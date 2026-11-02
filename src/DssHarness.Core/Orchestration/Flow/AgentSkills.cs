@@ -476,7 +476,7 @@ public sealed record AgentSkillFound(
     /// The text put into a prompt for this skill: the body after its substitutions inside the one block, with the
     /// folder handed to the step stated - the same on every client.
     /// </summary>
-    /// <param name="directory">The folder handed to the step, absolute: <c>work/&lt;agent&gt;/skills/&lt;name&gt;/</c>.</param>
+    /// <param name="directory">The folder handed to the step, absolute: <c>skills/&lt;name&gt;/</c> of what the step's agent is handed.</param>
     /// <param name="projectDirectory">The agent's worktree; for an agent with none, the main checkout.</param>
     /// <param name="session">The session's id, as the step's record has it.</param>
     /// <param name="effort">The effort the step resolved to.</param>
@@ -601,8 +601,11 @@ public sealed class AgentSkills(IFileSystem fileSystem, IHostPlatform platform, 
             + string.Join($"{Environment.NewLine}  ", Places(name))
             + $"{Environment.NewLine}A plugin's skill, a managed one and a .claude/commands file are not looked for: copy the skill's folder to .harness-config/skills/{name}.";
 
-    /// <summary>The three places, each with the name its folder is stated by: the first two as the checkout spells them, the user's whole.</summary>
-    private IReadOnlyList<(string From, string Folder)> PlacesIn(string name)
+    /// <summary>
+    /// The three places, each with the name its folder is stated by - the first two as the checkout spells them, the user's
+    /// whole - and the place its files are read relative to: the checkout, or the user's Claude directory.
+    /// </summary>
+    private IReadOnlyList<(string From, string Folder, string Anchor)> PlacesIn(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
@@ -614,9 +617,9 @@ public sealed class AgentSkills(IFileSystem fileSystem, IHostPlatform platform, 
 
         return
         [
-            (HarnessPlace, Path.Combine(_checkout, HarnessPlace.Replace('/', Path.DirectorySeparatorChar), name)),
-            (ClaudePlace, Path.Combine(_checkout, ClaudePlace.Replace('/', Path.DirectorySeparatorChar), name)),
-            (Path.Combine(_claude.ConfigDirectory, "skills"), Path.Combine(_claude.ConfigDirectory, "skills", name)),
+            (HarnessPlace, Path.Combine(_checkout, HarnessPlace.Replace('/', Path.DirectorySeparatorChar), name), _checkout),
+            (ClaudePlace, Path.Combine(_checkout, ClaudePlace.Replace('/', Path.DirectorySeparatorChar), name), _checkout),
+            (Path.Combine(_claude.ConfigDirectory, "skills"), Path.Combine(_claude.ConfigDirectory, "skills", name), _claude.ConfigDirectory),
         ];
     }
 
@@ -628,7 +631,7 @@ public sealed class AgentSkills(IFileSystem fileSystem, IHostPlatform platform, 
     /// <param name="name">The skill's name: the folder's.</param>
     public AgentSkillFound? Find(string name)
     {
-        foreach (var (from, folder) in PlacesIn(name))
+        foreach (var (from, folder, _) in PlacesIn(name))
         {
             if (!_fileSystem.DirectoryExists(folder))
             {
@@ -679,33 +682,29 @@ public sealed class AgentSkills(IFileSystem fileSystem, IHostPlatform platform, 
 
     /// <summary>
     /// The folder handed to a step: the skill's folder copied whole into <c>skills/&lt;name&gt;/</c> under
-    /// <paramref name="workDirectory"/>, in place of any earlier copy, and the directory it was copied to - what the
-    /// prompt's block states and what <c>${CLAUDE_SKILL_DIR}</c> becomes. The work directory is a root every agent
-    /// already reads and runs commands in, on every client.
+    /// <paramref name="handed"/>, in place of any earlier copy, and the directory it was copied to - what the prompt's block
+    /// states and what <c>${CLAUDE_SKILL_DIR}</c> becomes. What the step's agent is handed is a root it reads and no command
+    /// of its writes, on every client (<see cref="OrchestratorLayout.HandedDirectory"/>). Every file is read relative to the
+    /// place it was found in and written relative to <paramref name="handed"/>, each directory held with no link on the way
+    /// (<see cref="UnfollowedFiles"/>), its mode kept: a link put in the folder since it was walked is copied as nothing.
     /// </summary>
     /// <param name="found">The skill, as <see cref="Find"/> read it.</param>
-    /// <param name="workDirectory">The agent's own work directory.</param>
-    public string Copy(AgentSkillFound found, string workDirectory)
+    /// <param name="handed">Where the step's agent is handed what it reads.</param>
+    public string Copy(AgentSkillFound found, string handed)
     {
         ArgumentNullException.ThrowIfNull(found);
-        ArgumentException.ThrowIfNullOrWhiteSpace(workDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(handed);
 
-        var into = Path.Combine(workDirectory, "skills", found.Name);
+        var into = Path.Combine(handed, "skills", found.Name);
+        var place = PlacesIn(found.Name).First(each => each.From == found.From);
 
-        _fileSystem.DeleteDirectory(into);
-        _fileSystem.CreateDirectory(into);
+        _fileSystem.CreateDirectory(handed);
+        UnfollowedFiles.DeleteDirectory(_fileSystem, handed, into);
+        UnfollowedFiles.CreateDirectory(_fileSystem, handed, into);
 
         foreach (var file in _fileSystem.EnumerateFiles(found.Folder, recursive: true))
         {
-            var relative = Path.GetRelativePath(found.Folder, file);
-            var destination = Path.Combine(into, relative);
-
-            if (Path.GetDirectoryName(destination) is { } parent && !_fileSystem.DirectoryExists(parent))
-            {
-                _fileSystem.CreateDirectory(parent);
-            }
-
-            _fileSystem.CopyFile(file, destination, overwrite: true);
+            UnfollowedFiles.Copy(_fileSystem, place.Anchor, file, handed, Path.Combine(into, Path.GetRelativePath(found.Folder, file)));
         }
 
         return into;

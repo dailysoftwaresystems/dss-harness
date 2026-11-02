@@ -5,6 +5,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
@@ -439,6 +440,10 @@ public interface ISyncService : IUseCase
     /// <param name="sourceRoot">The copy's root on the far side.</param>
     /// <param name="destinationRoot">Where the files land here.</param>
     /// <param name="paths">The paths to bring back, relative to the copy's root.</param>
+    /// <param name="hidden">
+    /// The places the isolation hides on this machine (<see cref="Agents.Isolation.IAgentIsolation.Hidden"/>): each path
+    /// named is reached as it is spelt, a link along it followed, and never into one of them.
+    /// </param>
     /// <param name="cancellationToken">Stops the transfer.</param>
     /// <returns>
     /// Each file brought back, and each link below a directory named, which was not. Where a file could not be brought -
@@ -448,15 +453,16 @@ public interface ISyncService : IUseCase
     /// work out from the tree.
     /// </returns>
     /// <exception cref="HarnessException">
-    /// A path names the whole copy (<see cref="HarnessExit.UsageError"/>); or a directory named is not one, holds no file,
-    /// or holds more than a pull brings back (<see cref="HarnessExit.CommandFailed"/>) - every directory before any file
-    /// has crossed.
+    /// A path names the whole copy (<see cref="HarnessExit.UsageError"/>); or a directory named is not one, stands in a
+    /// hidden place, holds no file, or holds more than a pull brings back (<see cref="HarnessExit.CommandFailed"/>) - every
+    /// directory before any file has crossed.
     /// </exception>
     Task<SyncPull> PullAsync(
         ISyncTransport transport,
         string sourceRoot,
         string destinationRoot,
         IReadOnlyList<string> paths,
+        IReadOnlyList<IsolatedPath> hidden,
         CancellationToken cancellationToken = default);
 }
 
@@ -471,7 +477,8 @@ public sealed class SyncService(
     IFileSystem fileSystem,
     Platform.IHostPlatform platform,
     Execution.IProcessIdentity identity,
-    IHarnessOutput output) : ISyncService
+    IHarnessOutput output,
+    Agents.Isolation.IAgentIsolation isolation) : ISyncService
 {
     /// <summary>The command this service reports under.</summary>
     public const string CommandName = "sync";
@@ -486,6 +493,7 @@ public sealed class SyncService(
     private readonly Platform.IHostPlatform _platform = platform;
     private readonly Execution.IProcessIdentity _identity = identity;
     private readonly IHarnessOutput _output = output;
+    private readonly Agents.Isolation.IAgentIsolation _isolation = isolation ?? throw new ArgumentNullException(nameof(isolation));
 
     /// <summary>The one reading a command's hosts are synced from: made by the first that needs it, and let go with the command.</summary>
     private sealed class OneReading : IDisposable
@@ -631,9 +639,11 @@ public sealed class SyncService(
                     continue;
                 }
 
+                // What a pull reads follows the links along each path named, and never reaches a place the isolation hides.
+                var hidden = _isolation.Hidden(context.Config, context.Layout.MainCheckoutRoot);
                 var brought = options.DryRun
-                    ? await ListedForPullAsync(transport, destination, pull, cancellationToken).ConfigureAwait(false)
-                    : await PullAsync(transport, destination, context.Layout.RepositoryRoot, pull, cancellationToken).ConfigureAwait(false);
+                    ? await ListedForPullAsync(transport, destination, pull, hidden, cancellationToken).ConfigureAwait(false)
+                    : await PullAsync(transport, destination, context.Layout.RepositoryRoot, pull, hidden, cancellationToken).ConfigureAwait(false);
 
                 pulled += brought.Files.Count;
 
@@ -1466,13 +1476,15 @@ public sealed class SyncService(
         string sourceRoot,
         string destinationRoot,
         IReadOnlyList<string> paths,
+        IReadOnlyList<IsolatedPath> hidden,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(hidden);
 
         // Every directory is listed, and refused where it is not one a pull brings back, before any file crosses.
-        var listed = await ListedForPullAsync(transport, sourceRoot, paths, cancellationToken).ConfigureAwait(false);
+        var listed = await ListedForPullAsync(transport, sourceRoot, paths, hidden, cancellationToken).ConfigureAwait(false);
         var brought = new List<string>();
 
         foreach (var path in listed.Files)
@@ -1483,7 +1495,7 @@ public sealed class SyncService(
 
                 // Checked against the hash the far side took before sending, inside ReadFileAsync, and again once it
                 // is written here.
-                await CopyVerifiedAsync(transport, sourceRoot, _localTransport, destinationRoot, path, written: null, cancellationToken).ConfigureAwait(false);
+                await CopyVerifiedAsync(transport, () => transport.PullFileAsync(sourceRoot, path, hidden, cancellationToken), _localTransport, destinationRoot, path, written: null, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (StopOf(ex, path, destinationRoot, brought.Count, cancellationToken) is { } stop)
             {
@@ -1519,12 +1531,14 @@ public sealed class SyncService(
     /// <param name="transport">How the copy is reached.</param>
     /// <param name="sourceRoot">The copy's root on the far side.</param>
     /// <param name="paths">The paths a pull names, relative to the copy's root.</param>
+    /// <param name="hidden">The places the isolation hides, which no directory named stands in.</param>
     /// <param name="cancellationToken">Stops the listing.</param>
-    /// <exception cref="HarnessException">A directory named is the whole copy, is not a directory, or holds no file or too much.</exception>
+    /// <exception cref="HarnessException">A directory named is the whole copy, is not a directory, stands in a hidden place, or holds no file or too much.</exception>
     private static async Task<SyncPull> ListedForPullAsync(
         ISyncTransport transport,
         string sourceRoot,
         IReadOnlyList<string> paths,
+        IReadOnlyList<IsolatedPath> hidden,
         CancellationToken cancellationToken)
     {
         var files = new List<string>();
@@ -1551,7 +1565,7 @@ public sealed class SyncService(
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            var listing = await transport.ListFilesAsync(sourceRoot, directory, cancellationToken).ConfigureAwait(false);
+            var listing = await transport.ListFilesAsync(sourceRoot, directory, hidden, cancellationToken).ConfigureAwait(false);
 
             // Said, and failed: a directory of kept outputs that holds none is not what whoever named it expects, and a pull
             // that brought nothing and passed would say it had.
@@ -1664,7 +1678,7 @@ public sealed class SyncService(
 
                 // Counted as written before it is verified, because what has to be taken back is
                 // what reached the far side, and a file that arrived wrong is one of those.
-                await CopyVerifiedAsync(_localTransport, sourceRoot, transport, destinationRoot, path, () => landed.Add(path), cancellationToken)
+                await CopyVerifiedAsync(_localTransport, () => _localTransport.ReadFileAsync(sourceRoot, path, cancellationToken), transport, destinationRoot, path, () => landed.Add(path), cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -1685,7 +1699,7 @@ public sealed class SyncService(
     /// host to host is evidence that something built there runs here, and evidence nobody checked is not evidence.
     /// </summary>
     /// <param name="from">How the tree it is read from is reached.</param>
-    /// <param name="fromRoot">That tree's root.</param>
+    /// <param name="read">Reads the file out of that tree: a pull's read, or any other.</param>
     /// <param name="to">How the tree it is written to is reached.</param>
     /// <param name="toRoot">That tree's root.</param>
     /// <param name="path">The file, relative to both roots.</param>
@@ -1694,14 +1708,14 @@ public sealed class SyncService(
     /// <exception cref="HarnessException">It did not read back as it was read (<see cref="HarnessExit.CommandFailed"/>).</exception>
     private static async Task CopyVerifiedAsync(
         ISyncTransport from,
-        string fromRoot,
+        Func<Task<byte[]>> read,
         ISyncTransport to,
         string toRoot,
         string path,
         Action? written,
         CancellationToken cancellationToken)
     {
-        var contents = await from.ReadFileAsync(fromRoot, path, cancellationToken).ConfigureAwait(false);
+        var contents = await read().ConfigureAwait(false);
         var expected = FileContent.Of(contents);
 
         await to.WriteFileAsync(toRoot, path, contents, cancellationToken).ConfigureAwait(false);

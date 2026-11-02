@@ -162,7 +162,12 @@ the child ends or is stopped - every process still in it, and at a stop every on
 child's tree, read before anything is signalled, asked to end with SIGTERM, and whatever still
 stands five seconds later killed - and the output is read for five seconds more at most: a process
 that made a session of its own away from the child's tree is not reached, and nothing waits for
-what it holds. A process table that cannot be read - macOS's is read through `ps`, which a session
+what it holds. On macOS, where the isolation keeps no process namespace, such a process of an
+isolated command's outlives its launch and goes on writing the places it was given; every file
+operation of the tool's over those places - a fold, a hand-over, evidence kept, a removal, a sync -
+acts relative to directories it holds (`UnfollowedFiles`, `HeldDirectory`), so a link it swaps in
+meanwhile reaches nothing of the tool's. git's own removal of a worktree (`git worktree remove`)
+walks the tree by path, and is where such a process still meets the tool's work. A process table that cannot be read - macOS's is read through `ps`, which a session
 that has used up every process it may start leaves unable to start - takes nothing from the stop:
 the group is still asked and then killed by its id, which needs no table, the tree is still ended,
 and what went unreached is said in the result (`ProcessResult.Uncontained`), or, where the caller
@@ -2032,12 +2037,17 @@ table `AgentTools` holds (what a step is offered, what help prints and what runs
 held to its tool's schema (`JsonSchemaSubset`), each path to the agent's roots by `ConfinedPaths` -
 its spelling, its links followed, a write through no link below its root - before the policy is
 asked; reads and searches go through `AgentFiles` (git's listing in a work tree, a walk elsewhere),
-which reads and writes every file's bytes through the file as it was opened (`AgentFiles.ReadAsync`,
-`AgentFiles.Write`), where the open file stands - `IFileSystem.FinalPathOf`, over `OpenedFiles`:
-`GetFinalPathNameByHandleW` on Windows, `/proc/self/fd` on Linux, libproc's `proc_pidfdinfo` on macOS -
-decided again by the same rule before a byte passes, so a link put in place after the check reaches
-nothing refused (what goes by a path alone - a directory listed, made, moved or deleted, a file moved
-or deleted, the rename that puts a written file in place - still meets one, the known limit),
+which reads every file's bytes through the file as it was opened (`AgentFiles.ReadAsync`), where the
+open file stands - `IFileSystem.FinalPathOf`, over `OpenedFiles`: `GetFinalPathNameByHandleW` on
+Windows, `/proc/self/fd` on Linux, libproc's `proc_pidfdinfo` on macOS - decided again by the same
+rule before a byte passes, the file opened never to wait (`IFileSystem.OpenRead`: on Linux and macOS
+opened non-blocking and refused before a byte unless it is a regular file, so a pipe put there hangs
+nothing) and read to the bound alone; and every write, made directory, move and removal relative to
+its directory held from the writable root it was decided in (`AgentFiles.Write`, `UnfollowedFiles`
+over `IFileSystem.Hold`, `HeldDirectory`), every entry on the way opened as itself, so a link put in
+place after the check, or swapped in while the tool acts, reaches nothing and the call is refused
+naming it (`AgentFiles.Linked`, by `ConfinedPaths.LinksRule`); a directory listed goes by its path,
+so what a link put in place of one leads to is listed by name, never a byte of a file read through it,
 edits through `EditedText` over `EncodedText` (the encoding rule the graph's `CodeFileText` reads
 by too, its lines cut by `CodeFileText.Spans`), a command through `PhaseRunner` as a contained
 phase - its environment `AgentChildEnvironment`'s, every name the configuration appoints and every
@@ -2184,7 +2194,8 @@ and any run handed none - the run's prompt as the task). The continuation record
 the files changed, the last red build or test, the handoff (never cut), the continuation message after an attempt that
 was cut off, and the last iterations word for word from the stored stream of the newest attempt (`Iterations`, each
 message the engine sent the agent in its place, the earlier iterations kept back from the last until the first that
-does not fit) - whatever is cut named with a copy in the agent's `work/continuation/` (`AgentContinuation.CopiesFolder`),
+does not fit) - whatever is cut named with a copy in the step's own `handed/continuation/` (`OrchestratorLayout.HandedDirectory`,
+`AgentContinuation.CopiesFolder`), which the tool alone writes, through no link, and the agent reads as a root of its own,
 the bounds `agentContext.continuation`'s (`AgentContinuationBounds`: recordChars, stepChars, paths, lastIterations,
 iterationChars, each default one constant the help reads). One owner says what an attempt's events are
 (`Agents\AgentAttempt.cs`): every run that names the attempt, from the first of them on - an attempt that went on with
@@ -2326,7 +2337,9 @@ tree the agent touches - its worktree, and always the main checkout, whose run r
 reaches from the worktree - and git's own files beneath both, `AgentPolicyGround.Trees`), each skill its prompt names
 looked up
 again where the step starts (`AgentSkills.Find`, its name by `AgentSkills.NameIn`'s one rule), the folder copied
-whole into `work/<agent>/skills/<name>/` and the block put where the placeholder stood, its `${CLAUDE_SESSION_ID}` the
+whole into the step's own `handed/skills/<name>/` (`OrchestratorLayout.HandedDirectory`, a root the agent reads and the
+tool alone writes, through no link - never the work directory, where the agent's commands write and could plant one)
+and the block put where the placeholder stood, its `${CLAUDE_SESSION_ID}` the
 id the run's first session begins as (`AgentStepRequest.SessionId`), each skill handed recorded on the request, in
 the stream's `sessionStarted` and on the step's record (`FlowStepResult.Skills`, kept once each over the visit's
 attempts as `FlowStepRecord.Skills`, `step.json`'s `skills[]`, and taken up again by a resume) - the engine having filled every other name into the prompt once and handed it as
@@ -2472,8 +2485,9 @@ opens no file of the agent's there: Claude Code would open a file by the path th
 where a link a command - one left running in the background among them - put on the path in between would reach what
 the isolation keeps from every command; so its file tools are given no such launch (`ClaudeCodeTools.Of` with
 `ownFiles: false`, `--tools` its shell alone), and the engine's tool server serves the runtime's in their place
-(`ClaudeCodeTools.FileTools`, `Served`), each file opened by `AgentFiles` and decided again by where the system names
-the open file. Every shell call the engine allows is given back with a receipt at its command's head
+(`ClaudeCodeTools.FileTools`, `Served`), each file read by `AgentFiles` and decided again by where the system names
+the open file, and each written, made, moved or deleted relative to its directory held from the writable root it was
+decided in (`AgentFiles.Write`, `UnfollowedFiles`). Every shell call the engine allows is given back with a receipt at its command's head
 (`IsolatedShell.Marked`: `: dssharness-receipt <32 hexadecimal digits>; <command>`, the shell's no-op, a new one from
 the system's random source for each call), which `IsolatedShell.Prepared` reads off the line it is handed
 (`ReceiptOf`) and writes, new and never through a link, in the step's `claude-receipts` directory - named in the
@@ -2555,11 +2569,21 @@ sends it, but a leg placed in a WSL distribution, which reaches this machine's d
 (`ILegIsolation.ForDistribution`, `ExecutionIsolation.InDistribution`): skipped under `required`, run saying so under
 `preferred`. What the tool reads out of, or writes into, a place such work writes - `RunnerRunService`'s kept outputs,
 `KeptOnFailure`'s evidence, `WorkerSite`'s sites a sweep mutates and puts back in a worker, `LocalSyncTransport`'s
-every read, write, removal, listing and emptied directory in a copy - goes through `UnfollowedFiles`, the one owner of
-it: every entry from the place's root down a directory, never
-a link (`UnfollowedFiles.LinkOnTheWay`), and an open file held to where its path says by where the system names it
-(`IFileSystem.FinalPathOf`, against `FinalPathOfDirectory` of the root), so a link put on the way in the instant after
-the look reaches nothing either; a write is atomic, its file begun removed where it stands elsewhere. The step answers `isolation`
+every read, write, removal, listing and emptied directory in a copy - and the engine's own over an agent's places
+(`AgentEvidence`, `AgentFold`'s fold and hand-over, `AgentContinuation`'s and `AgentSkills`' copies, the tool runtime's
+writes) goes through `UnfollowedFiles`, over the one owner of a file operation relative to a held directory
+(`HeldDirectory`, reached through `IFileSystem.Hold`): the place's root opened as it is, then each name below it opened
+as itself relative to the directory before it - `openat` with `O_NOFOLLOW | O_DIRECTORY` and the other `*at` calls on
+Linux and macOS (`UnixHeld`), `NtCreateFile` relative to the parent's handle with `FILE_OPEN_REPARSE_POINT` and the
+entry's reparse tag on Windows (`WindowsHeld`) - so a link on the way, or one swapped in while the tool acts, is
+refused naming it (`LinkOnTheWayException`), and a link at the entry's own place is read as nothing, replaced or
+removed as itself. A write is a file made new in the held directory, then renamed over the one there, keeping its mode;
+a directory removed whole is emptied entry by entry relative to each held directory, a link among them removed as the
+link (every recursive removal the tool makes, `IFileSystem.DeleteDirectory` among them). A pull alone follows a link
+along the path it names, as it is spelt, and refuses one that leads into a place the isolation hides from every
+command, decided by where what it opened stands (`ISyncTransport.PullFileAsync`, `ListFilesAsync` given the hidden
+places of `IAgentIsolation.Hidden`, the one list the profiles hide, `IsolationHidden`); a host over ssh decides it
+against its own (`SyncServe.Pull`, `SyncServe.List`). The step answers `isolation`
 (`AgentIsolationRecord.ToOutput`, in `WorkflowStepTypes`' output of each leg step). The tool's own git runs none of
 the repository's hooks (`GitHooks`: every command `GitClient` runs is given `core.hooksPath` at the null device,
 `/dev/null`, `\\.\NUL` on Windows, through `GitOwnSettings.Apply` with the tool's other settings, but the subcommands
@@ -2717,8 +2741,8 @@ is made, so `AgentService.CreateAsync` makes an agent in a directory that holds 
 program a launch starts is found ready where the step starts (`ClaudeCodeUpdateService.ReadyAsync`, wired into the
 reason step runner, its answer carrying the program and the version it answered; a step's mask holding every form of
 each web-search key it was given, built of `Runners.ActionValues`); and the agent's scratch is the run's own
-`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), where the child is started and the continuation's copies and
-skills are put.
+`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), where the child is started; the continuation's copies and the
+skills are put in the step's own `handed/` (`OrchestratorLayout.HandedDirectory`), which no command writes.
 The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
 amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
 person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: its entries `u<n>` by order taken, cause
@@ -3673,7 +3697,8 @@ one at a time, writes a node's lines through `EditedText.ReplaceLines` only wher
 handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. Every
 file `body` reads and `edit` writes is reached through the `ConfinedPaths` the tool is handed (`ConfinedPaths.Within` the
 tree where query-codebase-graph runs it), which resolves each link, so a link out of the tree is neither read nor written
-through - and read and written through `AgentFiles`, where the open file stands decided again by it. The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
+through - and read through `AgentFiles`, where the open file stands decided again by it, and written relative to its
+directory held from the root it was decided in (`AgentFiles.Write`). The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
 it needs, is a usage line (`CodebaseGraphTool.Misused`). No step is given the tool: the tool
 runtime's table does not hold it. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
@@ -5828,9 +5853,10 @@ directory here cannot drift apart.
 - **A link the copy holds is named too, and never gone through.** A link sits in no manifest — the
   walk refuses to follow one — so a file written at its name replaces it, and everything behind a
   linked directory is outside any list a plan can build. A copy is a place a leg's work writes, and a
-  link there says nothing of what anybody meant, so no read, write, removal or listing of a sync -
-  `--pull` among them - goes through one below the copy's root (`UnfollowedFiles`): each is refused
-  naming the link, and a directory reached through one is never emptied.
+  link there says nothing of what anybody meant, so no read, write, removal or listing of a sync goes
+  through one below the copy's root (`UnfollowedFiles`): each is refused naming the link, and a
+  directory reached through one is never emptied. A `--pull` alone follows a link along the path it
+  names, as it is spelt, and never into a place the isolation hides from every command.
 - **`--dry-run` shows the plan, and exits as the sync would.** For a directory the tool did not
   create, for one whose deletions are over the bound, and for a worktree's copy another worktree
   of the same name still holds, the dry run lists what the sync would do - the bound's own message
@@ -6018,7 +6044,11 @@ directory here cannot drift apart.
   the host's tree for them. A path ending with `/` names a directory instead: the host that holds it
   lists every file below it with its size (`ISyncTransport.ListFilesAsync`, served as `sync-serve
   list`), never following a link below it, and each file then crosses as a file named does, in a
-  request of its own. The side that holds the directory bounds it before a file of it is read - 256
+  request of its own (`ISyncTransport.PullFileAsync`, served as `sync-serve pull`). A link along the
+  path named - to a file or a directory - is followed as it is spelt, a build directory pointed at
+  another volume being ordinary, but a pull that leads into a place the isolation hides from every
+  command - decided by where what it opened stands, as the system names it - fails naming that place,
+  nothing read; on a host the places are the host's own. The side that holds the directory bounds it before a file of it is read - 256
   files, 1 GiB together, no file past what one request carries - and one that is not there, is a
   file, or holds no file fails the pull by name (`SyncService.ListedForPullAsync`), every directory
   before any file has crossed. A directory that cannot be read where it is fails the pull by name

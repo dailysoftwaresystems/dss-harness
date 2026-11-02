@@ -621,8 +621,10 @@ public static class HelpTopics
             + $"{SyncServe.MostFilesPulledFromADirectory.ToString(CultureInfo.InvariantCulture)} files or more than "
             + $"{(SyncServe.LargestDirectoryPulled / (1024 * 1024)).ToString(CultureInfo.InvariantCulture)} MiB together fails the pull before "
             + "any file crosses: each file comes in a request of its own, so a directory named is a step's kept outputs, never "
-            + "a build tree - keep that as one archive. A link below it is never followed: it is named, and nothing is brought "
-            + "back for it. With --dry-run the host is asked what the directory holds, and nothing is brought. A pull that "
+            + "a build tree - keep that as one archive. A link along the path named, file or directory, is followed as it is "
+            + "spelt - a build directory pointed at another volume is ordinary - but never into a place the isolation hides "
+            + "from every command: one that leads there fails the pull, nothing read. A link below a directory named is never "
+            + "followed: it is named, and nothing is brought back for it. With --dry-run the host is asked what the directory holds, and nothing is brought. A pull that "
             + "stops part way - a file gone, a host that stopped answering - fails naming each file it had brought back, which "
             + "stays where it was written, and each it had not.");
         builder.AppendLine();
@@ -2650,10 +2652,11 @@ public static class HelpTopics
         builder.AppendLine("  ...the body...");
         builder.AppendLine("  </skill>");
         builder.AppendLine();
-        builder.AppendLine("The folder is copied whole into the agent's work directory, work/<agent>/skills/<name>/, in");
-        builder.AppendLine("place of any earlier copy; that path is the directory the text states and what");
-        builder.AppendLine("${CLAUDE_SKILL_DIR} becomes. The work directory is a root every agent already reads and runs");
-        builder.AppendLine($"commands in, on every client. A folder that holds a link, more than {AgentSkills.FileLimit} files or more than 16 MB is");
+        builder.AppendLine($"The folder is copied whole into what the step's agent is handed, the step's own {OrchestratorLayout.HandedDirectoryName}/skills/<name>/,");
+        builder.AppendLine("in place of any earlier copy; that path is the directory the text states and what");
+        builder.AppendLine("${CLAUDE_SKILL_DIR} becomes. It is a root the agent reads, on every client, which the tool alone");
+        builder.AppendLine("writes, through no link - never the agent's work directory, where its commands write.");
+        builder.AppendLine($"A folder that holds a link, more than {AgentSkills.FileLimit} files or more than 16 MB is");
         builder.AppendLine("refused. The step's record names every skill it was given, each once over its attempts - its");
         builder.AppendLine("step.json skills[], and its stream's sessionStarted event - with each one's place, its");
         builder.AppendLine("SKILL.md, the folder handed to the step, and the SHA-256 of SKILL.md and of the folder.");
@@ -2813,7 +2816,8 @@ public static class HelpTopics
             + "output, the files changed, the last red build or test, the handoff, and the last iterations of the newest "
             + "attempt word for word from its stored stream, every run of the attempt numbered as one, each message the "
             + "engine sent the agent in its place - nothing in it written or shortened by a model, and whatever is cut "
-            + $"named with a copy in the agent's work/{Agents.AgentContinuation.CopiesFolder}/. Its bounds are "
+            + $"named with a copy in the step's own {Orchestration.OrchestratorLayout.HandedDirectoryName}/{Agents.AgentContinuation.CopiesFolder}/, "
+            + "which the tool alone writes and the agent reads, never where its commands write. Its bounds are "
             + $"agentContext.continuation's - recordChars ({Agents.AgentContinuationBounds.DefaultRecordChars}), "
             + $"stepChars ({Agents.AgentContinuationBounds.DefaultStepChars}), paths ({Agents.AgentContinuationBounds.DefaultPaths}), "
             + $"lastIterations ({Agents.AgentContinuationBounds.DefaultLastIterations}) and iterationChars "
@@ -3188,9 +3192,10 @@ public static class HelpTopics
             + "- so no command it runs reaches its directories, its login or its environment. There Claude Code opens no file "
             + "of the agent's in its own process: its file tools are not given, --tools names its shell alone, and the engine's "
             + $"tool server serves the tool runtime's ({string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.FileTools)}) in their "
-            + "place, each file opened by the engine and decided again by where the system names the open file, so a link a "
-            + "command - one left running in the background among them - puts on a path between the decision and the open "
-            + "reaches nothing. Each shell command the engine allows is given back with a receipt at its head (: "
+            + "place, each file read through the file the engine opened, decided again by where the system names it, and "
+            + "each written, made, moved or deleted relative to its directory held from the writable root it was decided in "
+            + "with no link on the way, so a link a command - one left running in the background among them - puts on a "
+            + "path between the decision and the act reaches nothing. Each shell command the engine allows is given back with a receipt at its head (: "
             + $"{IsolatedShell.ReceiptWord} <32 hexadecimal digits>;, the shell's no-op), which --isolated-shell writes in the "
             + $"step's {Agents.ClaudeCode.ClaudeShell.ReceiptsDirectoryName} directory, where no command writes, before it runs "
             + "the command; a call that comes back with none - a Claude Code that skipped its prefix, the command run outside "
@@ -3297,8 +3302,12 @@ public static class HelpTopics
             + "written from what each phase prints. What the tool itself reads out of, or writes into, a place such work "
             + "writes - a runner's kept outputs, a test's evidence kept on failure, a sweep's sites mutated and put back in "
             + "its workers, a sync's every read, write, removal and listing in a copy - goes through no link below that "
-            + "place's root: an entry on the way that is a link is "
-            + "refused, naming it, and an open file is held to where its path says by where the system names it. A runner's "
+            + "place's root: each acts relative to a directory held open from that root, every entry on the way opened as "
+            + "itself and never looked up by its path again, so a link on the way - or one the work swaps in while the tool "
+            + "acts - is refused, naming it, and a link at the entry's own place is replaced or removed as itself. A pull "
+            + "(sync --pull) alone follows a link along the path it names, as it is spelt, but never into a place the "
+            + "isolation hides from every command, decided by where what it opened stands; a link below a directory it "
+            + "names is passed over and named. A runner's "
             + "values and secrets reach its steps as values "
             + "in their environment, read by this tool, never as the slot's files, which they cannot read. A set-up's lines "
             + "are the configuration's and bring up what outlives the leg, which no isolation outlives, so they run outside "
@@ -3604,10 +3613,12 @@ public static class HelpTopics
             + $"prefix, a device's name ({string.Join(", ", Agents.Runtime.ConfinedPaths.DeviceNames.Take(4))} and the rest), "
             + "a drive's own directory (C:x) or an alternate data stream - its links followed (one whose links cannot be followed refused as undecided) and held to the agent's roots, each compared as its own file "
             + "system names it: a read inside one of them, a write inside a writable one and through no link below it (a "
-            + "file is read and written through the file as it was opened, where the open file stands decided again before a "
-            + "byte passes, so a link put in place between the check and the act reaches nothing refused; what goes by a path "
-            + "alone - a directory listed, made, moved or deleted, a file moved or deleted, and the rename that puts a written "
-            + "file in place - is where such a link is the known limit); then the policy above is asked of it, and "
+            + "file is read through the file as it was opened, where the open file stands decided again before a byte "
+            + "passes - opened never to wait, so a pipe put there is refused - and a file written, a directory made, and a "
+            + "file or a directory moved or deleted is acted on relative to its directory held from the writable root it was "
+            + "decided in, every entry on the way opened as itself, so a link put in place between the check and the act, or "
+            + "swapped in while it acts, reaches nothing and the call is refused naming it; a directory listed goes by its "
+            + "path, so a link put in place of one lists names, never a byte of a file); then the policy above is asked of it, and "
             + "a deleting or moving tool is a write to every path it touches, at both ends of a move. A directory deleted or "
             + $"moved is refused where it is a root, holds a link, holds a path that may not be written or holds more than "
             + $"{Agents.Runtime.AgentTools.MostDeletedEntries:N0} entries. A file past {DiskSpace.Size(Agents.Runtime.AgentTools.MostViewedBytes)} is "

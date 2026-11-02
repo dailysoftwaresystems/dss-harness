@@ -1,5 +1,6 @@
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Sync;
@@ -268,20 +269,41 @@ public interface ISyncTransport
     Task<byte[]> ReadFileAsync(string root, string relativePath, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reads one file a pull brings back out of the copy (<see cref="ReadFileAsync"/>), following a link along its path as
+    /// it is spelt - a build directory pointed at another volume is ordinary - but never into a place
+    /// <paramref name="hidden"/> names: decided by where the file opened stands, as the system names it by its handle.
+    /// </summary>
+    /// <param name="root">The copy's root.</param>
+    /// <param name="relativePath">The file to read, relative to the root.</param>
+    /// <param name="hidden">The places the isolation hides on this machine (<see cref="Agents.Isolation.IAgentIsolation.Hidden"/>), which no read of a pull reaches.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <exception cref="HarnessException">
+    /// As <see cref="ReadFileAsync"/>; or the file opened stands in a hidden place, nothing read
+    /// (<see cref="HarnessExit.CommandFailed"/>).
+    /// </exception>
+    Task<byte[]> PullFileAsync(string root, string relativePath, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// What one directory of the copy holds, for a pull that names it: every file below it with its size, and every link
     /// below it, which is neither followed nor read. Bounded where the directory is, before any file of it is read: no
     /// more than <see cref="SyncServe.MostFilesPulledFromADirectory"/> files, no more than
     /// <see cref="SyncServe.LargestDirectoryPulled"/> bytes together, and no file past <see cref="SyncServe.LargestFile"/>.
+    /// The directory named is reached as its path is spelt, a link along it followed, where <paramref name="hidden"/> is
+    /// given - never into a place it names - and through no link where it is null.
     /// </summary>
     /// <param name="root">The copy's root.</param>
     /// <param name="relativeDirectory">The directory, relative to the root.</param>
+    /// <param name="hidden">
+    /// The places the isolation hides on this machine, which the directory named never stands in; null where no link on
+    /// the way is followed at all - a host serving its own copy, which knows no hidden place of the machine that asks.
+    /// </param>
     /// <param name="cancellationToken">Stops the listing.</param>
     /// <exception cref="HarnessException">
     /// No directory is at the path - nothing, or a file - or it holds more than a pull brings back, or it could not be
-    /// read, said by name as a transfer that failed, <see cref="HarnessExit.CommandFailed"/>; or the path leaves the
-    /// copy, refused.
+    /// read, or it stands in a hidden place, or a link stands on its way where none is followed, said by name as a transfer
+    /// that failed, <see cref="HarnessExit.CommandFailed"/>; or the path leaves the copy, refused.
     /// </exception>
-    Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default);
+    Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, IReadOnlyList<IsolatedPath>? hidden, CancellationToken cancellationToken = default);
 }
 
 /// <summary>One file on its way into a copy: where it goes, and what it holds.</summary>

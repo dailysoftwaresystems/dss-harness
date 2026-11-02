@@ -30,9 +30,12 @@ public sealed record EvidenceDeleted(IReadOnlyList<string> Left);
 /// </summary>
 /// <remarks>
 /// Files are found as <see cref="WorktreeEvidence"/> finds them, the one reading delete-worktree's evidence check uses, so
-/// what is kept is what the removal would have refused over. The originals are deleted by this class, and only those still
-/// holding what was kept; the worktree's removal is then asked for without waiving its evidence check, so a file written
-/// after the copy was read back stops it rather than going with it.
+/// what is kept is what the removal would have refused over. Each is read, and each original deleted, relative to its
+/// directory held from the worktree with no link on the way (<see cref="UnfollowedFiles"/>): a process of the agent's that
+/// outlived its launch - macOS keeps no process namespace to end it - cannot lead the copy or the removal elsewhere by a
+/// link it puts there while they run. The originals are deleted by this class, and only those still holding what was kept;
+/// the worktree's removal is then asked for without waiving its evidence check, so a file written after the copy was read
+/// back stops it rather than going with it.
 /// </remarks>
 /// <param name="fileSystem">Reads the worktree, and writes the kept copies.</param>
 /// <param name="platform">How paths compare.</param>
@@ -97,7 +100,10 @@ internal sealed class AgentEvidence(IFileSystem fileSystem, IHostPlatform platfo
 
             foreach (var relative in found.All)
             {
-                kept[relative] = (await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(worktree, relative), Path.Combine(destination, relative), cancellationToken: cancellationToken).ConfigureAwait(false)).Content;
+                // Read relative to the worktree, held, and written relative to the keeping, held: a process of the agent's
+                // still running cannot lead either through a link it puts on the way while the copy runs.
+                _fileSystem.CreateDirectory(destination);
+                kept[relative] = (await VerifiedFileCopy.CopyUnfollowedAsync(_fileSystem, worktree, Path.Combine(worktree, relative), destination, Path.Combine(destination, relative), cancellationToken: cancellationToken).ConfigureAwait(false)).Content;
             }
 
             var moved = (measured ?? new Dictionary<string, string>())
@@ -156,7 +162,7 @@ internal sealed class AgentEvidence(IFileSystem fileSystem, IHostPlatform platfo
 
                 if ((await FileContentHash.OfAsync(_fileSystem, file, cancellationToken).ConfigureAwait(false)).Content == digest)
                 {
-                    _fileSystem.DeleteFile(file);
+                    UnfollowedFiles.Delete(_fileSystem, worktree, file);
                 }
                 else
                 {

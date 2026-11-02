@@ -1,26 +1,27 @@
 namespace DssHarness.Core.FileSystem;
 
 /// <summary>
-/// The one way the tool reads, writes, copies or removes a file of its own inside a place an isolated process writes - a
-/// leg's tree or its copy, the outputs a runner's steps leave in it, the build directory a test leaves evidence in: never
-/// through a link. Every entry on the way below the place's root is a directory, never a link or a junction, and an open
-/// file is held to the place its path names, as the system names the open file (<see cref="IFileSystem.FinalPathOf"/>), so
-/// a link put on the way in the instant after the look reaches nothing either. A link such a process plants there would
-/// otherwise have the tool, outside every isolation, write what the process chose wherever the link leads - over a file
-/// of the user's - or carry what a hidden place holds to where the agents read it.
+/// The one way the tool reads, writes, copies, moves or removes a file or a directory of its own inside a place an isolated
+/// process writes - a leg's tree or its copy, the outputs a runner's steps leave in it, the build directory a test leaves
+/// evidence in, an agent's worktree and work directory: never through a link. Each acts relative to a directory held open
+/// from the place's root with no link on the way (<see cref="IFileSystem.Hold"/>, <see cref="HeldDirectory"/>), so a link
+/// put on the way - or swapped in by a command still running while the tool acts - reaches nothing, and a link at the
+/// entry's own place is read as nothing, replaced or removed as itself. A link such a process plants there would otherwise
+/// have the tool, outside every isolation, write what the process chose wherever the link leads - over a file of the
+/// user's - or carry what a hidden place holds to where the agents read it.
 /// </summary>
 /// <remarks>
-/// The root itself is the one place taken as it is: no process inside an isolation moves a root it writes, and whatever
-/// links lead to it were there before. A rename that puts a written file in place, and a removal, still go by the path,
-/// the one step a link put on the way in the instant after the look reaches; the rename replaces a link at the file's own
-/// place, and a removal removes such a link itself, and neither goes through one.
+/// The root is the one place taken as it is: it is a writable root of the isolation, or a place above every one, which no
+/// process inside an isolation moves - and whatever links lead to it were there before. A directory held and then moved by
+/// such a process is acted on where it went: inside the places that process writes, never through a link out of them.
 /// </remarks>
 public static class UnfollowedFiles
 {
     /// <summary>
     /// The first entry on the way to <paramref name="path"/> from <paramref name="root"/> down that is a link - a
     /// symbolic link or a junction alike - <paramref name="path"/> itself among them where <paramref name="itself"/>; null
-    /// where none is.
+    /// where none is. A look, for a caller deciding what to say or to pass by: what it then does goes through the other
+    /// members, which refuse a link put there since.
     /// </summary>
     /// <param name="fileSystem">Reads what each entry is.</param>
     /// <param name="root">The place's root, which is never asked about itself.</param>
@@ -31,7 +32,7 @@ public static class UnfollowedFiles
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
 
-        var parts = Parts(root, path);
+        var parts = Below(root, path);
         var place = root;
 
         for (var at = 0; at < parts.Count - (itself ? 0 : 1); at++)
@@ -53,115 +54,67 @@ public static class UnfollowedFiles
 
     /// <summary>
     /// Opens the file at <paramref name="path"/>, below <paramref name="root"/>, for reading - refused where a link stands
-    /// on its way or at it, or where the file opened stands anywhere but at its path.
+    /// on its way or at it, and where it is no regular file, before a byte is read.
     /// </summary>
-    /// <param name="fileSystem">Opens and names the file.</param>
+    /// <param name="fileSystem">Holds the file's directory.</param>
     /// <param name="root">The place's root.</param>
     /// <param name="path">The file.</param>
     /// <returns>The open file, which the caller disposes.</returns>
-    /// <exception cref="IOException">A link stands on the way, or the file could not be opened.</exception>
+    /// <exception cref="LinkOnTheWayException">A link stands on the way, or at the file.</exception>
+    /// <exception cref="FileNotFoundException">No file is there.</exception>
+    /// <exception cref="DirectoryNotFoundException">A directory on the way is not there.</exception>
+    /// <exception cref="IOException">It is no regular file, or could not be opened.</exception>
     /// <exception cref="UnauthorizedAccessException">This process may not read it.</exception>
     public static Stream OpenRead(IFileSystem fileSystem, string root, string path)
     {
-        ArgumentNullException.ThrowIfNull(fileSystem);
+        var (directory, name) = Split(root, path);
 
-        Refuse(LinkOnTheWay(fileSystem, root, path, itself: true), path);
+        using var held = Held(fileSystem, root, directory, make: false, path);
 
-        var stream = fileSystem.OpenRead(path);
-
-        try
-        {
-            Held(fileSystem, root, path, fileSystem.FinalPathOf(stream));
-            return stream;
-        }
-        catch
-        {
-            stream.Dispose();
-            throw;
-        }
+        return held.OpenRead(name);
     }
 
     /// <summary>
-    /// Writes the file at <paramref name="path"/>, below <paramref name="root"/>, whole and atomically
-    /// (<see cref="IFileSystem.WriteAtomic"/>) - refused, nothing written, where a link stands on the way to it, or where
-    /// the file begun stands anywhere but in its directory; a link at its own place is replaced, never written through.
+    /// Writes the file at <paramref name="path"/>, below <paramref name="root"/>, whole and atomically: a file made new in its
+    /// directory, held, then renamed over it - refused, nothing written, where a link stands on the way to it; a link at its
+    /// own place is replaced, never written through; the directories on the way made.
     /// </summary>
-    /// <param name="fileSystem">Writes and names the file.</param>
+    /// <param name="fileSystem">Holds the file's directory.</param>
     /// <param name="root">The place's root.</param>
     /// <param name="path">The file.</param>
     /// <param name="write">Writes what it is to hold.</param>
-    /// <exception cref="IOException">A link stands on the way, or the file could not be written.</exception>
+    /// <exception cref="LinkOnTheWayException">A link stands on the way.</exception>
+    /// <exception cref="IOException">The file could not be written.</exception>
     /// <exception cref="UnauthorizedAccessException">This process may not write it.</exception>
-    public static void Write(IFileSystem fileSystem, string root, string path, Action<Stream> write)
-    {
-        ArgumentNullException.ThrowIfNull(fileSystem);
-        ArgumentNullException.ThrowIfNull(write);
-
-        Refuse(LinkOnTheWay(fileSystem, root, path, itself: false), path);
-
-        IOException? refused = null;
-
-        try
-        {
-            fileSystem.WriteAtomic(path, stream =>
-            {
-                var begun = fileSystem.FinalPathOf(stream);
-
-                try
-                {
-                    Held(fileSystem, root, path, Path.Join(Path.GetDirectoryName(begun), Path.GetFileName(path)));
-                }
-                catch (IOException away)
-                {
-                    // Called off before a byte is written: the atomic write removes the file it began, and the target stays
-                    // as it was.
-                    refused = away;
-                    throw new OperationCanceledException(away.Message);
-                }
-
-                write(stream);
-            });
-        }
-        catch (OperationCanceledException) when (refused is not null)
-        {
-            throw refused;
-        }
-    }
+    public static void Write(IFileSystem fileSystem, string root, string path, Action<Stream> write) => Written(fileSystem, root, path, write, mode: null);
 
     /// <summary>
     /// Writes <paramref name="contents"/> to the file at <paramref name="path"/>, below <paramref name="root"/>, whole and
-    /// atomically (<see cref="IFileSystem.WriteAllBytesAtomicAsync"/>) - refused, nothing written, where a link stands on
-    /// the way to it, or where its directory stands anywhere but where its path says, as the system names it; a link at
-    /// its own place is replaced, never written through.
+    /// atomically, as <see cref="Write"/> writes.
     /// </summary>
-    /// <param name="fileSystem">Writes the file and names its directory.</param>
+    /// <param name="fileSystem">Holds the file's directory.</param>
     /// <param name="root">The place's root.</param>
     /// <param name="path">The file.</param>
     /// <param name="contents">What it is to hold.</param>
-    /// <param name="cancellationToken">Stops the write, leaving the file as it was.</param>
-    /// <exception cref="IOException">A link stands on the way, or the file could not be written.</exception>
+    /// <param name="cancellationToken">Stops the write before it begins, leaving the file as it was.</param>
+    /// <exception cref="LinkOnTheWayException">A link stands on the way.</exception>
+    /// <exception cref="IOException">The file could not be written.</exception>
     /// <exception cref="UnauthorizedAccessException">This process may not write it.</exception>
-    public static async Task WriteAsync(IFileSystem fileSystem, string root, string path, byte[] contents, CancellationToken cancellationToken)
+    public static Task WriteAsync(IFileSystem fileSystem, string root, string path, byte[] contents, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(contents);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        Refuse(LinkOnTheWay(fileSystem, root, path, itself: false), path);
-
-        // A directory the write makes on its way is made after the look, which found nothing there to follow.
-        if (Path.GetDirectoryName(Path.GetFullPath(path)) is { } directory && fileSystem.DirectoryExists(directory))
-        {
-            Held(fileSystem, root, path, Path.Join(fileSystem.FinalPathOfDirectory(directory), Path.GetFileName(path)));
-        }
-
-        await fileSystem.WriteAllBytesAtomicAsync(path, contents, cancellationToken).ConfigureAwait(false);
+        Write(fileSystem, root, path, stream => stream.Write(contents));
+        return Task.CompletedTask;
     }
 
     /// <summary>
     /// Copies the file at <paramref name="source"/>, below <paramref name="sourceRoot"/>, to <paramref name="destination"/>,
-    /// below <paramref name="destinationRoot"/>: read as <see cref="OpenRead"/> reads, written as <see cref="Write"/> writes.
+    /// below <paramref name="destinationRoot"/>: read as <see cref="OpenRead"/> reads, written as <see cref="Write"/> writes,
+    /// with the mode the file read has on Linux and macOS, as the platform's own copy keeps it - a script stays one to run.
     /// </summary>
-    /// <param name="fileSystem">Reads, writes and names the files.</param>
+    /// <param name="fileSystem">Holds both files' directories.</param>
     /// <param name="sourceRoot">The root of the place the file is read from.</param>
     /// <param name="source">The file read.</param>
     /// <param name="destinationRoot">The root of the place it is written in.</param>
@@ -172,23 +125,89 @@ public static class UnfollowedFiles
     {
         using var read = OpenRead(fileSystem, sourceRoot, source);
 
-        Write(fileSystem, destinationRoot, destination, write => read.CopyTo(write));
+        Written(fileSystem, destinationRoot, destination, write => read.CopyTo(write), ModeOf(read));
+    }
+
+    /// <summary>The mode <paramref name="read"/>'s file has, as a copy of it is given it on Linux and macOS; null on Windows, which keeps none.</summary>
+    /// <param name="read">A file opened by <see cref="OpenRead"/>.</param>
+    internal static Func<UnixFileMode, UnixFileMode>? ModeOf(Stream read)
+    {
+        if (OperatingSystem.IsWindows() || read is not FileStream { SafeFileHandle: var handle })
+        {
+            return null;
+        }
+
+        var mode = File.GetUnixFileMode(handle);
+
+        return _ => mode;
     }
 
     /// <summary>
-    /// Removes the file at <paramref name="path"/>, below <paramref name="root"/> - refused where a link stands on the way
-    /// to it; a link at its own place is removed itself, never what it leads to.
+    /// <see cref="Write(IFileSystem, string, string, Action{Stream})"/>, the file given what <paramref name="mode"/> answers
+    /// on Linux and macOS where it is given, in place of the mode of the file it replaces, and read back by
+    /// <paramref name="check"/> before it is put in place where that is given (<see cref="HeldDirectory.Write"/>).
     /// </summary>
-    /// <param name="fileSystem">Removes the file.</param>
+    internal static void Written(IFileSystem fileSystem, string root, string path, Action<Stream> write, Func<UnixFileMode, UnixFileMode>? mode, Action<Stream>? check = null)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+
+        var (directory, name) = Split(root, path);
+
+        using var held = Held(fileSystem, root, directory, make: true, path);
+
+        held.Write(name, write, mode, check);
+    }
+
+    /// <summary>
+    /// Removes the file at <paramref name="path"/>, below <paramref name="root"/> - refused where a link stands on the way to
+    /// it; a link at its own place is removed itself, never what it leads to; nothing where no file is there.
+    /// </summary>
+    /// <param name="fileSystem">Holds the file's directory.</param>
     /// <param name="root">The place's root.</param>
     /// <param name="path">The file.</param>
-    /// <exception cref="IOException">A link stands on the way, or the file could not be removed.</exception>
+    /// <exception cref="LinkOnTheWayException">A link stands on the way.</exception>
+    /// <exception cref="IOException">The file could not be removed.</exception>
     public static void Delete(IFileSystem fileSystem, string root, string path)
     {
-        ArgumentNullException.ThrowIfNull(fileSystem);
+        var (directory, name) = Split(root, path);
 
-        Refuse(LinkOnTheWay(fileSystem, root, path, itself: false), path);
-        fileSystem.DeleteFile(path);
+        try
+        {
+            using var held = Held(fileSystem, root, directory, make: false, path);
+
+            held.DeleteFile(name);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or HeldIsADirectoryException)
+        {
+            // No file there - nothing, a directory, or no directory it would be in: nothing to remove.
+        }
+    }
+
+    /// <summary>
+    /// Removes the directory at <paramref name="path"/>, below <paramref name="root"/>, and everything in it - refused where a
+    /// link stands on the way to it; every entry removed relative to the directory it is in, a link anywhere among them
+    /// removed itself and never entered, a link at <paramref name="path"/> itself removed as a link; nothing where nothing
+    /// is there.
+    /// </summary>
+    /// <param name="fileSystem">Holds the directory's parent.</param>
+    /// <param name="root">The place's root.</param>
+    /// <param name="path">The directory.</param>
+    /// <exception cref="LinkOnTheWayException">A link stands on the way.</exception>
+    /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
+    public static void DeleteDirectory(IFileSystem fileSystem, string root, string path)
+    {
+        var (directory, name) = Split(root, path);
+
+        try
+        {
+            using var held = Held(fileSystem, root, directory, make: false, path);
+
+            held.DeleteDirectory(name);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // No directory it would be in: nothing to remove.
+        }
     }
 
     /// <summary>
@@ -198,49 +217,71 @@ public static class UnfollowedFiles
     /// <param name="fileSystem">Makes the directories.</param>
     /// <param name="root">The place's root.</param>
     /// <param name="directory">The directory.</param>
-    /// <exception cref="IOException">A link stands on the way, or a directory could not be made.</exception>
+    /// <exception cref="LinkOnTheWayException">A link stands on the way, or at the directory.</exception>
+    /// <exception cref="IOException">A directory could not be made.</exception>
     public static void CreateDirectory(IFileSystem fileSystem, string root, string directory)
+    {
+        using var held = Held(fileSystem, root, directory, make: true, directory);
+    }
+
+    /// <summary>
+    /// Moves the entry at <paramref name="source"/> to <paramref name="destination"/>, both below <paramref name="root"/>: the
+    /// entry renamed as itself - a link moved as the link - from its directory, held, into the destination's, held and made
+    /// where it is not there, replacing what is there only where <paramref name="replace"/>; refused where a link stands on
+    /// either's way.
+    /// </summary>
+    /// <param name="fileSystem">Holds both directories.</param>
+    /// <param name="root">The place's root.</param>
+    /// <param name="source">The entry moved.</param>
+    /// <param name="destination">Where it goes.</param>
+    /// <param name="replace">Whether what is at <paramref name="destination"/> is replaced; refused where false and something is.</param>
+    /// <exception cref="LinkOnTheWayException">A link stands on either's way.</exception>
+    /// <exception cref="IOException">It could not be moved, or something is at the destination and it was not to be replaced.</exception>
+    public static void Move(IFileSystem fileSystem, string root, string source, string destination, bool replace)
+    {
+        var (from, fromName) = Split(root, source);
+        var (to, toName) = Split(root, destination);
+
+        using var fromHeld = Held(fileSystem, root, from, make: false, source);
+        using var toHeld = Held(fileSystem, root, to, make: true, destination);
+
+        fromHeld.Move(fromName, toHeld, toName, replace);
+    }
+
+    /// <summary>The directory <paramref name="directory"/>, below or at <paramref name="root"/>, held.</summary>
+    private static HeldDirectory Held(IFileSystem fileSystem, string root, string directory, bool make, string asked)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
 
-        Refuse(LinkOnTheWay(fileSystem, root, directory, itself: true), directory);
-        fileSystem.CreateDirectory(directory);
+        // Where the way is to be made, the root is made first where it is not there: the root is the place taken as it
+        // is, above every link the walk refuses, and a write that makes the way makes it as it made the rest - a pull's
+        // landing, before its first file, is a root that is not there yet.
+        if (make)
+        {
+            fileSystem.CreateDirectory(root);
+        }
+
+        return fileSystem.Hold(root, directory, make, asked);
     }
 
-    /// <summary>The names on the way from <paramref name="root"/> to <paramref name="path"/>, in order.</summary>
-    private static List<string> Parts(string root, string path)
+    /// <summary><paramref name="path"/>'s directory and its own name, where it is below <paramref name="root"/>.</summary>
+    private static (string Directory, string Name) Split(string root, string path)
+    {
+        Below(root, path);
+
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+        return (Path.GetDirectoryName(full)!, Path.GetFileName(full));
+    }
+
+    /// <summary>The names on the way from <paramref name="root"/> to <paramref name="path"/>, in order; at least one.</summary>
+    private static IReadOnlyList<string> Below(string root, string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        var relative = Path.GetRelativePath(root, path);
+        var names = HeldDirectory.Names(root, path);
 
-        return relative == "." || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relative)
-            ? throw new ArgumentException($"'{path}' is not below '{root}'.", nameof(path))
-            : [.. relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)];
-    }
-
-    /// <summary>Refuses a path a link stands on the way to.</summary>
-    private static void Refuse(string? link, string path)
-    {
-        if (link is not null)
-        {
-            throw new IOException($"'{path}' is reached through the link '{link}', which the tool never follows in a place an isolated process writes");
-        }
-    }
-
-    /// <summary>
-    /// Refuses a file the system names at <paramref name="opened"/> where its path, <paramref name="path"/>, does not
-    /// stand there: <paramref name="root"/> as the system names it, then the names below it as the path spells them. Told
-    /// apart whatever the letter case, as a link leads elsewhere, never to another case of its own name.
-    /// </summary>
-    private static void Held(IFileSystem fileSystem, string root, string path, string opened)
-    {
-        var expected = Path.Join(fileSystem.FinalPathOfDirectory(root), Path.GetRelativePath(root, path));
-
-        if (!string.Equals(Path.GetFullPath(expected), Path.GetFullPath(opened), StringComparison.OrdinalIgnoreCase))
-        {
-            throw new IOException($"'{path}' was opened as '{opened}', where a link put on its way leads, which the tool never follows in a place an isolated process writes");
-        }
+        return names.Count > 0 ? names : throw new ArgumentException($"'{path}' is not below '{root}'.", nameof(path));
     }
 }

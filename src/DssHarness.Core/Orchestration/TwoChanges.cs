@@ -381,7 +381,8 @@ public readonly record struct FileIdentity(string Digest, bool Executable);
 /// <param name="File">The file.</param>
 /// <param name="Tree">The tree it is in, as a stop names it.</param>
 /// <param name="Weighed">What it was when it was weighed: what the merge may be written over, and nothing else.</param>
-public sealed record MergeTarget(string File, string Tree, FileIdentity Weighed);
+/// <param name="Root">The tree's root, the merge written relative to the file's directory held from it with no link on the way.</param>
+public sealed record MergeTarget(string File, string Tree, FileIdentity Weighed, string Root);
 
 /// <summary>A path merged three ways, as a plan holds it until it is written.</summary>
 /// <param name="Path">The path.</param>

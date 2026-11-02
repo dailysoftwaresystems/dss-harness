@@ -87,12 +87,14 @@ public sealed record AgentContinuationWork(
 /// The continuation record: text the engine puts together each time from the
 /// step directories of the agent - what it is, the steps so far, the files changed, the last red build or test, the
 /// handoff, and the last iterations word for word from the stored stream of the newest attempt - nothing in it written
-/// or shortened by a model, whatever is cut named with a file that holds it whole, the copies put in the agent's own
-/// <c>continuation/</c> so the record never points into the run's records.
+/// or shortened by a model, whatever is cut named with a file that holds it whole, the copies put in <c>continuation/</c>
+/// of what the step's agent is handed (<see cref="Orchestration.OrchestratorLayout.HandedDirectory"/>): a place the agent
+/// reads and no command of its writes, so the record never points into the rest of the run's records and nothing the
+/// agent planted leads the copies elsewhere.
 /// </summary>
 public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOutput output)
 {
-    /// <summary>The folder, in the agent's work directory, the copies a record names are put in.</summary>
+    /// <summary>The folder, in what the step's agent is handed, the copies a record names are put in.</summary>
     public const string CopiesFolder = "continuation";
 
     /// <summary>The handoff's heading, as the record gives it its own.</summary>
@@ -111,21 +113,22 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
     /// <summary>
     /// The continuation record of <paramref name="work"/>: its parts in their order, the last iterations of the newest
     /// attempt read from the going-on step's stored stream, every part that was cut named with the copy of it put in
-    /// <paramref name="workDirectory"/>'s <c>continuation/</c> - each step's notes and output, the stream of the newest
-    /// attempt, and the results the iterations name.
+    /// <paramref name="handed"/>'s <c>continuation/</c> - each step's notes and output, the stream of the newest attempt,
+    /// and the results the iterations name - each written relative to <paramref name="handed"/>, held, never through a link.
     /// </summary>
     /// <param name="work">The work, as the engine resolved it.</param>
-    /// <param name="workDirectory">The agent's work directory, its copies put under it.</param>
+    /// <param name="handed">Where the step's agent is handed what it reads, its copies put under it.</param>
     /// <param name="bounds">The record's bounds.</param>
     /// <returns>The record, whole.</returns>
-    public string Render(AgentContinuationWork work, string workDirectory, AgentContinuationBounds bounds)
+    public string Render(AgentContinuationWork work, string handed, AgentContinuationBounds bounds)
     {
         ArgumentNullException.ThrowIfNull(work);
-        ArgumentException.ThrowIfNullOrWhiteSpace(workDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(handed);
         ArgumentNullException.ThrowIfNull(bounds);
 
-        var copies = Path.Combine(workDirectory, CopiesFolder);
-        Copy(work, copies);
+        var copies = Path.Combine(handed, CopiesFolder);
+        _fileSystem.CreateDirectory(handed);
+        Copy(work, handed, copies);
 
         // Part 1: what it is.
         var part1 = $"You are going on with work begun by step '{work.GoingOn}'. This is a new conversation. What follows is the engine's record of that work, ending with its last iterations word for word; the files are as that work left them.";
@@ -238,13 +241,13 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
             + (paths.Count > bounds.Paths ? $"{NL}... and {Invariant(paths.Count - bounds.Paths)} more, not listed" : string.Empty);
     }
 
-    /// <summary>Puts the copies the record names into <paramref name="copies"/>: each step's notes and output, the stream of the newest attempt, and the results the stream names - replaced by the next record, never pointing into the run's records.</summary>
-    private void Copy(AgentContinuationWork work, string copies)
+    /// <summary>Puts the copies the record names into <paramref name="copies"/>, under <paramref name="handed"/>: each step's notes and output, the stream of the newest attempt, and the results the stream names - replaced by the next record, never pointing into the run's records.</summary>
+    private void Copy(AgentContinuationWork work, string handed, string copies)
     {
         foreach (var step in work.Steps)
         {
-            Copied(Path.Combine(step.Directory, OrchestratorLayout.StepNotesFileName), Copy(copies, step, "notes.md"));
-            Copied(Path.Combine(step.Directory, "output.json"), Copy(copies, step, "output.json"));
+            Copied(handed, Path.Combine(step.Directory, OrchestratorLayout.StepNotesFileName), Copy(copies, step, "notes.md"));
+            Copied(handed, Path.Combine(step.Directory, "output.json"), Copy(copies, step, "output.json"));
         }
 
         if (work.StepDirectory.Length == 0)
@@ -252,24 +255,29 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
             return;
         }
 
-        Copied(Path.Combine(work.StepDirectory, StoredStream.FileName), Path.Combine(copies, StoredStream.FileName));
+        Copied(handed, Path.Combine(work.StepDirectory, StoredStream.FileName), Path.Combine(copies, StoredStream.FileName));
 
         foreach (var line in _store.ReadStepStream(work.StepDirectory))
         {
             if (line is ToolCallFinished { ResultFile: { } file } && Path.GetFileName(file) is { Length: > 0 } name)
             {
-                Copied(file, Path.Combine(copies, AgentCallRecords.ToolResultsDirectoryName, name));
+                Copied(handed, file, Path.Combine(copies, AgentCallRecords.ToolResultsDirectoryName, name));
             }
         }
     }
 
-    /// <summary>Copies <paramref name="from"/> to <paramref name="to"/> where it is there, making the directory; what is not there names nothing.</summary>
-    private void Copied(string from, string to)
+    /// <summary>
+    /// Copies <paramref name="from"/>, a record of the run's, to <paramref name="to"/> under <paramref name="handed"/> where
+    /// it is there, relative to the directories held from <paramref name="handed"/> and made on the way; what is not there
+    /// names nothing.
+    /// </summary>
+    private void Copied(string handed, string from, string to)
     {
         if (_fileSystem.FileExists(from))
         {
-            _fileSystem.CreateDirectory(Path.GetDirectoryName(to)!);
-            _fileSystem.WriteAllTextAtomic(to, _fileSystem.ReadAllText(from));
+            using var read = _fileSystem.OpenRead(from);
+
+            UnfollowedFiles.Write(_fileSystem, handed, to, write => read.CopyTo(write));
         }
     }
 
@@ -305,7 +313,7 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
         return head[..(head[cut - 1] == '\r' ? cut - 1 : cut)];
     }
 
-    /// <summary>The name of a step's copy in the agent's <c>continuation/</c>: its instance, made one a file name holds, and the file's own name.</summary>
+    /// <summary>The name of a step's copy in <c>continuation/</c>: its instance, made one a file name holds, and the file's own name.</summary>
     private static string Copy(string copies, AgentContinuedStep step, string file)
         => Path.Combine(copies, $"{step.Instance.Replace(Path.DirectorySeparatorChar, '_').Replace(Path.AltDirectorySeparatorChar, '_')}-{file}");
 

@@ -33,6 +33,10 @@ public static class AgentStepGround
     /// Whether the run only reads whatever its definition gives it - the run's advisor, which works where the asking step
     /// works and writes nothing there, and its reporter: its own work directory is all it writes.
     /// </param>
+    /// <param name="handed">
+    /// Where the step's agent is handed what it reads - its skills, its continuation record's copies
+    /// (<see cref="OrchestratorLayout.HandedDirectory"/>) - a root it reads and never writes; null where it is handed none.
+    /// </param>
     public static AgentPolicyGround Of(
         HarnessConfig config,
         AgentDefinition? definition,
@@ -41,7 +45,8 @@ public static class AgentStepGround
         bool webSearchGiven,
         IReadOnlyList<string> claudeDirectories,
         IReadOnlyList<Isolation.HiddenPlace> credentialPlaces,
-        bool readsOnly = false)
+        bool readsOnly = false,
+        string? handed = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(step);
@@ -83,6 +88,11 @@ public static class AgentStepGround
         if (workspace.Worktree is null)
         {
             reads.Add(workspace.MainCheckout);
+        }
+
+        if (handed is not null)
+        {
+            reads.Add(handed);
         }
 
         // A worktree is written only where the agent writes: a definition's `writes: false`, and a run that only reads,

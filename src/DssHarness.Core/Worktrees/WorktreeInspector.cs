@@ -325,7 +325,9 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             commits,
             record.Commit,
             await FindSubmoduleLossesAsync(repositories, cancellationToken).ConfigureAwait(false),
-            record.LockReason,
+
+            // git's list says it is locked; why is read here, as every record of the worktree's is, never through a link.
+            record.LockReason is null ? null : ReadLockReason(administrativeDirectory) ?? string.Empty,
             HoldsSubmodules: false);
     }
 
@@ -682,14 +684,14 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
         try
         {
-            if (!_fileSystem.FileExists(gitdirFile))
+            if (RecordText(administrativeDirectory, gitdirFile) is not { } record)
             {
                 return null;
             }
 
             // The record holds the path of the worktree's .git file: absolute, or relative to the
             // record's own directory when worktree.useRelativePaths is set.
-            var dotGit = Path.GetFullPath(Path.Combine(administrativeDirectory, _fileSystem.ReadAllText(gitdirFile).Trim()));
+            var dotGit = Path.GetFullPath(Path.Combine(administrativeDirectory, record.Trim()));
             var recorded = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(dotGit));
 
             // Resolved, because every path this is compared with comes from git resolved. A record
@@ -706,6 +708,24 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         }
     }
 
+    /// <summary>
+    /// The text of one of git's records of a worktree in <paramref name="administrativeDirectory"/>, or null where none is
+    /// there: read relative to that directory, held from git's directory of every worktree's records with no link on the
+    /// way (<see cref="UnfollowedFiles"/>) - a worktree's own records are a place its agent's commands write, and a link
+    /// put there would have this read, outside every isolation, print what a hidden place holds.
+    /// </summary>
+    private string? RecordText(string administrativeDirectory, string file)
+    {
+        if (!_fileSystem.FileExists(file))
+        {
+            return null;
+        }
+
+        using var reader = new StreamReader(UnfollowedFiles.OpenRead(_fileSystem, Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(administrativeDirectory))!, file));
+
+        return reader.ReadToEnd();
+    }
+
     /// <summary>Why the worktree is locked, or <see langword="null"/> when it is not.</summary>
     private string? ReadLockReason(string administrativeDirectory)
     {
@@ -714,7 +734,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
         try
         {
-            return _fileSystem.FileExists(lockFile) ? _fileSystem.ReadAllText(lockFile).Trim() : null;
+            return RecordText(administrativeDirectory, lockFile)?.Trim();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

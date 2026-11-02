@@ -98,9 +98,9 @@ public sealed class WorkerSiteTests
         }
 
         var stamp = new DateTime(2031, 5, 4, 3, 2, 1, DateTimeKind.Utc);
-        var read = Assert.Throws<IOException>(() => site.Read(worker.Path, linked));
-        var readThrough = Assert.Throws<IOException>(() => site.Read(worker.Path, through));
-        var written = await Assert.ThrowsAsync<IOException>(() => site.WriteAsync(worker.Path, through, "planted\n"u8.ToArray(), stamp, TestContext.Current.CancellationToken));
+        var read = Assert.Throws<LinkOnTheWayException>(() => site.Read(worker.Path, linked));
+        var readThrough = Assert.Throws<LinkOnTheWayException>(() => site.Read(worker.Path, through));
+        var written = await Assert.ThrowsAsync<LinkOnTheWayException>(() => site.WriteAsync(worker.Path, through, "planted\n"u8.ToArray(), stamp, TestContext.Current.CancellationToken));
 
         Assert.Equal($"'{linked}' is reached through the link '{linked}', which the tool never follows in a place an isolated process writes", read.Message);
         Assert.Equal($"'{through}' is reached through the link '{worker.Combine("lib")}', which the tool never follows in a place an isolated process writes", readThrough.Message);

@@ -226,6 +226,32 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>
+    /// The places the isolation hides from every command are one list, which a read of the tool's that follows a link - a
+    /// pull - is held to as every profile is: the main checkout's credential slots, every Claude Code directory, and the
+    /// file Claude Code keeps beside one named .claude.
+    /// </summary>
+    [Fact]
+    public async Task TheHiddenPlaces_AreTheSlots_AndEveryClaudeCodeDirectory_WithItsFile()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var claude = Directory.CreateDirectory(Path.Combine(home.Path, ".claude")).FullName;
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+
+        var hidden = isolation.Hidden(new HarnessConfig { Worktrees = OrchestrationKit.Settings }, kit.Main);
+
+        Assert.Equal(
+            [
+                .. HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Select(slot => new IsolatedPath(slot, Directory: true)),
+                new IsolatedPath(claude, Directory: true),
+                new IsolatedPath(claude + ".json", Directory: false),
+                .. UserCredentials.Of(new HarnessConfig(), home.Path, new HostPlatform().Current, _ => null).Select(credential => new IsolatedPath(credential.Path, credential.Directory)),
+            ],
+            hidden);
+    }
+
+    /// <summary>
     /// Under a mechanism that gives the child a temporary directory of its own and takes no command handed to it, a launch
     /// names no temporary directory and makes none, its variables the declared caches' alone; a Claude Code launch's whole
     /// process is given the commands' profile with the Claude Code directory and its file read, the slots still hidden; and

@@ -26,6 +26,9 @@ internal sealed class TestIsolation(
     /// <summary>Every execution that asked, in order: its ground.</summary>
     public List<ExecutionGround> Executions { get; } = [];
 
+    /// <summary>The places it hides (<see cref="IAgentIsolation.Hidden"/>): none where left out.</summary>
+    public IReadOnlyList<IsolatedPath> HiddenPlaces { get; init; } = [];
+
     /// <summary>An execution's answer under a mechanism of the test's: <paramref name="mechanism"/>, and a profile that names each of the ground's writable roots.</summary>
     /// <param name="mechanism">The mechanism.</param>
     /// <param name="after">What it answers once it has run (<see cref="IsolationDecision.AfterwardAsync"/>); nothing where left out.</param>
@@ -71,6 +74,9 @@ internal sealed class TestIsolation(
 
         return Task.FromResult(execution?.Invoke(config, ground) ?? new ExecutionIsolation(ground.Kind, AgentIsolationMode.Of(config), null, null, NotAsked, null));
     }
+
+    /// <inheritdoc/>
+    public IReadOnlyList<IsolatedPath> Hidden(HarnessConfig config, string mainCheckout) => HiddenPlaces;
 }
 
 /// <summary>A mechanism of a test's: it hands the program its own command line unchanged, recording each it was asked for.</summary>

@@ -524,6 +524,18 @@ public sealed record OrchestratorLayout(string Name, string Directory)
             ? StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance))
             : AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance));
 
+    /// <summary>
+    /// The folder, in a step's own directory, of what the engine hands the step's agent to read: the skills its prompt
+    /// names and the copies its continuation record names. The tool alone writes it, in the launch's own directory, which
+    /// no command of the agent's writes, so nothing a command planted there leads a write of the tool's elsewhere; the
+    /// agent reads it as a root of its own.
+    /// </summary>
+    public const string HandedDirectoryName = "handed";
+
+    /// <summary>Where a step's agent is handed what it reads (<see cref="HandedDirectoryName"/>), in the step's own directory.</summary>
+    /// <param name="stepDirectory">The step's own directory.</param>
+    public static string HandedDirectory(string stepDirectory) => Path.Combine(stepDirectory, HandedDirectoryName);
+
     /// <summary>Where a refresh or a rebase of <c>others</c> kept at <paramref name="stepDirectory"/> keeps what it did to <paramref name="agent"/>.</summary>
     /// <param name="stepDirectory">The step's own directory.</param>
     /// <param name="agent">The target's name.</param>

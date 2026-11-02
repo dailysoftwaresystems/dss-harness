@@ -155,6 +155,10 @@ public sealed class ReasonStepRunner(
 
         var workspace = launch.Workspace(agentRecord, context.Layout, layout.WorkDirectory(agent), layout.Directory);
         var (webSearch, webMask) = await WebSearchOf(context, providers, root, cancellationToken).ConfigureAwait(false);
+
+        // What the step's agent is handed to read - its skills, its continuation record's copies - the tool writes in the
+        // launch's own directory, which no command of the agent's writes, and the agent reads as a root of its own.
+        var handed = OrchestratorLayout.HandedDirectory(StepDirectoryOf(layout, run.Instance, agent));
         var ground = AgentStepGround.Of(
             context.Config,
             definition,
@@ -162,7 +166,8 @@ public sealed class ReasonStepRunner(
             workspace,
             webSearch is not null,
             launch.ClaudeDirectories(context.Config, context.Layout),
-            launch.CredentialPlaces(context.Config));
+            launch.CredentialPlaces(context.Config),
+            handed: handed);
 
         // The operating system's isolation the agent's commands run under, decided before anything of the step is handed
         // over: where agentPolicy.isolation is required and this machine has none, the step does not start, saying why and
@@ -174,7 +179,7 @@ public sealed class ReasonStepRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, unisolated);
         }
 
-        // The prompt with each skill it names handed over: the folder copied into the agent's own work directory, the
+        // The prompt with each skill it names handed over: the folder copied into what the step's agent is handed, the
         // block put in the prompt's place, and what cannot be handed refused here - the step-start half of the skill's
         // failing loud twice, held to the capabilities the agent's own ground gives it. The resume prompt, where the
         // step goes on with earlier work and names one, in its place. An attempt that goes on with an answer - a
@@ -209,14 +214,14 @@ public sealed class ReasonStepRunner(
         {
             session = Guid.NewGuid().ToString("D");
 
-            var handed = SkillBlocks(goingOn is { Compact: true } || resume is null ? readPrompt : resume, run, root.Agent ?? agent, ground.Capabilities, workspace, resolution, session);
+            var given = SkillBlocks(goingOn is { Compact: true } || resume is null ? readPrompt : resume, run, root.Agent ?? agent, ground.Capabilities, workspace, handed, resolution, session);
 
-            if (handed.Refused is { } refusedSkill)
+            if (given.Refused is { } refusedSkill)
             {
                 return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, refusedSkill);
             }
 
-            (filled, skills) = (handed.Prompt!, handed.Skills);
+            (filled, skills) = (given.Prompt!, given.Skills);
         }
 
         // The handoff the attempt is given - a stop wrote it, or a limit the attempt before this one reached - stands
@@ -240,8 +245,8 @@ public sealed class ReasonStepRunner(
         }
 
         var conversation = goingOn is null or { Compact: true } ? null : SessionIn(stream, layout, agent);
-        var ownContinuation = goingOn is null || conversation is not null ? null : await OwnContinuationOfAsync(layout, agent, run, context, cancellationToken).ConfigureAwait(false);
-        var continuation = ownContinuation ?? await ContinuationOfAsync(run, layout, agent, context, cancellationToken).ConfigureAwait(false);
+        var ownContinuation = goingOn is null || conversation is not null ? null : await OwnContinuationOfAsync(layout, agent, run, handed, context, cancellationToken).ConfigureAwait(false);
+        var continuation = ownContinuation ?? await ContinuationOfAsync(run, layout, agent, handed, context, cancellationToken).ConfigureAwait(false);
         var compaction = goingOn is { Compact: true } ? CompactedFrom(stream, run.Attempt, context) : null;
 
         var request = new AgentStepRequest(
@@ -624,15 +629,16 @@ public sealed class ReasonStepRunner(
     /// <summary>
     /// The continuation record of the work the step goes on with, where it goes on with any: the instances the engine
     /// named as its sources rendered whole - each as its own record says it ended - the paths this agent's folds wrote
-    /// and its worktree holds unfolded, and the red legs of its newest red build or test, their copies put in the
-    /// agent's own work directory. Null where the step begins its own work.
+    /// and its worktree holds unfolded, and the red legs of its newest red build or test, their copies put in what the
+    /// step's agent is handed. Null where the step begins its own work.
     /// </summary>
     /// <param name="run">The step, with the instances whose working sets its context pack is seeded from.</param>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as.</param>
+    /// <param name="handed">Where the step's agent is handed what it reads, the copies put under it.</param>
     /// <param name="context">The repository's context, whose configuration bounds the record.</param>
     /// <param name="cancellationToken">Stops the reading of the worktree.</param>
-    private async Task<string?> ContinuationOfAsync(FlowStepRun run, OrchestratorLayout layout, string agent, HarnessContext context, CancellationToken cancellationToken)
+    private async Task<string?> ContinuationOfAsync(FlowStepRun run, OrchestratorLayout layout, string agent, string handed, HarnessContext context, CancellationToken cancellationToken)
     {
         if (!GoesOnWithEarlierWork(run) || run.WorkedFrom is not [_, ..] worked)
         {
@@ -654,7 +660,7 @@ public sealed class ReasonStepRunner(
 
         return new AgentContinuation(fileSystem, harnessOutput).Render(
             work,
-            layout.WorkDirectory(agent),
+            handed,
             AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation));
     }
 
@@ -667,9 +673,10 @@ public sealed class ReasonStepRunner(
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as.</param>
     /// <param name="run">The step.</param>
+    /// <param name="handed">Where the step's agent is handed what it reads, the copies put under it.</param>
     /// <param name="context">The repository's context, whose configuration bounds the record.</param>
     /// <param name="cancellationToken">Stops the reading of the worktree.</param>
-    private async Task<string?> OwnContinuationOfAsync(OrchestratorLayout layout, string agent, FlowStepRun run, HarnessContext context, CancellationToken cancellationToken)
+    private async Task<string?> OwnContinuationOfAsync(OrchestratorLayout layout, string agent, FlowStepRun run, string handed, HarnessContext context, CancellationToken cancellationToken)
     {
         var work = new AgentContinuationWork(
             run.Instance,
@@ -680,7 +687,7 @@ public sealed class ReasonStepRunner(
 
         return new AgentContinuation(fileSystem, harnessOutput).Render(
             work,
-            layout.WorkDirectory(agent),
+            handed,
             AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation));
     }
 
@@ -859,7 +866,7 @@ public sealed class ReasonStepRunner(
     /// joined as the engine filled it, never read as a template again, so a value's braces stay as the value holds
     /// them: every <c>{skill.&lt;name&gt;}</c> read again where the step starts - its name by the one rule of a skill's
     /// name, the first place that has the folder deciding, one that is there and cannot be used refused, never fallen
-    /// past - the folder copied whole into the agent's <c>skills/&lt;name&gt;/</c> in place of an earlier copy, and the
+    /// past - the folder copied whole into <c>skills/&lt;name&gt;/</c> of what the step's agent is handed, in place of an earlier copy, and the
     /// block put where the placeholder stood, its tools held to the capabilities the agent's own ground gives it and
     /// its <c>${CLAUDE_SESSION_ID}</c> the session the run begins as. Every skill that could not be handed is the
     /// prompt's refusal, said whole; the skills handed are what the step's stream records.
@@ -868,7 +875,8 @@ public sealed class ReasonStepRunner(
     /// <param name="run">The step, whose instance names the skills.</param>
     /// <param name="agent">The agent a refusal names: the definition the step works by, else the agent it works as.</param>
     /// <param name="capabilities">The capabilities the agent's own ground gives it, its tools held to them.</param>
-    /// <param name="workspace">Where the run works, the skills copied under its work directory.</param>
+    /// <param name="workspace">Where the run works.</param>
+    /// <param name="handed">Where the step's agent is handed what it reads, the skills copied under it.</param>
     /// <param name="resolution">The step's resolution, whose effort the blocks are given.</param>
     /// <param name="session">The id the run's first session begins as.</param>
     private HandedSkills SkillBlocks(
@@ -877,13 +885,14 @@ public sealed class ReasonStepRunner(
         string agent,
         IReadOnlyList<AgentCapability> capabilities,
         AgentWorkspace workspace,
+        string handed,
         AgentResolution resolution,
         string session)
     {
         var skills = new AgentSkills(fileSystem, platform, workspace.MainCheckout);
         var may = capabilities.Select(one => one.ToString().ToLowerInvariant()).ToList();
         var filled = new StringBuilder();
-        var handed = new List<AgentSkill>();
+        var given = new List<AgentSkill>();
 
         foreach (var piece in pieces)
         {
@@ -908,7 +917,7 @@ public sealed class ReasonStepRunner(
                 return HandedSkills.RefusedFor(string.Join(" ", refused));
             }
 
-            var directory = skills.Copy(found, workspace.WorkDirectory);
+            var directory = skills.Copy(found, handed);
 
             if (found.Block(directory, workspace.Worktree ?? workspace.MainCheckout, session, resolution.Serving.Effort ?? string.Empty, out var unread) is not { } block)
             {
@@ -916,10 +925,10 @@ public sealed class ReasonStepRunner(
             }
 
             filled.Append(block);
-            handed.Add(new AgentSkill(found.Name, found.From, found.File, found.Digest!, found.FolderDigest!, directory));
+            given.Add(new AgentSkill(found.Name, found.From, found.File, found.Digest!, found.FolderDigest!, directory));
         }
 
-        return new HandedSkills(filled.ToString(), handed, Refused: null);
+        return new HandedSkills(filled.ToString(), given, Refused: null);
     }
 
     /// <summary>The prompt with its skills handed over, or why one could not be.</summary>

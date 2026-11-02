@@ -538,50 +538,27 @@ public sealed class TestServiceTests
             => Path.GetFullPath(path) == Path.GetFullPath(understated) && base.StandingOf(path) is { } standing ? standing with { Length = 1 } : base.StandingOf(path);
     }
 
-    /// <summary>A file system whose read of one file gives more than its entry says, and cannot say its length ahead: a log still written as it is read.</summary>
+    /// <summary>
+    /// A file system whose read of one file gives more than its entry said when the read was planned: a log still written
+    /// as the keep reads it, grown the moment the keep reaches for it relative to a directory held.
+    /// </summary>
     private sealed class GrowingRead(IFileSystem inner, string growing, int bytes) : PassThroughFileSystem(inner)
     {
-        public override Stream OpenRead(string path)
-            => Path.GetFullPath(path) == Path.GetFullPath(growing) ? new Unmeasured(new MemoryStream(new byte[bytes])) : base.OpenRead(path);
+        private bool _grown;
 
-        /// <summary>The growing file stands where its path says, as the system would name it open.</summary>
-        public override string FinalPathOf(Stream opened)
-            => opened is Unmeasured ? Path.Join(FinalPathOfDirectory(Path.GetDirectoryName(Path.GetFullPath(growing))!), Path.GetFileName(growing)) : base.FinalPathOf(opened);
-
-        /// <summary>A stream read forward alone, which cannot say its length.</summary>
-        private sealed class Unmeasured(Stream inner) : Stream
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
         {
-            public override bool CanRead => true;
-
-            public override bool CanSeek => false;
-
-            public override bool CanWrite => false;
-
-            public override long Length => throw new NotSupportedException("a stream still written has no length yet");
-
-            public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
-
-            public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
-
-            public override void Flush()
+            if (asked is not null && !_grown && Path.GetFullPath(asked) == Path.GetFullPath(growing))
             {
-            }
-
-            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-
-            public override void SetLength(long value) => throw new NotSupportedException();
-
-            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-            protected override void Dispose(bool disposing)
-            {
-                if (disposing)
+                _grown = true;
+                using (File.Open(growing, FileMode.Append, FileAccess.Write))
                 {
-                    inner.Dispose();
                 }
 
-                base.Dispose(disposing);
+                File.WriteAllText(growing, new string('g', bytes));
             }
+
+            return base.Hold(anchor, directory, make, asked);
         }
     }
 
@@ -609,17 +586,17 @@ public sealed class TestServiceTests
         }
     }
 
-    /// <summary>A file system that stops the run as one file is opened: a stop that comes while the evidence crosses.</summary>
+    /// <summary>A file system that stops the run as one file is reached for its read: a stop that comes while the evidence crosses.</summary>
     private sealed class StopsOnOpen(IFileSystem inner, string stopping, CancellationTokenSource stop) : PassThroughFileSystem(inner)
     {
-        public override Stream OpenRead(string path)
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
         {
-            if (Path.GetFullPath(path) == Path.GetFullPath(stopping))
+            if (asked is not null && Path.GetFullPath(asked) == Path.GetFullPath(stopping))
             {
                 stop.Cancel();
             }
 
-            return base.OpenRead(path);
+            return base.Hold(anchor, directory, make, asked);
         }
     }
 
@@ -629,8 +606,15 @@ public sealed class TestServiceTests
     /// </summary>
     private sealed class RefusingReads(IFileSystem inner, string refused) : PassThroughFileSystem(inner)
     {
-        public override Stream OpenRead(string path)
-            => path == refused ? throw new UnauthorizedAccessException($"'{path}' is held") : base.OpenRead(path);
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            if (asked is not null && Path.GetFullPath(asked) == Path.GetFullPath(refused))
+            {
+                throw new UnauthorizedAccessException($"'{asked}' is held");
+            }
+
+            return base.Hold(anchor, directory, make, asked);
+        }
     }
 
     [Fact]

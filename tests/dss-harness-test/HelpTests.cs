@@ -369,7 +369,7 @@ public sealed partial class HelpTests
                 + "output, the files changed, the last red build or test, the handoff, and the last iterations of the newest "
                 + "attempt word for word from its stored stream, every run of the attempt numbered as one, each message the "
                 + "engine sent the agent in its place - nothing in it written or shortened by a model, and whatever is cut "
-                + "named with a copy in the agent's work/continuation/. Its bounds are agentContext.continuation's - "
+                + $"named with a copy in the step's own {DssHarness.Core.Orchestration.OrchestratorLayout.HandedDirectoryName}/{DssHarness.Core.Agents.AgentContinuation.CopiesFolder}/, which the tool alone writes and the agent reads, never where its commands write. Its bounds are agentContext.continuation's - "
                 + $"recordChars ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultRecordChars}), "
                 + $"stepChars ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultStepChars}), "
                 + $"paths ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultPaths}), "
@@ -565,8 +565,10 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The folder is copied whole into the agent's work directory, work/<agent>/skills/<name>/, in place of any "
-                + $"earlier copy; that path is the directory the text states and what ${{CLAUDE_SKILL_DIR}} becomes. The work directory is a root every agent already reads and runs commands in, on every client. A folder that holds a link, more than {DssHarness.Core.Orchestration.Flow.AgentSkills.FileLimit} files or more than 16 MB is refused.",
+            $"The folder is copied whole into what the step's agent is handed, the step's own {DssHarness.Core.Orchestration.OrchestratorLayout.HandedDirectoryName}/skills/<name>/, in place of any "
+                + $"earlier copy; that path is the directory the text states and what ${{CLAUDE_SKILL_DIR}} becomes. It is a root the agent reads, on every client, which the tool alone "
+                + "writes, through no link - never the agent's work directory, where its commands write. A folder that holds a link, more than "
+                + $"{DssHarness.Core.Orchestration.Flow.AgentSkills.FileLimit} files or more than 16 MB is refused.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1081,9 +1083,10 @@ public sealed partial class HelpTests
                 + "directories, its login or its environment. There Claude Code opens no file of the agent's in its own process: its "
                 + "file tools are not given, --tools names its shell alone, and the engine's tool server serves the tool runtime's "
                 + "(view_file, find_files, search_files, create_file, replace_in_file, insert_in_file, create_directory, delete_file, "
-                + "delete_directory, move_path) in their place, each file opened by the engine and decided again by where the system "
-                + "names the open file, so a link a command - one left running in the background among them - puts on a path between "
-                + "the decision and the open reaches nothing.",
+                + "delete_directory, move_path) in their place, each file read through the file the engine opened, decided again by "
+                + "where the system names it, and each written, made, moved or deleted relative to its directory held from the "
+                + "writable root it was decided in with no link on the way, so a link a command - one left running in the "
+                + "background among them - puts on a path between the decision and the act reaches nothing.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1247,7 +1250,14 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.Arguments)}",
             $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.NoRecursion)}",
             nameof(DssHarness.Core.FileSystem.UnfollowedFiles),
-            $"{nameof(DssHarness.Core.FileSystem.UnfollowedFiles)}.{nameof(DssHarness.Core.FileSystem.UnfollowedFiles.LinkOnTheWay)}",
+            nameof(DssHarness.Core.FileSystem.HeldDirectory),
+            $"{nameof(DssHarness.Core.FileSystem.IFileSystem)}.{nameof(DssHarness.Core.FileSystem.IFileSystem.Hold)}",
+            nameof(DssHarness.Core.FileSystem.LinkOnTheWayException),
+            nameof(DssHarness.Core.Agents.Isolation.IsolationHidden),
+            $"{nameof(DssHarness.Core.Agents.Isolation.IAgentIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.IAgentIsolation.Hidden)}",
+            $"{nameof(DssHarness.Core.Sync.SyncServe)}.{nameof(DssHarness.Core.Sync.SyncServe.Pull)}",
+            $"{nameof(DssHarness.Core.Sync.ISyncTransport)}.{nameof(DssHarness.Core.Sync.ISyncTransport.PullFileAsync)}",
+            $"{nameof(DssHarness.Core.Orchestration.OrchestratorLayout)}.{nameof(DssHarness.Core.Orchestration.OrchestratorLayout.HandedDirectory)}",
             nameof(DssHarness.Core.Mutations.WorkerSite),
             nameof(DssHarness.Core.SetUps.SetUpConfinement),
             $"{nameof(DssHarness.Core.Agents.Isolation.ExecutionIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.ExecutionIsolation.InDistribution)}",
@@ -1380,9 +1390,12 @@ public sealed partial class HelpTests
         Assert.Contains("The run's reporter is given view_file, find_files, search_files, those that read, and no other.", prose, StringComparison.Ordinal);
         Assert.Contains("A replace or an insert needs its file viewed first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a newline.", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "a write inside a writable one and through no link below it (a file is read and written through the file as it was opened, where the open file stands "
-                + "decided again before a byte passes, so a link put in place between the check and the act reaches nothing refused; what goes by a path alone - a "
-                + "directory listed, made, moved or deleted, a file moved or deleted, and the rename that puts a written file in place - is where such a link is the known limit)",
+            "a write inside a writable one and through no link below it (a file is read through the file as it was opened, where the open file stands decided again before a byte "
+                + "passes - opened never to wait, so a pipe put there is refused - and a file written, a directory made, and a "
+                + "file or a directory moved or deleted is acted on relative to its directory held from the writable root it was "
+                + "decided in, every entry on the way opened as itself, so a link put in place between the check and the act, or "
+                + "swapped in while it acts, reaches nothing and the call is refused naming it; a directory listed goes by its "
+                + "path, so a link put in place of one lists names, never a byte of a file)",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("its links followed (one whose links cannot be followed refused as undecided) and held to the agent's roots", prose, StringComparison.Ordinal);
@@ -3775,7 +3788,13 @@ public sealed partial class HelpTests
             + "there, holds no file, holds more than 256 files or more than 1024 MiB together fails the pull before any file crosses",
             text,
             StringComparison.Ordinal);
-        Assert.Contains("A link below it is never followed: it is named, and nothing is brought back for it.", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A link along the path named, file or directory, is followed as it is spelt - a build directory pointed at "
+                + "another volume is ordinary - but never into a place the isolation hides from every command: one that "
+                + "leads there fails the pull, nothing read. A link below a directory named is never followed: it is named, "
+                + "and nothing is brought back for it.",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains(
             "A pull that stops part way - a file gone, a host that stopped answering - fails naming each file it had brought back, which stays "
             + "where it was written, and each it had not.",

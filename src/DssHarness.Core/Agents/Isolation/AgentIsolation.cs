@@ -494,6 +494,16 @@ public interface IAgentIsolation
     /// <param name="mainCheckout">The main checkout: no program on the PATH inside it is the mechanism.</param>
     /// <param name="cancellationToken">Stops the probe and the questions of the trees.</param>
     Task<ExecutionIsolation> ForExecutionAsync(HarnessConfig config, ExecutionGround ground, string mainCheckout, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The places the isolation hides from every isolated command over the repository whose main checkout is
+    /// <paramref name="mainCheckout"/> (<see cref="IsolationHidden.Places"/>): its credential slots, every Claude Code
+    /// directory there is for <paramref name="config"/>, and the file Claude Code keeps beside one - what a read of the
+    /// tool's that follows a link never reaches.
+    /// </summary>
+    /// <param name="config">The configuration, whose providers name the Claude Code directory a slot sets.</param>
+    /// <param name="mainCheckout">The main checkout, whose slots are hidden.</param>
+    IReadOnlyList<IsolatedPath> Hidden(HarnessConfig config, string mainCheckout);
 }
 
 /// <summary>
@@ -574,6 +584,15 @@ public sealed class AgentIsolation(
 
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
     private readonly ClaudeCodeDirectories _claudeCode = claudeCode ?? new ClaudeCodeDirectories(fileSystem, host, keys: null, environment);
+
+    /// <inheritdoc/>
+    public IReadOnlyList<IsolatedPath> Hidden(HarnessConfig config, string mainCheckout)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckout);
+
+        return IsolationHidden.Places(HarnessLayout.SecretSlotDirectoriesUnder(mainCheckout), _claudeCode.Of(config, mainCheckout), UserCredentials.Of(config, host.HomeDirectory, host.Current, _environment));
+    }
 
     /// <inheritdoc/>
     public async Task<LaunchIsolation> ForLaunchAsync(HarnessConfig config, AgentPolicyGround ground, string mainCheckout, string launchDirectory, CancellationToken cancellationToken)
@@ -1149,12 +1168,7 @@ public sealed class AgentIsolation(
             }
         }
 
-        var hidden = ground.SlotDirectories.Concat(ground.ClaudeCodeDirectories).Select(place => (place, directory: true))
-            .Concat(ground.ClaudeCodeDirectories
-                .Where(directory => Path.GetFileName(Path.TrimEndingDirectorySeparator(directory)) == ".claude")
-                .Select(directory => (place: Path.TrimEndingDirectorySeparator(directory) + ".json", directory: false)))
-            .Concat(ground.CredentialPlaces.Select(credential => (place: credential.Path, directory: credential.Directory)))
-            .ToList();
+        var hidden = IsolationHidden.Places(ground.SlotDirectories, ground.ClaudeCodeDirectories, ground.CredentialPlaces).Select(place => (place: place.Path, directory: place.Directory)).ToList();
 
         // A file git's configuration includes is held as it stands; one not there, where a command could make it, cannot be.
         var included = new List<IsolatedPath>();
@@ -1252,7 +1266,7 @@ public sealed class AgentIsolation(
 
         // The whole Claude Code process reads its login in its directories, read alone like the machine: written, they would
         // let a command plant what Claude Code runs outside later - its settings' hooks, its own file's servers.
-        var claudeCode = hidden.Where(entry => !ground.ClaudeCodeDirectories.Contains(entry.place, comparer) && !IsClaudeFile(entry.place)).Select(entry => Real(entry.place)).ToHashSet(comparer);
+        var claudeCode = hidden.Where(entry => !ground.ClaudeCodeDirectories.Contains(entry.place, comparer) && !IsolationHidden.IsClaudeFile(entry.place)).Select(entry => Real(entry.place)).ToHashSet(comparer);
 
         return (profile, profile with { Hidden = [.. profile.Hidden.Where(place => claudeCode.Contains(place.Path))], Reopened = readable }, null);
     }
@@ -1301,9 +1315,6 @@ public sealed class AgentIsolation(
     /// <summary>The variable that names a child's temporary directory where the profile has one of its own; none where the mechanism gives it one.</summary>
     private static IEnumerable<KeyValuePair<string, string>> TempVariable(string? temp)
         => temp is null ? [] : [new(IsolationCaches.TempVariable, temp)];
-
-    /// <summary>Whether <paramref name="place"/> is the file beside a Claude Code directory that Claude Code keeps its own state in: <c>~/.claude.json</c>.</summary>
-    private static bool IsClaudeFile(string place) => Path.GetFileName(place) == ".claude.json";
 
     /// <summary>
     /// <paramref name="path"/> as its guarded place, at its real spelling: there as it stands; not there and inside a

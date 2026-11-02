@@ -40,21 +40,28 @@ public sealed class PosixFilePermissions : IFilePermissions
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         var mode = File.GetUnixFileMode(path);
-
-        // Whoever may read it may run it, and its owner always: what git itself writes for a file it holds as one that
-        // can be run, and no wider than the file already was.
-        var wanted = executable
-            ? mode
-                | UnixFileMode.UserExecute
-                | ((mode & UnixFileMode.GroupRead) != 0 ? UnixFileMode.GroupExecute : UnixFileMode.None)
-                | ((mode & UnixFileMode.OtherRead) != 0 ? UnixFileMode.OtherExecute : UnixFileMode.None)
-            : mode & ~AnyExecute;
+        var wanted = Executable(mode, executable);
 
         if (wanted != mode)
         {
             File.SetUnixFileMode(path, wanted);
         }
     }
+
+    /// <summary>
+    /// <paramref name="mode"/> made one a file that can be run has, or one that cannot: whoever may read it may run it, and
+    /// its owner always - what git itself writes for a file it holds as one that can be run, and no wider than the file
+    /// already was - or every execute bit cleared. The one rule of it, whether a file is reached by its path or its handle.
+    /// </summary>
+    /// <param name="mode">The file's mode.</param>
+    /// <param name="executable">Whether it is to be one that can be run.</param>
+    public static UnixFileMode Executable(UnixFileMode mode, bool executable)
+        => executable
+            ? mode
+                | UnixFileMode.UserExecute
+                | ((mode & UnixFileMode.GroupRead) != 0 ? UnixFileMode.GroupExecute : UnixFileMode.None)
+                | ((mode & UnixFileMode.OtherRead) != 0 ? UnixFileMode.OtherExecute : UnixFileMode.None)
+            : mode & ~AnyExecute;
 
     public void CopyMode(string from, string to)
     {

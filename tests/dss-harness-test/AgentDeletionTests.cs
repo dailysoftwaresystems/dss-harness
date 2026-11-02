@@ -1198,15 +1198,19 @@ public sealed class AgentDeletionTests
     {
         private bool _written;
 
-        public override void DeleteFile(string path)
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
         {
-            base.DeleteFile(path);
+            var held = base.Hold(anchor, directory, make, asked);
 
-            if (!_written && string.Equals(Path.GetDirectoryName(path), Path.GetDirectoryName(lateFile), StringComparison.OrdinalIgnoreCase))
+            if (!_written && asked is not null && string.Equals(Path.GetDirectoryName(asked), Path.GetDirectoryName(lateFile), StringComparison.OrdinalIgnoreCase))
             {
+                // The evidence was kept and its first kept file is being reached for deletion: a file of the same root
+                // appears now, after the keeping measured it.
                 _written = true;
                 File.WriteAllText(lateFile, "written late\n");
             }
+
+            return held;
         }
     }
 
@@ -1337,8 +1341,18 @@ public sealed class AgentDeletionTests
     {
         public override void ReplaceFile(string source, string destination)
         {
+            Wrote(destination);
             base.ReplaceFile(source, destination);
+        }
 
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            Wrote(asked ?? directory);
+            return base.Hold(anchor, directory, make, asked);
+        }
+
+        private void Wrote(string destination)
+        {
             if (string.Equals(Path.GetFullPath(destination), Path.GetFullPath(trigger), StringComparison.OrdinalIgnoreCase) && !File.Exists(meanwhile))
             {
                 File.WriteAllText(meanwhile, "written meanwhile\n");
@@ -1362,17 +1376,39 @@ public sealed class AgentDeletionTests
         }
     }
 
-    /// <summary>The real file system, except that one file cannot be deleted, as while another program holds it open.</summary>
+    /// <summary>
+    /// The real file system, except that one file cannot be deleted, as while another program holds it open: the second
+    /// time it is reached relative to a directory held - the first is the reading of it that keeps its evidence, the
+    /// second the removal of what was kept.
+    /// </summary>
     private sealed class UndeletableFileSystem(IFileSystem inner, string held) : PassThroughFileSystem(inner)
     {
+        private int _reached;
+
         public override void DeleteFile(string path)
+        {
+            Refuse(path);
+            base.DeleteFile(path);
+        }
+
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            var path = asked ?? directory;
+
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase) && Interlocked.Increment(ref _reached) >= 2)
+            {
+                Refuse(path);
+            }
+
+            return base.Hold(anchor, directory, make, asked);
+        }
+
+        private void Refuse(string path)
         {
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.");
             }
-
-            base.DeleteFile(path);
         }
     }
 
