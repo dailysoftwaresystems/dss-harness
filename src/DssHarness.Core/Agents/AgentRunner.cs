@@ -148,6 +148,13 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                     await pump.PostOwnAsync(new Notice(unisolated)).ConfigureAwait(false);
                 }
 
+                // A launch over a linked worktree an earlier version of this tool made says so at its start, every time:
+                // inside the isolation git add and git fetch fail there, and the remedy names the verbs that replace it.
+                foreach (var legacy in step.Isolation?.LegacyWorktrees ?? [])
+                {
+                    await pump.PostOwnAsync(new Notice(legacy)).ConfigureAwait(false);
+                }
+
                 (var worked, thrown) = await WorkAsync(step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
 
                 // What the agent's commands left in the trees' git directories that no git may go on over fails the run - looked

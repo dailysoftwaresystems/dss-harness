@@ -453,6 +453,31 @@ public sealed class SandboxExecTests
     }
 
     /// <summary>
+    /// A command inside a step's launch makes no hard link from a file of the main checkout's into a place it writes: the
+    /// sandbox denies every operation it does not allow, and no rule of the profile's allows creating one, so nothing
+    /// read-only gains a second name a command could write by. This is the hard-link canary of macOS's sandbox: where it
+    /// fails, the sandbox allows the link, and the profile must deny link creation from outside the writable roots.
+    /// </summary>
+    [Fact]
+    public async Task ACommandInside_MakesNoHardLinkFromTheMainCheckout_IntoAPlaceItWrites()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var packed = Path.Combine(launch.Kit.Main, ".git", "objects", "pack");
+        await launch.Kit.Harness.RunGitAsync(launch.Kit.Main, ["repack", "--quiet", "-ad"], Token);
+        var pack = Assert.Single(Directory.GetFiles(packed, "*.pack"));
+
+        var linked = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/ln", pack, Path.Combine(launch.Worktree, "hard"));
+
+        Assert.NotEqual(0, linked.ExitCode);
+        Assert.Contains("Operation not permitted", linked.StandardError, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(launch.Worktree, "hard")));
+    }
+
+    /// <summary>
     /// A command handed over writes the one file it ends by writing its working directory to in place - its data alone - and
     /// nothing removes it, puts a link in its stead, by its name or by a rename onto it, or writes beside it in Claude Code's
     /// own temporary directory.

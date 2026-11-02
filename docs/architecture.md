@@ -2437,18 +2437,21 @@ declared caches. An agent that may run no command - the reporter - needs none (`
 nothing is probed. Otherwise the platform's mechanism, proved once per process (`IIsolationPlatform`), and a profile
 of the ground, the machine read-only: written, the ground's writable roots, what git writes of each of its trees that
 is itself one of them and its repository's top level (`AgentIsolation.GitPlacesAsync`: `rev-parse
---path-format=absolute --git-dir --git-common-dir --git-path hooks --show-toplevel --show-ref-format`, git 2.31 or
-newer, so a leg's copy that is no repository of its own writes nothing of the repository above it; a git before 2.45
-answers the last option back as a line, and opens no reftable repository at all), by the tree's kind
-(`AgentIsolation.GitWritten`): a linked worktree's own git directory and the common directory's `objects/`, `refs/`,
-`reftable/` where the repository keeps its refs there (`GitPlaces.Reftables`; its `refs/` is then a stub git writes no
-ref in), `logs/` (made where git has not) and `lfs/` where there is one, never the common directory itself, where a
-`commondir` made would lead every git to another repository's own files, so a shallow repository's fetch, a rewrite
-of `packed-refs` and `git gc` fail there; a main checkout's `.git` whole, and an agent's repository's, for git makes its lock files directly in
-it, which no rule at a path grants one name at a time, but a main checkout's `commondir` and its `worktrees/`, sealed below - so
-`git add`, commit and fetch write the objects, the index and the refs, while `git worktree add`, `move`, `remove` and
-`prune` and a `git gc` that expires another worktree's reflog fail there. The refs so written are the repository's
-own, every branch, tag, stash and remote-tracking ref and their reflogs; the push step sends the commit the run's
+--path-format=absolute --git-dir --git-common-dir --git-path hooks --show-toplevel`, git 2.31 or
+newer, so a leg's copy that is no repository of its own writes nothing of the repository above it) -
+each tree's own git directory alone (`AgentIsolation.GitWritten`): a main checkout's `.git` whole,
+and an agent's repository's, which is its repository's own common directory, for git makes its lock
+files directly in it, which no rule at a path grants one name at a time, but a main checkout's
+`commondir`, made naming itself, and its `worktrees/`, sealed below; a linked worktree's own git
+directory is its directory under the common directory's `worktrees/`, and the common directory
+itself - its `objects/`, `refs/` and `reftable/` wherever the repository keeps them, its `logs/` and
+`lfs/` where there is one - is read-only to the work, so `git add` and fetch fail inside the isolation
+there, a legacy agent tree's and a leg-pinned plain worktree's work among them, and each launch over
+one says so. So `git add`, commit and fetch write the objects, the index and the refs in a main
+checkout and in an agent's repository, while `git worktree add`, `move`, `remove` and
+`prune` and a `git gc` that expires another worktree's reflog fail in a main checkout. The refs so written are those
+of a repository whose git directory the work writes whole, every branch, tag, stash and remote-tracking ref and their
+reflogs; the push step sends the commit the run's
 commit steps recorded, never what the branch names later - the launch's own temporary directory under the isolation's own (`IsolationCaches.Root`, then `tmp/`;
 none where the mechanism gives one, `OwnTemp`) and the declared tool caches (`IsolationCaches.Declared`, each variable
 pointed into the directory of the child's write scope under `caches/`, `IsolationCaches.Prepared`: one for each set of
@@ -2529,7 +2532,8 @@ configuration the agent's. A default in the configuration would not hold: a `.gi
 the tree, outranks it. The repository's configuration is otherwise read as git reads it, its filters among it, which is
 why every configuration file is written by nobody. What the work left in the git directories it wrote that no rule
 can hold is looked at once it has run under a mechanism, however it ended, against what was there before it started
-(`IsolationDecision.AfterwardAsync`, the held decision's `After`, over the trees the ground writes): the state of an
+(`IsolationDecision.AfterwardAsync`, the held decision's `After`, over the git directories the ground's written trees
+are granted, each tree's own alone): the state of an
 operation under way (`AgentIsolation.OperationState`: `rebase-merge/`, `rebase-apply/`, `sequencer/`), which no place
 made empty can stand for - git reads an empty one as an operation under way - made or changed in a tree's own git
 directory, each file read for its hash never through a link (`UnfollowedFiles`) and never past 64 MiB, so a `git
@@ -2548,7 +2552,11 @@ problem of the configuration) turns no mechanism into the launch's refusal (`Lau
 failed, 14; the advisor's advice is not obtained; `run-side-task` exits 14 having started nothing) - every mode but
 `preferred` refuses - or, under `preferred`, its notice (`LaunchIsolation.Notice`), a `Notice` the runner says at the
 launch's start, as it says the one of a mechanism that leaves something reached (`IIsolationMechanism.Leaves`:
-bubblewrap on a kernel with no Landlock scope), from the same base (`IsolationDecision.NoticeSaying`). Every launch's
+bubblewrap on a kernel with no Landlock scope), from the same base (`IsolationDecision.NoticeSaying`); and a launch
+whose ground writes a linked worktree - an agent an earlier version of this tool made - says at its start, the same
+way, that git add and fetch fail inside the isolation there and the remedy, one `Notice` per tree
+(`LaunchIsolation.LegacyWorktrees`, from the held decision's own finding of a written tree whose git directory is not
+its common directory). Every launch's
 result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s `isolation`, an `AgentIsolationRecord`:
 the mode, and the mechanism with its version, what it leaves reached and what
 its anchors cost, or why there was none), and each side-task turn its own (`SideTaskTurn.Isolation`). The request
@@ -2640,7 +2648,12 @@ services that trust certificates, which are the keychain's; on Windows MXC's con
 empty; on Linux the keyring sits behind the user's message bus, hidden with the runtime directory. Under MXC, which
 grants nothing beneath a denial, a hidden directory is hidden whole - `Reopened` is never handed to the container, so
 ssh's `known_hosts` and `config` are not read there. The network is theirs; and what no rule at a path reaches - a
-hard link made before the launch, another path bound to the same files - is reached. Inside the isolation a verb of this tool's that reads a slot or writes state or its install would fail part
+hard link made before the launch, another path bound to the same files - is reached; inside, no hard link can be made
+from the machine's files into a written place: under bubblewrap each place is a mount of its own and `link(2)` fails
+across mounts (`EXDEV`), macOS's sandbox denies every operation it does not allow and no rule of the profile's allows
+one, and MXC's container grants the machine read alone, which a hard link
+needs written - each held by a canary in its mechanism's real suite (`BubblewrapTests`, `SandboxExecTests`,
+`MxcProcessContainerTests`), whose failure would name the link allowed. Inside the isolation a verb of this tool's that reads a slot or writes state or its install would fail part
 way, so the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a
 step and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's
 own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one or the other.

@@ -171,8 +171,9 @@ public sealed class BubblewrapTests
     /// <summary>
     /// A command inside moves no directory above a guarded place, for a place moved away would take its rule with it and
     /// leave its name free to make again: the repository's git directory and the directory that holds the credential slots
-    /// stand in the main checkout, and the worktrees directory and the worktree's own git directory stand in the common
-    /// directory, which a worktree's work never writes - the read-only machine keeps each where it is.
+    /// stand in the main checkout, which the work never writes, and the repository of the agent's own - its .git written
+    /// whole, its code-running files sealed inside it - is a mount point of its own - the read-only machine and the mount
+    /// each keep them where they are.
     /// </summary>
     [Fact]
     public async Task ACommandInside_MovesNoDirectoryAboveAGuardedPlace()
@@ -184,10 +185,9 @@ public sealed class BubblewrapTests
         var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
         var git = Path.Combine(launch.Kit.Main, ".git");
         var config = Path.Combine(launch.Kit.Main, HarnessLayout.DirectoryName);
-        var worktrees = Path.Combine(git, "worktrees");
-        var linked = Assert.Single(Directory.GetDirectories(worktrees));
+        var own = Path.Combine(launch.Worktree, ".git");
 
-        foreach (var (anchor, said) in new[] { (git, "Read-only file system"), (config, "Read-only file system"), (worktrees, "Read-only file system"), (linked, "Read-only file system") })
+        foreach (var (anchor, said) in new[] { (git, "Read-only file system"), (config, "Read-only file system"), (own, "Device or resource busy") })
         {
             var moved = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "mv \"$1\" \"$1-moved\"", "sh", anchor);
 
@@ -196,6 +196,57 @@ public sealed class BubblewrapTests
             Assert.True(Directory.Exists(anchor), anchor);
             Assert.False(Directory.Exists(anchor + "-moved"), anchor);
         }
+    }
+
+    /// <summary>
+    /// A command inside a step's launch over an agent's repository writes that repository's own git and nothing of the main
+    /// checkout's: git update-ref makes a ref of its own there and git add stages a file into its index, while writing the
+    /// main checkout's own refs, the repository's alternates - which lend it the main checkout's objects - and a
+    /// hard link from the main checkout's object store into the repository each fails, the link across the mounts bubblewrap
+    /// made (EXDEV) - so nothing the agent runs writes or gains a second name on a file of the main checkout's, whose refs
+    /// stand exactly as they stood and whose store fsck finds clean. This is the hard-link canary of Linux's bubblewrap:
+    /// where it fails, bubblewrap allows the link, and the profile must deny it.
+    /// </summary>
+    [Fact]
+    public async Task ACommandInsideAnAgentsRepository_WritesItsOwnGitAlone_TheMainCheckoutStayingAsItWas()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var main = launch.Kit.Main;
+        var git = Path.Combine(main, ".git");
+        var own = Path.Combine(launch.Worktree, ".git");
+        var head = (await launch.Kit.Harness.RunGitAsync(main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        var branch = (await launch.Kit.Harness.RunGitAsync(main, ["symbolic-ref", "--short", "HEAD"], Token)).StandardOutput.Trim();
+        var branchFile = Path.Combine(git, "refs", "heads", branch);
+        var refs = (await launch.Kit.Harness.GitClient.RunAsync(main, ["for-each-ref"], cancellationToken: Token)).StandardOutput;
+
+        // A packed object of the main checkout's store, for the hard-link canary.
+        await launch.Kit.Harness.RunGitAsync(main, ["repack", "--quiet", "-ad"], Token);
+        var pack = Assert.Single(Directory.GetFiles(Path.Combine(git, "objects", "pack"), "*.pack"));
+
+        var updated = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "git", "update-ref", "refs/heads/made", head);
+        var made = Path.Combine(launch.Worktree, "made.txt");
+        await File.WriteAllTextAsync(made, "made", Token);
+        var staged = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "git", "add", "made.txt");
+        var mainsRef = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", ": > \"$1\"", "sh", branchFile);
+        var alternates = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", ": > \"$1\"", "sh", Path.Combine(own, "objects", "info", "alternates"));
+        var linked = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/ln", pack, Path.Combine(launch.Worktree, "hard"));
+
+        Assert.Equal((0, 0), (updated.ExitCode, staged.ExitCode));
+        Assert.Equal([$"refs/heads/made {head}"], (await launch.Kit.Harness.GitClient.RunAsync(launch.Worktree, ["for-each-ref", "--format=%(refname) %(objectname)"], cancellationToken: Token)).OutputLines);
+        Assert.Equal(["made.txt"], (await launch.Kit.Harness.GitClient.RunAsync(launch.Worktree, ["diff", "--cached", "--name-only"], cancellationToken: Token)).OutputLines);
+        Assert.NotEqual(0, mainsRef.ExitCode);
+        Assert.True(mainsRef.StandardError.Contains("Read-only file system", StringComparison.Ordinal), mainsRef.StandardError);
+        Assert.NotEqual(0, alternates.ExitCode);
+        Assert.True(alternates.StandardError.Contains("Read-only file system", StringComparison.Ordinal), alternates.StandardError);
+        Assert.NotEqual(0, linked.ExitCode);
+        Assert.True(linked.StandardError.Contains("Invalid cross-device link", StringComparison.Ordinal), linked.StandardError);
+        Assert.False(File.Exists(Path.Combine(launch.Worktree, "hard")));
+        Assert.Equal(refs, (await launch.Kit.Harness.GitClient.RunAsync(main, ["for-each-ref"], cancellationToken: Token)).StandardOutput);
+        Assert.Equal(0, (await launch.Kit.Harness.GitClient.RunAsync(main, ["fsck", "--no-progress"], cancellationToken: Token)).ExitCode);
     }
 
     /// <summary>

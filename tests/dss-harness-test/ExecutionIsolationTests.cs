@@ -168,7 +168,6 @@ public sealed class ExecutionIsolationTests
         var legsOfAnotherRun = await ExecutionCachesAsync(ExecutionGrounds.OfLeg(config, kit.Main, first, first, [Path.Combine(first, HarnessLayout.ActionBuildRelative("corpus", "r2", "native"))]));
         var hooks = await ExecutionCachesAsync(ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false));
 
-        var git = Path.Combine(kit.Main, ".git");
         var cachesRoot = Path.Combine(IsolationCaches.Root(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.Directory);
 
         Assert.Equal(agent, again);
@@ -177,10 +176,10 @@ public sealed class ExecutionIsolationTests
         Assert.Equal(4, new[] { agent, other, legs, hooks }.Distinct(StringComparer.Ordinal).Count());
         Assert.All(new[] { agent, other, legs, hooks }, caches => Assert.Equal(cachesRoot, Path.GetDirectoryName(caches)));
 
-        // Its record names the outermost places the scope writes: the agent's worktree, its work directory, and what git
-        // writes of a linked worktree.
+        // Its record names the outermost places the scope writes: the agent's worktree and its work directory - its
+        // worktree's own git directory, a repository of its own, lying inside the worktree, is the worktree's.
         Assert.Equal(
-            new[] { first, kit.Layout.WorkDirectory("a1"), Path.Combine(git, "worktrees", Path.GetFileName(first)), Path.Combine(git, "objects"), Path.Combine(git, "refs"), Path.Combine(git, "logs") }
+            new[] { first, kit.Layout.WorkDirectory("a1") }
                 .Order(StringComparer.Ordinal)
                 .Select(place => $"written {place}"),
             File.ReadAllLines(agent + IsolationCaches.ScopeRecordExtension));

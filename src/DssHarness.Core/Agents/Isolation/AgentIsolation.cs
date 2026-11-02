@@ -214,6 +214,14 @@ public sealed record LaunchIsolation(
     /// </summary>
     public string? ClaudeCodeOutside => Mechanism is { TakesHandedCommands: true } && ClaudeCode is null ? Mechanism.Unnested : null;
 
+    /// <summary>
+    /// What every launch whose ground writes a linked worktree - an agent an earlier version of this tool made - says as it
+    /// starts, each tree one saying: inside the isolation the work writes the tree's own git directory alone, so git add and
+    /// git fetch fail there, and the remedy names the verbs that give the agent a repository of its own. Empty where no tree
+    /// the ground writes is a linked worktree, and where it runs under no mechanism, whose denial nothing fails.
+    /// </summary>
+    public IReadOnlyList<string> LegacyWorktrees { get; init; } = [];
+
     /// <summary>What the launch's client runs its processes under, handed it in its run: <see cref="ForCommands"/>, <see cref="ForClaudeCode"/> and <see cref="ClaudeCodeOutside"/>.</summary>
     public LaunchProcesses Processes => new(ForCommands, ForClaudeCode) { ClaudeCodeOutside = ClaudeCodeOutside };
 
@@ -546,8 +554,8 @@ public interface IAgentIsolation
 /// <summary>
 /// The owner of the operating system's isolation of what an agent runs, and of what the tool runs of an agent's work: the
 /// configuration's mode, this machine's mechanism as its platform proved it once, and each profile built from its ground -
-/// the machine read-only; written only the ground's writable roots, what git writes of a tree that is itself written - by
-/// its kind (<see cref="GitWritten"/>) - the launch's own temporary directory and the declared tool caches of its write
+/// the machine read-only; written only the ground's writable roots, what git writes of a tree that is itself written -
+/// its own git directory (<see cref="GitWritten"/>) - the launch's own temporary directory and the declared tool caches of its write
 /// scope's own (<see cref="IsolationCaches"/>), which no child of another reach shares; neither read nor written the
 /// credential slots, every Claude Code directory (<see cref="ClaudeCodeDirectories"/>) and every place the user keeps
 /// credentials in (<see cref="UserCredentials"/>), but the files each leaves read; reached outside no Unix socket but the
@@ -645,7 +653,13 @@ public sealed class AgentIsolation(
 
         var held = await HeldAsync(config, IsolationGround.Of(ground, launchDirectory), mainCheckout, "make sure git 2.31 or newer answers in the agent's trees", cancellationToken).ConfigureAwait(false);
 
-        return new LaunchIsolation(held.Mode, held.Mechanism, held.Profile, held.Without, held.Remedy) { ClaudeCode = held.ClaudeCode, Release = held.Release, After = held.After };
+        return new LaunchIsolation(held.Mode, held.Mechanism, held.Profile, held.Without, held.Remedy)
+        {
+            ClaudeCode = held.ClaudeCode,
+            Release = held.Release,
+            After = held.After,
+            LegacyWorktrees = held.Legacy,
+        };
     }
 
     /// <inheritdoc/>
@@ -730,10 +744,22 @@ public sealed class AgentIsolation(
         var cachesRoot = Path.Combine(root, IsolationCaches.Directory);
         var comparer = StringComparer.FromComparison(host.PathComparison);
 
-        // What is written: the ground's roots, and what git writes of a tree that is itself written - its objects, index
-        // and refs, which git add and fetch write. Its caches are its write scope's own, those of every scope gone swept.
+        // A tree the ground writes that is one of git's linked worktrees - an agent an earlier version of this tool made -
+        // is said at the launch: the work writes its own git directory alone there, so git add and git fetch fail inside the
+        // isolation, and the remedy names the verbs that give the agent a repository of its own.
+        // A tree the ground writes that is one of git's linked worktrees - an agent an earlier version of this tool made -
+        // is said at the launch: the work writes its own git directory alone there, so git add and git fetch fail inside the
+        // isolation, and the remedy names the verbs that give the agent a repository of its own.
+        var legacy = gitPlaces.Directories
+            .Where(directory => ground.WritableRoots.Any(writable => comparer.Equals(Real(writable), Real(directory.Tree)))
+                && !comparer.Equals(Real(directory.GitDirectory), Real(directory.CommonDirectory)))
+            .Select(directory => $"'{directory.Tree}' is a linked worktree an earlier version made: git add and fetch fail there; delete-agent and a new agent give it a repository of its own")
+            .ToList();
+
+        // What is written: the ground's roots, and what git writes of a tree that is itself written - its own git directory,
+        // whatever the tree's kind. Its caches are its write scope's own, those of every scope gone swept.
         var written = ground.WritableRoots
-            .Concat(writtenTrees.SelectMany(directory => GitWritten(directory, gitPlaces.Reftables.Contains(directory.CommonDirectory, comparer))))
+            .Concat(writtenTrees.SelectMany(GitWritten))
             .Select(Real)
             .Distinct(comparer)
             .ToList();
@@ -769,13 +795,13 @@ public sealed class AgentIsolation(
             pins?.Pin(tree, gitDirectory, commonDirectory);
         }
 
-        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, temp is null ? null : () => Removed(temp), async token => LeftSince(before, await LeftAsync(writtenTrees, token).ConfigureAwait(false)));
+        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, legacy, temp is null ? null : () => Removed(temp), async token => LeftSince(before, await LeftAsync(writtenTrees, token).ConfigureAwait(false)));
     }
 
     /// <summary>A decision as the builder makes it, before it is a launch's or an execution's.</summary>
-    private sealed record Held(string Mode, IIsolationMechanism? Mechanism, IsolationProfile? Profile, IsolationProfile? ClaudeCode, string? Without, string? Remedy, Action? Release, Func<CancellationToken, Task<string?>>? After = null)
+    private sealed record Held(string Mode, IIsolationMechanism? Mechanism, IsolationProfile? Profile, IsolationProfile? ClaudeCode, string? Without, string? Remedy, IReadOnlyList<string> Legacy, Action? Release, Func<CancellationToken, Task<string?>>? After = null)
     {
-        public static Held None(string mode, string? why, string? remedy) => new(mode, null, null, null, why, remedy, null);
+        public static Held None(string mode, string? why, string? remedy) => new(mode, null, null, null, why, remedy, [], null);
     }
 
     /// <summary>
@@ -789,8 +815,8 @@ public sealed class AgentIsolation(
 
     /// <summary>
     /// Each tree of <paramref name="gitPlaces"/> that is one of <paramref name="ground"/>'s writable roots, with its git
-    /// directories: those whose git the work writes - a linked worktree's own git directory and its repository's refs, a
-    /// main checkout's git directory whole (<see cref="GitWritten"/>).
+    /// directories: those whose git the work writes - a linked worktree's own git directory alone, a main checkout's and an
+    /// agent repository's whole (<see cref="GitWritten"/>).
     /// </summary>
     private IReadOnlyList<(string Tree, string GitDirectory, string CommonDirectory)> Written(IsolationGround ground, GitPlaces gitPlaces)
     {
@@ -822,7 +848,15 @@ public sealed class AgentIsolation(
             }
         }
 
-        foreach (var (tree, _, common) in written.DistinctBy(directory => directory.CommonDirectory, comparer))
+        // The repositories whose refs the work writes are those whose git directory it writes whole - a main checkout's, an
+        // agent repository's own. A linked worktree's work writes no ref of its repository's: its common directory is
+        // read-only to it, so its replacements are not the work's to make or move.
+        // The repositories whose refs the work writes are those whose git directory it writes whole - a main checkout's, an
+        // agent repository's own. A linked worktree's work writes no ref of its repository's: its common directory is
+        // read-only to it, so its replacements are not the work's to make or move.
+        foreach (var (tree, _, common) in written
+                     .Where(directory => comparer.Equals(Real(directory.GitDirectory), Real(directory.CommonDirectory)))
+                     .DistinctBy(directory => directory.CommonDirectory, comparer))
         {
             var listed = await git.RunWithinAsync(tree, ["for-each-ref", "--format=%(objectname) %(refname)", ReplaceRefs], AfterwardLimit, cancellationToken).ConfigureAwait(false);
 
@@ -943,10 +977,9 @@ public sealed class AgentIsolation(
     /// linked worktree's - whole, for it holds the submodules' own git directories,
     /// their configuration and hooks; and every configuration file git reads in the tree, the user's and what each includes
     /// among them - and each tree's own and common git directory, where the tree is its repository's top, with every file a
-    /// configuration file names to include, whether its condition holds now or not (<see cref="GitPlaces.Includes"/>), and
-    /// each repository that keeps its refs in a reftable (<see cref="GitPlaces.Reftables"/>). Or why git could not say -
-    /// an answer that is no whole path among it, which git before 2.31 gives - or why what it says cannot be trusted: a
-    /// main checkout's <c>.git</c> holding a <c>commondir</c> that leads anywhere but to itself.
+    /// configuration file names to include, whether its condition holds now or not (<see cref="GitPlaces.Includes"/>). Or
+    /// why git could not say - an answer that is no whole path among it, which git before 2.31 gives - or why what it says
+    /// cannot be trusted: a main checkout's <c>.git</c> holding a <c>commondir</c> that leads anywhere but to itself.
     /// </summary>
     /// <param name="trees">The trees the agent touches.</param>
     /// <param name="cancellationToken">Stops git.</param>
@@ -957,7 +990,6 @@ public sealed class AgentIsolation(
         var comparer = StringComparer.FromComparison(host.PathComparison);
         var places = new List<IsolatedPath>();
         var directories = new List<(string Tree, string GitDirectory, string CommonDirectory)>();
-        var reftables = new List<string>();
         var listed = new HashSet<string>(comparer);
         var read = new HashSet<string>(comparer);
         var includes = new List<string>();
@@ -977,9 +1009,7 @@ public sealed class AgentIsolation(
                     $"look at where '{pointer}' leads, and remove it");
             }
 
-            // git before 2.45 knows no --show-ref-format and answers it back as a line of its own, after every other: such a
-            // git opens no reftable repository at all.
-            var answer = await git.RunAsync(tree, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--git-path", "hooks", "--show-toplevel", "--show-ref-format"], cancellationToken: cancellationToken).ConfigureAwait(false);
+            var answer = await git.RunAsync(tree, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--git-path", "hooks", "--show-toplevel"], cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (!answer.Succeeded || answer.OutputLines is not [var gitLine, var commonLine, var hooksLine, var topLine, ..])
             {
@@ -1000,11 +1030,6 @@ public sealed class AgentIsolation(
             if (comparer.Equals(Real(top), Real(tree)))
             {
                 directories.Add((tree, gitDirectory, common));
-            }
-
-            if (answer.OutputLines.Count > 4 && answer.OutputLines[4].Trim() == Reftable)
-            {
-                reftables.Add(common);
             }
 
             places.Add(new IsolatedPath(Path.GetFullPath(hooksLine.Trim()), Directory: true));
@@ -1096,11 +1121,8 @@ public sealed class AgentIsolation(
             }
         }
 
-        return new GitPlaces([.. places.DistinctBy(place => place.Path, comparer)], directories, null) { Includes = [.. named], Reftables = [.. reftables.Distinct(comparer)] };
+        return new GitPlaces([.. places.DistinctBy(place => place.Path, comparer)], directories, null) { Includes = [.. named] };
     }
-
-    /// <summary>What <c>git rev-parse --show-ref-format</c> answers for a repository that keeps its refs in a reftable.</summary>
-    private const string Reftable = "reftable";
 
     /// <summary>
     /// Whether the <see cref="CommonDirectoryFile"/> in <paramref name="gitDirectory"/> leads git nowhere but to that
@@ -1386,38 +1408,19 @@ public sealed class AgentIsolation(
         => socket is null ? [] : [new(SshAgentSocketVariable, socket)];
 
     /// <summary>
-    /// What git writes of a tree that is itself written, by its kind: a linked worktree's own git directory and, of the
-    /// common directory it shares, the objects, the refs - its <c>reftable/</c> too where the repository keeps its refs
-    /// there (<paramref name="reftable"/>), for the <c>refs/</c> of such a repository is a stub git writes no ref in - the
-    /// logs - made where git has not made them yet, for it could not inside - and Git LFS's objects where there are any,
-    /// never the common directory itself, where a file made would lead every git to another repository's own files (a
-    /// <c>commondir</c>), nor its other worktrees; a main checkout's git directory whole - and an agent's repository's,
-    /// which is its repository's own common directory - for git makes its lock files directly in it, which no rule at a
-    /// path grants one name at a time - but a main checkout's <c>commondir</c>, made naming itself, and its
-    /// <c>worktrees/</c>, which hold no write (<see cref="GitPlacesAsync"/>); what is left there that no rule holds
-    /// is looked at once the work has run (<see cref="IsolationDecision.AfterwardAsync"/>).
+    /// What git writes of a tree that is itself written: its own git directory alone. A main checkout's is written whole,
+    /// and an agent's repository's, which is its repository's own common directory, for git makes its lock files directly
+    /// in it, which no rule at a path grants one name at a time - but a main checkout's <c>commondir</c>, made naming
+    /// itself, and its <c>worktrees/</c>, hold no write (<see cref="GitPlacesAsync"/>); a linked worktree's is its
+    /// directory under the common directory's <c>worktrees/</c>, and the common directory itself - its <c>objects/</c>,
+    /// its <c>refs/</c> and its <c>reftable/</c> wherever the repository keeps them, its <c>logs/</c> and Git LFS's
+    /// <c>lfs/</c> - is read-only to the work, so git add and git fetch fail inside the isolation there, an agent an
+    /// earlier version made and a leg pinned to a plain worktree among them. What is left in a git directory it wrote
+    /// that no rule holds is looked at once the work has run
+    /// (<see cref="IsolationDecision.AfterwardAsync"/>).
     /// </summary>
-    private IEnumerable<string> GitWritten((string Tree, string GitDirectory, string CommonDirectory) directory, bool reftable)
-    {
-        if (StringComparer.FromComparison(host.PathComparison).Equals(Real(directory.GitDirectory), Real(directory.CommonDirectory)))
-        {
-            return [directory.GitDirectory];
-        }
-
-        var logs = Path.Combine(directory.CommonDirectory, "logs");
-        var lfs = Path.Combine(directory.CommonDirectory, "lfs");
-        fileSystem.CreateDirectory(logs);
-
-        return
-        [
-            directory.GitDirectory,
-            Path.Combine(directory.CommonDirectory, "objects"),
-            Path.Combine(directory.CommonDirectory, "refs"),
-            .. reftable ? [Path.Combine(directory.CommonDirectory, Reftable)] : Array.Empty<string>(),
-            logs,
-            .. fileSystem.DirectoryExists(lfs) ? [lfs] : Array.Empty<string>(),
-        ];
-    }
+    private static IEnumerable<string> GitWritten((string Tree, string GitDirectory, string CommonDirectory) directory)
+        => [directory.GitDirectory];
 
     /// <summary>The variable that names a child's temporary directory where the profile has one of its own; none where the mechanism gives it one.</summary>
     private static IEnumerable<KeyValuePair<string, string>> TempVariable(string? temp)
@@ -1558,9 +1561,6 @@ public sealed record GitPlaces(IReadOnlyList<IsolatedPath> Places, IReadOnlyList
 {
     /// <summary>Every file git's configuration names to include, whether its condition holds now or not, there or not.</summary>
     public IReadOnlyList<string> Includes { get; init; } = [];
-
-    /// <summary>The common directory of each repository that keeps its refs in a reftable, as git says (<c>rev-parse --show-ref-format</c>).</summary>
-    public IReadOnlyList<string> Reftables { get; init; } = [];
 
     /// <summary>What would let git's places be read, where they could not be for a reason of their own; null for the asker's.</summary>
     public string? Remedy { get; init; }

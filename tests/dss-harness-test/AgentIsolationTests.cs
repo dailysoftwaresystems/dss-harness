@@ -149,17 +149,17 @@ public sealed class AgentIsolationTests
 
     /// <summary>
     /// A step working in its worktree is given, by its launch's profile: the machine read-only; written its worktree, its
-    /// work directory, what git writes of a linked worktree - its own git directory, and the common directory's objects,
-    /// refs and logs, never the common directory itself - and the isolation's tool caches, with its own temporary
-    /// directory; hidden every credential slot there is and the Claude Code directory and its .claude.json, the shell
-    /// snapshots read again; written by nobody, inside what it writes, the worktree's .git pointer and configuration
-    /// directory, the tool's state in the worktree, its git directory's pointers, configuration and submodules, the common
-    /// directory's replacements and alternates. A place not there inside what it writes is made first; the launch's own
-    /// directory, which no command writes, is not. Under a mechanism that starts again inside a layer of its own, a Claude
-    /// Code launch's whole process is given the outer layer: the same profile, the slots still hidden, but Claude Code's own
-    /// directory and file written, and the receipts' directory and its own temporary directory in the launch's - every rule
-    /// parent first. Its records say the mechanism, its pins hold the git directories of the worktree and of the main
-    /// checkout alike, and its disposal takes the temporary directory away.
+    /// work directory, what git writes of a tree it writes - a worktree a repository of its own writes its .git whole - and
+    /// the isolation's tool caches, with its own temporary directory; hidden every credential slot there is and the Claude
+    /// Code directory and its .claude.json, the shell snapshots read again; written by nobody, inside what it writes, the
+    /// worktree's configuration directory, the tool's state in the worktree, and the git directory's own code-running files,
+    /// pointers and submodules: its hooks, its configuration, its replacements, its alternates and its commondir, made
+    /// naming the directory itself, and its worktrees/. A place not there inside what it writes is made first; the launch's
+    /// own directory, which no command writes, is not. Under a mechanism that starts again inside a layer of its own, a
+    /// Claude Code launch's whole process is given the outer layer: the same profile, the slots still hidden, but Claude
+    /// Code's own directory and file written, and the receipts' directory and its own temporary directory in the launch's -
+    /// every rule parent first. Its records say the mechanism, its pins hold the git directories of the worktree and of the
+    /// main checkout alike, nothing is said of a linked worktree, and its disposal takes the temporary directory away.
     /// </summary>
     [Fact]
     public async Task AStepInItsWorktree_IsGivenTheMachineReadOnly_ItsRootsAndGitWritten_ItsGuardedPlacesSealed()
@@ -167,7 +167,7 @@ public sealed class AgentIsolationTests
         using var temp = new TempDirectory();
         using var home = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
-        var worktree = await kit.CreateLegacyAgentAsync("a1");
+        var worktree = await kit.CreateAgentAsync("a1");
         var claude = Directory.CreateDirectory(Path.Combine(home.Path, ".claude")).FullName;
         await File.WriteAllTextAsync(claude + ".json", "{}", Token);
         var work = kit.Layout.WorkDirectory("a1");
@@ -189,33 +189,32 @@ public sealed class AgentIsolationTests
         var isolated = await isolation.ForLaunchAsync(config, ground, kit.Main, launch, Token);
 
         var git = Path.Combine(kit.Main, ".git");
-        var linked = Assert.Single(Directory.GetDirectories(Path.Combine(git, "worktrees")));
+        var own = Path.Combine(worktree, ".git");
         var root = IsolationRoot(home.Path);
 
         // The caches of what the launch writes - its write scope - alone.
-        var caches = Path.Combine(root, IsolationCaches.Directory, IsolationCaches.ScopeName([worktree, work, linked, Path.Combine(git, "objects"), Path.Combine(git, "refs"), Path.Combine(git, "logs")], []));
+        var caches = Path.Combine(root, IsolationCaches.Directory, IsolationCaches.ScopeName([worktree, work, own], []));
         var settings = Path.Combine(worktree, HarnessLayout.DirectoryName);
         var commands = isolated.Commands!;
         IReadOnlyList<IsolatedWrite> writes =
         [
             new(worktree, Directory: true, Writable: true),
             new(work, Directory: true, Writable: true),
-            new(linked, Directory: true, Writable: true),
-            new(Path.Combine(git, "objects"), Directory: true, Writable: true),
-            new(Path.Combine(git, "refs"), Directory: true, Writable: true),
-            new(Path.Combine(git, "logs"), Directory: true, Writable: true),
+            new(own, Directory: true, Writable: true),
             new(caches, Directory: true, Writable: true),
-            new(Path.Combine(worktree, ".git"), Directory: false, Writable: false),
             new(settings, Directory: true, Writable: false),
             .. ground.StateDirectories
                 .Where(state => IsolationProfile.Covers(worktree, state) && !IsolationProfile.Covers(settings, state) && Directory.Exists(state))
                 .Select(state => new IsolatedWrite(state, Directory: true, Writable: false)),
-            new(Path.Combine(git, "objects", "info"), Directory: true, Writable: false),
-            new(Path.Combine(git, "refs", "replace"), Directory: true, Writable: false),
-            new(Path.Combine(linked, "config.worktree"), Directory: false, Writable: false),
-            new(Path.Combine(linked, "commondir"), Directory: false, Writable: false),
-            new(Path.Combine(linked, "gitdir"), Directory: false, Writable: false),
-            new(Path.Combine(linked, "modules"), Directory: true, Writable: false),
+            new(Path.Combine(own, "hooks"), Directory: true, Writable: false),
+            new(Path.Combine(own, "config"), Directory: false, Writable: false),
+            new(Path.Combine(own, "config.worktree"), Directory: false, Writable: false),
+            new(Path.Combine(own, "info"), Directory: true, Writable: false),
+            new(Path.Combine(own, "refs", "replace"), Directory: true, Writable: false),
+            new(Path.Combine(own, "objects", "info"), Directory: true, Writable: false),
+            new(Path.Combine(own, "modules"), Directory: true, Writable: false),
+            new(Path.Combine(own, AgentIsolation.CommonDirectoryFile), Directory: false, Writable: false),
+            new(Path.Combine(own, "worktrees"), Directory: true, Writable: false),
         ];
 
         Assert.Equal((AgentIsolationMode.Required, false, null, null), (isolated.Mode, isolated.Refused, isolated.Notice, isolated.Refusal("'think'")));
@@ -232,10 +231,12 @@ public sealed class AgentIsolationTests
         Assert.Equal([Path.Combine(claude, AgentIsolation.ShellSnapshots)], commands.Reopened);
         Assert.Equal(Path.Combine(root, IsolationCaches.TempDirectory), Path.GetDirectoryName(commands.Temp));
         Assert.Equal([new("TMPDIR", commands.Temp!), .. IsolationCaches.Environment(caches)], commands.Environment);
-        Assert.True(Directory.Exists(Path.Combine(linked, "modules")) && Directory.Exists(Path.Combine(git, "refs", "replace")) && Directory.Exists(commands.Temp) && Directory.Exists(caches));
-        Assert.False(File.Exists(Path.Combine(git, "config.worktree")) || Directory.Exists(Path.Combine(git, "modules")), "a place in the common directory itself, which no command writes, is made");
+        Assert.True(Directory.Exists(Path.Combine(own, "modules")) && Directory.Exists(Path.Combine(own, "refs", "replace")) && Directory.Exists(Path.Combine(own, "worktrees")) && Directory.Exists(commands.Temp) && Directory.Exists(caches));
+        Assert.Equal(AgentIsolation.ItsOwnDirectory, await File.ReadAllTextAsync(Path.Combine(own, AgentIsolation.CommonDirectoryFile), Token));
+        Assert.False(File.Exists(Path.Combine(git, "config.worktree")) || Directory.Exists(Path.Combine(git, "modules")), "a place in the main checkout's git directory, which no command writes, is made");
         Assert.False(Directory.Exists(launch), launch);
-        Assert.Equal((new GitDirectoryPin(worktree, linked, git), new GitDirectoryPin(kit.Main, git, git)), (pins.Of(worktree), pins.Of(kit.Main)));
+        Assert.Empty(isolated.LegacyWorktrees);
+        Assert.Equal((new GitDirectoryPin(worktree, own, own), new GitDirectoryPin(kit.Main, git, git)), (pins.Of(worktree), pins.Of(kit.Main)));
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Required) { Mechanism = "test", Version = "1.0" }, isolated.Record);
 
         // Claude Code's whole process, in the outer layer each command is handed in from: the slots still hidden, Claude
@@ -265,6 +266,80 @@ public sealed class AgentIsolationTests
         isolated.Dispose();
 
         Assert.False(Directory.Exists(commands.Temp), commands.Temp);
+    }
+
+    /// <summary>
+    /// A step over a linked worktree an earlier version of this tool made writes, by its launch's profile, the worktree's
+    /// own git directory alone - its directory under the main checkout's .git/worktrees/ - and nothing of the common
+    /// directory it shares: no object, no ref, no log and no large-file store of the main checkout's is written or held by
+    /// any rule, so git add and git fetch fail inside the isolation there, and the launch says so at its start; a
+    /// replacement made in the main checkout while it ran is none of its decision's, for it writes no ref of that
+    /// repository's.
+    /// </summary>
+    [Fact]
+    public async Task ALegacyLinkedWorktree_WritesItsOwnGitDirectoryAlone_AndSaysSo_AMainsReplacementNotItsAnswer()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateLegacyAgentAsync("a1");
+        var work = kit.Layout.WorkDirectory("a1");
+        Directory.CreateDirectory(work);
+        var launch = Path.Combine(kit.Layout.Directory, "steps", "think");
+        var platform = new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism()));
+        var isolation = new AgentIsolation(platform, kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var ground = AgentStepGround.Of(
+            config,
+            definition: null,
+            new WorkflowStep { Name = "think", Type = "reason" },
+            new AgentWorkspace(worktree, work, kit.Main, [], worktree, kit.Layout.Directory),
+            webSearchGiven: false,
+            [],
+            []);
+
+        using var isolated = await isolation.ForLaunchAsync(config, ground, kit.Main, launch, Token);
+
+        var git = Path.Combine(kit.Main, ".git");
+        var linked = Assert.Single(Directory.GetDirectories(Path.Combine(git, "worktrees")));
+        var root = IsolationRoot(home.Path);
+        var caches = Path.Combine(root, IsolationCaches.Directory, IsolationCaches.ScopeName([worktree, work, linked], []));
+        var settings = Path.Combine(worktree, HarnessLayout.DirectoryName);
+        var commands = isolated.Commands!;
+        IReadOnlyList<IsolatedWrite> writes =
+        [
+            new(worktree, Directory: true, Writable: true),
+            new(work, Directory: true, Writable: true),
+            new(linked, Directory: true, Writable: true),
+            new(caches, Directory: true, Writable: true),
+            new(Path.Combine(worktree, ".git"), Directory: false, Writable: false),
+            new(settings, Directory: true, Writable: false),
+            .. ground.StateDirectories
+                .Where(state => IsolationProfile.Covers(worktree, state) && !IsolationProfile.Covers(settings, state) && Directory.Exists(state))
+                .Select(state => new IsolatedWrite(state, Directory: true, Writable: false)),
+            new(Path.Combine(linked, "config.worktree"), Directory: false, Writable: false),
+            new(Path.Combine(linked, AgentIsolation.CommonDirectoryFile), Directory: false, Writable: false),
+            new(Path.Combine(linked, "gitdir"), Directory: false, Writable: false),
+            new(Path.Combine(linked, "modules"), Directory: true, Writable: false),
+        ];
+
+        Assert.Equal(writes.OrderBy(write => write.Path, StringComparer.Ordinal), commands.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
+
+        // The common directory the worktree shares with the main checkout: no rule of the launch's reaches its objects, its
+        // refs, its logs or its large-file store, and none of them is made.
+        Assert.DoesNotContain(commands.Writes, write => write.Writable && IsolationProfile.Covers(git, write.Path) && !IsolationProfile.Covers(linked, write.Path));
+        Assert.DoesNotContain(commands.Writes, write => IsolationProfile.Covers(Path.Combine(git, "objects"), write.Path) || IsolationProfile.Covers(Path.Combine(git, "refs"), write.Path) || IsolationProfile.Covers(Path.Combine(git, "logs"), write.Path));
+        Assert.False(Directory.Exists(Path.Combine(git, "refs", "replace")), "a place of the main checkout's git directory, read-only to the work, is made");
+        Assert.Equal(
+            [$"'{worktree}' is a linked worktree an earlier version made: git add and fetch fail there; delete-agent and a new agent give it a repository of its own"],
+            isolated.LegacyWorktrees);
+
+        // A replacement in the main checkout is not this launch's to answer: it writes no ref of that repository's.
+        var replaced = (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "in its place"], Token);
+        await kit.Harness.RunGitAsync(kit.Main, ["replace", replaced, "HEAD"], Token);
+
+        Assert.Null(await isolated.AfterwardAsync(Token));
     }
 
     /// <summary>
@@ -579,12 +654,13 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>
-    /// In a repository that keeps its refs in a reftable, a step in a linked worktree writes the common directory's
-    /// reftable/ - where git writes every ref of it, its refs/ a stub - and a replacement made there, where no file under
-    /// refs/replace/ and no packed-refs line names it, is what its decision answers once it has.
+    /// In a repository that keeps its refs in a reftable, a work a linked worktree does writes no ref of it at all - the
+    /// common reftable/, where git writes every ref and whose refs/ is a stub, is read-only to the work as the objects and
+    /// the logs are - so a replacement made in the main checkout while it ran is not answered: nothing it could write
+    /// there.
     /// </summary>
     [Fact]
-    public async Task InAReftableRepository_AWorktreeWritesItsRefsWhereGitKeepsThem_AndAReplacementThereIsAnswered()
+    public async Task InAReftableRepository_ALinkedWorktreesWorkWritesNoRef_AndMainsReplacementIsNotItsAnswer()
     {
         using var temp = new TempDirectory();
         using var home = new TempDirectory();
@@ -602,17 +678,15 @@ public sealed class AgentIsolationTests
         var git = Path.Combine(main, ".git");
         var config = new HarnessConfig();
         var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), harness.GitClient, harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var replaced = (await harness.RunGitAsync(main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
 
         using var legs = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfLegs(config, main, linkedTree), main, Token);
-        var replaced = (await harness.RunGitAsync(main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
-        await harness.RunGitAsync(linkedTree, ["commit", "--quiet", "--allow-empty", "-m", "in its place"], Token);
-        await harness.RunGitAsync(linkedTree, ["replace", replaced, "HEAD"], Token);
+        await harness.RunGitAsync(main, ["commit", "--quiet", "--allow-empty", "-m", "in its place"], Token);
+        await harness.RunGitAsync(main, ["replace", replaced, "HEAD"], Token);
 
-        Assert.Contains(new IsolatedWrite(Path.Combine(git, "reftable"), Directory: true, Writable: true), legs.Profile!.Writes);
-        Assert.Contains(new IsolatedWrite(Path.Combine(git, "refs"), Directory: true, Writable: true), legs.Profile.Writes);
-        Assert.Equal(
-            $"'{git}' came to hold refs/replace/{replaced} while it ran: a replacement, which puts other content in place of an object for every git started outside that reads it - so nothing goes on over the trees; look at what it puts in place, and remove it with git update-ref -d refs/replace/{replaced}",
-            await legs.AfterwardAsync(Token));
+        Assert.DoesNotContain(legs.Profile!.Writes, write => write.Writable && (IsolationProfile.Covers(git, write.Path) && !IsolationProfile.Covers(Path.Combine(git, "worktrees"), write.Path)));
+        Assert.DoesNotContain(legs.Profile.Writes, write => write.Path == Path.Combine(git, "reftable") || write.Path == Path.Combine(git, "refs") || write.Path == Path.Combine(git, "objects"));
+        Assert.Null(await legs.AfterwardAsync(Token));
     }
 
     /// <summary>

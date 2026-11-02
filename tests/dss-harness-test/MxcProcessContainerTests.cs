@@ -491,6 +491,29 @@ public sealed class MxcProcessContainerTests
         }
     }
 
+    /// <summary>
+    /// A command inside MXC's container makes no hard link from a file of the main checkout's into a place it writes: the
+    /// container grants the main checkout read alone, and a hard link needs it written, so nothing read-only gains a second
+    /// name a command could write by. This is the hard-link canary of Windows' container: where it fails, the container
+    /// allows the link, and the profile must deny link creation from outside the writable roots.
+    /// </summary>
+    [Fact]
+    public async Task OnWindows_ACommandInside_MakesNoHardLinkFromTheMainCheckout_IntoAPlaceItWrites_ForReal()
+    {
+        var version = Supported();
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = new FixedIsolationPlatform(IsolationAvailability.Of(new MxcProcessContainer(version, (CliRunner.CliProgram, []))));
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var objects = Path.Combine(launch.Kit.Main, ".git", "objects");
+        var stored = Assert.Single(Directory.EnumerateFiles(objects, "*", SearchOption.AllDirectories).Take(1));
+
+        var linked = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, Interpreter, "/d", "/c", "mklink", "/H", Path.Combine(launch.Worktree, "hard"), stored);
+
+        Assert.NotEqual(0, linked.ExitCode);
+        Assert.False(File.Exists(Path.Combine(launch.Worktree, "hard")));
+    }
+
     /// <summary>The system's command interpreter.</summary>
     private static string Interpreter => Path.Combine(Environment.SystemDirectory, "cmd.exe");
 
