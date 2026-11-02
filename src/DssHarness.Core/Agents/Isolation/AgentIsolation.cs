@@ -190,9 +190,12 @@ public sealed record LaunchIsolation(
     public const string NoCommands = "the agent may run no command";
 
     /// <summary>
-    /// What a Claude Code launch's whole process is denied where the mechanism takes no command handed to it one by one
-    /// (<see cref="IIsolationMechanism.TakesHandedCommands"/>): the commands' profile with the Claude Code directories
-    /// read, for it reads its login there. Null where there is no mechanism.
+    /// What a Claude Code launch's whole process is denied: where the mechanism takes no command handed to it one by one
+    /// (<see cref="IIsolationMechanism.TakesHandedCommands"/>), the commands' profile with the Claude Code directories read,
+    /// for it reads its login there; where it takes them and starts again inside a layer of its own
+    /// (<see cref="IIsolationMechanism.Unnested"/>), the outer layer its commands are each handed into a layer of their own
+    /// from (<see cref="IsolationProfile.Outer"/>). Null where there is no mechanism, or Claude Code's own process runs
+    /// outside every layer.
     /// </summary>
     public IsolationProfile? ClaudeCode { get; init; }
 
@@ -200,13 +203,19 @@ public sealed record LaunchIsolation(
     public ProcessIsolation? ForCommands => Mechanism is not null && Commands is not null ? new ProcessIsolation(Mechanism, Commands) : null;
 
     /// <summary>
-    /// The isolation a Claude Code launch's whole process is started with, where its mechanism takes no command handed to it
-    /// one by one; null where there is none, or the launch hands its commands over and runs outside.
+    /// The isolation a Claude Code launch's whole process is started with - whole inside, or in the outer layer it hands each
+    /// command in from; null where there is none, or the launch hands its commands over from outside every layer.
     /// </summary>
-    public ProcessIsolation? ForClaudeCode => Mechanism is { TakesHandedCommands: false } && ClaudeCode is not null ? new ProcessIsolation(Mechanism, ClaudeCode) : null;
+    public ProcessIsolation? ForClaudeCode => Mechanism is not null && ClaudeCode is not null ? new ProcessIsolation(Mechanism, ClaudeCode) : null;
 
-    /// <summary>What the launch's client runs its processes under, handed it in its run: <see cref="ForCommands"/> and <see cref="ForClaudeCode"/>.</summary>
-    public LaunchProcesses Processes => new(ForCommands, ForClaudeCode);
+    /// <summary>
+    /// Why a Claude Code launch's own process runs outside every layer, handing each command in from there - the mechanism
+    /// takes handed commands and starts none inside a layer of its own; null where it runs inside, or there is no mechanism.
+    /// </summary>
+    public string? ClaudeCodeOutside => Mechanism is { TakesHandedCommands: true } && ClaudeCode is null ? Mechanism.Unnested : null;
+
+    /// <summary>What the launch's client runs its processes under, handed it in its run: <see cref="ForCommands"/>, <see cref="ForClaudeCode"/> and <see cref="ClaudeCodeOutside"/>.</summary>
+    public LaunchProcesses Processes => new(ForCommands, ForClaudeCode) { ClaudeCodeOutside = ClaudeCodeOutside };
 
     /// <summary>
     /// What every launch says where it starts on the words policy alone, its agent able to run a command: why there is no
@@ -230,12 +239,16 @@ public sealed record LaunchIsolation(
 /// <summary>
 /// What a client runs a launch's processes under, handed it in its run (<see cref="AgentRun.Isolation"/>): the isolation
 /// each command it starts is started with, and the one a Claude Code launch's whole process is started with where it runs
-/// inside. The decision it comes from (<see cref="LaunchIsolation"/>) stays with the one who asked it, who releases it once
-/// the launch has run, so a client is handed nothing it could end.
+/// inside one - whole, or in an outer layer. The decision it comes from (<see cref="LaunchIsolation"/>) stays with the one
+/// who asked it, who releases it once the launch has run, so a client is handed nothing it could end.
 /// </summary>
 /// <param name="Commands">The isolation each command of the launch is started with; null where there is none.</param>
 /// <param name="ClaudeCode">The isolation a Claude Code launch's whole process is started with; null where there is none, or it runs outside.</param>
-public sealed record LaunchProcesses(ProcessIsolation? Commands, ProcessIsolation? ClaudeCode);
+public sealed record LaunchProcesses(ProcessIsolation? Commands, ProcessIsolation? ClaudeCode)
+{
+    /// <summary>Why a Claude Code launch's own process runs outside every layer, handing each command in (<see cref="LaunchIsolation.ClaudeCodeOutside"/>); null where it does not.</summary>
+    public string? ClaudeCodeOutside { get; init; }
+}
 
 /// <summary>
 /// Which of the tool's own executions of an agent's work an <see cref="ExecutionGround"/> is of: what decides the
@@ -1197,10 +1210,10 @@ public sealed class AgentIsolation(
 
     /// <summary>
     /// The profile of <paramref name="ground"/> as this machine's mechanism holds it - a command's, and a Claude Code
-    /// launch's whole process's, which reads the Claude Code directories it keeps its login in - or why it cannot be held:
+    /// launch's whole process's where the mechanism holds one (<see cref="ClaudeCodeOf"/>) - or why it cannot be held:
     /// <paramref name="written"/> written, its write scope's <paramref name="caches"/> among them.
     /// </summary>
-    private (IsolationProfile Profile, IsolationProfile ClaudeCode, (string Why, string Remedy)? Unheld) Built(IsolationGround ground, GitPlaces gitPlaces, IReadOnlyList<string> written, string caches, string? temp, IIsolationMechanism mechanism)
+    private (IsolationProfile Profile, IsolationProfile? ClaudeCode, (string Why, string Remedy)? Unheld) Built(IsolationGround ground, GitPlaces gitPlaces, IReadOnlyList<string> written, string caches, string? temp, IIsolationMechanism mechanism)
     {
         var comparer = StringComparer.FromComparison(host.PathComparison);
         var open = new IsolationProfile([], [.. written.Select(root => new IsolatedWrite(root, Directory: true, Writable: true))]) { Temp = temp is null ? null : Real(temp) };
@@ -1314,11 +1327,46 @@ public sealed class AgentIsolation(
             Sockets = socket is null ? [] : [socket],
         };
 
-        // The whole Claude Code process reads its login in its directories, read alone like the machine: written, they would
-        // let a command plant what Claude Code runs outside later - its settings' hooks, its own file's servers.
-        var claudeCode = hidden.Where(entry => !ground.ClaudeCodeDirectories.Contains(entry.place, comparer) && !IsolationHidden.IsClaudeFile(entry.place)).Select(entry => Real(entry.place)).ToHashSet(comparer);
+        return (profile, ClaudeCodeOf(profile, ground, hidden, readable, mechanism, comparer), null);
+    }
 
-        return (profile, profile with { Hidden = [.. profile.Hidden.Where(place => claudeCode.Contains(place.Path))], Reopened = readable }, null);
+    /// <summary>
+    /// What a Claude Code launch's whole process is denied, from its commands' <paramref name="profile"/>, as the mechanism
+    /// takes the launch: where it takes no command handed to it (MXC's container), the commands' profile with the Claude
+    /// Code directories and <c>~/.claude.json</c> read alone - written, they would let a command plant what Claude Code runs
+    /// outside later, its settings' hooks, its own file's servers, but the files a program reads by itself inside a hidden
+    /// directory of the user's credentials still read (<paramref name="readable"/>); where it takes handed commands and
+    /// starts again inside a layer of its own (bubblewrap where its probe proved that), an outer layer: the commands'
+    /// profile with Claude Code's own places written - those directories and that file, which Claude Code fails every shell
+    /// command without writing, and the receipts' directory and its own temporary directory in the launch directory,
+    /// sealed but for them - so a command Claude Code ran without its prefix stays inside it, the slots hidden, the machine
+    /// read-only, git's code-running files and the tool's state sealed; null where it takes handed commands and starts none
+    /// inside (macOS's sandbox), and Claude Code's own process runs outside, or for an execution, which has no launch.
+    /// </summary>
+    private IsolationProfile? ClaudeCodeOf(IsolationProfile profile, IsolationGround ground, IReadOnlyList<(string place, bool directory)> hidden, IReadOnlyList<string> readable, IIsolationMechanism mechanism, IEqualityComparer<string> comparer)
+    {
+        var own = hidden.Where(entry => ground.ClaudeCodeDirectories.Contains(entry.place, comparer) || IsolationHidden.IsClaudeFile(entry.place)).ToList();
+        var slots = hidden.Except(own).Select(entry => Real(entry.place)).ToHashSet(comparer);
+        var apart = profile with { Hidden = [.. profile.Hidden.Where(place => slots.Contains(place.Path))], Reopened = [.. readable] };
+
+        if (!mechanism.TakesHandedCommands)
+        {
+            return apart;
+        }
+
+        if (mechanism.Unnested is not null || ground.LaunchDirectory is not { } launch)
+        {
+            return null;
+        }
+
+        IReadOnlyList<IsolatedWrite> written =
+        [
+            .. profile.Writes,
+            .. own.DistinctBy(entry => entry.place, comparer).Select(entry => new IsolatedWrite(Real(entry.place), entry.directory, Writable: true)),
+            .. ClaudeCode.ClaudeShell.PlacesIn(launch).Select(place => new IsolatedWrite(Real(place), Directory: true, Writable: true)),
+        ];
+
+        return apart with { Writes = IsolationProfiles.Ordered(written, comparer), Outer = true };
     }
 
     /// <summary>
@@ -1529,14 +1577,32 @@ public static class IsolationProfiles
     {
         ArgumentNullException.ThrowIfNull(sealedPlaces);
         ArgumentNullException.ThrowIfNull(writableRoots);
+
+        return Ordered(
+            [
+                .. sealedPlaces.Select(place => new IsolatedWrite(place.Path, place.Directory, Writable: false)),
+                .. writableRoots.Select(root => new IsolatedWrite(root, Directory: true, Writable: true)),
+            ],
+            comparer);
+    }
+
+    /// <summary>
+    /// <paramref name="writes"/>, each place once, parent first: the places written by nobody before the places written,
+    /// a place both standing sealed, then every place's rule laid over the rule of every place above it.
+    /// </summary>
+    /// <param name="writes">The write rules, a file written alone among them.</param>
+    /// <param name="comparer">How this machine compares paths.</param>
+    public static IReadOnlyList<IsolatedWrite> Ordered(IReadOnlyList<IsolatedWrite> writes, IEqualityComparer<string> comparer)
+    {
+        ArgumentNullException.ThrowIfNull(writes);
         ArgumentNullException.ThrowIfNull(comparer);
 
-        var sealedSet = sealedPlaces.Select(place => place.Path).ToHashSet(comparer);
+        var sealedSet = writes.Where(write => !write.Writable).Select(write => write.Path).ToHashSet(comparer);
 
         return
         [
-            .. sealedPlaces.DistinctBy(place => place.Path, comparer).Select(place => new IsolatedWrite(place.Path, place.Directory, Writable: false))
-                .Concat(writableRoots.Distinct(comparer).Where(root => !sealedSet.Contains(root)).Select(root => new IsolatedWrite(root, Directory: true, Writable: true)))
+            .. writes.Where(write => !write.Writable).DistinctBy(write => write.Path, comparer)
+                .Concat(writes.Where(write => write.Writable && !sealedSet.Contains(write.Path)).DistinctBy(write => write.Path, comparer))
                 .Select((write, at) => (write, at))
                 .OrderBy(pair => IsolationProfile.Depth(pair.write.Path))
                 .ThenBy(pair => pair.at)

@@ -3051,7 +3051,7 @@ public static class HelpTopics
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
         builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call it");
         builder.AppendLine("runs - the web's of the claude-code client, and its file tools' where Claude Code's own");
-        builder.AppendLine("process runs outside the isolation, served through the engine's tool server, and");
+        builder.AppendLine("process runs apart from the isolation, served through the engine's tool server, and");
         builder.AppendLine("every call of the API clients, the claude-api and glm clients below - for every agent a");
         builder.AppendLine("command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a");
         builder.AppendLine("side-task.");
@@ -3074,6 +3074,9 @@ public static class HelpTopics
 
         return builder.ToString();
     }
+
+    /// <summary>How long a shell call's receipt is waited for, in seconds (<see cref="Agents.ClaudeCode.ClaudeCodeClient.ReceiptBound"/>).</summary>
+    private static string ReceiptSeconds => Agents.ClaudeCode.ClaudeCodeClient.ReceiptBound.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
     /// The operating system's isolation of an agent's commands beneath the policy: the mechanism, what a launch's profile
@@ -3172,7 +3175,8 @@ public static class HelpTopics
             + "prompt read the repository as it stands: the refs and objects the work wrote, an operation's state it left "
             + "until a person removes it, and a repository it made inside its tree, whose own configuration - an fsmonitor, "
             + "a filter - git started in that directory reads and runs, as it does any repository's. "
-            + "Under bubblewrap the child has a user namespace of its own that allows no further one, and a process "
+            + "Under bubblewrap the child has a user namespace of its own that allows no further one - but a claude-code "
+            + "launch's outer layer, below, which is left one to make each command's own layer in - and a process "
             + "namespace with its own /proc, so no command reaches another process's environment; each place is a mount, "
             + "each directory above one a mount point no command moves; WSL's interoperation sockets and shared directory "
             + $"(/run/WSL, /mnt/wsl, and {Bubblewrap.WslInteropVariable} taken from its environment), screen's sessions, the "
@@ -3197,11 +3201,26 @@ public static class HelpTopics
             + "each record says as the anchors' cost. The child has the environment the step was given and the "
             + "container's own user interface - no clipboard, no input sent to another window - which a program "
             + "that loads Windows' user interface library needs to start at all. On each, the network is the user's, the "
-            + "loopback both ways. On Linux and macOS a claude-code launch's own process runs outside the isolation, "
-            + "reading its login and the key it is handed there, and every shell command it starts is handed to the "
-            + "isolation through its shell prefix (CLAUDE_CODE_SHELL_PREFIX: this tool and --isolated-shell, which becomes "
-            + "the mechanism with /bin/bash inside, the launch's isolation read from the file DSSHARNESS_ISOLATED_SHELL names) "
-            + "- so no command it runs reaches its directories, its login or its environment. There Claude Code opens no file "
+            + "loopback both ways. On Linux and macOS a claude-code launch's own process runs apart from its commands, "
+            + "reading its login and the key it is handed there, and every shell command it starts is handed into a layer "
+            + "of its own through its shell prefix (CLAUDE_CODE_SHELL_PREFIX: this tool and --isolated-shell, which becomes "
+            + $"the mechanism with /bin/bash inside, the launch's isolation read from the file {IsolatedShell.FileVariable} names) "
+            + "- so no command it runs reaches its directories, its login or its environment. On Linux Claude Code's own "
+            + "process runs inside an outer layer of bubblewrap: the machine read-only, every credential slot hidden, git's "
+            + "code-running files and the tool's state sealed as for its commands, and written but its writable roots, its "
+            + "temporary directory, the declared caches, Claude Code's own directories and "
+            + $"~/{Orchestration.ClaudeTranscripts.StateFileName} - without which it fails every shell command - and the step's "
+            + $"{Agents.ClaudeCode.ClaudeShell.ReceiptsDirectoryName} and {Agents.ClaudeCode.ClaudeShell.TempDirectoryName}; the "
+            + "outer layer alone is left a user namespace to make each command's layer in, and the mounts it laid are locked "
+            + "into every namespace made inside it, so none is undone there. A command Claude Code ran without its prefix "
+            + "therefore still runs inside the outer layer, never with the user's rights - though there it reads Claude "
+            + "Code's login and environment and could write its directories. Where Claude Code never ran, its directory and "
+            + $"{Orchestration.ClaudeTranscripts.StateFileName} (holding {{}}) are made first, for inside it can make neither. "
+            + "Where this machine's bubblewrap cannot start again inside a layer of its own - an AppArmor profile that denies "
+            + "its children every capability, as Ubuntu's bwrap-userns-restrict does - the probe says so, and Claude Code's "
+            + "own process runs outside every layer, as on macOS, whose sandbox starts none inside another; there a command "
+            + "Claude Code ran without its prefix runs outside with the user's rights, and each launch says so as it starts. "
+            + "In or out of a layer, Claude Code opens no file "
             + "of the agent's in its own process: its file tools are not given, --tools names its shell alone, and the engine's "
             + $"tool server serves the tool runtime's ({string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.FileTools)}) in their "
             + "place, each file read through the file the engine opened, decided again by where the system names it, and "
@@ -3209,15 +3228,22 @@ public static class HelpTopics
             + "with no link on the way, so a link a command - one left running in the background among them - puts on a "
             + "path between the decision and the act reaches nothing. Each shell command the engine allows is given back with a receipt at its head (: "
             + $"{IsolatedShell.ReceiptWord} <32 hexadecimal digits>;, the shell's no-op), which --isolated-shell writes in the "
-            + $"step's {Agents.ClaudeCode.ClaudeShell.ReceiptsDirectoryName} directory, where no command writes, before it runs "
-            + "the command; a call that comes back with none - a Claude Code that skipped its prefix, the command run outside "
-            + "- ends the launch failed at once, a call run in the background within "
-            + $"{Agents.ClaudeCode.ClaudeCodeClient.ReceiptBound.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s or by its turn's end. "
+            + $"step's {Agents.ClaudeCode.ClaudeShell.ReceiptsDirectoryName} directory, where no command handed over writes, "
+            + "before it runs the command - the command itself run without that mark, and without the variables that hand it "
+            + "over, so nothing it is started with names its receipt or where receipts are written. A call that comes back "
+            + "with none - a Claude Code that skipped its prefix - ends the launch failed at once, and one run in the "
+            + $"background is waited for within {ReceiptSeconds} s; however a launch ends - at a turn's result, Claude Code "
+            + $"gone or its output cut - each allowed call whose receipt is not there yet is waited for within {ReceiptSeconds} s "
+            + "before anything of it is ended, one with none by then ending it failed, and where the launch was stopped or "
+            + "ended at once, each is said. A receipt proves only that Claude Code handed the command over, and only once it "
+            + "has run: it stops nothing, and a command run without the prefix runs where Claude Code's own process runs, "
+            + "where it could write a receipt of its own - so what holds such a command is the outer layer on Linux, and "
+            + "nothing on macOS or where bubblewrap starts none inside itself. "
             + $"Claude Code's own temporary directory is the step's {Agents.ClaudeCode.ClaudeShell.TempDirectoryName}, where no "
             + "command writes but the one file each ends by writing its working directory to - made empty, given that command "
             + "alone, written in place, never removed or replaced - so nothing Claude Code writes or reads there in its own process is a "
             + "command's to replace with a link; it goes with the launch. Claude Code's own sandbox "
-            + "is turned off in its settings, for none nests in this one; where this tool runs as a runtime handed its "
+            + "is turned off in its settings, for none nests in a command's layer; where this tool runs as a runtime handed its "
             + "assembly, or from a path holding \" -\", neither of which the prefix can name, the launch is not started, "
             + "saying why. On Windows, where nothing "
             + "becomes another program and every command Claude Code runs is Git Bash's, the launch runs whole inside "
@@ -3233,7 +3259,10 @@ public static class HelpTopics
             + "its name and by another case of it, a place written by nobody unwritten by either, a place outside every "
             + "open one unwritten, an open place written - on Windows after MXC's library says this Windows has the container "
             + $"({WindowsContainerHost.Builds}), and followed by each of node, git and Git Bash's sh found on this machine "
-            + "started inside it and asked to answer, one that does not making none, said with how it ended. MXC 1.0.1 ends "
+            + "started inside it and asked to answer, one that does not making none, said with how it ended; on Linux "
+            + "bubblewrap, once proved, is started again inside an outer layer of its own around a shell that must end 0, and "
+            + "where it does not, it is the mechanism all the same, a claude-code launch's own process outside every layer, "
+            + "said with how the trial ended. MXC 1.0.1 ends "
             + "every program of Git Bash's with 0xC0000142, a library that would not start, so where Git Bash is "
             + "installed Windows has none yet; from WSL 2, bubblewrap isolates. agentPolicy.isolation says what happens where "
             + "this machine has none: "
@@ -3258,7 +3287,9 @@ public static class HelpTopics
             + "checkout's its own - and only a repository of the agent's own would keep them apart: so a command can move "
             + "any branch, tag, stash or remote-tracking ref, which a person's checkout outside then takes, and, as git's "
             + "checkout reads an object as it lies without hashing it again, put other content under a name the store "
-            + "already holds, which a checkout outside then writes. This "
+            + "already holds, which a checkout outside then writes. A command Claude Code runs without its shell prefix "
+            + "runs where Claude Code's own process runs - in the outer layer on Linux, with the user's rights on macOS "
+            + "and where bubblewrap starts none inside itself - its missing receipt telling it only once it has run. This "
             + "tool's verbs that read a credential slot or write its state or install would fail inside it, so each is "
             + "refused to every agent by name, a side-task's as well as a step's: "
             + $"{string.Join(", ", Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those that "
@@ -3560,7 +3591,7 @@ public static class HelpTopics
             + "turns and budget, and the tools of the agent's capabilities and no other - "
             + tools
             + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}; where its own process runs "
-            + "outside the isolation it hands its commands to (above), the engine's tool server serves read's "
+            + "apart from the isolation it hands its commands to (above), the engine's tool server serves read's "
             + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.ServedOf(Agents.AgentCapability.Read, ownFiles: false))} and write's "
             + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.ServedOf(Agents.AgentCapability.Write, ownFiles: false))} in place of "
             + "Claude Code's own, each call asked of the engine and run by the tool runtime below as on the API clients. The run's reporter is given "
@@ -3629,7 +3660,7 @@ public static class HelpTopics
 
         return "The tool runtime is the harness's own tools, built for the API clients to give their agents in place of a "
             + "client's own - the claude-api and glm clients below - and serving the claude-code client the web's through "
-            + "the engine's tool server, and its file tools there too where Claude Code's own process runs outside the "
+            + "the engine's tool server, and its file tools there too where Claude Code's own process runs apart from the "
             + "isolation, each under the "
             + $"capability that gives it: {tools}. The run's reporter is given "
             + $"{string.Join(", ", Agents.Runtime.AgentTools.All(defaults).Where(tool => Agents.Policy.AgentPolicyGround.ReporterCapabilities.Contains(tool.Needs)).Select(tool => tool.Name))}, "

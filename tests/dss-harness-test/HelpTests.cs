@@ -1076,6 +1076,12 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
+            "Under bubblewrap the child has a user namespace of its own that allows no further one - but a claude-code launch's outer "
+                + "layer, below, which is left one to make each command's own layer in - and a process namespace with its own /proc, so "
+                + "no command reaches another process's environment;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "MXC's container grants nothing it is not told to: every fixed drive is read, each writable root written, each place "
                 + "written by nobody read, each hidden place denied outright. It meets a place by its path alone and refuses no rename "
                 + "alone, so each directory above a guarded place whose own holder is written is read alone, every entry it holds "
@@ -1086,11 +1092,24 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "On Linux and macOS a claude-code launch's own process runs outside the isolation, reading its login and the key it is "
-                + "handed there, and every shell command it starts is handed to the isolation through its shell prefix "
+            "On Linux and macOS a claude-code launch's own process runs apart from its commands, reading its login and the key it is "
+                + "handed there, and every shell command it starts is handed into a layer of its own through its shell prefix "
                 + "(CLAUDE_CODE_SHELL_PREFIX: this tool and --isolated-shell, which becomes the mechanism with /bin/bash inside, the "
                 + "launch's isolation read from the file DSSHARNESS_ISOLATED_SHELL names) - so no command it runs reaches its "
-                + "directories, its login or its environment. There Claude Code opens no file of the agent's in its own process: its "
+                + "directories, its login or its environment. On Linux Claude Code's own process runs inside an outer layer of "
+                + "bubblewrap: the machine read-only, every credential slot hidden, git's code-running files and the tool's state "
+                + "sealed as for its commands, and written but its writable roots, its temporary directory, the declared caches, "
+                + "Claude Code's own directories and ~/.claude.json - without which it fails every shell command - and the step's "
+                + "claude-receipts and claude-tmp; the outer layer alone is left a user namespace to make each command's layer in, "
+                + "and the mounts it laid are locked into every namespace made inside it, so none is undone there. A command Claude "
+                + "Code ran without its prefix therefore still runs inside the outer layer, never with the user's rights - though "
+                + "there it reads Claude Code's login and environment and could write its directories. Where Claude Code never ran, "
+                + "its directory and .claude.json (holding {}) are made first, for inside it can make neither. Where this machine's "
+                + "bubblewrap cannot start again inside a layer of its own - an AppArmor profile that denies its children every "
+                + "capability, as Ubuntu's bwrap-userns-restrict does - the probe says so, and Claude Code's own process runs "
+                + "outside every layer, as on macOS, whose sandbox starts none inside another; there a command Claude Code ran "
+                + "without its prefix runs outside with the user's rights, and each launch says so as it starts. In or out of a "
+                + "layer, Claude Code opens no file of the agent's in its own process: its "
                 + "file tools are not given, --tools names its shell alone, and the engine's tool server serves the tool runtime's "
                 + "(view_file, find_files, search_files, create_file, replace_in_file, insert_in_file, create_directory, delete_file, "
                 + "delete_directory, move_path) in their place, each file read through the file the engine opened, decided again by "
@@ -1102,12 +1121,20 @@ public sealed partial class HelpTests
         Assert.Contains(
             "Each shell command the engine allows is given back with a receipt at its head (: dssharness-receipt <32 hexadecimal "
                 + "digits>;, the shell's no-op), which --isolated-shell writes in the step's claude-receipts directory, where no command "
-                + "writes, before it runs the command; a call that comes back with none - a Claude Code that skipped its prefix, the "
-                + "command run outside - ends the launch failed at once, a call run in the background within 20 s or by its turn's end. "
+                + "handed over writes, before it runs the command - the command itself run without that mark, and without the "
+                + "variables that hand it over, so nothing it is started with names its receipt or where receipts are written. A call "
+                + "that comes back with none - a Claude Code that skipped its prefix - ends the launch failed at once, and one run in "
+                + "the background is waited for within 20 s; however a launch ends - at a turn's result, Claude Code gone or its "
+                + "output cut - each allowed call whose receipt is not there yet is waited for within 20 s before anything of it is "
+                + "ended, one with none by then ending it failed, and where the launch was stopped or ended at once, each is said. A "
+                + "receipt proves only that Claude Code handed the command over, and only once it has run: it stops nothing, and a "
+                + "command run without the prefix runs where Claude Code's own process runs, where it could write a receipt of its "
+                + "own - so what holds such a command is the outer layer on Linux, and nothing on macOS or where bubblewrap starts "
+                + "none inside itself. "
                 + "Claude Code's own temporary directory is the step's claude-tmp, where no command writes but the one file each ends "
                 + "by writing its working directory to - made empty, given that command alone, written in place, never removed or replaced - so "
                 + "nothing Claude Code writes or reads there in its own process is a command's to replace with a link; it goes with the "
-                + "launch. Claude Code's own sandbox is turned off in its settings, for none nests in this one;",
+                + "launch. Claude Code's own sandbox is turned off in its settings, for none nests in a command's layer;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1129,7 +1156,10 @@ public sealed partial class HelpTests
                 + "case of it, a place written by nobody unwritten by either, a place outside every open one unwritten, an open place "
                 + "written - on Windows after MXC's library says this Windows has the container (Windows 11 24H2 build 26100.9278 or "
                 + "later, or 26H2 build 26300.9550 or later), and followed by each of node, git and Git Bash's sh found on this machine "
-                + "started inside it and asked to answer, one that does not making none, said with how it ended. MXC 1.0.1 ends every "
+                + "started inside it and asked to answer, one that does not making none, said with how it ended; on Linux bubblewrap, "
+                + "once proved, is started again inside an outer layer of its own around a shell that must end 0, and where it does "
+                + "not, it is the mechanism all the same, a claude-code launch's own process outside every layer, said with how the "
+                + "trial ended. MXC 1.0.1 ends every "
                 + "program of Git Bash's with 0xC0000142, a library that would not start, so where Git Bash is installed Windows has "
                 + "none yet; from WSL 2, bubblewrap isolates.",
             prose,
@@ -1157,7 +1187,9 @@ public sealed partial class HelpTests
                 + "checkout's its own - and only a repository of the agent's own would keep them apart: so a command can move any "
                 + "branch, tag, stash or remote-tracking ref, which a person's checkout outside then takes, and, as git's checkout "
                 + "reads an object as it lies without hashing it again, put other "
-                + "content under a name the store already holds, which a checkout outside then writes.",
+                + "content under a name the store already holds, which a checkout outside then writes. A command Claude Code runs "
+                + "without its shell prefix runs where Claude Code's own process runs - in the outer layer on Linux, with the user's "
+                + "rights on macOS and where bubblewrap starts none inside itself - its missing receipt telling it only once it has run.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1344,7 +1376,7 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
 
         Assert.Contains(
-            "where its own process runs outside the isolation it hands its commands to (above), the engine's tool server serves read's "
+            "where its own process runs apart from the isolation it hands its commands to (above), the engine's tool server serves read's "
                 + "mcp__dssharness__view_file, mcp__dssharness__find_files, mcp__dssharness__search_files and write's mcp__dssharness__create_file, "
                 + "mcp__dssharness__replace_in_file, mcp__dssharness__insert_in_file, mcp__dssharness__create_directory, mcp__dssharness__delete_file, "
                 + "mcp__dssharness__delete_directory, mcp__dssharness__move_path in place of Claude Code's own, each call asked of the engine and run by the "
@@ -1392,7 +1424,7 @@ public sealed partial class HelpTests
         Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);
         Assert.Contains(
             "the claude-code client below asks it of every call, the tool runtime below decides by it each call it runs - the web's of the claude-code client, and its file tools' "
-                + "where Claude Code's own process runs outside the isolation, served through the engine's tool server, and every call of the API clients, the claude-api and glm clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
+                + "where Claude Code's own process runs apart from the isolation, served through the engine's tool server, and every call of the API clients, the claude-api and glm clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("a second layer, for the engine is asked about every other call and answers from this policy in its own process, and a call those rules refuse first is counted and recorded as Claude Code's own denial.", prose, StringComparison.Ordinal);
@@ -1419,7 +1451,7 @@ public sealed partial class HelpTests
                 + "alone in its turn); run_command (run, alone in its turn); web_fetch (web); web_search (web).",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("built for the API clients to give their agents in place of a client's own - the claude-api and glm clients below - and serving the claude-code client the web's through the engine's tool server, and its file tools there too where Claude Code's own process runs outside the isolation, each under the capability that gives it:", prose, StringComparison.Ordinal);
+        Assert.Contains("built for the API clients to give their agents in place of a client's own - the claude-api and glm clients below - and serving the claude-code client the web's through the engine's tool server, and its file tools there too where Claude Code's own process runs apart from the isolation, each under the capability that gives it:", prose, StringComparison.Ordinal);
         Assert.Contains("The run's reporter is given view_file, find_files, search_files, those that read, and no other.", prose, StringComparison.Ordinal);
         Assert.Contains("A replace or an insert needs its file viewed first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a newline.", prose, StringComparison.Ordinal);
         Assert.Contains(
@@ -1555,7 +1587,7 @@ public sealed partial class HelpTests
         Assert.Contains("a call those rules refuse before the engine is asked is counted and recorded as Claude Code's own denial.", readme, StringComparison.Ordinal);
         Assert.Contains(
             "the tool runtime below decides by it each call it runs - the web's of the `claude-code` client, and its file tools' where Claude Code's own process runs "
-                + "outside the isolation, served through the engine's tool server, and every call of the API clients, the `claude-api` and `glm` clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
+                + "apart from the isolation, served through the engine's tool server, and every call of the API clients, the `claude-api` and `glm` clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1563,7 +1595,7 @@ public sealed partial class HelpTests
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "where its own process runs outside the isolation it hands its commands to (above), the engine's tool server serves the tool runtime's file tools in place "
+            "where its own process runs apart from the isolation it hands its commands to (above), the engine's tool server serves the tool runtime's file tools in place "
                 + "of Claude Code's own - `read`: `mcp__dssharness__view_file`, `mcp__dssharness__find_files`, `mcp__dssharness__search_files`; `write`: "
                 + "`mcp__dssharness__create_file`, `mcp__dssharness__replace_in_file`, `mcp__dssharness__insert_in_file`, `mcp__dssharness__create_directory`, "
                 + "`mcp__dssharness__delete_file`, `mcp__dssharness__delete_directory`, `mcp__dssharness__move_path` - each call asked of the engine and run by the "
@@ -1571,14 +1603,31 @@ public sealed partial class HelpTests
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "There Claude Code opens no file of the agent's in its own process: its file tools are not given, `--tools` names its shell alone,",
+            "On Linux Claude Code's own process runs inside an outer layer of bubblewrap: the machine read-only, every credential slot hidden, git's "
+                + "code-running files and the tool's state sealed as for its commands, and written but its writable roots, its temporary directory, the declared "
+                + "caches, Claude Code's own directories and `~/.claude.json` - without which it fails every shell command - and the step's `claude-receipts` and "
+                + "`claude-tmp`; the outer layer alone is left a user namespace to make each command's layer in, and the mounts it laid are locked into every "
+                + "namespace made inside it, so none is undone there. A command Claude Code ran without its prefix therefore still runs inside the outer layer, "
+                + "never with the user's rights",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "and Claude Code's own process runs outside every layer, as on macOS, whose sandbox starts none inside another; there a command Claude Code ran "
+                + "without its prefix runs outside with the user's rights, and each launch says so as it starts. In or out of a layer, Claude Code opens no file "
+                + "of the agent's in its own process: its file tools are not given, `--tools` names its shell alone,",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
             "Each shell command the engine allows is given back with a receipt at its head (`: dssharness-receipt <32 hexadecimal digits>;`, the shell's no-op), "
-                + "which `--isolated-shell` writes in the step's `claude-receipts` directory, where no command writes, before it runs the command; a call that comes "
-                + "back with none - a Claude Code that skipped its prefix, the command run outside - ends the launch failed at once, a call run in the background "
-                + "within 20 s or by its turn's end. Claude Code's own temporary directory is the step's `claude-tmp`,",
+                + "which `--isolated-shell` writes in the step's `claude-receipts` directory, where no command handed over writes, before it runs the command - the "
+                + "command itself run without that mark, and without the variables that hand it over, so nothing it is started with names its receipt or where "
+                + "receipts are written. A call that comes back with none - a Claude Code that skipped its prefix - ends the launch failed at once, and one run in "
+                + "the background is waited for within 20 s; however a launch ends - at a turn's result, Claude Code gone or its output cut - each allowed call "
+                + "whose receipt is not there yet is waited for within 20 s before anything of it is ended, one with none by then ending it failed, and where the "
+                + "launch was stopped or ended at once, each is said. A receipt proves only that Claude Code handed the command over, and only once it has run: it "
+                + "stops nothing, and a command run without the prefix runs where Claude Code's own process runs, where it could write a receipt of its own - so "
+                + "what holds such a command is the outer layer on Linux, and nothing on macOS or where bubblewrap starts none inside itself. Claude Code's own "
+                + "temporary directory is the step's `claude-tmp`,",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1950,7 +1999,7 @@ public sealed partial class HelpTests
         Assert.Contains("the run's reporter is given those that read and no other.", readme, StringComparison.Ordinal);
         Assert.Contains(
             "built for the API clients to give their agents in place of a client's own - the `claude-api` and `glm` clients below - and serving the `claude-code` client the web's through the engine's tool server, and its file tools there too "
-                + "where Claude Code's own process runs outside the isolation:",
+                + "where Claude Code's own process runs apart from the isolation:",
             readme,
             StringComparison.Ordinal);
         Assert.Contains($"its links followed (one whose links cannot be followed refused as {DssHarness.Core.Agents.Policy.AgentPolicy.UndecidedRule}) and held to the agent's roots", readme, StringComparison.Ordinal);

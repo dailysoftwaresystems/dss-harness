@@ -2426,25 +2426,28 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A launch whose run was given an isolation starts Claude Code's own process outside it - where it reads its login and
-    /// key, which no command it runs reaches - and hands every shell command it starts to the isolation through its shell
-    /// prefix: this tool's own program and its isolated shell's option, the launch's isolation written beside its settings
-    /// with where each command's receipt is written and Claude Code's own temporary directory - both in the step's
-    /// directory, which no command writes - named by a variable, the one shell, and that temporary directory as Claude Code's
-    /// own - each in its environment and in its settings' env, where Claude Code's own sandbox is turned off. Its --tools
-    /// names the shell alone: the engine's tool server serves the runtime's file tools in place of Claude Code's own, asked
-    /// as every tool is. The temporary directory goes with the launch; the receipts stay. A launch with none sets none of it,
-    /// gives Claude Code's own file tools, and leaves that sandbox to the user's own settings.
+    /// A launch whose run was given an isolation that starts none inside a layer of its own - macOS's sandbox - starts Claude
+    /// Code's own process outside it, where it reads its login and key, which no command it runs reaches, and says so as it
+    /// starts: a command it ran without its prefix would run outside. It hands every shell command it starts to the
+    /// isolation through its shell prefix: this tool's own program and its isolated shell's option, the launch's isolation
+    /// written beside its settings with where each command's receipt is written, Claude Code's own temporary directory -
+    /// both in the step's directory, which no command writes - and the variables that hand the commands over, which no
+    /// command is given; named by a variable, the one shell, and that temporary directory as Claude Code's own - each in its
+    /// environment and in its settings' env, where Claude Code's own sandbox is turned off. Its --tools names the shell
+    /// alone: the engine's tool server serves the runtime's file tools in place of Claude Code's own, asked as every tool
+    /// is. The temporary directory goes with the launch; the receipts stay. A launch with none sets none of it, gives Claude
+    /// Code's own file tools, and leaves that sandbox to the user's own settings.
     /// </summary>
     [Fact]
     public async Task ALaunch_RunsClaudeCodeOutside_HandingEachShellCommandToTheIsolation_ItsOwnSandboxOff()
     {
         using var kit = new Kit();
         kit.Script([new JsonObject()]);
-        var mechanism = new PassThroughMechanism();
+        var mechanism = new PassThroughMechanism { Unnested = DssHarness.Core.Processes.SandboxExec.NoSandboxInside };
         var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []) { Temp = "/home/me/.cache/dssharness-isolation/tmp/abc" };
+        var sink = new Sink();
 
-        await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null).Processes }, new Sink(), Token);
+        await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null).Processes }, sink, Token);
 
         var file = Path.Combine(kit.StepDirectory, ClaudeShell.FileName);
         var receipts = Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName);
@@ -2465,9 +2468,15 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.All(handed, variable => Assert.Equal(variable.Value, settings["env"]![variable.Key]!.GetValue<string>()));
         Assert.Equal("""{"enabled":false}""", settings["sandbox"]!.ToJsonString());
         Assert.Equal(
-            IsolatedShell.Written(new DssHarness.Core.Processes.ProcessIsolation(mechanism, commands), new DssHarness.Core.Processes.IsolatedShellHanding(receipts, temp)),
+            IsolatedShell.Written(
+                new DssHarness.Core.Processes.ProcessIsolation(mechanism, commands),
+                new DssHarness.Core.Processes.IsolatedShellHanding(receipts, temp) { Variables = [.. handed.Select(variable => variable.Key)] }),
             File.ReadAllText(file));
         Assert.Equal((true, false), (Directory.Exists(receipts), Directory.Exists(temp)));
+        Assert.Equal(
+            ["Claude Code's own process runs outside the isolation, for macOS starts no sandbox inside another: each shell command it starts is handed into the isolation through its shell prefix, and one it ran without would run outside with the user's rights, its missing receipt showing it only once it had run"],
+            sink.Of<Notice>().Select(notice => notice.Text));
+        Assert.False(File.Exists(Path.Combine(kit.ClaudeDirectory, ".claude.json")), "a launch outside makes nothing of Claude Code's own");
         Assert.Equal("Bash", Value(request.Arguments, "--tools"));
         Assert.Equal(
             [
@@ -2491,6 +2500,35 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.False(File.Exists(Path.Combine(bare.StepDirectory, ClaudeShell.FileName)));
         Assert.False(Directory.Exists(Path.Combine(bare.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
         Assert.Equal("Read,Grep,Glob,Write,Edit,NotebookEdit,Bash", Value(unisolated.Arguments, "--tools"));
+    }
+
+    /// <summary>
+    /// Under a mechanism that starts again inside a layer of its own - bubblewrap - a launch runs Claude Code's own process in
+    /// its outer layer, saying nothing of running outside, and hands each shell command it starts through its shell prefix
+    /// into a layer of the command's own; where Claude Code never ran, its own directory and the file it keeps its state in
+    /// are made first - the file holding no state - for inside the outer layer it could make neither.
+    /// </summary>
+    [Fact]
+    public async Task UnderAMechanismThatNests_ALaunchRunsClaudeCodeInItsOuterLayer_HandingEachCommandIn()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        var mechanism = new PassThroughMechanism();
+        var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath(kit.ClaudeDirectory, Directory: true)], []);
+        var outer = new DssHarness.Core.Processes.IsolationProfile([], [new DssHarness.Core.Processes.IsolatedWrite(kit.ClaudeDirectory, Directory: true, Writable: true)]) { Outer = true };
+        Directory.Delete(kit.ClaudeDirectory);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null) { ClaudeCode = outer }.Processes }, sink, Token);
+
+        var request = Assert.Single(kit.Runner.Requests);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal((mechanism, outer), (request.Isolation!.Mechanism, request.Isolation.Profile));
+        Assert.Equal("/opt/tools/dssharness --isolated-shell", request.Environment[ClaudeShell.PrefixVariable]);
+        Assert.True(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
+        Assert.Equal("{}\n", File.ReadAllText(Path.Combine(kit.ClaudeDirectory, ".claude.json")));
+        Assert.Empty(sink.Of<Notice>());
     }
 
     /// <summary>
@@ -2566,11 +2604,138 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token);
 
         Assert.Equal(AgentRunStatus.Failed, result.Status);
-        Assert.Matches(
-            $"^Claude Code ran the command of its 'Bash' call toolu_[0-9]+ with no receipt of it in '{System.Text.RegularExpressions.Regex.Escape(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName))}': it was not handed to the isolation through Claude Code's shell prefix, so it may have run outside it \\(claude",
-            result.Error);
+        Assert.Equal(Unreceipted(kit, CallIdOf(kit), ran: true), result.Error);
         Assert.Empty(Directory.GetFiles(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
     }
+
+    /// <summary>
+    /// A shell call run in the background whose command is handed over only after its turn - the launch's last - has ended
+    /// is waited for at the launch's end, Claude Code still running, and the launch completes once its receipt is there: a
+    /// call still starting is no command run unhanded.
+    /// </summary>
+    [Fact]
+    public async Task ABackgroundCallHandedOverAfterItsTurnEnded_IsWaitedForAtTheLaunchsEnd_AndTheLaunchCompletes()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject
+        {
+            ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "sleep 5", ["run_in_background"] = true }, ["handedAfterMs"] = 1500 }),
+        }]);
+
+        var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token);
+
+        Assert.Equal((AgentRunStatus.Completed, (string?)null), (result.Status, result.Error));
+        Assert.Single(Directory.GetFiles(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
+    }
+
+    /// <summary>
+    /// A launch that ends otherwise than at a turn's result - a chat the person left, its cut turn's result not come within
+    /// the interrupt's bound - is held at its end to the receipt it still awaits of a call run in the background: none
+    /// written by its bound, the launch ends failed, saying so, never completed.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchEndedOtherwiseThanAtATurnsResult_IsHeldToTheReceiptItAwaits()
+    {
+        using var kit = new Kit
+        {
+            Clock = new BoundsClock(
+                (ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)),
+                (ClaudeCodeClient.InterruptBound, TimeSpan.FromSeconds(1)),
+                (ClaudeCodeClient.ReceiptBound, TimeSpan.FromSeconds(3))),
+        };
+        kit.Script([new JsonObject
+        {
+            ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "sleep 5", ["run_in_background"] = true }, ["skipsPrefix"] = true }),
+            ["hang"] = true,
+            ["slowInterrupt"] = 8000,
+        }]);
+        var run = Handed(kit) with { Chat = true };
+        var sink = new Sink(@event =>
+        {
+            if (@event is ToolCallFinished)
+            {
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal((AgentRunStatus.Failed, Unreceipted(kit, CallIdOf(kit), ran: true), false), (result.Status, result.Error, result.EndedWithItsLastTurn));
+    }
+
+    /// <summary>
+    /// A launch whose program ended while an allowed shell call ran - its result never come - is held to that call's
+    /// receipt: written, the command was handed over and the launch ends as its program's end says; none written by the
+    /// bound, the launch ends failed, saying the command may have run unhanded.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ALaunchWhoseProgramEndedWhileACallRan_IsHeldToThatCallsReceipt(bool skipsPrefix)
+    {
+        using var kit = new Kit { Clock = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)), (ClaudeCodeClient.ReceiptBound, TimeSpan.FromMilliseconds(300))) };
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "make" }, ["skipsPrefix"] = skipsPrefix, ["exitsWhileRunning"] = true }) }]);
+
+        var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Equal(skipsPrefix ? Unreceipted(kit, CallIdOf(kit), ran: false) : "Claude Code ended before its turn's result, exit 1: ", result.Error);
+    }
+
+    /// <summary>
+    /// A launch stopped while an allowed shell call ran, its command never handed over, waits for nothing at its stop: it
+    /// stops, and says once it has gone that the call left no receipt.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchStoppedWhileACallRanUnhanded_SaysTheCallLeftNoReceipt()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "make" }, ["skipsPrefix"] = true, ["hangsWhileRunning"] = true }) }]);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var sink = new Sink(@event =>
+        {
+            if (@event is ToolCallStarted)
+            {
+                stop.CancelAfter(TimeSpan.FromMilliseconds(1500));
+            }
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => kit.Client().RunAsync(Handed(kit), sink, stop.Token).WaitAsync(TimeSpan.FromSeconds(60), Token));
+
+        Assert.Equal(
+            [$"The launch ended at once with no receipt in '{Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)}' of the command of Claude Code's 'Bash' call {CallIdOf(kit)}: if it ran, it was not handed to the isolation through Claude Code's shell prefix, and ran outside its commands' isolation"],
+            sink.Of<Notice>().Select(notice => notice.Text).Where(text => text.Contains("no receipt", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A shell call the engine allowed that Claude Code says did not run - cut before it ran - is held to no receipt: the
+    /// launch ends as its turn did, at once, nothing awaited.
+    /// </summary>
+    [Fact]
+    public async Task AnAllowedCallClaudeCodeSaysDidNotRun_IsHeldToNoReceipt()
+    {
+        using var kit = new Kit { Clock = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)), (ClaudeCodeClient.ReceiptBound, TimeSpan.FromMilliseconds(300))) };
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "make" }, ["cutAfterAllowed"] = true }) }]);
+
+        var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token);
+
+        Assert.Equal((AgentRunStatus.Completed, (string?)null), (result.Status, result.Error));
+        Assert.Empty(Directory.GetFiles(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
+    }
+
+    /// <summary>What a launch that ended for a call whose command left no receipt says.</summary>
+    private static string Unreceipted(Kit kit, string callId, bool ran)
+    {
+        var receipts = Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName);
+
+        return ran
+            ? $"Claude Code ran the command of its 'Bash' call {callId} with no receipt of it in '{receipts}': it was not handed to the isolation through Claude Code's shell prefix, so it ran outside its commands' isolation, where Claude Code's own process runs (claude fake)"
+            : $"Claude Code was allowed its 'Bash' call {callId}, and the launch ended with no result of it and no receipt of its command in '{receipts}': if it ran, it was not handed to the isolation through Claude Code's shell prefix, so it ran outside its commands' isolation, where Claude Code's own process runs (claude fake)";
+    }
+
+    /// <summary>The id of the one call the engine was asked about, as the launch's control messages name it.</summary>
+    private static string CallIdOf(Kit kit)
+        => Control(kit).Select(line => line["request"]?["tool_use_id"]?.GetValue<string>()).OfType<string>().Single();
 
     /// <summary>
     /// A shell call run in the background comes back before its command is handed over: its receipt, written a moment after,

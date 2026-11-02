@@ -162,6 +162,12 @@ public sealed class SandboxExec(string version, Func<string, string> realPath) :
     /// <summary>The isolated shell becomes the sandbox in a command's place.</summary>
     public bool TakesHandedCommands => true;
 
+    /// <summary>What a record says of why a program that hands its commands to the sandbox runs outside it.</summary>
+    public const string NoSandboxInside = "macOS starts no sandbox inside another";
+
+    /// <summary>macOS starts no sandbox inside another, so a program that hands its commands over runs outside every one.</summary>
+    public string? Unnested => NoSandboxInside;
+
     /// <inheritdoc/>
     public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)
     {

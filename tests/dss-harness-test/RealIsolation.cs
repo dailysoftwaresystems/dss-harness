@@ -56,9 +56,10 @@ internal static class RealIsolation
     }
 
     /// <summary>
-    /// A step's launch in its worktree over a real repository: a canary in a credential slot of the main checkout, the
-    /// launch's own directory, and the isolation its commands run inside, built by the one owner of a profile with the
-    /// mechanism <paramref name="platform"/> proved.
+    /// A step's launch in its worktree over a real repository: a canary in a credential slot of the main checkout, a Claude
+    /// Code directory in <paramref name="home"/> holding a canary of its own, the launch's own directory, and the isolation
+    /// its commands run inside and the one a Claude Code launch's whole process runs inside - where the mechanism holds one -
+    /// built by the one owner of a profile with the mechanism <paramref name="platform"/> proved.
     /// </summary>
     /// <param name="temp">Where the repository is made.</param>
     /// <param name="home">The home the user's git configuration is read under.</param>
@@ -72,6 +73,8 @@ internal static class RealIsolation
         var canary = Path.Combine(slot, "canary");
         await File.WriteAllTextAsync(canary, "secret", Token);
         var launch = Directory.CreateDirectory(Path.Combine(kit.Layout.Directory, "steps", "think")).FullName;
+        var claude = Directory.CreateDirectory(Path.Combine(home.Path, ".claude")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(claude, "canary"), "login", Token);
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
         var ground = AgentStepGround.Of(
             config,
@@ -79,12 +82,12 @@ internal static class RealIsolation
             new WorkflowStep { Name = "think", Type = "reason" },
             new AgentWorkspace(worktree, kit.Layout.WorkDirectory("a1"), kit.Main, [], worktree, kit.Layout.Directory),
             webSearchGiven: false,
-            [],
+            [claude],
             UserCredentials.Of(config, home.Path, new HostPlatform().Current, _ => null));
         var isolated = await new AgentIsolation(platform, kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path))
             .ForLaunchAsync(config, ground, kit.Main, launch, Token);
 
-        return new StepLaunch(kit, worktree, canary, launch, Assert.IsType<ProcessIsolation>(isolated.ForCommands));
+        return new StepLaunch(kit, worktree, canary, launch, Assert.IsType<ProcessIsolation>(isolated.ForCommands)) { ClaudeCode = isolated.ForClaudeCode, Claude = claude };
     }
 
     /// <summary>
@@ -121,12 +124,17 @@ internal static class RealIsolation
 
     /// <summary>Runs <paramref name="program"/> contained and inside <paramref name="isolation"/>, in <paramref name="directory"/>.</summary>
     public static Task<ProcessResult> InsideAsync(ProcessIsolation isolation, string directory, string program, params string[] arguments)
+        => InsideAsync(isolation, directory, new Dictionary<string, string?>(), program, arguments);
+
+    /// <summary>Runs <paramref name="program"/> contained and inside <paramref name="isolation"/>, in <paramref name="directory"/>, with <paramref name="environment"/> set.</summary>
+    public static Task<ProcessResult> InsideAsync(ProcessIsolation isolation, string directory, IReadOnlyDictionary<string, string?> environment, string program, params string[] arguments)
         => Runner().RunAsync(
             new ProcessRequest
             {
                 FileName = program,
                 Arguments = arguments,
                 WorkingDirectory = directory,
+                Environment = environment,
                 Timeout = TimeSpan.FromSeconds(60),
                 Contained = true,
                 Isolation = isolation,
@@ -187,7 +195,14 @@ internal static class RealIsolation
     /// <param name="Canary">The canary in a credential slot of the main checkout.</param>
     /// <param name="Directory">The launch's own directory.</param>
     /// <param name="Commands">The isolation its commands run inside.</param>
-    public sealed record StepLaunch(OrchestrationKit Kit, string Worktree, string Canary, string Directory, ProcessIsolation Commands);
+    public sealed record StepLaunch(OrchestrationKit Kit, string Worktree, string Canary, string Directory, ProcessIsolation Commands)
+    {
+        /// <summary>The isolation a Claude Code launch's whole process runs inside; null where it runs outside every layer.</summary>
+        public ProcessIsolation? ClaudeCode { get; init; }
+
+        /// <summary>The Claude Code directory, holding a canary of its own.</summary>
+        public string Claude { get; init; } = string.Empty;
+    }
 
     /// <summary>The places a user keeps credentials in, made by <see cref="CredentialsAsync"/>.</summary>
     /// <param name="Key">ssh's private key.</param>

@@ -232,7 +232,7 @@ public sealed class ClaudeToolDeciderTests : IDisposable
     }
 
     /// <summary>
-    /// Where Claude Code's own file tools are not given - its process outside the isolation it hands its commands to - a
+    /// Where Claude Code's own file tools are not given - its process apart from the isolation it hands its commands to - a
     /// launch's --tools names its shell alone, and the engine's tool server serves the runtime's file tools in their place,
     /// those of the step's capabilities, beside the web's: from the runtime's one table, the file tools those of the read and
     /// write capabilities.

@@ -6,22 +6,25 @@ using DssHarness.Core.Platform;
 namespace DssHarness.Core.Processes;
 
 /// <summary>
-/// The step a program that runs outside the isolation hands each of its shell commands to, so the command runs inside it:
-/// this tool, started as <c>dssharness --isolated-shell '&lt;command&gt;'</c>, reads the launch's isolation from the file
-/// <see cref="FileVariable"/> names, and becomes the mechanism with the shell inside, the command its script - Landlock's
-/// scope entered first where the mechanism asks it. Claude Code's own process stays outside, reading its own login,
-/// while every shell command it starts - started through <c>CLAUDE_CODE_SHELL_PREFIX</c> - is inside, where the process
-/// namespace keeps it from Claude Code's environment and the profile from its directories.
+/// The step a program apart from its commands' isolation hands each of its shell commands to, so the command runs inside
+/// it: this tool, started as <c>dssharness --isolated-shell '&lt;command&gt;'</c>, reads the launch's isolation from the
+/// file <see cref="FileVariable"/> names, and becomes the mechanism with the shell inside, the command its script -
+/// Landlock's scope entered first where the mechanism asks it. Claude Code's own process reads its own login apart from
+/// its commands - in an outer layer of the mechanism's on Linux, outside every layer on macOS - while every shell command
+/// it starts through <c>CLAUDE_CODE_SHELL_PREFIX</c> is inside a layer of its own, where the process namespace keeps it
+/// from Claude Code's environment and the profile from its directories.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Where the file names how the program hands its commands over (<see cref="IsolatedShellHanding"/>), two things are done
-/// outside before the shell is: the command's receipt is written - the receipt its program's host put at the command's
-/// head (<see cref="Marked"/>), a file of that name in the receipts' directory, which no command writes - so the host
-/// knows each command it allowed was handed over, and ends a launch that ran one that was not; and the one file the
-/// command ends by writing the working directory it ended in to, in the program's own temporary directory, which no command
-/// writes either, is made empty and given the command alone, written in place, never removed or replaced
-/// (<see cref="EndFileOf"/>) - so nothing of the program's own there is a command's to replace.
+/// before the shell is, where the program itself runs: the command's receipt is written - the receipt its program's host
+/// put at the command's head (<see cref="Marked"/>), a file of that name in the receipts' directory, which no command
+/// handed over writes - so the host knows each command it allowed was handed over, and ends a launch that ran one that was
+/// not; and the one file the command ends by writing the working directory it ended in to, in the program's own temporary
+/// directory, which no command writes either, is made empty and given the command alone, written in place, never removed
+/// or replaced (<see cref="EndFileOf"/>) - so nothing of the program's own there is a command's to replace. A receipt says
+/// a command was handed over; it keeps nothing from a command that was not, which ran where the program runs and could
+/// write one of its own there.
 /// </para>
 /// <para>
 /// Not a command anyone types: help does not list it. A file it cannot read, or that names no mechanism of this machine's,
@@ -155,6 +158,31 @@ public static partial class IsolatedShell
     }
 
     /// <summary>
+    /// The command line <paramref name="handed"/> as it is run, without the mark of its receipt (<see cref="ReceiptOf"/>) -
+    /// the shell's no-op and its one following blank taken out, which leaves the command as it was written - so no command
+    /// finds its own receipt in what it was started with; the line as it is where it holds none.
+    /// </summary>
+    /// <param name="handed">The whole command line the program handed over.</param>
+    public static string Unmarked(string handed)
+    {
+        ArgumentNullException.ThrowIfNull(handed);
+
+        if (MarkShape().Match(handed) is not { Success: true } found)
+        {
+            return handed;
+        }
+
+        var end = found.Index + found.Length;
+
+        if (end < handed.Length && handed[end] == ' ')
+        {
+            end++;
+        }
+
+        return string.Concat(handed.AsSpan(0, found.Index), handed.AsSpan(end));
+    }
+
+    /// <summary>
     /// The one file the command <paramref name="handed"/> ends by writing the working directory it ended in to: what
     /// Claude Code ends every command it hands over with, <c>pwd -P &gt;| &lt;file&gt;</c>, the file named as the shell reads
     /// the word - quoted, escaped or bare - and named <c>claude-&lt;hex&gt;-cwd</c> directly in <paramref name="programTemp"/>.
@@ -244,7 +272,11 @@ public static partial class IsolatedShell
 
     /// <summary>
     /// Runs <paramref name="command"/> in <see cref="Shell"/> inside the isolation the file <paramref name="file"/> names
-    /// holds: becomes the mechanism, on Linux and macOS, and returns only where it could not.
+    /// holds: becomes the mechanism, on Linux and macOS, and returns only where it could not. The command is run without
+    /// the mark of its receipt (<see cref="Unmarked"/>), and handed no variable that hands it over
+    /// (<see cref="IsolatedShellHanding.Variables"/>, <see cref="FileVariable"/> among them) - neither in its own
+    /// environment nor in the mechanism's, which a process inside reads - so nothing it is started with names its receipt
+    /// or where receipts are written.
     /// </summary>
     /// <param name="file">The isolation file, as <see cref="FileVariable"/> names it; null where it names none.</param>
     /// <param name="command">The command, as the program that hands it over gives it.</param>
@@ -276,8 +308,8 @@ public static partial class IsolatedShell
             return NotRun;
         }
 
-        var (program, arguments) = isolation.Mechanism.Command(isolation.Profile, Shell, ["-c", command]);
-        var refused = Containment.Become(isolation.Mechanism.Scoped, program, arguments);
+        var (program, arguments) = isolation.Mechanism.Command(isolation.Profile, Shell, ["-c", Unmarked(command)]);
+        var refused = Containment.Become(isolation.Mechanism.Scoped, program, arguments, [FileVariable, .. handing?.Variables ?? []]);
 
         error.WriteLine($"dssharness: the command was not run: {isolation.Mechanism.Name} '{program}' could not be started ({new System.ComponentModel.Win32Exception(refused).Message}).");
         return NotRun;
@@ -390,10 +422,19 @@ public static partial class IsolatedShell
 }
 
 /// <summary>
-/// How a program kept outside the isolation hands its commands over, as its isolation file says it: where each command's
-/// receipt is written, and the program's own temporary directory, where a command ends by writing the working directory it
-/// ended in to the one file it is given there. No command writes either.
+/// How a program apart from its commands' isolation hands its commands over, as its isolation file says it: where each
+/// command's receipt is written, the program's own temporary directory, where a command ends by writing the working
+/// directory it ended in to the one file it is given there - no command writes either - and the variables that hand the
+/// commands over, which no command is given.
 /// </summary>
 /// <param name="Receipts">The directory each command's receipt is written in, by the receipt at its head.</param>
 /// <param name="ProgramTemp">The program's own temporary directory: Claude Code's <c>CLAUDE_CODE_TMPDIR</c>.</param>
-public sealed record IsolatedShellHanding(string Receipts, string ProgramTemp);
+public sealed record IsolatedShellHanding(string Receipts, string ProgramTemp)
+{
+    /// <summary>
+    /// The variables in the program's environment that hand its commands over - the shell prefix, the isolation file, the
+    /// shell and the program's own temporary directory - taken from each command's environment before it runs, so none
+    /// names a command the places its receipts are written in; none where left out.
+    /// </summary>
+    public IReadOnlyList<string> Variables { get; init; } = [];
+}

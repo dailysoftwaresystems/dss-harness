@@ -113,6 +113,9 @@ internal sealed class PassThroughMechanism(string name = "test", string version 
     public bool TakesHandedCommands { get; init; } = true;
 
     /// <inheritdoc/>
+    public string? Unnested { get; init; }
+
+    /// <inheritdoc/>
     public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)
     {
         lock (Profiles)

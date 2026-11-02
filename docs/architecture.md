@@ -223,10 +223,12 @@ The machine is read-only under each. What a mechanism holds of its own it says o
 ignores letter case reaches it by (`HoldsEveryCase`), whether abstract sockets and signals are
 scoped (`Scoped`) and what is left reached where not (`Leaves`), what its anchors cost
 (`AnchorCost`), whether it gives the child a temporary directory of its own (`OwnTemp`), and whether
-it takes a command handed to it from a process outside (`TakesHandedCommands`). On Linux the
+it takes a command handed to it from a process apart from it (`TakesHandedCommands`), and why a process inside it
+cannot start it again for each command it hands over (`Unnested`). On Linux the
 mechanism is the system's bubblewrap (`Bubblewrap`): the machine bound read-only (`--ro-bind / /`,
 `--dev /dev`), a user namespace of its own allowing no further one (`--unshare-user
---disable-userns`), a process namespace with its own `/proc` (`--unshare-pid --proc /proc`, so
+--disable-userns`) - but a program's outer layer (`IsolationProfile.Outer`), left one to make each command's own layer
+in - a process namespace with its own `/proc` (`--unshare-pid --proc /proc`, so
 `/proc/<id>/root` and `/proc/<id>/environ` reach no process outside), never `--die-with-parent`,
 whose parent would be the thread that started the step; the launch's temporary directory bound at
 `/tmp` and any read root under `/tmp` bound again read-only; then the profile's writes in its order,
@@ -299,7 +301,11 @@ case of its directory's; a place written by nobody unwritten, by either spelling
 every open one unwritten; an open place written - each checked from outside, through `sh` on Linux
 and macOS and through `cmd.exe` on Windows, a run for each, and why not with the remedy where it
 fails (Ubuntu's `apparmor_restrict_unprivileged_userns` named with the `bwrap-userns-restrict`
-profile; on Windows the builds MXC needs, or WSL 2). On Windows each of node, git and Git Bash's
+profile; on Windows the builds MXC needs, or WSL 2). On Linux bubblewrap, once proved, is started again
+inside an outer layer of its own around a shell that must end 0, as a `claude-code` launch's outer layer starts it for
+each command; where it does not - an AppArmor profile that denies bubblewrap's children every capability, as
+`bwrap-userns-restrict` does - it is the mechanism all the same, its `Unnested` saying how the trial ended, and a
+`claude-code` launch's own process runs outside. On Windows each of node, git and Git Bash's
 `sh` - on the PATH outside the tree, `sh` else beside the git found - is then started inside the
 container and must end 0 having said something; one that does not is no mechanism, named with its
 path and how it ended, a status the system ended it with written in hexadecimal, and one not on the
@@ -2030,7 +2036,7 @@ API clients - `claude-api` and `glm` - each run's opened by `AgentToolHost.Open`
 the `claude-code` client the web's through the engine's tool server (`AgentToolServer`, opened by
 `AgentToolHost.Serve` for one launch: the server's tools alone, written to the launch's own
 `AgentCallRecords`, each call answered by `AgentToolRuntime.ServeAsync`, whose end the launch's
-stream tells), and the file tools there too where Claude Code's own process runs outside the isolation
+stream tells), and the file tools there too where Claude Code's own process runs apart from the isolation
 it hands its commands to (`ClaudeCodeTools.FileTools`, `Of` and `Served` given `ownFiles: false`): the
 tools are the one
 table `AgentTools` holds (what a step is offered, what help prints and what runs); each call is
@@ -2478,16 +2484,34 @@ carries the launch's isolation (`AgentStepRequest.Isolation`, on to `AgentRun.Is
 - `LaunchIsolation.Processes`, `LaunchProcesses` - so a client is handed nothing it could end, the decision released
 by its asker once the launch has run): the tool runtime starts each `run_command` inside the commands' profile
 (`LaunchIsolation.ForCommands`, through `PhaseRequest.Isolation`). The claude-code client keeps Claude Code's own
-process outside where the mechanism takes a command handed to it (`TakesHandedCommands`: bubblewrap and macOS's
-sandbox): Claude Code reads its login and the key it is handed in its own process, and starts each shell command
+process apart from its commands where the mechanism takes a command handed to it (`TakesHandedCommands`: bubblewrap and
+macOS's sandbox): Claude Code reads its login and the key it is handed in its own process, and starts each shell command
 through its shell prefix (`ClaudeShell`, `CLAUDE_CODE_SHELL_PREFIX` naming this tool and `--isolated-shell`), which
 `Program` dispatches before anything else to `IsolatedShell.Run`, which reads the launch's isolation from the file
 `DSSHARNESS_ISOLATED_SHELL` names (`claude-isolation.json` in the step's directory) and becomes the mechanism with
 `/bin/bash` inside - so no command reaches Claude Code's directories, its login or its environment
 (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` among the controlled variables, a process namespace of the command's own), and a
-login whose token has run out is renewed by Claude Code outside, which writes its directories. Claude Code's own process
-opens no file of the agent's there: Claude Code would open a file by the path the engine decided earlier, outside,
-where a link a command - one left running in the background among them - put on the path in between would reach what
+login whose token has run out is renewed by Claude Code in its own process, which writes its directories. Where the
+mechanism starts again inside a layer of its own (`IIsolationMechanism.Unnested` null: bubblewrap, where the probe
+started it inside an outer layer of its own around a shell that ended 0), Claude Code's own process runs in an outer
+layer (`LaunchIsolation.ForClaudeCode`, the profile `AgentIsolation.ClaudeCodeOf` builds): the commands' profile, its
+slots still hidden and git's code-running files, the tool's state and the launch's directory still sealed, but Claude
+Code's own directories and `~/.claude.json` written - Claude Code 2.1.101 fails every shell command with `EROFS` on
+`<config>/session-env` without them, and ends at once, saying nothing, with no `.claude.json` it can write - and the
+step's `claude-receipts` and `claude-tmp` (`ClaudeShell.PlacesIn`), its rules laid parent first
+(`IsolationProfiles.Ordered`); marked `IsolationProfile.Outer`, for which bubblewrap leaves out `--disable-userns`, so
+the isolated shell inside makes each command's layer in a user namespace of its own, where the outer layer's mounts are
+locked and none is undone - no hidden place shown, no read-only one written. A command Claude Code ran without its
+prefix is then held by the outer layer, though it reads Claude Code's login and environment and could write its
+directories; and the outer layer's own process namespace ends whatever the launch left running once bubblewrap's first
+process inside is ended. Where Claude Code never ran, the client makes its directory and the file it keeps its state
+in (`ClaudeTranscripts.StateFile`, holding `{}`) before the launch, for inside it could make neither. Where the
+mechanism starts none inside (`Unnested`: macOS's sandbox, `SandboxExec.NoSandboxInside`; bubblewrap under an AppArmor
+profile that denies its children every capability, as Ubuntu's `bwrap-userns-restrict` does, which the probe's trial
+finds), Claude Code's own process runs outside every layer, the launch says so as it starts
+(`LaunchIsolation.ClaudeCodeOutside`, `LaunchProcesses.ClaudeCodeOutside`), and a command it ran without its prefix
+runs outside with the user's rights. In or out of an outer layer, Claude Code's own process opens no file of the
+agent's: it would open a file by the path the engine decided earlier, apart from the commands' layer, where a link a command - one left running in the background among them - put on the path in between would reach what
 the isolation keeps from every command; so its file tools are given no such launch (`ClaudeCodeTools.Of` with
 `ownFiles: false`, `--tools` its shell alone), and the engine's tool server serves the runtime's in their place
 (`ClaudeCodeTools.FileTools`, `Served`), each file read by `AgentFiles` and decided again by where the system names
@@ -2496,11 +2520,24 @@ decided in (`AgentFiles.Write`, `UnfollowedFiles`). Every shell call the engine 
 (`IsolatedShell.Marked`: `: dssharness-receipt <32 hexadecimal digits>; <command>`, the shell's no-op, a new one from
 the system's random source for each call), which `IsolatedShell.Prepared` reads off the line it is handed
 (`ReceiptOf`) and writes, new and never through a link, in the step's `claude-receipts` directory - named in the
-isolation file's handing (`IsolatedShellHanding`), where no command writes - before the shell runs; a call whose result
-comes back with no receipt of its command (`HeldToItsReceipt`) ran without being handed over, by a Claude Code that
-skipped its prefix, and ends the launch failed at once, killed, a call run in the background - whose result comes back
-before its command is handed over - awaited for `ClaudeCodeClient.ReceiptBound` (20 s) and at the latest by its turn's
-end. Claude Code's own temporary directory (`CLAUDE_CODE_TMPDIR`) is the step's `claude-tmp`, beside the receipts and
+isolation file's handing (`IsolatedShellHanding`), where no command handed over writes - before the shell runs; the shell
+is then given the line without that mark (`IsolatedShell.Unmarked`), and the variables that hand commands over
+(`IsolatedShellHanding.Variables`, the isolation file's among them) are taken from the C library's own environment
+before the mechanism is become (`Containment.Become`'s `unsetenv`), so neither the command's environment and
+`$BASH_EXECUTION_STRING` nor the mechanism's own arguments and environment, which a process inside reads at
+`/proc/1`, name its receipt or the file that says where receipts are written. A call whose result comes back with no
+receipt of its command (`HeldToItsReceipt`) ran without being handed over, by a Claude Code that skipped its prefix, and
+ends the launch failed at once, killed; a call run in the background - whose result comes back before its command is
+handed over - is awaited for `ClaudeCodeClient.ReceiptBound` (20 s), however the launch goes on; a call Claude Code says
+did not run is held to none. However the launch's loop ends (`HeldToTheirReceiptsAsync`) - a turn's result, Claude
+Code gone, its output cut - before anything of it is ended, each receipt still awaited and each of a call allowed whose
+result never came is looked for again until it is there or `ReceiptBound` has passed, and one missing ends the launch
+failed in place of the ending it had; where the launch was stopped or ended at once nothing is waited for, and each
+missing receipt is said once it has gone (`SayUnreceiptedAsync`). A receipt proves only that Claude Code handed the
+command over, and only once it has run - it stops nothing: a command run without the prefix runs where Claude Code's own
+process runs, which writes the receipts, so it could write one of its own - the outer layer, never the receipt, is what
+holds it, and on macOS, or where bubblewrap starts none inside itself, nothing does. Claude Code's own temporary
+directory (`CLAUDE_CODE_TMPDIR`) is the step's `claude-tmp`, beside the receipts and
 equally beyond every command's writes, so nothing Claude Code writes or reads there in its own process - a task's
 output, a prompt's file - is a command's to replace with a link; each command ends by writing the working directory it
 ended in to a file there (`pwd -P >| <claude-tmp>/claude-<hex>-cwd`, the form Claude Code ends every handed command
@@ -2522,8 +2559,9 @@ the path the engine decided, the words policy alone between them. Claude
 Code's own Bash sandbox is not used: the tool's own mechanism holds every command, one mechanism for every client, and
 nothing rests on how that sandbox treats the network in print mode or weighs its own write rules against the profile -
 and the launch's settings turn it off (`ClaudeSettings.Render`'s `isolated`, `"sandbox": {"enabled": false}`) over any
-the user's own settings ask for, for no mechanism of the tool's nests another (macOS no sandbox inside a sandbox,
-bubblewrap no namespace inside its own) and each command would fail in it; on Windows Claude Code has none of its own.
+the user's own settings ask for, for no command's layer of the tool's nests another (macOS no sandbox inside a sandbox,
+bubblewrap no namespace inside a command's own) and each command would fail in it; on Windows Claude Code has none of
+its own.
 The machine stays readable as the user reads it but the hidden places - a credential kept anywhere else among it - and
 the system's own credential stores are services, not places: on macOS the login keychain is reached through the
 services that trust certificates, which are the keychain's; on Windows MXC's container shows the Credential Manager

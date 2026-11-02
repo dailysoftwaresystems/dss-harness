@@ -60,8 +60,8 @@ public sealed class MxcProcessContainerTests
             ],
             arguments);
         Assert.Equal(
-            (true, false, (string?)null, MxcProcessContainer.AnchorReadAlone, true, false),
-            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands));
+            (true, false, (string?)null, MxcProcessContainer.AnchorReadAlone, true, false, "MXC's container takes no command handed to it"),
+            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands, mechanism.Unnested));
     }
 
     /// <summary>

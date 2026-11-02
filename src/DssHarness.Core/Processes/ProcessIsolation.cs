@@ -48,6 +48,13 @@ public sealed record IsolationProfile(IReadOnlyList<IsolatedPath> Hidden, IReadO
     public IReadOnlyList<KeyValuePair<string, string>> Environment { get; init; } = [];
 
     /// <summary>
+    /// Whether the child is a program's outer layer, which starts the mechanism again inside it for each command it hands
+    /// over (<see cref="IIsolationMechanism.Unnested"/>): bubblewrap leaves it a user namespace to make each command's own
+    /// layer in, where every command's own layer allows none inside it. False for every other child.
+    /// </summary>
+    public bool Outer { get; init; }
+
+    /// <summary>
     /// The Unix sockets outside the child reaches, each alone wherever it stands - inside a hidden place or the system's
     /// temporary directory among them: a push's SSH agent's. None for an agent's own commands.
     /// </summary>
@@ -189,12 +196,20 @@ public interface IIsolationMechanism
     bool OwnTemp { get; }
 
     /// <summary>
-    /// Whether a program kept outside may hand each shell command it runs to the mechanism through this tool's isolated
-    /// shell (<see cref="IsolatedShell"/>), which becomes the mechanism in the command's place - so Claude Code's own
-    /// process, its login and the key it is handed stay outside every command it runs. Where false, a launch of Claude
-    /// Code runs whole inside.
+    /// Whether a program may hand each shell command it runs to the mechanism through this tool's isolated shell
+    /// (<see cref="IsolatedShell"/>), which becomes the mechanism in the command's place - so Claude Code's own process, its
+    /// login and the key it is handed stay apart from every command it runs. Where false, a launch of Claude Code runs whole
+    /// inside.
     /// </summary>
     bool TakesHandedCommands { get; }
+
+    /// <summary>
+    /// Why a program inside the mechanism cannot start it again, tighter, for each command it hands over - so a program that
+    /// hands its commands over (a Claude Code launch) runs outside every layer, where a command it ran without handing it
+    /// over would run with the user's rights; null where it can, and the program runs inside an outer layer of its own
+    /// (<see cref="IsolationProfile.Outer"/>), so even such a command stays inside that one.
+    /// </summary>
+    string? Unnested { get; }
 
     /// <summary>
     /// The command line that runs <paramref name="program"/> with <paramref name="arguments"/> inside

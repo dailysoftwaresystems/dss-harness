@@ -45,6 +45,9 @@ namespace DssHarness.Tests;
 /// isolated shell as Claude Code's shell prefix does - its whole line prepared as the isolated shell prepares it, the
 /// receipt at its head written - before its result; its <c>handedAfterMs</c> hands it that long after its result, as a call
 /// run in the background is, and its <c>skipsPrefix</c> never hands it over, as a version that skipped the prefix would.
+/// An allowed call's <c>exitsWhileRunning</c> ends the process once it is handed over, or not, its result never written,
+/// and its <c>hangsWhileRunning</c> writes no result and plays nothing more until the process is ended; its
+/// <c>cutAfterAllowed</c> is cut before it runs, stamped not run, nothing handed over.
 /// An allowed call's <c>pauseAfterMs</c> waits that long after its result before the turn plays on.
 /// </para>
 /// <para>
@@ -733,6 +736,12 @@ internal static class FakeClaude
                     CallServer(call, tool);
                     continue;
                 }
+                else if (behavior == "allow" && Flag(call, "cutAfterAllowed"))
+                {
+                    // Allowed, and cut before it ran, as an interrupt that lands between the answer and the run cuts it:
+                    // stamped not run, nothing handed over.
+                    ToolResult(id, ok: false, "[Request interrupted by user for tool use]", Meta(id, "user-rejected", "accept", "user_temporary"));
+                }
                 else if (behavior == "allow")
                 {
                     // A shell command of a launch that hands its commands over goes through the prefix, as Claude Code's does,
@@ -753,6 +762,18 @@ internal static class FakeClaude
                         {
                             HandOver(handed, command);
                         }
+                    }
+
+                    if (Flag(call, "exitsWhileRunning"))
+                    {
+                        // It ends the process while the call runs, its result never written.
+                        return 1;
+                    }
+
+                    if (Flag(call, "hangsWhileRunning"))
+                    {
+                        // The call runs on, its result never written, until the process is ended.
+                        continue;
                     }
 
                     ToolResult(id, ok: true, Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));

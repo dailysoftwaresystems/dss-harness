@@ -51,8 +51,8 @@ public sealed class SandboxExecTests
 
         Assert.Equal(("/usr/bin/sandbox-exec", "sandbox-exec", "15.3"), (program, mechanism.Name, mechanism.Version));
         Assert.Equal(
-            (true, false, (string?)null, (string?)null, false, true),
-            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands));
+            (true, false, (string?)null, (string?)null, false, true, SandboxExec.NoSandboxInside),
+            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands, mechanism.Unnested));
         Assert.Equal(
             [
                 "-p",

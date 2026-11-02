@@ -86,6 +86,9 @@ public sealed class MxcProcessContainer(string version, (string Program, IReadOn
     /// </summary>
     public bool TakesHandedCommands => false;
 
+    /// <summary>Nothing is handed to the container one command at a time: a launch runs whole inside it.</summary>
+    public string? Unnested => "MXC's container takes no command handed to it";
+
     /// <inheritdoc/>
     public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)
     {

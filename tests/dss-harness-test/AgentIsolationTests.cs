@@ -1,4 +1,5 @@
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Agents.SideTasks;
@@ -76,8 +77,25 @@ public sealed class AgentIsolationTests
             ],
             arguments);
         Assert.Equal(("bubblewrap", "0.9.0", false, false, Bubblewrap.Unscoped), (mechanism.Name, mechanism.Version, mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves));
-        Assert.Equal(((string?)null, false, true), (mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands));
+        Assert.Equal(((string?)null, false, true, (string?)null), (mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands, mechanism.Unnested));
         Assert.Null((mechanism with { Scoped = true }).Leaves);
+    }
+
+    /// <summary>
+    /// A program's outer layer is left a user namespace to make, for each command it hands over is started in a layer of its
+    /// own inside it; every other child is allowed none - its line otherwise the same.
+    /// </summary>
+    [Fact]
+    public void ABubblewrapOuterLayer_LeavesAUserNamespaceToMake_EveryOtherChildNone()
+    {
+        var mechanism = new Bubblewrap("/usr/bin/bwrap", "0.9.0", []);
+        var profile = new IsolationProfile([], [new IsolatedWrite("/r/w", Directory: true, Writable: true)]);
+
+        var (_, inner) = mechanism.Command(profile, "/bin/sh", ["-c", "true"]);
+        var (_, outer) = mechanism.Command(profile with { Outer = true }, "/bin/sh", ["-c", "true"]);
+
+        Assert.Equal(["--unshare-user", "--disable-userns", "--unshare-pid"], inner.Take(3));
+        Assert.Equal([.. inner.Where(argument => argument != "--disable-userns")], outer);
     }
 
     /// <summary>
@@ -137,8 +155,11 @@ public sealed class AgentIsolationTests
     /// snapshots read again; written by nobody, inside what it writes, the worktree's .git pointer and configuration
     /// directory, the tool's state in the worktree, its git directory's pointers, configuration and submodules, the common
     /// directory's replacements and alternates. A place not there inside what it writes is made first; the launch's own
-    /// directory, which no command writes, is not. Its records say the mechanism, its pins hold the git directories of the
-    /// worktree and of the main checkout alike, and its disposal takes the temporary directory away.
+    /// directory, which no command writes, is not. Under a mechanism that starts again inside a layer of its own, a Claude
+    /// Code launch's whole process is given the outer layer: the same profile, the slots still hidden, but Claude Code's own
+    /// directory and file written, and the receipts' directory and its own temporary directory in the launch's - every rule
+    /// parent first. Its records say the mechanism, its pins hold the git directories of the worktree and of the main
+    /// checkout alike, and its disposal takes the temporary directory away.
     /// </summary>
     [Fact]
     public async Task AStepInItsWorktree_IsGivenTheMachineReadOnly_ItsRootsAndGitWritten_ItsGuardedPlacesSealed()
@@ -216,7 +237,26 @@ public sealed class AgentIsolationTests
         Assert.False(Directory.Exists(launch), launch);
         Assert.Equal((new GitDirectoryPin(worktree, linked, git), new GitDirectoryPin(kit.Main, git, git)), (pins.Of(worktree), pins.Of(kit.Main)));
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Required) { Mechanism = "test", Version = "1.0" }, isolated.Record);
-        Assert.Null(isolated.ForClaudeCode);
+
+        // Claude Code's whole process, in the outer layer each command is handed in from: the slots still hidden, Claude
+        // Code's own directory and file written, and the receipts' directory and its own temporary one in the launch's.
+        var outer = isolated.ForClaudeCode!.Profile;
+        IReadOnlyList<IsolatedWrite> outerWrites =
+        [
+            .. writes,
+            new(claude, Directory: true, Writable: true),
+            new(claude + ".json", Directory: false, Writable: true),
+            new(Path.Combine(launch, ClaudeShell.ReceiptsDirectoryName), Directory: true, Writable: true),
+            new(Path.Combine(launch, ClaudeShell.TempDirectoryName), Directory: true, Writable: true),
+        ];
+
+        Assert.Equal((true, (string?)null, (string?)null), (outer.Outer, isolated.ClaudeCodeOutside, isolated.Processes.ClaudeCodeOutside));
+        Assert.Equal([.. HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Where(Directory.Exists).Select(slot => new IsolatedPath(slot, Directory: true))], outer.Hidden);
+        Assert.Equal(outerWrites.OrderBy(write => write.Path, StringComparer.Ordinal), outer.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
+        Assert.Equal(outer.Writes.OrderBy(write => IsolationProfile.Depth(write.Path)), outer.Writes);
+        Assert.Equal((commands.Reads, commands.Temp, commands.Environment), (outer.Reads, outer.Temp, outer.Environment));
+        Assert.Empty(outer.Reopened);
+        Assert.False(commands.Outer);
 
         var again = await isolation.ForLaunchAsync(config, ground, kit.Main, launch, Token);
 
@@ -228,9 +268,30 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>
+    /// Under a mechanism that takes handed commands and starts none inside a layer of its own - macOS's sandbox - a Claude
+    /// Code launch's whole process is given no profile: it runs outside every layer, and the launch says why to its client.
+    /// </summary>
+    [Fact]
+    public async Task AMechanismThatStartsNoneInsideItself_LeavesClaudeCodeOutside_SayingWhy()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var mechanism = new PassThroughMechanism { Unnested = SandboxExec.NoSandboxInside };
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(mechanism)), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+
+        using var isolated = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        Assert.NotNull(isolated.ForCommands);
+        Assert.Equal(((ProcessIsolation?)null, (ProcessIsolation?)null, SandboxExec.NoSandboxInside), (isolated.ForClaudeCode, isolated.Processes.ClaudeCode, isolated.Processes.ClaudeCodeOutside));
+    }
+
+    /// <summary>
     /// The places the isolation hides from every command are one list, which a read of the tool's that follows a link - a
-    /// pull - is held to as every profile is: the main checkout's credential slots, every Claude Code directory, and the
-    /// file Claude Code keeps beside one named .claude.
+    /// pull - is held to as every profile is: the main checkout's credential slots, every Claude Code directory, the
+    /// file Claude Code keeps beside one named .claude, and every place the user keeps credentials in.
     /// </summary>
     [Fact]
     public async Task TheHiddenPlaces_AreTheSlots_AndEveryClaudeCodeDirectory_WithItsFile()
@@ -996,6 +1057,8 @@ public sealed class AgentIsolationTests
         public bool OwnTemp => false;
 
         public bool TakesHandedCommands => true;
+
+        public string? Unnested => null;
 
         public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)
             => (program, [.. arguments, "inside"]);

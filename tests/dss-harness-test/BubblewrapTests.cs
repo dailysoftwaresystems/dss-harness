@@ -1,3 +1,4 @@
+using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 
@@ -88,6 +89,83 @@ public sealed class BubblewrapTests
         await ProvedAsync(platform, temp.Path);
 
         await RealIsolation.EndFileWrittenInPlaceAsync(await RealIsolation.StepLaunchAsync(temp, home, platform));
+    }
+
+    /// <summary>
+    /// A Claude Code launch's outer layer holds a command Claude Code ran without its shell prefix: it reads no file of a
+    /// credential slot and writes neither git's hooks nor the launch's own settings, but Claude Code's own directory and
+    /// the receipts' directory - where it could write a receipt of its own. A command handed in from there through this
+    /// tool's isolated shell runs in a layer of its own, started inside the outer one: its receipt written first, Claude
+    /// Code's directory hidden from it and the receipts' directory sealed, and nothing it was started with - its
+    /// environment, its line, the mechanism's own - naming its receipt or the file that says where receipts are written.
+    /// </summary>
+    [Fact]
+    public async Task AClaudeCodeLaunchsOuterLayer_HoldsACommandRunWithoutThePrefix_AndHandsEachCommandIntoALayerOfItsOwn()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        var bubblewrap = Assert.IsType<Bubblewrap>(await ProvedAsync(platform, temp.Path));
+
+        // Only where Ubuntu restricts unprivileged user namespaces, which the bwrap-userns-restrict profile answers by denying
+        // bubblewrap's children every capability, does bubblewrap start none inside itself; anywhere else it must.
+        var restricted = File.Exists(Core.Platform.IsolationPlatform.RestrictedUserNamespaces) && (await File.ReadAllTextAsync(Core.Platform.IsolationPlatform.RestrictedUserNamespaces, Token)).Trim() == "1";
+        Assert.SkipWhen(restricted && bubblewrap.Unnested is not null, $"{bubblewrap.Unnested}: a Claude Code launch's own process runs outside every layer here.");
+        Assert.Null(bubblewrap.Unnested);
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var outer = Assert.IsType<ProcessIsolation>(launch.ClaudeCode);
+        var receipts = Directory.CreateDirectory(Path.Combine(launch.Directory, ClaudeShell.ReceiptsDirectoryName)).FullName;
+        var claudeTemp = Directory.CreateDirectory(Path.Combine(launch.Directory, ClaudeShell.TempDirectoryName)).FullName;
+        var hook = Path.Combine(launch.Kit.Main, ".git", "hooks", "pre-commit");
+        var settings = Path.Combine(launch.Directory, ClaudeLaunch.SettingsFileName);
+        var forged = Path.Combine(receipts, IsolatedShell.NewReceipt());
+        var written = Path.Combine(launch.Claude, "written");
+
+        // Run as Claude Code runs a command it did not hand over: in the outer layer itself.
+        var read = await RealIsolation.InsideAsync(outer, launch.Worktree, "/bin/sh", "-c", "cat \"$1\"", "sh", launch.Canary);
+        var sealedWrites = new[] { hook, settings }.Select(place => (place, RealIsolation.InsideAsync(outer, launch.Worktree, "/bin/sh", "-c", ": > \"$1\"", "sh", place))).ToList();
+        var own = await RealIsolation.InsideAsync(outer, launch.Worktree, "/bin/sh", "-c", ": > \"$1\" && : > \"$2\"", "sh", written, forged);
+
+        Assert.Equal((1, string.Empty), (read.ExitCode, read.StandardOutput));
+        Assert.Contains("No such file or directory", read.StandardError, StringComparison.Ordinal);
+
+        foreach (var (place, writing) in sealedWrites)
+        {
+            var result = await writing;
+
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.True(result.StandardError.Contains("Read-only file system", StringComparison.Ordinal), $"{place}: {result.StandardError}");
+            Assert.False(File.Exists(place), place);
+        }
+
+        Assert.Equal((0, true, true), (own.ExitCode, File.Exists(written), File.Exists(forged)));
+
+        // Handed in from the outer layer through the isolated shell, as Claude Code's shell prefix hands each command.
+        var file = Path.Combine(launch.Directory, ClaudeShell.FileName);
+        var handing = new IsolatedShellHanding(receipts, claudeTemp) { Variables = [ClaudeShell.TempVariable, IsolatedShell.FileVariable] };
+        await File.WriteAllTextAsync(file, IsolatedShell.Written(launch.Commands, handing), Token);
+        var receipt = IsolatedShell.NewReceipt();
+        var inner = Path.Combine(receipts, "inner");
+        var script = string.Join(
+            "; ",
+            $"cat '{Path.Combine(launch.Claude, "canary")}' 2>/dev/null || echo hidden",
+            $": > '{inner}' 2>/dev/null || echo sealed",
+            "echo \"[${DSSHARNESS_ISOLATED_SHELL-}][${CLAUDE_CODE_TMPDIR-}]\"",
+            "printf '%s\\n' \"$BASH_EXECUTION_STRING\" | grep -c 'dssharness''-receipt'",
+            "tr '\\0' '\\n' < /proc/1/environ | grep -c -e '^DSSHARNESS_ISOLATED_SHELL=' -e '^CLAUDE_CODE_TMPDIR='",
+            "tr '\\0' ' ' < /proc/1/cmdline | grep -c 'dssharness''-receipt'",
+            "true");
+
+        var handed = await RealIsolation.InsideAsync(
+            outer,
+            launch.Worktree,
+            new Dictionary<string, string?> { [IsolatedShell.FileVariable] = file, [ClaudeShell.TempVariable] = claudeTemp },
+            CliRunner.CliProgram,
+            IsolatedShell.Option,
+            IsolatedShell.Marked(script, receipt));
+
+        Assert.Equal((0, "hidden\nsealed\n[][]\n0\n0\n0\n"), (handed.ExitCode, handed.StandardOutput));
+        Assert.Equal((true, false), (File.Exists(Path.Combine(receipts, receipt)), File.Exists(inner)));
     }
 
     /// <summary>
@@ -392,7 +470,9 @@ public sealed class BubblewrapTests
 
     /// <summary>
     /// A bubblewrap only the system writes is asked its version and proved by the trial, contained and inside it - scoped by
-    /// Landlock where the kernel has its scope, and its record saying what it leaves reached where the kernel has not.
+    /// Landlock where the kernel has its scope, and its record saying what it leaves reached where the kernel has not - then
+    /// started again inside an outer layer of its own, as a Claude Code launch's outer layer starts it for each command: it
+    /// starts again there.
     /// </summary>
     [Theory]
     [InlineData(6, true)]
@@ -403,26 +483,62 @@ public sealed class BubblewrapTests
         using var tree = new TempDirectory();
         var program = Path.Combine(tools.Path, "bwrap");
         await File.WriteAllTextAsync(program, string.Empty, Token);
-        var runner = new AnsweringRunner(request =>
-        {
-            if (request.Arguments is ["--version"])
-            {
-                return Ended(0, "bubblewrap 0.9.0\n");
-            }
-
-            File.WriteAllText(Path.Combine(request.Arguments[^2], "w"), string.Empty);
-            return Ended(0, string.Empty);
-        });
+        var runner = Answering(nested: Ended(0, string.Empty));
         var platform = new Core.Platform.IsolationPlatform(new SaidPlatform(Core.Platform.PlatformId.Linux), runner, path: () => tools.Path, userWrites: _ => false, landlock: () => landlock);
 
         var found = await platform.ProbeAsync(tree.Path, Token);
 
         var bubblewrap = Assert.IsType<Bubblewrap>(found.Mechanism);
 
-        Assert.Equal((program, "0.9.0", scoped, scoped ? null : Bubblewrap.Unscoped), (bubblewrap.Program, bubblewrap.Version, bubblewrap.Scoped, bubblewrap.Leaves));
-        Assert.Equal([(program, false), ("/bin/sh", true)], runner.Asked.Select(asked => (asked.FileName, asked.Contained)));
-        Assert.Same(bubblewrap, runner.Asked[1].Isolation!.Mechanism);
+        Assert.Equal((program, "0.9.0", scoped, scoped ? null : Bubblewrap.Unscoped, (string?)null), (bubblewrap.Program, bubblewrap.Version, bubblewrap.Scoped, bubblewrap.Leaves, bubblewrap.Unnested));
+        Assert.Equal([(program, false), ("/bin/sh", true), (program, true)], runner.Asked.Select(asked => (asked.FileName, asked.Contained)));
+        Assert.Equal(bubblewrap with { Unnested = null }, (Bubblewrap)runner.Asked[1].Isolation!.Mechanism);
+        Assert.Equal((true, IsolationProfile.Nothing with { Outer = true }), (runner.Asked[2].Isolation!.Mechanism is Bubblewrap, runner.Asked[2].Isolation!.Profile));
+        Assert.Equal([.. bubblewrap.Command(IsolationProfile.Nothing, "/bin/sh", ["-c", "exit 0"]).Arguments], runner.Asked[2].Arguments);
     }
+
+    /// <summary>
+    /// A bubblewrap that cannot start again inside a layer of its own - an AppArmor profile that denies its children every
+    /// capability, as Ubuntu's bwrap-userns-restrict does - is still the mechanism, saying why it starts none inside: a
+    /// Claude Code launch's own process then runs outside every layer.
+    /// </summary>
+    [Fact]
+    public async Task ABubblewrapThatCannotStartInsideItself_IsTheMechanism_SayingWhy()
+    {
+        using var tools = new TempDirectory();
+        using var tree = new TempDirectory();
+        var program = Path.Combine(tools.Path, "bwrap");
+        await File.WriteAllTextAsync(program, string.Empty, Token);
+        var runner = Answering(nested: new ProcessResult(1, string.Empty, "bwrap: Can't mount proc on /newroot/proc: Operation not permitted\n", TimeSpan.Zero, TimedOut: false));
+        var platform = new Core.Platform.IsolationPlatform(new SaidPlatform(Core.Platform.PlatformId.Linux), runner, path: () => tools.Path, userWrites: _ => false, landlock: () => 6);
+
+        var found = await platform.ProbeAsync(tree.Path, Token);
+
+        Assert.Equal(
+            $"bubblewrap 0.9.0 ('{program}') starts none inside a layer of its own here: its trial ended 1: 'bwrap: Can't mount proc on /newroot/proc: Operation not permitted'",
+            Assert.IsType<Bubblewrap>(found.Mechanism).Unnested);
+    }
+
+    /// <summary>
+    /// A process runner that answers the probe as a bubblewrap would: its version, the trial writing its open place, and
+    /// <paramref name="nested"/> for its start inside an outer layer of its own.
+    /// </summary>
+    private static AnsweringRunner Answering(ProcessResult nested)
+        => new(request =>
+        {
+            if (request.Arguments is ["--version"])
+            {
+                return Ended(0, "bubblewrap 0.9.0\n");
+            }
+
+            if (request.Isolation?.Profile.Outer == true)
+            {
+                return nested;
+            }
+
+            File.WriteAllText(Path.Combine(request.Arguments[^2], "w"), string.Empty);
+            return Ended(0, string.Empty);
+        });
 
     /// <summary>A process's end as a test gives it.</summary>
     private static ProcessResult Ended(int code, string output) => new(code, output, string.Empty, TimeSpan.Zero, TimedOut: false);

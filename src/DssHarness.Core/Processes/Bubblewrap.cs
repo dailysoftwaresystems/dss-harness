@@ -18,7 +18,10 @@ namespace DssHarness.Core.Processes;
 /// </para>
 /// <para>
 /// A user namespace of its own with no further one allowed inside (<c>--unshare-user --disable-userns</c>), so no command
-/// makes a namespace in which the mounts could be undone; a process namespace of its own with its own <c>/proc</c>
+/// makes a namespace in which to lay mounts of its own; a program's outer layer (<see cref="IsolationProfile.Outer"/>)
+/// alone is left one to make, for each command it hands over is started inside it in a layer of its own, and the mounts
+/// the outer layer laid are locked into every namespace made inside it, so none is undone there - no hidden place shown,
+/// no read-only one written. A process namespace of its own with its own <c>/proc</c>
 /// (<c>--unshare-pid</c>), so no command reaches a process outside - its environment, its files through
 /// <c>/proc/&lt;id&gt;/root</c> - where no mount stands. Bubblewrap is not asked to end with its parent: the parent it
 /// would watch is the thread of the tool that started the contained step, whose end would kill a long launch at random;
@@ -77,6 +80,13 @@ public sealed record Bubblewrap(string Program, string Version, IReadOnlyList<Is
     /// <summary>The isolated shell becomes bubblewrap in a command's place.</summary>
     public bool TakesHandedCommands => true;
 
+    /// <summary>
+    /// Why bubblewrap cannot be started again inside a layer of its own on this machine, as its probe found - an AppArmor
+    /// profile that denies bubblewrap's children every capability, as Ubuntu's <c>bwrap-userns-restrict</c> does; null
+    /// where it can.
+    /// </summary>
+    public string? Unnested { get; init; }
+
     /// <inheritdoc/>
     public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)
     {
@@ -84,13 +94,14 @@ public sealed record Bubblewrap(string Program, string Version, IReadOnlyList<Is
         ArgumentException.ThrowIfNullOrWhiteSpace(program);
         ArgumentNullException.ThrowIfNull(arguments);
 
-        var line = new List<string>
-        {
-            "--unshare-user", "--disable-userns", "--unshare-pid",
+        // A program's outer layer is left a user namespace to make, for each command it hands over is given a layer of its own.
+        List<string> line = profile.Outer ? ["--unshare-user", "--unshare-pid"] : ["--unshare-user", "--disable-userns", "--unshare-pid"];
+        line.AddRange(
+        [
             "--ro-bind", "/", "/",
             "--dev", "/dev",
             "--proc", "/proc",
-        };
+        ]);
 
         if (profile.Temp is { } temp)
         {

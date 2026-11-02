@@ -62,17 +62,29 @@ internal static class Containment
 
     /// <summary>
     /// Becomes <paramref name="program"/> under this process's id, on Linux and macOS, Landlock's scope entered first where
-    /// <paramref name="scope"/> asks it - tried again while the file is busy, as any start is.
+    /// <paramref name="scope"/> asks it and each of <paramref name="unset"/> taken from the environment it is handed - the
+    /// C library's own, which the runtime's copy never writes back - tried again while the file is busy, as any start is.
     /// </summary>
     /// <param name="scope">Whether the program is become inside Landlock's scope of abstract sockets and signals.</param>
     /// <param name="program">The program, by its whole path.</param>
     /// <param name="arguments">Its arguments.</param>
+    /// <param name="unset">The variables the program is not handed.</param>
     /// <returns>No return where the program was become; else the error number that kept it from being.</returns>
-    internal static int Become(bool scope, string program, IReadOnlyList<string> arguments)
+    internal static int Become(bool scope, string program, IReadOnlyList<string> arguments, IReadOnlyList<string> unset)
     {
+        ArgumentNullException.ThrowIfNull(unset);
+
         if (scope && Landlock.Scope() is var refused and not 0)
         {
             return refused;
+        }
+
+        foreach (var name in unset)
+        {
+            if (Posix.Calls().Unset(name) != 0)
+            {
+                return Marshal.GetLastPInvokeError();
+            }
         }
 
         try
@@ -464,7 +476,7 @@ internal static class Containment
         return unchecked((int)code);
     }
 
-    /// <summary>How the C library is reached, bound once: the session, group, signal and exec calls.</summary>
+    /// <summary>How the C library is reached, bound once: the session, group, signal, environment and exec calls.</summary>
     private sealed class Posix
     {
         /// <summary>The signal that asks a process to end.</summary>
@@ -484,6 +496,7 @@ internal static class Containment
         private readonly BecomeFunction _become;
         private readonly IdOfFunction _sessionOf;
         private readonly IdOfFunction _groupOf;
+        private readonly UnsetFunction _unset;
 
         private Posix(IntPtr library)
         {
@@ -495,7 +508,11 @@ internal static class Containment
             _become = Bound<BecomeFunction>(library, "execv");
             _sessionOf = Bound<IdOfFunction>(library, "getsid");
             _groupOf = Bound<IdOfFunction>(library, "getpgid");
+            _unset = Bound<UnsetFunction>(library, "unsetenv");
         }
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl, SetLastError = true)]
+        private delegate int UnsetFunction([MarshalAs(UnmanagedType.LPUTF8Str)] string name);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl, SetLastError = true)]
         private delegate int StartSessionFunction();
@@ -512,7 +529,7 @@ internal static class Containment
         [UnmanagedFunctionPointer(CallingConvention.Cdecl, SetLastError = true)]
         private delegate int IdOfFunction(int process);
 
-        /// <summary>The calls, bound; on any Linux or macOS there is a C library holding all six.</summary>
+        /// <summary>The calls, bound; on any Linux or macOS there is a C library holding all seven.</summary>
         public static Posix Calls()
         {
             if (_bound is { } bound)
@@ -553,6 +570,9 @@ internal static class Containment
 
         /// <summary>The group <paramref name="process"/> is in, by its leader's id; -1 where it cannot be told.</summary>
         public int GroupOf(int process) => _groupOf(process);
+
+        /// <summary>Takes <paramref name="name"/> from the environment a program this process becomes is handed; 0 where it is gone, -1 where it could not be taken.</summary>
+        public int Unset(string name) => _unset(name);
 
         /// <summary>
         /// Becomes the program by its whole path, its own name first among <paramref name="arguments"/>,

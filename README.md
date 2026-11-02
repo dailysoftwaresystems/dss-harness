@@ -902,7 +902,7 @@ ends. Where this tool cannot decide a call it denies it, never allows: nothing
 runs while the host that would answer is silent or gone. The policy is built and holds every
 action behind it; the `claude-code` client asks it of every call, the tool runtime below decides
 by it each call it runs - the web's of the `claude-code` client, and its file tools' where Claude
-Code's own process runs outside the isolation, served through the engine's tool server, and every
+Code's own process runs apart from the isolation, served through the engine's tool server, and every
 call of the API clients, the `claude-api` and `glm` clients below - for every
 agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a
 side-task.
@@ -1042,7 +1042,8 @@ tree, whose own configuration - an fsmonitor, a filter - git started in that dir
 runs, as it does any repository's.
 
 Under bubblewrap the child has a user namespace of its own that allows no further one
-(`--disable-userns`) and a process namespace with its own `/proc`, so no command reaches another
+(`--disable-userns`) - but a `claude-code` launch's outer layer, below, which is left one to make each
+command's own layer in - and a process namespace with its own `/proc`, so no command reaches another
 process's environment; each place is a mount, each directory above one a mount point no command
 moves; WSL's interoperation sockets and shared directory (`/run/WSL`, `/mnt/wsl`, and `WSL_INTEROP`
 taken from its environment), screen's sessions, the user's runtime directory whole - their service
@@ -1070,12 +1071,27 @@ step was given and the container's own user interface - no clipboard, no input s
 window - which a program that loads Windows' user interface library needs to start at all. On each,
 the network is the user's, the loopback both ways.
 
-On Linux and macOS a `claude-code` launch's own process runs outside the isolation, reading its
-login and the key it is handed there, and every shell command it starts is handed to the isolation
-through its shell prefix (`CLAUDE_CODE_SHELL_PREFIX`: this tool and `--isolated-shell`, which becomes
-the mechanism with `/bin/bash` inside, the launch's isolation read from the file
+On Linux and macOS a `claude-code` launch's own process runs apart from its commands, reading its
+login and the key it is handed there, and every shell command it starts is handed into a layer of
+its own through its shell prefix (`CLAUDE_CODE_SHELL_PREFIX`: this tool and `--isolated-shell`, which
+becomes the mechanism with `/bin/bash` inside, the launch's isolation read from the file
 `DSSHARNESS_ISOLATED_SHELL` names) - so no command it runs reaches its directories, its login or its
-environment. There Claude Code opens no file of the agent's in its own process: its file tools are
+environment. On Linux Claude Code's own process runs inside an outer layer of bubblewrap: the
+machine read-only, every credential slot hidden, git's code-running files and the tool's state
+sealed as for its commands, and written but its writable roots, its temporary directory, the
+declared caches, Claude Code's own directories and `~/.claude.json` - without which it fails every
+shell command - and the step's `claude-receipts` and `claude-tmp`; the outer layer alone is left a
+user namespace to make each command's layer in, and the mounts it laid are locked into every
+namespace made inside it, so none is undone there. A command Claude Code ran without its prefix
+therefore still runs inside the outer layer, never with the user's rights - though there it reads
+Claude Code's login and environment and could write its directories. Where Claude Code never ran,
+its directory and `.claude.json` (holding `{}`) are made first, for inside it can make neither. Where
+this machine's bubblewrap cannot start again inside a layer of its own - an AppArmor profile that
+denies its children every capability, as Ubuntu's `bwrap-userns-restrict` does - the probe says so,
+and Claude Code's own process runs outside every layer, as on macOS, whose sandbox starts none inside
+another; there a command Claude Code ran without its prefix runs outside with the user's rights, and
+each launch says so as it starts. In or out of a layer, Claude Code opens no file of the agent's in
+its own process: its file tools are
 not given, `--tools` names its shell alone, and the engine's tool server serves the tool runtime's
 (`view_file`, `find_files`, `search_files`, `create_file`, `replace_in_file`, `insert_in_file`,
 `create_directory`, `delete_file`, `delete_directory`, `move_path`) in their place, each file read
@@ -1084,14 +1100,23 @@ made, moved or deleted relative to its directory held from the writable root it 
 no link on the way, so a link a command - one left running in the background among them - puts on a
 path between the decision and the act reaches nothing. Each shell command the engine allows is given back with a receipt at its head
 (`: dssharness-receipt <32 hexadecimal digits>;`, the shell's no-op), which `--isolated-shell` writes
-in the step's `claude-receipts` directory, where no command writes, before it runs the command; a
-call that comes back with none - a Claude Code that skipped its prefix, the command run outside -
-ends the launch failed at once, a call run in the background within 20 s or by its turn's end.
+in the step's `claude-receipts` directory, where no command handed over writes, before it runs the
+command - the command itself run without that mark, and without the variables that hand it over, so
+nothing it is started with names its receipt or where receipts are written. A call that comes back
+with none - a Claude Code that skipped its prefix - ends the launch failed at once, and one run in
+the background is waited for within 20 s; however a launch ends - at a turn's result, Claude Code
+gone or its output cut - each allowed call whose receipt is not there yet is waited for within 20 s
+before anything of it is ended, one with none by then ending it failed, and where the launch was
+stopped or ended at once, each is said. A receipt proves only that Claude Code handed the command
+over, and only once it has run: it stops nothing, and a command run without the prefix runs where
+Claude Code's own process runs, where it could write a receipt of its own - so what holds such a
+command is the outer layer on Linux, and nothing on macOS or where bubblewrap starts none inside
+itself.
 Claude Code's own temporary directory is the step's `claude-tmp`, where no command writes but the
 one file each ends by writing its working directory to - made empty, given that command alone,
 written in place, never removed or replaced - so nothing Claude Code writes or reads there in its own process
 is a command's to replace with a link; it goes with the launch. Claude Code's own sandbox is turned
-off in its settings, for none nests in this one; where this tool runs as a runtime handed its
+off in its settings, for none nests in a command's layer; where this tool runs as a runtime handed its
 assembly, or from a path holding ` -`, neither of which the prefix can name, the launch is not
 started, saying why. On Windows, where nothing becomes another program and every command Claude Code
 runs is Git Bash's, the launch runs whole inside MXC's container with its directories read alone: its
@@ -1108,7 +1133,10 @@ unread, by its name and by another case of it, a place written by nobody unwritt
 outside every open one unwritten, an open place written - on Windows after MXC's library says this
 Windows has the container (Windows 11 24H2 build 26100.9278 or later, or 26H2 build 26300.9550 or
 later), and followed by each of node, git and Git Bash's `sh` found on this machine started inside it
-and asked to answer, one that does not making none, said with how it ended. MXC 1.0.1 ends every
+and asked to answer, one that does not making none, said with how it ended; on Linux bubblewrap,
+once proved, is started again inside an outer layer of its own around a shell that must end 0, and
+where it does not, it is the mechanism all the same, a `claude-code` launch's own process outside
+every layer, said with how the trial ended. MXC 1.0.1 ends every
 program of Git Bash's with `0xC0000142`, a library that would not start, so where Git Bash is
 installed Windows has none yet; from WSL 2, bubblewrap isolates. `agentPolicy.isolation` says what
 happens where this machine has none: `required`, where nothing is said, starts no agent that may run
@@ -1132,7 +1160,9 @@ the main checkout and every other worktree, a main checkout's its own - and only
 agent's own would keep them apart: so a command can move any branch, tag, stash or remote-tracking
 ref, which a person's checkout outside then takes, and, as git's checkout reads an object as it lies
 without hashing it again, put other content under a name the store already holds, which a checkout
-outside then writes. This tool's verbs that
+outside then writes. A command Claude Code runs without its shell prefix runs where Claude Code's
+own process runs - in the outer layer on Linux, with the user's rights on macOS and where bubblewrap
+starts none inside itself - its missing receipt telling it only once it has run. This tool's verbs that
 read a credential slot or write its state or install would fail inside it, so each is refused to
 every agent by name, a side-task's as well as a step's (`AgentPolicy.SlotOrStateVerbs`, listed by
 `help agent-clients`): `init`, `create-worktree`,
@@ -1239,7 +1269,7 @@ every other root it reaches added. It is given its model and no fallback, the st
 the agent's capabilities and no other (`read`: `Read`, `Grep`, `Glob`; `write`: `Write`, `Edit`,
 `NotebookEdit`; `run`: `Bash`; `web`: none of Claude Code's, but `mcp__dssharness__web_fetch` and
 `mcp__dssharness__web_search` of the engine's tool server beside them), never one that starts
-agents, loads skills, asks a person or plans; where its own process runs outside the isolation it
+agents, loads skills, asks a person or plans; where its own process runs apart from the isolation it
 hands its commands to (above), the engine's tool server serves the tool runtime's file tools in
 place of Claude Code's own - `read`: `mcp__dssharness__view_file`, `mcp__dssharness__find_files`,
 `mcp__dssharness__search_files`; `write`: `mcp__dssharness__create_file`,
@@ -1287,7 +1317,7 @@ a new launch, and a move within the step's work goes on from what the engine sto
 The tool runtime is the harness's own tools, built for the API clients to give their agents in
 place of a client's own - the `claude-api` and `glm` clients below - and serving
 the `claude-code` client the web's through the engine's tool server, and its file tools there
-too where Claude Code's own process runs outside the isolation: `view_file`, `find_files` and `search_files` (read),
+too where Claude Code's own process runs apart from the isolation: `view_file`, `find_files` and `search_files` (read),
 `create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
 `delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` and `web_search` (web), each under
 the capability that gives it; the run's reporter is given those that read and no other. Each
