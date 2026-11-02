@@ -626,8 +626,35 @@ public sealed partial class IsolationPlatform(
             how.Contains(AnotherCase, StringComparison.Ordinal)
                 ? "keep the tree on a file system that tells letter case apart - WSL's own, not a Windows drive under /mnt" + OrPreferred
                 : restricted
-                    ? $"Ubuntu restricts unprivileged user namespaces here ({RestrictedUserNamespaces} = 1): load the bwrap-userns-restrict AppArmor profile for '{mechanism.Program}' (on Ubuntu 24.04 from the apparmor-profiles package: sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/ and sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict)" + OrPreferred
+                    ? RestrictedRemedy(mechanism.Program, File.Exists) + OrPreferred
                     : "check that unprivileged user namespaces are allowed on this machine and that bubblewrap runs ('bwrap --ro-bind / / true')" + OrPreferred);
+    }
+
+    /// <summary>The AppArmor profile that lets bubblewrap make its user namespace where Ubuntu restricts them.</summary>
+    internal const string RestrictProfile = "/etc/apparmor.d/bwrap-userns-restrict";
+
+    /// <summary>Where Ubuntu 24.04 keeps that profile until it is copied into place: the apparmor-profiles package's extra profiles.</summary>
+    internal const string ExtraRestrictProfile = "/usr/share/apparmor/extra-profiles/bwrap-userns-restrict";
+
+    /// <summary>
+    /// The remedy where Ubuntu restricts unprivileged user namespaces, in the commands this machine needs: the profile
+    /// loaded where the apparmor package ships it in place (Ubuntu 25.04 and later), copied from the extra profiles
+    /// first where it is there (Ubuntu 24.04), and the package that carries it installed first where neither is.
+    /// </summary>
+    /// <param name="program">The bubblewrap that did not prove itself.</param>
+    /// <param name="exists">Whether a file is at a path.</param>
+    internal static string RestrictedRemedy(string program, Func<string, bool> exists)
+    {
+        ArgumentNullException.ThrowIfNull(exists);
+
+        var load = $"sudo apparmor_parser -r {RestrictProfile}";
+        var commands = exists(RestrictProfile)
+            ? load
+            : exists(ExtraRestrictProfile)
+                ? $"sudo cp {ExtraRestrictProfile} /etc/apparmor.d/ and {load}"
+                : $"sudo apt-get install apparmor-profiles, sudo cp {ExtraRestrictProfile} /etc/apparmor.d/ and {load}";
+
+        return $"Ubuntu restricts unprivileged user namespaces here ({RestrictedUserNamespaces} = 1): load the bwrap-userns-restrict AppArmor profile for '{program}' ({commands})";
     }
 
     /// <summary>Whether this user may write <paramref name="place"/>, as the system answers <c>access(W_OK)</c>.</summary>
