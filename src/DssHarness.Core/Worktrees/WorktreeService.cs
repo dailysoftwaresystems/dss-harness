@@ -110,8 +110,17 @@ public interface IWorktreeService : IUseCase
 /// </param>
 public sealed record WorktreeListing(string Name, string? BaseCommit)
 {
+    /// <summary>What <see cref="Kind"/> holds for one of git's linked worktrees, which git records in the main checkout.</summary>
+    public const string WorktreeKind = "worktree";
+
+    /// <summary>What <see cref="Kind"/> holds for an agent's repository, a repository of its own that git records nowhere.</summary>
+    public const string RepositoryKind = "repository";
+
     /// <summary>Where it is, links resolved, as git records it and as a sync records the tree a host's copy is of.</summary>
     public string Path { get; init; } = string.Empty;
+
+    /// <summary>What kind of tree it is: <see cref="WorktreeKind"/> or <see cref="RepositoryKind"/>.</summary>
+    public string Kind { get; init; } = WorktreeKind;
 
     /// <summary>The line <c>list-worktree</c> prints for this worktree.</summary>
     public override string ToString()
@@ -544,7 +553,7 @@ public sealed class WorktreeService(
 
         try
         {
-            identity = await inspector.IdentifyAsync(layout.MainCheckoutRoot, path, cancellationToken).ConfigureAwait(false);
+            identity = await inspector.IdentifyAsync(layout.MainCheckoutRoot, address, path, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed && force)
         {
@@ -942,14 +951,15 @@ public sealed class WorktreeService(
             .Where(worktree => !worktree.IsMain)
             .ToList();
 
-        var names = new List<(string Name, string Path)>();
+        var names = new List<(string Name, string Path, string Kind)>();
         var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
+        var repositories = new AgentRepositories(_gitClient, _fileSystem, _platform);
 
         foreach (var directory in Directories(worktreesDirectory, "the worktrees root"))
         {
             var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
 
-            if (string.IsNullOrEmpty(name) || TakeListed(directory, name, orchestrator: null))
+            if (string.IsNullOrEmpty(name) || await TakeListedAsync(directory, name, orchestrator: null).ConfigureAwait(false))
             {
                 continue;
             }
@@ -974,7 +984,7 @@ public sealed class WorktreeService(
             {
                 var agent = Path.GetFileName(Path.TrimEndingDirectorySeparator(child));
 
-                if (!string.IsNullOrEmpty(agent) && TakeListed(child, agent, orchestrator: name))
+                if (!string.IsNullOrEmpty(agent) && await TakeListedAsync(child, agent, orchestrator: name).ConfigureAwait(false))
                 {
                     agents++;
                 }
@@ -988,16 +998,22 @@ public sealed class WorktreeService(
             }
         }
 
-        // Whether the directory is a worktree git records, listed under its address; one holding a .git entry git does
-        // not record is said, and taken as dealt with, since it is nobody's orchestrator.
-        bool TakeListed(string directory, string name, string? orchestrator)
+        // Whether the directory is a worktree git records, or an agent's repository, listed under its address; one holding
+        // a .git entry that is neither is said, and taken as dealt with, since it is nobody's orchestrator.
+        async Task<bool> TakeListedAsync(string directory, string name, string? orchestrator)
         {
-            var address = orchestrator is null ? name : WorktreeAddress.Nested(orchestrator, name).Name;
+            var address = orchestrator is null ? WorktreeAddress.Plain(name) : WorktreeAddress.Nested(orchestrator, name);
             var resolved = _fileSystem.ResolveLinks(directory);
 
             if (inspector.RecordAt(registered, resolved) is not null)
             {
-                names.Add((address, resolved));
+                names.Add((address.Name, resolved, WorktreeListing.WorktreeKind));
+                return true;
+            }
+
+            if (await repositories.IsAtAsync(context.Layout.MainCheckoutRoot, address, directory, cancellationToken).ConfigureAwait(false))
+            {
+                names.Add((address.Name, resolved, WorktreeListing.RepositoryKind));
                 return true;
             }
 
@@ -1008,7 +1024,7 @@ public sealed class WorktreeService(
                 // and its name stays taken: dropped from the listing silently, it looks free.
                 _output.Warn(
                     ListCommand,
-                    $"'{address}' holds a .git entry, and git records no worktree there: {WorktreeInspector.UnrecordedWhy}. "
+                    $"'{address.Name}' holds a .git entry, and git records no worktree there: {WorktreeInspector.UnrecordedWhy}. "
                     + "It is not listed, and no worktree can be made at its path until it is gone; look inside for "
                     + $"anything wanted, then delete '{directory}'.");
                 return true;
@@ -1019,13 +1035,14 @@ public sealed class WorktreeService(
 
         var listings = new List<WorktreeListing>();
 
-        foreach (var (name, path) in names.OrderBy(worktree => worktree.Name, StringComparer.Ordinal))
+        foreach (var (name, path, kind) in names.OrderBy(worktree => worktree.Name, StringComparer.Ordinal))
         {
             listings.Add(new WorktreeListing(
                 name,
                 await WorktreeKeepalive.ReadBaseAsync(_gitClient, context.Layout.MainCheckoutRoot, name, cancellationToken).ConfigureAwait(false))
             {
                 Path = path,
+                Kind = kind,
             });
         }
 

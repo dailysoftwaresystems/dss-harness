@@ -1,4 +1,5 @@
 using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Results;
 using DssHarness.Core.Worktrees;
 
@@ -265,6 +266,129 @@ public sealed class AgentRepositoriesTests
         Assert.True((await harness.GitClient.RunAsync(main, ["cat-file", "-e", head + "^{commit}"], cancellationToken: Token)).Succeeded);
         Assert.Equal(string.Empty, (await harness.RunGitAsync(path, ["status", "--porcelain"], Token)).StandardOutput);
         Assert.Equal("only here\n", (await harness.RunGitAsync(path, ["show", "HEAD:a.txt"], Token)).StandardOutput);
+    }
+
+    /// <summary>
+    /// A command run inside an agent's repository, which git names its own main checkout, finds the main checkout its mark
+    /// names: the repository is the tree acted on, and every piece of the harness's state - the worktrees root, the run
+    /// lock, the orchestrators - resolves in the main checkout, as from inside a linked worktree.
+    /// </summary>
+    [Fact]
+    public async Task LocatingFromInsideAnAgentRepository_FindsItsMainCheckout()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        var (main, path) = await PlaceAsync(harness, temp);
+        Assert.Null((await Repositories(harness).MakeAsync(main, Address, path, Token)).Failure);
+        Directory.CreateDirectory(Path.Combine(path, "deeper"));
+
+        foreach (var start in new[] { path, Path.Combine(path, "deeper") })
+        {
+            var layout = await harness.RepositoryLocator.LocateAsync(start, Token);
+
+            PathAssert.Same(path, layout!.RepositoryRoot);
+            Assert.Equal(main, layout.MainCheckoutRoot);
+            Assert.True(layout.IsWorktree(harness.Platform));
+        }
+
+        // The main checkout is still its own.
+        var mains = await harness.RepositoryLocator.LocateAsync(main, Token);
+        Assert.Equal(new Core.Repository.HarnessLayout(main, main), mains);
+    }
+
+    /// <summary>
+    /// A repository whose mark names a main checkout that does not lend it its objects is refused, with why: never taken for
+    /// a main checkout of its own, which would put every piece of the harness's state inside the agent's tree.
+    /// </summary>
+    [Fact]
+    public async Task AMarkedRepositoryWhoseMainDoesNotLendIt_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        var (main, path) = await PlaceAsync(harness, temp);
+        Assert.Null((await Repositories(harness).MakeAsync(main, Address, path, Token)).Failure);
+        var common = await CommonAsync(harness, main);
+        var root = (await harness.GitClient.GetRepositoryRootAsync(path, Token))!;
+
+        File.WriteAllText(Path.Combine(path, ".git", "objects", "info", "alternates"), string.Empty);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.RepositoryLocator.LocateAsync(path, Token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            $"'{root}' is an agent's repository of '{main}', which does not lend it its objects: '{common}/objects' is not among the object "
+            + "directories git reads there. DssHarness keeps its state in the main checkout, and so runs nothing from here; run it from a "
+            + $"main checkout, and delete '{root}' once nothing in it is needed.",
+            refused.Message);
+    }
+
+    /// <summary>
+    /// list-worktree lists an agent's repository by its address with the commit it was made at, beside a plain linked
+    /// worktree, each said in --json as the kind of tree it is: a repository of its own, or one of git's worktrees.
+    /// </summary>
+    [Fact]
+    public async Task ListWorktree_ListsAnAgentRepositoryByItsAddress_WithItsBase()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeHarnessAsync(temp.Path, Token, new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings });
+        var main = (await harness.GitClient.GetMainWorktreeAsync(temp.Path, Token))!.Path;
+        var root = new Core.Repository.HarnessLayout(main, main).WorktreesDirectoryUnder(OrchestrationKit.Settings.Root);
+        var path = Path.Combine(root, "o1", "a");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var head = (await harness.GitClient.ResolveCommitAsync(main, "HEAD", Token))!;
+
+        Assert.Null((await Repositories(harness).MakeAsync(main, Address, path, Token)).Failure);
+        var plain = await harness.WorktreeService.CreateAsync(main, "wt", useRandomName: false, Token);
+        Assert.True(plain.Succeeded, plain.Outcome.Message);
+
+        var listed = await harness.WorktreeService.ListAsync(main, Token);
+        var text = WorktreeReports.List(listed, new HostCopyListing(), json: false);
+        var json = WorktreeReports.List(listed, new HostCopyListing(), json: true);
+
+        Assert.Equal("2 worktree(s)", text.Message);
+        Assert.Equal([$"o1/a  base {head[..12]}", $"wt  base {head[..12]}"], text.Details);
+        Assert.True(
+            System.Text.Json.Nodes.JsonNode.DeepEquals(
+                new System.Text.Json.Nodes.JsonArray(
+                    new System.Text.Json.Nodes.JsonObject { ["name"] = "o1/a", ["kind"] = "repository", ["baseCommit"] = head, ["path"] = harness.FileSystem.ResolveLinks(path), ["copies"] = new System.Text.Json.Nodes.JsonArray() },
+                    new System.Text.Json.Nodes.JsonObject { ["name"] = "wt", ["kind"] = "worktree", ["baseCommit"] = head, ["path"] = harness.FileSystem.ResolveLinks(plain.Path), ["copies"] = new System.Text.Json.Nodes.JsonArray() }),
+                System.Text.Json.Nodes.JsonNode.Parse((string)json.Data![0])!["worktrees"]),
+            (string)json.Data![0]);
+
+        // Asked from inside the agent's repository, the command answers as from the main checkout.
+        var fromMain = await CliRunner.RunAsync(["list-worktree", "--json", "-C", main], Token);
+        var fromInside = await CliRunner.RunAsync(["list-worktree", "--json", "-C", path], Token);
+
+        Assert.Equal(0, fromMain.ExitCode);
+        Assert.Equal(fromMain.StandardOutput, fromInside.StandardOutput);
+        Assert.Equal(fromMain.ExitCode, fromInside.ExitCode);
+    }
+
+    /// <summary>
+    /// An orchestrator is not deleted while an agent's repository is below its directory, which is said as the worktree it
+    /// is, by its address - never as a directory git records nothing at, which the person would be told to look in and
+    /// delete by hand.
+    /// </summary>
+    [Fact]
+    public async Task DeleteOrchestrator_RefusesAnAgentRepositoryBelow_AsAWorktreeNotAsUnrecorded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var main = (await kit.Harness.GitClient.GetMainWorktreeAsync(kit.Main, Token))!.Path;
+        Directory.CreateDirectory(kit.Worktrees);
+        Assert.Null((await Repositories(kit.Harness).MakeAsync(main, Address, kit.Worktree("a"), Token)).Failure);
+
+        var refused = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, OrchestrationKit.Orchestrator, deleteEvidence: false, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            $"Orchestrator 'o1' was not deleted: worktrees are left below '{kit.Worktrees}' - o1/a. Delete each with "
+            + $"'{ToolPackage.Command} delete-worktree <address>' first. Nothing was changed.",
+            refused.Message);
+        Assert.True(Directory.Exists(Path.Combine(kit.Worktree("a"), ".git")));
     }
 
     private static AgentRepositories Repositories(HarnessFactory harness, IGitClient? gitClient = null)

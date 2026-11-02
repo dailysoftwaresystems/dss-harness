@@ -48,14 +48,22 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
         ArgumentNullException.ThrowIfNull(fileSystem);
 
         var gitDirectory = Path.Combine(tree, ".git");
+        var configuration = Path.Combine(gitDirectory, "config");
 
-        if (!fileSystem.DirectoryExists(gitDirectory) || !fileSystem.FileExists(Path.Combine(gitDirectory, "config")))
+        if (!fileSystem.DirectoryExists(gitDirectory) || !fileSystem.FileExists(configuration))
+        {
+            return null;
+        }
+
+        // A file that never spells the section's name holds none of its keys, and git, which would read every main
+        // checkout's configuration at every command, is not asked. One that cannot be read here is left to git to say.
+        if (SpellsSection(fileSystem, configuration) == false)
         {
             return null;
         }
 
         var read = await gitClient
-            .RunAsync(tree, ["config", "--file", Path.Combine(gitDirectory, "config"), "--null", "--get-regexp", $@"^{SectionName}\."], cancellationToken: cancellationToken)
+            .RunAsync(tree, ["config", "--file", configuration, "--null", "--get-regexp", $@"^{SectionName}\."], cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         // git answers 1 where no key matches: a repository carrying no mark.
@@ -100,9 +108,9 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(platform);
 
-        if (MainCheckout.Length == 0)
+        if (!Path.IsPathFullyQualified(MainCheckout))
         {
-            return "is named by nothing: its mark names no main checkout";
+            return "is no whole path, and so no checkout the tool made it from";
         }
 
         if (!fileSystem.DirectoryExists(MainCheckout))
@@ -191,6 +199,19 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
             .Where(line => line.StartsWith(Alternate, StringComparison.Ordinal))
             .Select(line => Unquoted(line[Alternate.Length..]))
             .Any(borrowed => PathContainment.AreSame(Path.GetFullPath(borrowed), Path.GetFullPath(objects), platform.PathComparison));
+    }
+
+    /// <summary>Whether the configuration file spells the mark's section's name anywhere; null where it cannot be read here.</summary>
+    private static bool? SpellsSection(IFileSystem fileSystem, string configuration)
+    {
+        try
+        {
+            return fileSystem.ReadAllText(configuration).Contains(SectionName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>A path git printed, read back: one in double quotes has its C-style escapes undone, its octal ones as UTF-8 bytes.</summary>

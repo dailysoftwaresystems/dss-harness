@@ -17,13 +17,19 @@ internal enum WorktreeMembership
 
     /// <summary>The root of a work tree of another repository, such as a clone.</summary>
     OfAnotherRepository,
+
+    /// <summary>
+    /// An agent's repository of this repository's main checkout, at the address it sits at (<see cref="AgentRepositories.IsAtAsync"/>):
+    /// a repository of its own, borrowing the main checkout's objects, that git records no worktree for.
+    /// </summary>
+    AgentRepository,
 }
 
 /// <summary>Which repository a directory belongs to, and where git keeps its record of it.</summary>
 /// <param name="Membership">What git makes of the directory.</param>
 /// <param name="AdministrativeDirectory">
-/// The worktree's own git directory, when it is a worktree of this repository. git's record of the
-/// worktree lasts exactly as long as this directory does.
+/// The worktree's own git directory, when it is a worktree of this repository: git's record of the worktree lasts exactly as
+/// long as this directory does. For an agent's repository, its own git directory, which goes with it.
 /// </param>
 internal sealed record WorktreeIdentity(WorktreeMembership Membership, string? AdministrativeDirectory);
 
@@ -99,9 +105,10 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         return fileSystem.FileExists(git) || fileSystem.DirectoryExists(git);
     }
 
-    /// <summary>What git makes of <paramref name="path"/>, compared with the main checkout's repository.</summary>
+    /// <summary>What git makes of <paramref name="path"/>, which sits at <paramref name="address"/>, compared with the main checkout's repository.</summary>
     public async Task<WorktreeIdentity> IdentifyAsync(
         string mainCheckoutRoot,
+        WorktreeAddress address,
         string path,
         CancellationToken cancellationToken)
     {
@@ -126,8 +133,15 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             && string.Equals(Path.GetFileName(parent), "worktrees", StringComparison.Ordinal)
             && string.Equals(grandparent, main, _platform.PathComparison);
 
-        return ofThisRepository
-            ? new WorktreeIdentity(WorktreeMembership.OfThisRepository, here.GitDirectory)
+        if (ofThisRepository)
+        {
+            return new WorktreeIdentity(WorktreeMembership.OfThisRepository, here.GitDirectory);
+        }
+
+        // A repository of its own is told apart before it is taken for another repository's: an agent's borrows the main
+        // checkout's objects and carries its mark, and its git directory is the .git in it.
+        return await new AgentRepositories(_gitClient, _fileSystem, _platform).IsAtAsync(mainCheckoutRoot, address, path, cancellationToken).ConfigureAwait(false)
+            ? new WorktreeIdentity(WorktreeMembership.AgentRepository, here.GitDirectory)
             : new WorktreeIdentity(WorktreeMembership.OfAnotherRepository, null);
     }
 
@@ -194,14 +208,13 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
     /// <summary>
     /// What is below <paramref name="path"/>, which is not a worktree itself: the address of each worktree git records
-    /// strictly inside it, and - in the directory named for an orchestrator - each directory directly in it holding a
-    /// .git entry of its own that git records no worktree at, since an orchestrator's directory holds its agents'
-    /// worktrees and nothing else. Anywhere else such a directory is a worktree's own submodule or nested repository, not
-    /// a worktree.
+    /// strictly inside it and of each agent's repository directly in it, and - in the directory named for an orchestrator -
+    /// each other directory directly in it holding a .git entry of its own that git records no worktree at, since an
+    /// orchestrator's directory holds its agents' worktrees and nothing else.
     /// </summary>
     /// <param name="mainCheckoutRoot">The main checkout, whose list is read.</param>
     /// <param name="worktreesDirectory">The worktrees root, which the addresses are relative to.</param>
-    /// <param name="path">A directory under the root.</param>
+    /// <param name="path">A directory directly under the root, named as a plain worktree is.</param>
     /// <param name="orchestrators">Whether <paramref name="path"/> is the directory named for an orchestrator.</param>
     /// <param name="cancellationToken">Stops the question.</param>
     /// <exception cref="HarnessException">
@@ -217,18 +230,17 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     {
         var found = new SortedSet<string>(StringComparer.Ordinal);
         var resolved = ResolveLinks(path);
-        IReadOnlyList<string> holdingGit = [];
+        IReadOnlyList<string> holdingGit;
 
-        if (orchestrators)
+        // Every directory directly in it holding a .git of its own is looked at, whatever the directory is named: an agent's
+        // repository is a worktree below it, which git records nowhere.
+        try
         {
-            try
-            {
-                holdingGit = [.. _fileSystem.EnumerateDirectories(path).Where(child => HoldsOwnGit(_fileSystem, child)).Order(StringComparer.Ordinal)];
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                throw CouldNotBeLookedIn(path, ex);
-            }
+            holdingGit = [.. _fileSystem.EnumerateDirectories(path).Select(Path.TrimEndingDirectorySeparator).Where(child => HoldsOwnGit(_fileSystem, child)).Order(StringComparer.Ordinal)];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw CouldNotBeLookedIn(path, ex);
         }
 
         // A list git could not give is not an empty one: raised, never read as no worktree below.
@@ -242,11 +254,26 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             }
         }
 
-        // Each git does not record is told apart, whatever its name: nothing here can say what it holds, so it is a
-        // person's to look in and delete - what a removal left, or a copy an earlier version of this tool kept there.
-        return new WorktreesBelow(
-            [.. found],
-            [.. holdingGit.Where(child => RecordAt(listed, ResolveLinks(child)) is null)]);
+        var unrecorded = new List<string>();
+        var repositories = new AgentRepositories(_gitClient, _fileSystem, _platform);
+
+        foreach (var child in holdingGit.Where(child => RecordAt(listed, ResolveLinks(child)) is null))
+        {
+            var address = WorktreeAddress.Nested(Path.GetFileName(Path.TrimEndingDirectorySeparator(path)), Path.GetFileName(child));
+
+            if (await repositories.IsAtAsync(mainCheckoutRoot, address, child, cancellationToken).ConfigureAwait(false))
+            {
+                found.Add(address.Name);
+            }
+            else if (orchestrators)
+            {
+                // Each git does not record is told apart, whatever its name: nothing here can say what it holds, so it is a
+                // person's to look in and delete - what a removal left, or a copy an earlier version of this tool kept there.
+                unrecorded.Add(child);
+            }
+        }
+
+        return new WorktreesBelow([.. found], unrecorded);
 
         string AddressOf(string root, string tree)
             => WorktreeAddress.OfTree(root, tree, _platform.PathComparison)?.Name

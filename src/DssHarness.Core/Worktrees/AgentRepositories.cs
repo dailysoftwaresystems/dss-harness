@@ -13,6 +13,11 @@ namespace DssHarness.Core.Worktrees;
 /// <param name="Failure">Why it was not made, with what of it could not be taken back; null where it was made.</param>
 internal sealed record AgentRepositoryMade(string? BaseCommit, CommandOutcome? Failure);
 
+/// <summary>An agent's repository found below the worktrees root.</summary>
+/// <param name="Address">The agent's address, <c>orchestrator/agent</c>: where it sits under the root, and what its mark names.</param>
+/// <param name="Path">Where it is, as the worktrees root is spelt.</param>
+internal sealed record AgentRepositoryFound(WorktreeAddress Address, string Path);
+
 /// <summary>
 /// The one owner of an agent's repository: the tree an orchestrator's agent works in is a git repository of its own, at
 /// <c>&lt;worktrees.root&gt;/&lt;orchestrator&gt;/&lt;agent&gt;</c>, with its own refs and its own object directory, borrowing the main
@@ -43,6 +48,99 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
+
+    /// <summary>
+    /// Whether the directory at <paramref name="path"/>, which sits at <paramref name="address"/> under the worktrees root, is
+    /// an agent's repository of the main checkout at <paramref name="mainCheckoutRoot"/>: an agent's address, its <c>.git</c> a
+    /// directory whose own configuration carries the mark naming that checkout and that address, and that checkout lending it
+    /// its objects. The one rule every command that finds, lists or weighs an agent's tree asks.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, as git spells its root.</param>
+    /// <param name="address">Where the directory sits under the worktrees root.</param>
+    /// <param name="path">The directory.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    /// <exception cref="HarnessException">git could not be asked (<see cref="HarnessExit.CommandFailed"/>): never read as no.</exception>
+    public async Task<bool> IsAtAsync(string mainCheckoutRoot, WorktreeAddress address, string path, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+
+        return address.IsNested
+            && await MarkedAtAsync(mainCheckoutRoot, address, path, cancellationToken).ConfigureAwait(false)
+            && await AgentRepositoryMark.BorrowsAsync(
+                _gitClient,
+                _platform,
+                path,
+                await AgentRepositoryMark.ObjectsOfAsync(_gitClient, mainCheckoutRoot, cancellationToken).ConfigureAwait(false),
+                cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The agents' repositories of the main checkout at <paramref name="mainCheckoutRoot"/> below
+    /// <paramref name="worktreesDirectory"/>, in the order of their addresses: each directory two below the root, in a
+    /// directory that is no tree itself, that <see cref="IsAtAsync"/> takes for one.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, as git spells its root.</param>
+    /// <param name="worktreesDirectory">The worktrees root, as configured.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    /// <exception cref="HarnessException">
+    /// A directory could not be looked in, or git could not be asked (<see cref="HarnessExit.CommandFailed"/>): never read as
+    /// none there.
+    /// </exception>
+    public async Task<IReadOnlyList<AgentRepositoryFound>> ListUnderAsync(string mainCheckoutRoot, string worktreesDirectory, CancellationToken cancellationToken)
+    {
+        if (!_fileSystem.DirectoryExists(worktreesDirectory))
+        {
+            return [];
+        }
+
+        var candidates = new List<AgentRepositoryFound>();
+
+        foreach (var group in Directories(worktreesDirectory).Where(group => !WorktreeInspector.HoldsOwnGit(_fileSystem, group)))
+        {
+            foreach (var tree in Directories(group).Where(tree => _fileSystem.DirectoryExists(Path.Combine(tree, ".git"))))
+            {
+                candidates.Add(new AgentRepositoryFound(WorktreeAddress.Nested(Path.GetFileName(group), Path.GetFileName(tree)), tree));
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        var objects = await AgentRepositoryMark.ObjectsOfAsync(_gitClient, mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
+        var found = new List<AgentRepositoryFound>();
+
+        foreach (var candidate in candidates)
+        {
+            if (await MarkedAtAsync(mainCheckoutRoot, candidate.Address, candidate.Path, cancellationToken).ConfigureAwait(false)
+                && await AgentRepositoryMark.BorrowsAsync(_gitClient, _platform, candidate.Path, objects, cancellationToken).ConfigureAwait(false))
+            {
+                found.Add(candidate);
+            }
+        }
+
+        return [.. found.OrderBy(repository => repository.Address.Name, StringComparer.Ordinal)];
+
+        IEnumerable<string> Directories(string directory)
+        {
+            try
+            {
+                return [.. _fileSystem.EnumerateDirectories(directory).Select(Path.TrimEndingDirectorySeparator)];
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw WorktreeInspector.CouldNotBeLookedIn(directory, ex);
+            }
+        }
+    }
+
+    /// <summary>Whether the repository at <paramref name="path"/> carries the mark naming the main checkout and <paramref name="address"/>.</summary>
+    private async Task<bool> MarkedAtAsync(string mainCheckoutRoot, WorktreeAddress address, string path, CancellationToken cancellationToken)
+        => await AgentRepositoryMark.ReadAsync(_gitClient, _fileSystem, path, cancellationToken).ConfigureAwait(false) is { } mark
+            && string.Equals(mark.Agent, address.Name, StringComparison.Ordinal)
+            && mark.MainCheckout.Length > 0
+            && PathContainment.AreSame(mark.MainCheckout, mainCheckoutRoot, _platform.PathComparison);
 
     /// <summary>
     /// Makes the repository the agent at <paramref name="address"/> works in at <paramref name="path"/>, checked out at the main

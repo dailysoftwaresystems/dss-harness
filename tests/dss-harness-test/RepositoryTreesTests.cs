@@ -42,6 +42,35 @@ public sealed class RepositoryTreesTests
     }
 
     /// <summary>
+    /// An agent's repository, which git records nowhere, is among the trees too, spelt where its address puts it under the
+    /// worktrees root and named by that address, as a linked worktree of the same address is: a compiler working in it is
+    /// that agent's tree's, never nobody's.
+    /// </summary>
+    [Fact]
+    public async Task RepositoryTrees_NameAnAgentRepository_AsWorktreeOA()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        var main = (await harness.GitClient.GetMainWorktreeAsync(temp.Path, cancellationToken))!.Path;
+        var context = new HarnessContext(new HarnessLayout(main, main), new HarnessConfig());
+        var root = context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
+        Directory.CreateDirectory(Path.Combine(root, "o1"));
+
+        var made = await new AgentRepositories(harness.GitClient, harness.FileSystem, harness.Platform)
+            .MakeAsync(main, WorktreeAddress.Nested("o1", "a"), Path.Combine(root, "o1", "a"), cancellationToken);
+        Assert.Null(made.Failure);
+
+        var found = await Trees(harness).HereAsync(context, here: null, cancellationToken);
+
+        Assert.Null(found.Unlisted);
+        Assert.Equal(
+            [new RepositoryTree(main, RepositoryTree.MainCheckout), new RepositoryTree(Path.Combine(root, "o1", "a"), "worktree o1/a")],
+            found.Trees);
+    }
+
+    /// <summary>
     /// Trees git's record could not be read for are said, with why, rather than taken for none - and the main checkout,
     /// known without asking git anything, is still among them.
     /// </summary>

@@ -714,6 +714,18 @@ of its own that holds worktrees below it - an orchestrator's, holding its agents
 as one, `--force` or not: deleting it would delete each of them. A worktree's submodules and nested
 repositories are its own contents, and do not make it such a directory.
 
+An agent's worktree can also be a repository of its own (`AgentRepositories`): one that git records
+nowhere, whose own `.git/config` carries the mark naming this main checkout and the agent's address
+(`harness.mainCheckout`, `harness.agent`, read by `AgentRepositoryMark` from that file alone, never
+through the main checkout's configuration it includes), and which borrows the main checkout's
+objects. It is taken for the agent's worktree only where all three hold at the address it sits at.
+A command run inside one finds the main checkout its mark names, as from inside a linked worktree;
+one whose mark names a checkout that is not there, is bare, is no main checkout of its own, carries
+a mark itself or does not lend it its objects is refused, never taken for a main checkout.
+`list-worktree` lists it by its address, its `--json` saying `"kind": "repository"` of it and
+`"kind": "worktree"` of a linked one; delete-orchestrator and `delete-worktree <orchestrator>`
+count it among the worktrees below, never as a directory git records nothing at.
+
 ### What deleting one refuses
 
 Without `--force`, every check runs before anything is touched. A refusal deletes nothing of the

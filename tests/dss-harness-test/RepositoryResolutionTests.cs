@@ -23,7 +23,7 @@ public sealed class RepositoryLocatorTests
         _git.GetRepositoryRootAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<string?>(null));
 
-        Assert.Null(await new RepositoryLocator(_git).LocateAsync(Main, TestContext.Current.CancellationToken));
+        Assert.Null(await new RepositoryLocator(_git, Substitute.For<IFileSystem>(), new HostPlatform()).LocateAsync(Main, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -33,7 +33,7 @@ public sealed class RepositoryLocatorTests
         _git.GetMainWorktreeAsync(Worktree, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<GitWorktree?>(new GitWorktree(Main, "abc", "main", IsMain: true, IsBare: false)));
 
-        var layout = await new RepositoryLocator(_git).LocateAsync(Worktree, TestContext.Current.CancellationToken);
+        var layout = await new RepositoryLocator(_git, Substitute.For<IFileSystem>(), new HostPlatform()).LocateAsync(Worktree, TestContext.Current.CancellationToken);
 
         Assert.NotNull(layout);
         Assert.Equal(Worktree, layout.RepositoryRoot);
@@ -49,7 +49,7 @@ public sealed class RepositoryLocatorTests
         _git.GetMainWorktreeAsync(Worktree, Arg.Any<CancellationToken>()).Returns(Task.FromResult<GitWorktree?>(null));
 
         var exception = await Assert.ThrowsAsync<HarnessException>(() =>
-            new RepositoryLocator(_git).LocateAsync(Worktree, TestContext.Current.CancellationToken));
+            new RepositoryLocator(_git, Substitute.For<IFileSystem>(), new HostPlatform()).LocateAsync(Worktree, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, exception.ExitCode);
     }
@@ -63,7 +63,7 @@ public sealed class RepositoryLocatorTests
             .Returns(Task.FromResult<GitWorktree?>(new GitWorktree(Main, null, null, IsMain: true, IsBare: true)));
 
         var exception = await Assert.ThrowsAsync<HarnessException>(() =>
-            new RepositoryLocator(_git).LocateAsync(Worktree, TestContext.Current.CancellationToken));
+            new RepositoryLocator(_git, Substitute.For<IFileSystem>(), new HostPlatform()).LocateAsync(Worktree, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.Refused, exception.ExitCode);
         Assert.Contains("bare", exception.Message, StringComparison.Ordinal);

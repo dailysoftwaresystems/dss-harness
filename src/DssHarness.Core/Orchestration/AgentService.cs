@@ -1757,7 +1757,7 @@ public sealed class AgentService(
                 + "removes. Nothing was written or removed: run it from the main tree.");
         }
 
-        var standing = await StandingAsync(context, path, cancellationToken).ConfigureAwait(false);
+        var standing = await StandingAsync(context, record, path, cancellationToken).ConfigureAwait(false);
         var target = new Target(context, layout, record, WorktreeAddress.Nested(record.Orchestrator, record.Name), path, standing);
 
         return record.State == AgentStates.Closed
@@ -3275,7 +3275,7 @@ public sealed class AgentService(
             return new AgentAt(CommandOutcome.Refused(moved));
         }
 
-        var standing = await StandingAsync(context, path, cancellationToken).ConfigureAwait(false);
+        var standing = await StandingAsync(context, record, path, cancellationToken).ConfigureAwait(false);
 
         if (standing.Kind != Standing.Registered)
         {
@@ -3309,7 +3309,7 @@ public sealed class AgentService(
     }
 
     /// <summary>What the directory at an agent's worktree path is to git; a path that cannot be looked at is never taken for one that is gone.</summary>
-    private async Task<WorktreeStanding> StandingAsync(HarnessContext context, string path, CancellationToken cancellationToken)
+    private async Task<WorktreeStanding> StandingAsync(HarnessContext context, AgentRecord record, string path, CancellationToken cancellationToken)
     {
         try
         {
@@ -3332,7 +3332,7 @@ public sealed class AgentService(
 
         try
         {
-            identity = await Inspector().IdentifyAsync(context.Layout.MainCheckoutRoot, path, cancellationToken).ConfigureAwait(false);
+            identity = await Inspector().IdentifyAsync(context.Layout.MainCheckoutRoot, WorktreeAddress.Nested(record.Orchestrator, record.Name), path, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
         {

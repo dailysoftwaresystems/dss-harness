@@ -2291,7 +2291,11 @@ public static class HelpTopics
             builder,
             "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, "
             + "made by create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, "
-            + "and delete-worktree takes that address. The directory named for an orchestrator is never deleted as one while "
+            + "and delete-worktree takes that address. One that is a repository of its own, whose own .git/config carries the "
+            + "mark naming this main checkout and that address and which borrows this checkout's objects, is that agent's "
+            + "worktree as well: a command run inside it finds this main checkout, one whose mark names a checkout that does not "
+            + $"lend it its objects is refused ({HarnessExit.Refused}), and list-worktree --json says \"kind\": \"repository\" of it "
+            + "and \"kind\": \"worktree\" of a linked one. The directory named for an orchestrator is never deleted as one while "
             + "worktrees are below it, or a directory holding a .git of its own that git records no worktree at - what a "
             + "removal left, a person's to look in and delete, or a worker an earlier version of this tool kept beside an "
             + $"agent's worktree, which clean --former-workers removes - --force or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git "

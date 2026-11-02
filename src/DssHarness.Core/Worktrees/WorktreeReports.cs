@@ -196,6 +196,7 @@ public static class WorktreeReports
             ["worktrees"] = new JsonArray([.. worktrees.Select(worktree => (JsonNode)new JsonObject
             {
                 ["name"] = worktree.Name,
+                ["kind"] = worktree.Kind,
                 ["baseCommit"] = worktree.BaseCommit,
                 ["path"] = worktree.Path,
                 ["copies"] = Copies(copies.OfListed.GetValueOrDefault(worktree.Name) ?? []),
