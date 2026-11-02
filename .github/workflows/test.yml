@@ -93,7 +93,9 @@ jobs:
       - name: Isolation
         # The tests of an agent's isolation run the system's bubblewrap for real, and here a runner lacking it fails them
         # (see the variable the Test step sets) rather than skipping them green. No Linux image carries it, and where
-        # Ubuntu restricts unprivileged user namespaces the AppArmor profile for it is loaded - the remedy the tool names.
+        # Ubuntu restricts unprivileged user namespaces the AppArmor profile for it is loaded - the remedy the tool names:
+        # in place where the apparmor package ships it there (Ubuntu 25.04 and later), copied first from the
+        # apparmor-profiles package's extra profiles where it does not (Ubuntu 24.04).
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -102,9 +104,14 @@ jobs:
           sudo apt-get install --yes bubblewrap
 
           if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
-            sudo apt-get install --yes apparmor-profiles
-            sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/
-            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+            profile=/etc/apparmor.d/bwrap-userns-restrict
+
+            if [ ! -f "$profile" ]; then
+              sudo apt-get install --yes apparmor-profiles
+              sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/
+            fi
+
+            sudo apparmor_parser -r "$profile"
           fi
 
       - name: Test
