@@ -189,6 +189,48 @@ public sealed class BubblewrapTests
     }
 
     /// <summary>
+    /// A run's commit and push, whose hooks write the main checkout's git directory whole, lead no git elsewhere: a command
+    /// inside neither rewrites nor removes its commondir - made naming that directory itself, which git takes as no pointer
+    /// - makes no worktree's git directory under its worktrees/, and rewrites no .git file of a linked worktree standing in
+    /// the main checkout; and git still stages and reads its status there from inside.
+    /// </summary>
+    [Fact]
+    public async Task TheHooksInTheMainCheckout_LeadNoGitElsewhere_AndGitStillWorksThere()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var inside = Path.Combine(kit.Main, "inside");
+        await kit.Harness.RunGitAsync(kit.Main, ["worktree", "add", "--quiet", inside, "-b", "inside"], Token);
+        var config = new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        using var isolated = await new Core.Agents.Isolation.AgentIsolation(platform, kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path))
+            .ForExecutionAsync(config, Core.Agents.Isolation.ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
+        var git = Path.Combine(kit.Main, ".git");
+        var commondir = Path.Combine(git, Core.Agents.Isolation.AgentIsolation.CommonDirectoryFile);
+        var planted = Path.Combine(git, "worktrees", "planted");
+        var dotGit = Path.Combine(inside, ".git");
+        var pointing = await File.ReadAllTextAsync(dotGit, Token);
+        await File.WriteAllTextAsync(Path.Combine(kit.Main, "made.txt"), "made", Token);
+
+        var rewritten = await RealIsolation.InsideAsync(isolated.ForProcess!, kit.Main, "/bin/sh", "-c", "echo /elsewhere > \"$1\"", "sh", commondir);
+        var removed = await RealIsolation.InsideAsync(isolated.ForProcess!, kit.Main, "/bin/sh", "-c", "rm -f \"$1\"", "sh", commondir);
+        var made = await RealIsolation.InsideAsync(isolated.ForProcess!, kit.Main, "/bin/sh", "-c", "mkdir \"$1\"", "sh", planted);
+        var pointed = await RealIsolation.InsideAsync(isolated.ForProcess!, kit.Main, "/bin/sh", "-c", "echo gitdir: /elsewhere > \"$1\"", "sh", dotGit);
+        var staged = await RealIsolation.InsideAsync(isolated.ForProcess!, kit.Main, "git", "add", "made.txt");
+        var status = await RealIsolation.InsideAsync(isolated.ForProcess!, kit.Main, "git", "status", "--porcelain");
+
+        Assert.All(new[] { rewritten, removed, made, pointed }, refused => Assert.NotEqual(0, refused.ExitCode));
+        Assert.Equal(
+            (Core.Agents.Isolation.AgentIsolation.ItsOwnDirectory, false, pointing),
+            (await File.ReadAllTextAsync(commondir, Token), Directory.Exists(planted), await File.ReadAllTextAsync(dotGit, Token)));
+        Assert.Equal((0, 0), (staged.ExitCode, status.ExitCode));
+        Assert.Equal(["made.txt"], (await kit.Harness.GitClient.RunAsync(kit.Main, ["diff", "--cached", "--name-only"], cancellationToken: Token)).OutputLines);
+        Assert.Null(await isolated.AfterwardAsync(Token));
+    }
+
+    /// <summary>
     /// The probe refuses a bubblewrap this user could replace - the program, or a directory above it, writable to them - for
     /// the tool runs it outside before anything is isolated: no mechanism, saying which and the remedy, and nothing asked.
     /// </summary>

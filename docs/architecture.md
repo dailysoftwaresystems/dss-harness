@@ -2345,14 +2345,19 @@ declared caches. An agent that may run no command - the reporter - needs none (`
 nothing is probed. Otherwise the platform's mechanism, proved once per process (`IIsolationPlatform`), and a profile
 of the ground, the machine read-only: written, the ground's writable roots, what git writes of each of its trees that
 is itself one of them and its repository's top level (`AgentIsolation.GitPlacesAsync`: `rev-parse
---path-format=absolute --git-dir --git-common-dir --git-path hooks --show-toplevel`, git 2.31 or newer, so a leg's
-copy that is no repository of its own writes nothing of the repository above it), by the tree's kind
+--path-format=absolute --git-dir --git-common-dir --git-path hooks --show-toplevel --show-ref-format`, git 2.31 or
+newer, so a leg's copy that is no repository of its own writes nothing of the repository above it; a git before 2.45
+answers the last option back as a line, and opens no reftable repository at all), by the tree's kind
 (`AgentIsolation.GitWritten`): a linked worktree's own git directory and the common directory's `objects/`, `refs/`,
-`logs/` (made where git has not) and `lfs/` where there is one, never the common directory itself, where a
+`reftable/` where the repository keeps its refs there (`GitPlaces.Reftables`; its `refs/` is then a stub git writes no
+ref in), `logs/` (made where git has not) and `lfs/` where there is one, never the common directory itself, where a
 `commondir` made would lead every git to another repository's own files, so a shallow repository's fetch, a rewrite
 of `packed-refs` and `git gc` fail there; a main checkout's `.git` whole, for git makes its lock files directly in
-it, which no rule at a path grants one name at a time - so `git add`, commit and fetch write the objects, the index
-and the refs - the launch's own temporary directory under the isolation's own (`IsolationCaches.Root`, then `tmp/`;
+it, which no rule at a path grants one name at a time, but its `commondir` and its `worktrees/`, sealed below - so
+`git add`, commit and fetch write the objects, the index and the refs, while `git worktree add`, `move`, `remove` and
+`prune` and a `git gc` that expires another worktree's reflog fail there. The refs so written are the repository's
+own, every branch, tag, stash and remote-tracking ref and their reflogs; the push step sends the commit the run's
+commit steps recorded, never what the branch names later - the launch's own temporary directory under the isolation's own (`IsolationCaches.Root`, then `tmp/`;
 none where the mechanism gives one, `OwnTemp`) and the declared tool caches (`IsolationCaches.Declared`, each variable
 pointed into `caches/`; a cache is code a later build runs, so the user's own stay read-only; on Linux Playwright's
 browsers, which the moved `XDG_CACHE_HOME` would hide, named where the user has them, `IsolationCaches.Installed`);
@@ -2362,7 +2367,13 @@ the claude-code client's logins - with `~/.claude.json` beside `~/.claude`, the 
 read again (`Reopened`); written by nobody, git's code-running files and its pointers to its own directories and to
 other content as git names them (the hooks git runs and the common directory's own `hooks/`, which git runs again once
 `core.hooksPath` is gone; the common directory's `config`, `config.worktree`, `info/`, `refs/replace/` and
-`objects/info/`; each linked worktree's `config.worktree`, `commondir` and `gitdir`; a worktree's `.git` file; every
+`objects/info/`; its own `commondir` (`AgentIsolation.CommonDirectoryFile`), made where a main checkout's `.git`
+holds none naming that directory itself (`AgentIsolation.ItsOwnDirectory`, `.`), which git takes as no pointer while
+an empty one it refuses, so the one file of a main checkout's that would lead every git elsewhere is held as every
+other place is; its `worktrees/`, so a main checkout's work makes no worktree's git directory and writes no other's;
+each linked worktree's `config.worktree`, `commondir` and `gitdir`; every linked worktree's `.git` file, the tree's
+own and each other `git worktree list` names, which a ground writing the directory it stands in - a worktree a person
+or another tool made inside the main checkout - would otherwise point at a repository of its own; every
 git directory's `modules/` whole, the common one's and each linked worktree's, where git keeps a linked worktree's own),
 every configuration file git reads there (`git config --list --show-origin`) and every file one includes, whether its
 condition holds now or not (`GitPlaces.Includes`, `AgentIsolation.IncludeTargets`, an inactive one read with `git
@@ -2374,11 +2385,13 @@ whose holder is written and each writable root itself, which no command renames 
 path, so a directory above a guarded place moved away would take the place out from under its rule and leave its name
 free to make again - a `.git` moved aside and a new one with hooks of the agent's, run by the tool's own git outside.
 Every place is ruled at its real spelling. A place not there inside a written place and under no guarded one is made
-empty first, so no command makes it inside and has it read or run outside later; a state file never is
-(`HarnessLayout.StateFileNames`), for the tool reads one as meaning something, and the words policy alone guards it. A
-launch has no isolation, said, where its places cannot be held: a git that cannot say where a tree keeps its files
-(`AgentIsolation.Unwhole`), a main checkout's `.git` holding a pointer to another repository's own files
-(`AgentIsolation.GitPointers`), which git's answers there would follow, a file git's configuration includes that is
+first - empty, but a `commondir`, made naming its own directory - so no command makes it inside and has it read or
+run outside later; a state file never is (`HarnessLayout.StateFileNames`), for the tool reads one as meaning
+something, and the words policy alone guards it. A launch has no isolation, said, where its places cannot be held: a
+git that cannot say where a tree keeps its files (`AgentIsolation.Unwhole`) or list its repository's replacements, a
+main checkout's `.git` holding a `commondir` that leads anywhere but to itself (`AgentIsolation.LeadsToItself`, read
+as git reads it, never through a link and never past a line's worth), which git's answers there would follow - a
+`gitdir` there git never follows from a main checkout, so it holds nothing back - a file git's configuration includes that is
 not there inside a written place, which a command could make, a link inside a written place on the way to a guarded
 one (`AgentIsolation.LinkOnTheWay`), which a command could replace with one leading elsewhere, or, under a mechanism
 whose rules hold the one spelling
@@ -2402,13 +2415,22 @@ against its HEAD, never by asking its own git about its work tree, which would r
 its clean filters among it: a repository an agent made in its tree and put in the index is such a submodule, its
 configuration the agent's. A default in the configuration would not hold: a `.gitmodules` file's `ignore`, a file of
 the tree, outranks it. The repository's configuration is otherwise read as git reads it, its filters among it, which is
-why every configuration file is written by nobody. What the work made in the trees' git directories is looked at once
-it has run under a mechanism, against what was there as the profile was built (`IsolationDecision.Afterward`, the held
-decision's `After`): a pointer made in a common directory or a linked worktree's git directory under it, or a
-replacement a `packed-refs` came to name - which a main checkout's `.git`, written whole, could take while its
-`refs/replace/` is sealed, and the user's own git, an editor or a prompt started outside would follow - ends what
-asked: `AgentRunner` fails the launch, `LegRunService` the leg, `CommitStepRunner` and `PushStepRunner` the step after
-git's own work, each naming it and the remedy.
+why every configuration file is written by nobody. What the work left in the git directories it wrote that no rule
+can hold is looked at once it has run under a mechanism, however it ended, against what was there before it started
+(`IsolationDecision.AfterwardAsync`, the held decision's `After`, over the trees the ground writes): the state of an
+operation under way (`AgentIsolation.OperationState`: `rebase-merge/`, `rebase-apply/`, `sequencer/`), which no place
+made empty can stand for - git reads an empty one as an operation under way - made or changed in a tree's own git
+directory, each file read for its hash never through a link (`UnfollowedFiles`) and never past 64 MiB, so a `git
+rebase --continue` outside, the user's or an editor's, would run each `exec` line its todo holds; or a replacement made
+or moved in a repository whose refs it wrote, as `git for-each-ref refs/replace/` lists them - loose, in `packed-refs`
+or in a reftable alike, the tool reading no ref file the work wrote, and a ref store that holds git up answered within
+`AgentIsolation.AfterwardLimit` as unread - which every git started outside would read in an object's place. Either
+ends what asked: `AgentRunner` fails the launch, `LegRunService` the leg, `CommitStepRunner` and `PushStepRunner` the
+step after git's own work, each naming it and the remedy - remove the state, never continue or abort it, for an abort
+puts the branch where the state says. A worktree added while the work ran - by the tool beside a step, or by a person -
+is none of it: no ground writes a worktree's git directory but its own. The user's own git, an editor or a prompt
+started outside read the repository as it stands - the refs and objects the work wrote, and a repository it made
+inside its tree, whose configuration git started in that directory runs as any repository's.
 `agentPolicy.isolation` (`AgentIsolationMode`: `required` where nothing is said, any other word than the two a
 problem of the configuration) turns no mechanism into the launch's refusal (`LaunchIsolation.Refusal`: a step ends
 failed, 14; the advisor's advice is not obtained; `run-side-task` exits 14 having started nothing) - every mode but
@@ -2847,8 +2869,11 @@ branch the run started on (`FlowRunPlace.OffItsBranch`, over `FlowRunContext.Bra
 and the pull request apply), every fold upstream settled (`FoldOwed.Unsettled`), an empty index, each path's digest and
 no path to stage the index marks assume-unchanged or skip-worktree checked before anything is
 staged; the staged set written to the ledger (`FlowCommitEntry`) before `IGitPublisher` stages it by explicit path and
-commits once, then held to what the commit changes against its parent - one that took more, or left a path of the set
-out, is left for a person and kept beside the set (`FlowCommitStray`) - and marked committed in it and in each fold path
+commits once, then held over the commit the branch named before it: its parents, as its own object names them
+(`IGitClient.ParentsOfAsync`, `git cat-file commit`, which no graft or shallow boundary stands in for), that commit
+alone - a hook could move the branch to a commit of its own, standing on one that carries anything - and what it
+changes against that commit the set alone; one that stands elsewhere, took more, or left a path of the set out, is
+left for a person and kept beside the set (`FlowCommitStray`, where it took more or less) - and marked committed in it and in each fold path
 it took (`FlowFoldPath.Committed`); a path git ignores marked `Ignored` and answered under `ignored`
 (`FoldLedger.IgnoredOf`); and a set an attempt before left staged settled first, committed only where the tree holds
 what it staged. Whether HEAD holds a fold's path as the tree does is one answer, `FoldLedger.DifferingAsync` - the blob
@@ -2866,7 +2891,10 @@ refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targe
 `OrchestrationRules.AgentNameOrder`, each claimed on its own tree (`FlowClaims.Of`), retried by its own count and ended
 on its own. `PushStepRunner` and `PullRequestStepRunner` read the main checkout as a run's start does (`FlowCheckout`),
 each refused where it is not on the run's branch (`FlowRunPlace.OffItsBranch`):
-the push sends HEAD to its branch on the step's remote, else `FlowCheckout.Remote` - one, which the definition's check
+the push sends the commit the run's commit steps recorded last in its ledger (`OrchestrationStore.ReadFolds`, the last
+`FlowCommitEntry.Committed` entry's `Sha`), else the one the run started on (`FlowRunPlace.StartCommit`) - never what
+HEAD names by then, which a hook or a build working in the main checkout's git directory, written whole, could have
+moved - to the main checkout's branch on the step's remote, else `FlowCheckout.Remote` - one, which the definition's check
 holds every push step that names a remote to - through `IGitPublisher.PushAsync` -
 `<sha>:refs/heads/<branch>` with `--porcelain`, never forced, its line read for whether the branch moved; the pull
 request is found - among those gh lists from the branch's name, never one from another repository (`isCrossRepository`)

@@ -920,18 +920,25 @@ public sealed partial class HelpTests
         Assert.Contains(
             "Beneath the policy, the operating system isolates every command an agent runs, so a command spelt past a reader of "
                 + "words still reads no credential slot, and writes none of git's code-running files, none of its pointers to another "
-                + "repository and none of the tool's state - what it writes is the work itself, whose limits are said below.",
+                + "repository and none of the tool's state; what it leaves that git outside would go on with as it lies - an "
+                + "operation's state, a replacement - fails what ran once it has, and the rest it writes is the work itself, whose "
+                + "limits are said below.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "Written are the agent's writable roots - its worktree, its work directory - what git writes of a tree it writes, by "
                 + "the tree's kind: for a linked worktree its own git directory and the common directory's objects/, refs/ and logs/ "
-                + "(and Git LFS's lfs/ where there is one), never the common directory itself, where a file made - a commondir - would "
-                + "lead every git to another repository's own files; for a main checkout its .git whole, for git makes its lock files "
-                + "directly in it - so git add, commit, fetch, rm and status write the objects, the index and the refs, while in a "
+                + "(with reftable/ where the repository keeps its refs in a reftable, and Git LFS's lfs/ where there is one), never "
+                + "the common directory itself, where a file made - a commondir - would lead every git to another repository's own "
+                + "files; for a main checkout its .git whole, for git makes its lock files directly in it, but its commondir and its "
+                + "worktrees/ - so git add, commit, fetch, rm and status write the objects, the index and the refs, while in a "
                 + "linked worktree what writes the common directory itself fails: a shallow repository's fetch, a rewrite of "
-                + "packed-refs, git gc; a temporary directory of the launch's own, named by TMPDIR - on Linux the system's /tmp inside, "
-                + "so nothing another process keeps there is reached, on Windows MXC's own; and the declared tool caches,",
+                + "packed-refs, git gc; and in a main checkout what writes another worktree's git directory: git worktree add, move, "
+                + "remove and prune, git gc where there are linked worktrees. The refs written are the repository's own - every "
+                + "branch, tag, stash and remote-tracking ref, and their reflogs - which a command spelt past the words policy can "
+                + "move; a run's push sends the commit its commit step recorded, never what the branch names later. Written too are a "
+                + "temporary directory of the launch's own, named by TMPDIR - on Linux the system's /tmp inside, so nothing another "
+                + "process keeps there is reached, on Windows MXC's own; and the declared tool caches,",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -957,9 +964,12 @@ public sealed partial class HelpTests
                 + "directories and to other content: the hooks git runs and the common directory's hooks/ beside them, which git runs "
                 + "again once core.hooksPath is gone; the common directory's config, config.worktree and info/; its refs/replace/ and "
                 + "objects/info/, whose replacements and alternates would put other content in place of what every checkout reads; "
-                + "each linked worktree's config.worktree, commondir and gitdir; a worktree's .git file; and every git directory's "
-                + "modules/ whole - the common one's and each linked worktree's - which holds the submodules' own git directories, so "
-                + "a submodule's git fails inside. Written by nobody too are every configuration file git says it reads there (git "
+                + "its own commondir - made, where a main checkout's .git holds none, naming that directory itself "
+                + $"({DssHarness.Core.Agents.Isolation.AgentIsolation.ItsOwnDirectory}), which git takes as no pointer - and its "
+                + "worktrees/; each linked worktree's config.worktree, commondir and gitdir; every linked worktree's .git file, the "
+                + "agent's own and every other git lists; and every git directory's modules/ whole - the common one's and each linked "
+                + "worktree's - which holds the submodules' own git directories, so a submodule's git fails inside. Written by nobody "
+                + "too are every configuration file git says it reads there (git "
                 + "config --show-origin), every file one includes whether its condition holds now or not - an onbranch: a later "
                 + "checkout makes true among them -",
             prose,
@@ -969,20 +979,29 @@ public sealed partial class HelpTests
                 + "a place moved away would take its rule with it and leave its name free to be made again, and a root put back as a "
                 + "link would lead the next launch's rules elsewhere. A launch has no isolation - which the mode below turns into a "
                 + "refusal or a notice - where its places cannot be held: git cannot say where a tree keeps its files (git 2.31 or "
-                + $"newer answers), a main checkout's .git holds a {string.Join(" or ", DssHarness.Core.Agents.Isolation.AgentIsolation.GitPointers)} "
-                + "- a pointer to another repository's own files, which no main checkout's holds - a file git's configuration "
-                + "includes is not there inside a place the agent writes, where a command could make it (an empty file includes "
-                + "nothing), a link stands where the agent writes on the way to a guarded place, or, under bubblewrap, a guarded place "
-                + "stands on a file system that finds a name in any case - a Windows drive under /mnt - where a mount holds one "
-                + "spelling alone. Once a launch or one of the tool's executions has run under a mechanism, the tool looks in the "
-                + "trees' git directories before anything of its own goes on over them: a pointer made there while it ran, or a "
-                + "replacement a packed-refs came to name - which a main checkout's .git, written whole, could take, and every git "
-                + "started outside would follow - fails the step, the leg, the commit or the push, naming it and the remedy. Every git "
+                + "newer answers) or list its repository's replacements, a main checkout's .git holds a "
+                + $"{DssHarness.Core.Agents.Isolation.AgentIsolation.CommonDirectoryFile} leading anywhere but to itself - to another "
+                + "repository's own files - a file git's configuration includes is not there inside a place the agent writes, where a "
+                + "command could make it (an empty file includes nothing), a link stands where the agent writes on the way to a "
+                + "guarded place, or, under bubblewrap, a guarded place stands on a file system that finds a name in any case - a "
+                + "Windows drive under /mnt - where a mount holds one spelling alone. Once a launch or one of the tool's executions has "
+                + "run under a mechanism, however it ended, the tool looks at what no rule could hold before anything of its own goes "
+                + "on over the trees: the state of an operation under way - "
+                + $"{string.Join(", ", DssHarness.Core.Agents.Isolation.AgentIsolation.OperationState.Select(name => name + "/"))} - "
+                + "made or changed in a tree's own git directory it wrote, which git's next continue outside, the user's or an "
+                + "editor's, goes on with as it lies, running each exec line its todo holds; or a replacement made or moved in a "
+                + "repository whose refs it wrote, as git lists them whatever keeps them - loose, packed-refs or a reftable - which "
+                + "every git started outside would read in an object's place. Either fails the step, the leg, the commit or the push, "
+                + "naming it and the remedy - remove the state, never continue or abort it, for an abort puts the branch where the "
+                + "state says - as does a git that cannot list the replacements within 1 minute. Every git "
                 + "of this tool's own runs with no file-system monitor, no object replaced "
                 + $"({DssHarness.Core.Git.GitOwnSettings.NoReplaceVariable}=1) and, in a tree an isolated agent or execution works "
                 + "over - a worktree or the main checkout - with the git directories git named before it ran (GIT_DIR, "
                 + "GIT_COMMON_DIR), whatever the tree's own files say later; otherwise it reads the repository's configuration as git "
-                + "does, its filters among it, which is why every configuration file is written by nobody.",
+                + "does, its filters among it, which is why every configuration file is written by nobody. The user's own git, an "
+                + "editor and a prompt read the repository as it stands: the refs and objects the work wrote, an operation's state it "
+                + "left until a person removes it, and a repository it made inside its tree, whose own configuration - an fsmonitor, a "
+                + "filter - git started in that directory reads and runs, as it does any repository's.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1076,8 +1095,11 @@ public sealed partial class HelpTests
                 + "and what its anchors cost, or why there was none. Where it ends: the machine stays readable as the user reads it - "
                 + "their ssh keys and every credential outside the slots among it, and on macOS the login keychain through the "
                 + "system's security service - the network is theirs, and what no rule at a path reaches - a hard link made before the "
-                + "launch, another path bound to the same files - is reached. git's object store, and Git LFS's, are written as git "
-                + "needs them, and git's checkout reads an object as it lies without hashing it again, so a command can put other "
+                + "launch, another path bound to the same files - is reached. git's refs and object store, and Git LFS's, are written "
+                + "as git needs them - a linked worktree's agent writes the refs and objects of the common directory it shares with "
+                + "the main checkout and every other worktree, a main checkout's its own - and only a repository of the agent's own "
+                + "would keep them apart: so a command can move any branch, tag, stash or remote-tracking ref, which a person's "
+                + "checkout outside then takes, and, as git's checkout reads an object as it lies without hashing it again, put other "
                 + "content under a name the store already holds, which a checkout outside then writes.",
             prose,
             StringComparison.Ordinal);
@@ -1181,9 +1203,12 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Git.GitDirectoryPins),
             nameof(DssHarness.Core.Git.GitHooks),
             $"{nameof(DssHarness.Core.Agents.Isolation.ClaudeCodeDirectories)}.{nameof(DssHarness.Core.Agents.Isolation.ClaudeCodeDirectories.Of)}",
-            $"{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation.GitPointers)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation.CommonDirectoryFile)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation.ItsOwnDirectory)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation.OperationState)}",
             $"{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.AgentIsolation.IncludeTargets)}",
-            $"{nameof(DssHarness.Core.Agents.Isolation.IsolationDecision)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationDecision.Afterward)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.IsolationDecision)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationDecision.AfterwardAsync)}",
+            $"{nameof(DssHarness.Core.Git.IGitClient)}.{nameof(DssHarness.Core.Git.IGitClient.ParentsOfAsync)}",
             $"{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches.Installed)}",
             $"{nameof(DssHarness.Core.Agents.Isolation.ExecutionGround)}.{nameof(DssHarness.Core.Agents.Isolation.ExecutionGround.ReachesSshAgent)}",
             $"{nameof(DssHarness.Core.Git.GitSsh)}.{nameof(DssHarness.Core.Git.GitSsh.PushesOverSshAsync)}",
@@ -4794,8 +4819,10 @@ public sealed partial class HelpTests
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The commit is held to the set, by what it changes against its parent: one that took more - a hook staged another "
-                + $"file - or left a path of the set out fails the step ({HarnessExit.CommandFailed}) naming each, and is left as it is "
+            "The commit is held to the set over the commit the branch named before it: one that stands on anything but that commit "
+                + "alone - a hook moved the branch to a commit of its own, its parent carrying anything - took more against it - a "
+                + "hook staged another file - or left a path of the set out fails the step "
+                + $"({HarnessExit.CommandFailed}) naming each, and is left as it is "
                 + "for a person to keep or undo, the set staged in the ledger beside it. A set an attempt before left staged is "
                 + "settled first: committed where HEAD moved and holds each of its paths as the set staged it, else unstaged and "
                 + "staged again whole. It answers committed, sha, paths and ignored - each path its folds changed that git ignores, "
@@ -4829,15 +4856,17 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "leftover", "notRun", "preExisting", "ran", "red"]);
         Assert.Contains(
-            "push pushes the commit the main checkout's HEAD names to the branch of its name on a remote - the step's remote, else "
+            "push pushes the commit the run's commit steps recorded last, else the one the run started on - never what the branch "
+                + "names by then, which a hook or a build working in the main checkout could have moved - to the branch of the name "
+                + "the main checkout is on, on a remote - the step's remote, else "
                 + "the one the run's branch goes to (the push step's, else the one the branch tracks, else origin, else the only one) - "
                 + "as a fast-forward and never forced, and answers pushed",
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(
             "Every push step that names a remote names the same one, the remote the run's branch goes to: a definition whose push "
-                + "steps name two is refused. HEAD detached, the main checkout on another branch than the run started on, a branch "
-                + "with no commit yet, no remote it can name and one the repository does not have each refuse it",
+                + "steps name two is refused. HEAD detached, the main checkout on another branch than the run started on, a run that "
+                + "made no commit and started on none, no remote it can name and one the repository does not have each refuse it",
             workflows,
             StringComparison.Ordinal);
         Assert.Contains(

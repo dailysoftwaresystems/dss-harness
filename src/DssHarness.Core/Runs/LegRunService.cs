@@ -1256,8 +1256,9 @@ public sealed class LegRunService(
 
         entry = setUp is null ? entry : entry with { DeveloperEnvironment = setUp.Fact };
 
-        // What the leg's work made in the trees' git directories that no git may go on over fails the leg, saying it.
-        if (held?.Afterward() is { } made)
+        // What the leg's work left in the trees' git directories that no git may go on over fails the leg, saying it - looked
+        // at however the leg ended, a stop among the ways, within the look's own bound.
+        if (held is not null && await held.AfterwardAsync(CancellationToken.None).ConfigureAwait(false) is { } made)
         {
             entry = entry with { Verdict = LegVerdict.Failed, Detail = made };
         }

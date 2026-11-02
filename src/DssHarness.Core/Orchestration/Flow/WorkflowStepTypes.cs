@@ -313,7 +313,7 @@ public static class WorkflowStepTypes
             [new("remote", "the remote it pushes to; absent, the one the run's branch goes to"), new("checkpoint", "a push made before the run's end, which runs only where the workflow says pushCheckpoints")],
             [],
             null,
-            "PushStepRunner: FlowCheckout, IGitPublisher.PushAsync over IGitClient.RunWithHooksAsync, IAgentIsolation.ForExecutionAsync",
+            "PushStepRunner: FlowCheckout, OrchestrationStore.ReadFolds, IGitPublisher.PushAsync over IGitClient.RunWithHooksAsync, IAgentIsolation.ForExecutionAsync",
             ["the remote resource"],
             null,
             ObjectOf(("pushed", Flag), ("remote", Text), ("branch", Text), ("sha", Text), ("isolation", IsolationOutput))),

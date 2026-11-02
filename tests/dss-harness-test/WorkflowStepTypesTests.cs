@@ -40,7 +40,7 @@ public sealed class WorkflowStepTypesTests
                 ("ci-read", "CiReadStepRunner: ICiLegsService.CheckAsync over GhCiJobSource and GhProcess"),
                 ("ci-wait", "CiWaitStepRunner: ICiChecksService over GhCiJobSource and GhProcess, ICiLegsService.ClassifyRunAsync"),
                 ("commit", "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunWithinAsync and RunWithHooksAsync, IAgentIsolation.ForExecutionAsync"),
-                ("push", "PushStepRunner: FlowCheckout, IGitPublisher.PushAsync over IGitClient.RunWithHooksAsync, IAgentIsolation.ForExecutionAsync"),
+                ("push", "PushStepRunner: FlowCheckout, OrchestrationStore.ReadFolds, IGitPublisher.PushAsync over IGitClient.RunWithHooksAsync, IAgentIsolation.ForExecutionAsync"),
                 ("pull-request", "PullRequestStepRunner: FlowCheckout, IGitPublisher over GhProcess"),
                 ("pause", "the engine itself"),
             ],

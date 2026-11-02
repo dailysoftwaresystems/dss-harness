@@ -1342,6 +1342,28 @@ public sealed partial class GitClient(
             $"Could not resolve '{reference}': {result.FailureMessage}");
     }
 
+    public async Task<IReadOnlyList<string>> ParentsOfAsync(
+        string directory,
+        string commit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+
+        // The object itself, read raw: its header's parent lines, up to the blank line that ends it. rev-list and rev-parse
+        // read a graft or a shallow boundary in its place, and both are files a git directory written whole could hold.
+        var result = await RunAsync(directory, ["cat-file", "commit", "--end-of-options", commit], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (!result.Succeeded)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"git could not read the commit {commit}: {result.FailureMessage}");
+        }
+
+        return [.. result.StandardOutput.Split('\n')
+            .TakeWhile(line => line.Length > 0)
+            .Where(line => line.StartsWith("parent ", StringComparison.Ordinal))
+            .Select(line => line["parent ".Length..].Trim())];
+    }
+
     public async Task<string?> MergeBaseAsync(
         string directory,
         string first,

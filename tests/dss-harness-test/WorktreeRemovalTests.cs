@@ -1411,6 +1411,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
             ? Task.FromException<string?>(new HarnessException(HarnessExit.CommandFailed, $"git could not resolve '{reference}': fatal: unable to read index"))
             : inner.ResolveCommitAsync(directory, reference, Token(cancellationToken)));
 
+    public Task<IReadOnlyList<string>> ParentsOfAsync(string directory, string commit, CancellationToken cancellationToken = default)
+        => Call(() => inner.ParentsOfAsync(directory, commit, Token(cancellationToken)));
+
     public Task<string?> MergeBaseAsync(string directory, string first, IReadOnlyList<string> others, CancellationToken cancellationToken = default)
         => Call(() => MergeBaseFailure is { } failure
             ? Task.FromException<string?>(failure)

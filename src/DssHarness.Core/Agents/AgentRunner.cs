@@ -150,8 +150,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
                 (var worked, thrown) = await WorkAsync(step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
 
-                // What the agent's commands made in the trees' git directories that no git may go on over fails the run.
-                if (step.Isolation?.Afterward() is { } made)
+                // What the agent's commands left in the trees' git directories that no git may go on over fails the run - looked
+                // at however the run ended, a stop among the ways, within the look's own bound.
+                if (step.Isolation is { } isolation && await isolation.AfterwardAsync(CancellationToken.None).ConfigureAwait(false) is { } made)
                 {
                     worked = worked.FailedFor(made);
                 }

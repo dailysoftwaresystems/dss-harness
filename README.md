@@ -909,8 +909,9 @@ side-task.
 
 Beneath the policy, the operating system isolates every command an agent runs, so a command spelt
 past a reader of words still reads no credential slot, and writes none of git's code-running files,
-none of its pointers to another repository and none of the tool's state - what it writes is the
-work itself, whose limits are said below. On Linux, WSL 2's included, the mechanism is the system's
+none of its pointers to another repository and none of the tool's state; what it leaves that git
+outside would go on with as it lies - an operation's state, a replacement - fails what ran once it
+has, and the rest it writes is the work itself, whose limits are said below. On Linux, WSL 2's included, the mechanism is the system's
 bubblewrap 0.8 or newer -
 the first `bwrap` in an absolute directory of the PATH outside the tree, none where the user could
 write it or a directory above it, for the tool runs it outside - on macOS the system's own sandbox,
@@ -922,13 +923,18 @@ so no child runs outside it for an instant.
 
 Inside it the machine is read-only. Written are the agent's writable roots - its worktree, its work
 directory - what git writes of a tree it writes, by the tree's kind: for a linked worktree its own
-git directory and the common directory's `objects/`, `refs/` and `logs/` (and Git LFS's `lfs/`
-where there is one), never the common directory itself, where a file made - a `commondir` - would
-lead every git to another repository's own files; for a main checkout its `.git` whole, for git makes
-its lock files directly in it - so `git add`, `commit`, `fetch`, `rm` and `status` write the objects,
-the index and the refs, while in a linked worktree what writes the common directory itself fails: a
-shallow repository's fetch, a rewrite of `packed-refs`, `git gc`; a temporary directory
-of the launch's own, named by `TMPDIR` - on Linux the system's `/tmp` inside, so nothing another
+git directory and the common directory's `objects/`, `refs/` and `logs/` (with `reftable/` where the
+repository keeps its refs in a reftable, and Git LFS's `lfs/` where there is one), never the common
+directory itself, where a file made - a `commondir` - would lead every git to another repository's
+own files; for a main checkout its `.git` whole, for git makes its lock files directly in it, but its
+`commondir` and its `worktrees/` - so `git add`, `commit`, `fetch`, `rm` and `status` write the
+objects, the index and the refs, while in a linked worktree what writes the common directory itself
+fails: a shallow repository's fetch, a rewrite of `packed-refs`, `git gc`; and in a main checkout
+what writes another worktree's git directory: `git worktree add`, `move`, `remove` and `prune`, `git
+gc` where there are linked worktrees. The refs written are the repository's own - every branch, tag,
+stash and remote-tracking ref, and their reflogs - which a command spelt past the words policy can
+move; a run's push sends the commit its commit step recorded, never what the branch names later.
+Written too are a temporary directory of the launch's own, named by `TMPDIR` - on Linux the system's `/tmp` inside, so nothing another
 process keeps there is reached, on Windows MXC's own; and the declared tool caches, each pointed by
 its variable into the isolation's own cache directory (`dssharness-isolation/caches` under
 `XDG_CACHE_HOME`, else `~/.cache` - `~/Library/Caches` on macOS - and under `LOCALAPPDATA` on
@@ -953,10 +959,12 @@ Written by nobody, inside what is written, are git's code-running files and its 
 directories and to other content: the hooks git runs and the common directory's `hooks/` beside them,
 which git runs again once `core.hooksPath` is gone; the common directory's `config`,
 `config.worktree` and `info/`; its `refs/replace/` and `objects/info/`, whose replacements and
-alternates would put other content in place of what every checkout reads; each linked worktree's
-`config.worktree`, `commondir` and `gitdir`; a worktree's `.git` file; and every git directory's
-`modules/` whole - the common one's and each linked worktree's - which holds the submodules' own git
-directories, so a submodule's git fails inside. Written by nobody too are every configuration file git
+alternates would put other content in place of what every checkout reads; its own `commondir` -
+made, where a main checkout's `.git` holds none, naming that directory itself (`.`), which git takes
+as no pointer - and its `worktrees/`; each linked worktree's `config.worktree`, `commondir` and
+`gitdir`; every linked worktree's `.git` file, the agent's own and every other git lists; and every
+git directory's `modules/` whole - the common one's and each linked worktree's - which holds the
+submodules' own git directories, so a submodule's git fails inside. Written by nobody too are every configuration file git
 says it reads there (`git config --show-origin`), every file one includes whether its condition holds
 now or not - an `onbranch:` a later checkout makes true among them - each tree's `.harness-config`,
 the tool's state and the launch's own directory. Each place not there inside a
@@ -967,17 +975,22 @@ no writable root itself, is renamed or removed - a place moved away would take i
 leave its name free to be made again, and a root put back as a link would lead the next launch's
 rules elsewhere. A launch has no isolation - which the mode below turns into a refusal or a notice -
 where its places cannot be held: git cannot say where a tree keeps its files (git 2.31 or newer
-answers), a main checkout's `.git` holds a `commondir` or `gitdir` - a pointer to another
-repository's own files, which no main checkout's holds - a file git's configuration includes is not
-there inside a place the agent writes, where a command could make it (an empty file includes
-nothing), a link stands where the agent writes on the way to a guarded place, or, under bubblewrap, a
-guarded place stands on a file system that finds a name in any case - a Windows drive under `/mnt` -
-where a mount holds one spelling alone. Once a launch or one of the tool's executions has run under a
-mechanism, the tool looks in the trees' git directories before anything of its own goes on over
-them: a `commondir` or `gitdir` made there while it ran, or a replacement a `packed-refs` came to
-name - which a main checkout's `.git`, written whole, could take, and every git started outside
-would follow - fails the step, the leg, the commit or the push, naming it and the remedy
-(`IsolationDecision.Afterward`). Every git of this tool's own runs with no file-system monitor
+answers) or list its repository's replacements, a main checkout's `.git` holds a `commondir`
+leading anywhere but to itself - to another repository's own files - a file git's configuration
+includes is not there inside a place the agent writes, where a command could make it (an empty file
+includes nothing), a link stands where the agent writes on the way to a guarded place, or, under
+bubblewrap, a guarded place stands on a file system that finds a name in any case - a Windows drive
+under `/mnt` - where a mount holds one spelling alone. Once a launch or one of the tool's executions
+has run under a mechanism, however it ended, the tool looks at what no rule could hold before
+anything of its own goes on over the trees: the state of an operation under way - `rebase-merge/`,
+`rebase-apply/`, `sequencer/` - made or changed in a tree's own git directory it wrote, which git's
+next continue outside, the user's or an editor's, goes on with as it lies, running each `exec` line
+its todo holds; or a replacement made or moved in a repository whose refs it wrote, as git lists them
+whatever keeps them - loose, `packed-refs` or a reftable - which every git started outside would read
+in an object's place. Either fails the step, the leg, the commit or the push, naming it and the
+remedy - remove the state, never continue or abort it, for an abort puts the branch where the state
+says - as does a git that cannot list the replacements within a minute
+(`IsolationDecision.AfterwardAsync`). Every git of this tool's own runs with no file-system monitor
 (`core.fsmonitor=false`), no object replaced (`GIT_NO_REPLACE_OBJECTS=1`) and, in a tree an isolated
 agent or execution works over - a worktree or the main checkout - with the git directories git
 named before it ran (`GIT_DIR`, `GIT_COMMON_DIR`), whatever the tree's own files say later
@@ -992,7 +1005,10 @@ its superproject's modules for its own, and names one whose repository is anywhe
 of its own in the work tree - as a change never looked into, which stops the deletion as any
 uncommitted change does. Otherwise a git of the tool's reads the repository's configuration as git
 does, its filters among it, which is why every configuration file is written by nobody. The user's
-own git, an editor and a prompt read the repository as it stands.
+own git, an editor and a prompt read the repository as it stands: the refs and objects the work
+wrote, an operation's state it left until a person removes it, and a repository it made inside its
+tree, whose own configuration - an fsmonitor, a filter - git started in that directory reads and
+runs, as it does any repository's.
 
 Under bubblewrap the child has a user namespace of its own that allows no further one
 (`--disable-userns`) and a process namespace with its own `/proc`, so no command reaches another
@@ -1075,9 +1091,13 @@ version - macOS's own for its sandbox, MXC's library's for its container - what 
 machine stays readable as the user reads it - their ssh keys and every credential outside the slots
 among it, and on macOS the login keychain through the system's security service - the network is
 theirs, and what no rule at a path reaches - a hard link made before the launch, another path bound
-to the same files - is reached. git's object store, and Git LFS's, are written as git needs them,
-and git's checkout reads an object as it lies without hashing it again, so a command can put other
-content under a name the store already holds, which a checkout outside then writes. This tool's verbs that
+to the same files - is reached. git's refs and object store, and Git LFS's, are written as git needs
+them - a linked worktree's agent writes the refs and objects of the common directory it shares with
+the main checkout and every other worktree, a main checkout's its own - and only a repository of the
+agent's own would keep them apart: so a command can move any branch, tag, stash or remote-tracking
+ref, which a person's checkout outside then takes, and, as git's checkout reads an object as it lies
+without hashing it again, put other content under a name the store already holds, which a checkout
+outside then writes. This tool's verbs that
 read a credential slot or write its state or install would fail inside it, so each is refused to
 every agent by name, a side-task's as well as a step's (`AgentPolicy.SlotOrStateVerbs`, listed by
 `help agent-clients`): `init`, `create-worktree`,
@@ -1645,16 +1665,19 @@ commits the folds upstream of it and no other work - each path they changed that
 its fold left there (a path edited or restored since, a path the index marks assume-unchanged or skip-worktree, the
 main checkout off the branch the run started on, or a fold upstream whose intent nobody settled, fails it, and nothing
 is staged), on an empty index, by explicit path, with the configuration's `commit.template` filled or the step's own
-message, the commit held to that set (one a hook made take more, or less, fails it, 20, left for a person) - answers the
+message, the commit held to that set over the commit the branch named before it (one a hook made take more, or less,
+or stand on anything but that commit alone, fails it, 20, left for a person) - answers the
 paths git ignores, which it never commits, and with nothing owed is done and runs no git - its commit and the
 repository's commit hooks run inside the isolation of the agents' work, answered as `isolation` (none here and `required`
 fails it, 14, nothing staged); any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
-checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`); `push`, which pushes the main checkout's
-HEAD to its branch on the remote the run's branch goes to (or the step's), a fast-forward never forced, and answers
-whether the branch moved, its push and the repository's push hooks inside the isolation of the agents' work, answered
-as `isolation` (a detached HEAD, the main checkout off the branch the run started on, or no remote it can name refuses
-it, 13; no isolation here under `required` fails it, 14; the remote refusing fails it, 20; push steps that name two
-remotes are refused); and
+checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`); `push`, which pushes the commit the
+run's commit steps recorded last, else the one the run started on - never what the branch names by then, which a hook
+or a build working in the main checkout could have moved - to the main checkout's branch on the remote the run's branch
+goes to (or the step's), a fast-forward never forced, and answers whether the branch moved, its push and the
+repository's push hooks inside the isolation of the agents' work, answered as `isolation` (a detached HEAD, the main
+checkout off the branch the run started on, a run that made no commit and started on none, or no remote it can name
+refuses it, 13; no isolation here under `required` fails it, 14; the remote refusing fails it, 20; push steps that name
+two remotes are refused); and
 `pull-request`, which opens the run's branch's pull request against its base - the step's, else the remote's default -
 on the repository the remote's address names, its body the workflow's file filled where the step starts, and answers an
 open one as it is (`created` false) so a step run again opens no second, and never one from a fork's branch of the same

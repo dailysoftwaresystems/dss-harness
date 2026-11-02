@@ -12,9 +12,10 @@ using NSubstitute;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The push and pull-request steps over a real repository: a push sends the main checkout's HEAD to its branch on the
-/// remote - the one the step names, else the one the run's branch goes to - never forced, answering whether the remote's
-/// branch moved, and refuses a detached HEAD and a remote it cannot name; a pull request of that branch is found where
+/// The push and pull-request steps over a real repository: a push sends the commit the run recorded, else the one it
+/// started on, to the main checkout's branch on the remote - the one the step names, else the one the run's branch goes
+/// to - never forced, answering whether the remote's branch moved, and refuses a detached HEAD, a run with no commit and a
+/// remote it cannot name; a pull request of that branch is found where
 /// one is open and opened where none is, on the repository the remote's address names, against the base the step names
 /// or the remote's default, its body written for the forge's tool to read - the forge itself scripted.
 /// </summary>
@@ -45,7 +46,7 @@ public sealed class PublishStepRunnerTests
         using var remote = new TempDirectory();
         var kit = await PushingToAsync(temp, remote);
 
-        var refused = await Push(kit, isolation: TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it")).RunAsync(Run(kit, PushStep()), Token);
+        var refused = await Push(kit, isolation: TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it")).RunAsync(await StartedHereAsync(kit, PushStep()), Token);
 
         Assert.Equal(
             (false, HarnessExit.ToolMissing, "'push' is refused: agentPolicy.isolation is \"required\" and bubblewrap is not here, so no hook of the repository's runs over the agents' work here; install it. Nothing was pushed."),
@@ -53,7 +54,7 @@ public sealed class PublishStepRunnerTests
         Assert.Equal(string.Empty, (await kit.Harness.RunGitAsync(remote.Path, ["for-each-ref", "refs/heads/work"], Token)).StandardOutput.Trim());
 
         var mechanism = new PassThroughMechanism();
-        var pushed = await Push(kit, isolation: TestIsolation.Under(mechanism)).RunAsync(Run(kit, PushStep()), Token);
+        var pushed = await Push(kit, isolation: TestIsolation.Under(mechanism)).RunAsync(await StartedHereAsync(kit, PushStep()), Token);
 
         Assert.True(pushed.Passed, pushed.Error);
         Assert.Single(mechanism.Profiles);
@@ -75,7 +76,7 @@ public sealed class PublishStepRunnerTests
         var made = "'x' was made while it ran";
         var local = TestIsolation.Under(new PassThroughMechanism(), () => made);
 
-        var pushed = await Push(kit, isolation: local).RunAsync(Run(kit, PushStep()), Token);
+        var pushed = await Push(kit, isolation: local).RunAsync(await StartedHereAsync(kit, PushStep()), Token);
 
         Assert.Equal(
             (false, HarnessExit.CommandFailed, $"'push' pushed {await HeadAsync(kit)} to origin's 'work', and {made}."),
@@ -83,43 +84,78 @@ public sealed class PublishStepRunnerTests
         Assert.False(Assert.Single(local.Executions).ReachesSshAgent);
 
         // Run again, the commit is there already, and the step says so.
-        var again = await Push(kit, isolation: TestIsolation.Under(new PassThroughMechanism(), () => made)).RunAsync(Run(kit, PushStep()), Token);
+        var again = await Push(kit, isolation: TestIsolation.Under(new PassThroughMechanism(), () => made)).RunAsync(await StartedHereAsync(kit, PushStep()), Token);
 
         Assert.Equal($"'push' found {await HeadAsync(kit)} already on origin's 'work', and {made}.", again.Error);
 
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "add", "far", "git@example.com:team/r.git"], Token);
         var far = TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it");
-        _ = await Push(kit, isolation: far).RunAsync(Run(kit, PushStep() with { Remote = "far" }), Token);
+        _ = await Push(kit, isolation: far).RunAsync(await StartedHereAsync(kit, PushStep() with { Remote = "far" }), Token);
 
         Assert.True(Assert.Single(far.Executions).ReachesSshAgent);
     }
 
     /// <summary>
-    /// A push sends the commit HEAD names to the branch of its name on the remote the run's branch goes to and answers
-    /// that it moved it; run again, it pushes what is pushed already and answers that it did not.
+    /// A push of a run that committed nothing sends the commit it started on to the branch of its name on the remote the
+    /// run's branch goes to and answers that it moved it; run again, it pushes what is pushed already and answers that it
+    /// did not; a commit the run's commit step recorded after it is a fast-forward the remote's branch moves on by.
     /// </summary>
     [Fact]
-    public async Task APush_SendsHeadToItsBranch_AndRunAgainMovesNothing()
+    public async Task APush_SendsWhatTheRunStartedOn_ThenWhatItCommitted_AndRunAgainMovesNothing()
     {
         using var temp = new TempDirectory();
         using var remote = new TempDirectory();
         var kit = await PushingToAsync(temp, remote);
+        var start = await HeadAsync(kit);
 
-        var first = await Push(kit).RunAsync(Run(kit, PushStep()), Token);
-        var again = await Push(kit).RunAsync(Run(kit, PushStep()), Token);
+        var first = await Push(kit).RunAsync(Run(kit, PushStep(), start: start), Token);
+        var again = await Push(kit).RunAsync(Run(kit, PushStep(), start: start), Token);
 
-        var head = await HeadAsync(kit);
         Assert.True(first.Passed, first.Error);
-        Assert.Equal($$$"""{"pushed":true,"remote":"origin","branch":"work","sha":"{{{head}}}","isolation":{"mode":"required","none":"the test asked none"}}""", first.Output!.ToJsonString());
-        Assert.Equal($$$"""{"pushed":false,"remote":"origin","branch":"work","sha":"{{{head}}}","isolation":{"mode":"required","none":"the test asked none"}}""", again.Output!.ToJsonString());
-        Assert.Equal(head, (await kit.Harness.RunGitAsync(remote.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
+        Assert.Equal($$$"""{"pushed":true,"remote":"origin","branch":"work","sha":"{{{start}}}","isolation":{"mode":"required","none":"the test asked none"}}""", first.Output!.ToJsonString());
+        Assert.Equal($$$"""{"pushed":false,"remote":"origin","branch":"work","sha":"{{{start}}}","isolation":{"mode":"required","none":"the test asked none"}}""", again.Output!.ToJsonString());
+        Assert.Equal(start, (await kit.Harness.RunGitAsync(remote.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("push")!.Output!)!, first.Output));
 
-        // A commit after it is a fast-forward the remote's branch moves on by.
         await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "more"], Token);
-        var onward = await Push(kit).RunAsync(Run(kit, PushStep()), Token);
+        var more = await HeadAsync(kit);
+        await RecordedAsync(kit, start, more);
+        var onward = await Push(kit).RunAsync(Run(kit, PushStep(), start: start), Token);
 
-        Assert.Equal($$$"""{"pushed":true,"remote":"origin","branch":"work","sha":"{{{await HeadAsync(kit)}}}","isolation":{"mode":"required","none":"the test asked none"}}""", onward.Output!.ToJsonString());
+        Assert.Equal($$$"""{"pushed":true,"remote":"origin","branch":"work","sha":"{{{more}}}","isolation":{"mode":"required","none":"the test asked none"}}""", onward.Output!.ToJsonString());
+    }
+
+    /// <summary>
+    /// A push sends the commit the run's commit step recorded, never what the branch names by then: a commit made on top of
+    /// it since - by a hook, by a build working in the main checkout - and one HEAD moved to that stands elsewhere alike stay
+    /// off the remote, and a run that committed nothing pushes the commit it started on, not one made after.
+    /// </summary>
+    [Fact]
+    public async Task APush_SendsTheCommitTheRunRecorded_NeverWhatTheBranchNamesLater()
+    {
+        using var temp = new TempDirectory();
+        using var remote = new TempDirectory();
+        var kit = await PushingToAsync(temp, remote);
+        var start = await HeadAsync(kit);
+        await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "made after the run started"], Token);
+
+        var unrecorded = await Push(kit).RunAsync(Run(kit, PushStep(), start: start), Token);
+
+        Assert.Equal((true, start), (unrecorded.Passed, unrecorded.Output!["sha"]!.GetValue<string>()));
+        Assert.Equal(start, (await kit.Harness.RunGitAsync(remote.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
+
+        var committed = await HeadAsync(kit);
+        await RecordedAsync(kit, start, committed);
+        await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "a hook's, on top"], Token);
+        var onTop = await Push(kit).RunAsync(Run(kit, PushStep(), start: start), Token);
+        await kit.Harness.RunGitAsync(kit.Main, ["reset", "--quiet", "--hard", start], Token);
+        await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "a hook's, elsewhere"], Token);
+        var elsewhere = await Push(kit).RunAsync(Run(kit, PushStep(), start: start), Token);
+
+        Assert.Equal(
+            [(true, true, committed), (true, false, committed)],
+            new[] { onTop, elsewhere }.Select(pushed => (pushed.Passed, pushed.Output!["pushed"]!.GetValue<bool>(), pushed.Output["sha"]!.GetValue<string>())));
+        Assert.Equal(committed, (await kit.Harness.RunGitAsync(remote.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
     }
 
     /// <summary>A push goes to the remote the step names, where it names one, not to the one the run's branch goes to.</summary>
@@ -133,7 +169,7 @@ public sealed class PublishStepRunnerTests
         await kit.Harness.RunGitAsync(other.Path, ["init", "--bare", "--quiet", "."], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "add", "mirror", other.Path], Token);
 
-        var pushed = await Push(kit).RunAsync(Run(kit, PushStep() with { Remote = "mirror" }), Token);
+        var pushed = await Push(kit).RunAsync(await StartedHereAsync(kit, PushStep() with { Remote = "mirror" }), Token);
 
         Assert.Equal("mirror", pushed.Output!["remote"]!.GetValue<string>());
         Assert.Equal(await HeadAsync(kit), (await kit.Harness.RunGitAsync(other.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
@@ -150,18 +186,21 @@ public sealed class PublishStepRunnerTests
         using var temp = new TempDirectory();
         using var remote = new TempDirectory();
         var kit = await PushingToAsync(temp, remote);
-        _ = await Push(kit).RunAsync(Run(kit, PushStep()), Token);
+        var start = await HeadAsync(kit);
+        _ = await Push(kit).RunAsync(Run(kit, PushStep(), start: start), Token);
         await kit.Harness.RunGitAsync(kit.Main, ["checkout", "--quiet", "-b", "theirs"], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "theirs"], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["push", "--quiet", "--force", "origin", "theirs:refs/heads/work"], Token);
         var theirs = await HeadAsync(kit);
         await kit.Harness.RunGitAsync(kit.Main, ["checkout", "--quiet", "work"], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "ours"], Token);
+        var ours = await HeadAsync(kit);
+        await RecordedAsync(kit, start, ours);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => Push(kit).RunAsync(Run(kit, PushStep()), Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => Push(kit).RunAsync(Run(kit, PushStep(), start: start), Token));
 
         Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
-        Assert.StartsWith($"git did not push {await HeadAsync(kit)} to origin's 'work': [rejected]", refused.Message, StringComparison.Ordinal);
+        Assert.StartsWith($"git did not push {ours} to origin's 'work': [rejected]", refused.Message, StringComparison.Ordinal);
         Assert.Equal(theirs, (await kit.Harness.RunGitAsync(remote.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
     }
 
@@ -178,22 +217,22 @@ public sealed class PublishStepRunnerTests
         var kit = await PushingToAsync(temp, remote);
         var publisher = Substitute.For<IGitPublisher>();
 
-        var unknown = await Push(kit, publisher).RunAsync(Run(kit, PushStep() with { Remote = "elsewhere" }), Token);
+        var unknown = await Push(kit, publisher).RunAsync(await StartedHereAsync(kit, PushStep() with { Remote = "elsewhere" }), Token);
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "rename", "origin", "one"], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "add", "two", remote.Path], Token);
-        var unnamed = await Push(kit, publisher).RunAsync(Run(kit, PushStep()), Token);
+        var unnamed = await Push(kit, publisher).RunAsync(await StartedHereAsync(kit, PushStep()), Token);
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "remove", "one"], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "remove", "two"], Token);
-        var none = await Push(kit, publisher).RunAsync(Run(kit, PushStep()), Token);
+        var none = await Push(kit, publisher).RunAsync(await StartedHereAsync(kit, PushStep()), Token);
         await kit.Harness.RunGitAsync(kit.Main, ["remote", "add", "origin", remote.Path], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["checkout", "--quiet", "--orphan", "fresh"], Token);
-        var unborn = await Push(kit, publisher).RunAsync(Run(kit, PushStep()), Token);
+        var unborn = await Push(kit, publisher).RunAsync(await StartedHereAsync(kit, PushStep()), Token);
         await kit.Harness.RunGitAsync(kit.Main, ["checkout", "--quiet", "--force", "work"], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["checkout", "--quiet", "--detach"], Token);
-        var detached = await Push(kit, publisher).RunAsync(Run(kit, PushStep()), Token);
+        var detached = await Push(kit, publisher).RunAsync(await StartedHereAsync(kit, PushStep()), Token);
 
         Assert.All([unknown, unnamed, none, unborn, detached], refused => Assert.Equal((false, HarnessExit.Refused), (refused.Passed, refused.Exit)));
-        Assert.Equal("'push' pushes 'fresh', which holds no commit yet. Nothing was pushed.", unborn.Error);
+        Assert.Equal("'push' pushes the commit the run made on 'fresh', and it has made none there and started on none. Nothing was pushed.", unborn.Error);
         Assert.Equal("'push' pushes to 'elsewhere', which is not a remote of this repository (origin): name one of them, or add it. Nothing was pushed.", unknown.Error);
         Assert.Equal(
             "'push' pushes to the remote the run's branch goes to, and none is that one (the push step names none, the branch tracks none, and none is origin): name one on the step. Nothing was pushed.",
@@ -212,8 +251,8 @@ public sealed class PublishStepRunnerTests
         var kit = await PushingToAsync(temp, remote);
         var publisher = Substitute.For<IGitPublisher>();
 
-        _ = await Push(kit, publisher).RunAsync(Run(kit, PushStep() with { TimeoutMinutes = 3 }), Token);
-        _ = await Push(kit, publisher).RunAsync(Run(kit, PushStep()), Token);
+        _ = await Push(kit, publisher).RunAsync(await StartedHereAsync(kit, PushStep() with { TimeoutMinutes = 3 }), Token);
+        _ = await Push(kit, publisher).RunAsync(await StartedHereAsync(kit, PushStep()), Token);
 
         var head = await HeadAsync(kit);
         await publisher.Received(1).PushAsync(kit.Main, "origin", head, "work", TimeSpan.FromMinutes(3), null, Arg.Any<CancellationToken>());
@@ -412,7 +451,7 @@ public sealed class PublishStepRunnerTests
         await kit.Harness.RunGitAsync(kit.Main, ["checkout", "--quiet", "-b", "main-like"], Token);
         var requests = new List<ProcessRequest>();
 
-        var pushed = await Push(kit).RunAsync(Run(kit, PushStep(), branch: "work"), Token);
+        var pushed = await Push(kit).RunAsync(await StartedHereAsync(kit, PushStep(), branch: "work"), Token);
         var opened = await PullRequests(kit, requests, null, Exited(0, "[]")).RunAsync(Run(kit, PullRequestStep() with { Base = "main" }, body: "b", branch: "work"), Token);
 
         Assert.Equal(
@@ -425,7 +464,7 @@ public sealed class PublishStepRunnerTests
         Assert.Empty(requests);
 
         await kit.Harness.RunGitAsync(kit.Main, ["checkout", "--quiet", "work"], Token);
-        var back = await Push(kit).RunAsync(Run(kit, PushStep(), branch: "work"), Token);
+        var back = await Push(kit).RunAsync(await StartedHereAsync(kit, PushStep(), branch: "work"), Token);
 
         Assert.True(back.Passed, back.Error);
         Assert.Equal(await HeadAsync(kit), (await kit.Harness.RunGitAsync(remote.Path, ["rev-parse", "refs/heads/work"], Token)).StandardOutput.Trim());
@@ -436,7 +475,7 @@ public sealed class PublishStepRunnerTests
     private static WorkflowStep PullRequestStep() => new() { Name = "pr", Type = "pull-request", Title = "the run's work", Body = "body.md" };
 
     private static PushStepRunner Push(OrchestrationKit kit, IGitPublisher? publisher = null, IAgentIsolation? isolation = null)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.GitClient, publisher ?? kit.Harness.GitPublisher, isolation ?? new TestIsolation());
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.GitClient, publisher ?? kit.Harness.GitPublisher, isolation ?? new TestIsolation());
 
     /// <summary>
     /// A pull-request step whose forge's tool answers each call with the next of <paramref name="answers"/>, the last again
@@ -480,9 +519,10 @@ public sealed class PublishStepRunnerTests
     /// <summary>
     /// One run of <paramref name="step"/> on <paramref name="kit"/>'s orchestrator of <paramref name="definition"/>, else
     /// the workflow above, the engine having read <paramref name="body"/> as its body where given, of a run that started on
-    /// <paramref name="branch"/> where one is given; its instance is the step's name.
+    /// <paramref name="branch"/> where one is given, at <paramref name="start"/> where one is given; its instance is the
+    /// step's name.
     /// </summary>
-    private static FlowStepRun Run(OrchestrationKit kit, WorkflowStep step, string? body = null, WorkflowDefinition? definition = null, string? branch = null)
+    private static FlowStepRun Run(OrchestrationKit kit, WorkflowStep step, string? body = null, WorkflowDefinition? definition = null, string? branch = null, string? start = null)
         => new(
             step,
             step.Name,
@@ -492,8 +532,21 @@ public sealed class PublishStepRunnerTests
             null,
             [],
             new NoEvents(),
-            Place: new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, null, definition ?? Definition, branch),
+            Place: new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, start, definition ?? Definition, branch),
             Read: body is null ? null : new Dictionary<string, FlowValue> { ["body"] = FlowValue.Of(body) });
+
+    /// <summary>One run of <paramref name="step"/> as <see cref="Run"/> makes it, of a run that started at the commit HEAD names now, where it names one.</summary>
+    private static async Task<FlowStepRun> StartedHereAsync(OrchestrationKit kit, WorkflowStep step, string? branch = null)
+        => Run(kit, step, branch: branch, start: await HeadAsync(kit));
+
+    /// <summary>Records in the run's ledger, as a fold and its commit step do, that the commit <paramref name="sha"/> took a set staged over <paramref name="head"/>.</summary>
+    private static async Task RecordedAsync(OrchestrationKit kit, string head, string sha)
+    {
+        var ledger = new FoldLedger(kit.Harness.OrchestrationStore, kit.Harness.FileSystem, TimeProvider.System);
+        var fold = await ledger.IntendAsync(kit.Layout, kit.Main, "fold", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }, Token);
+
+        ledger.Committed(kit.Layout, ledger.Staging(kit.Layout, "commit", 1, head, [new FlowCommitPath("a.txt", null)], [fold]), sha);
+    }
 
     /// <summary>A run's repository on a branch of its own, <c>work</c>.</summary>
     private static async Task<OrchestrationKit> OnWorkAsync(TempDirectory temp)

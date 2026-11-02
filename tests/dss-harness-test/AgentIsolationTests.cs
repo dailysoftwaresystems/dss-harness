@@ -309,12 +309,13 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>
-    /// A main checkout's git directory that holds a pointer to another repository's own files keeps a launch from any
-    /// isolation, with its own remedy; one made while a launch or an execution ran is what its decision answers once it
-    /// has, as is a new linked worktree's and a replacement its packed-refs came to name, and nothing where none was made.
+    /// A main checkout's git directory, written whole, holds its commondir and its worktrees/ from the work: the commondir
+    /// made naming that directory itself, which git takes as no pointer - its common directory is its git directory still -
+    /// and a later launch takes it as it stands; one that leads elsewhere keeps a launch from any isolation, with its own
+    /// remedy, and a gitdir there, which git never follows from a main checkout, keeps nothing from it.
     /// </summary>
     [Fact]
-    public async Task APointerInAMainCheckoutsGit_LeavesNoIsolation_AndOneMadeWhileItRan_IsAnsweredAfterward()
+    public async Task AMainCheckoutsCommondir_IsMadeNamingItselfAndHeld_AndOneLeadingElsewhere_LeavesNoIsolation()
     {
         using var temp = new TempDirectory();
         using var home = new TempDirectory();
@@ -323,58 +324,200 @@ public sealed class AgentIsolationTests
         var layout = new HarnessLayout(kit.Main, kit.Main);
         var ground = SideTaskPolicy.Ground(layout, config, []);
         var records = SideTaskLayout.Of(layout, "one").Directory;
+        var git = Path.Combine(kit.Main, ".git");
+        var pointer = Path.Combine(git, AgentIsolation.CommonDirectoryFile);
         AgentIsolation Isolation() => new(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
 
-        using var clean = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
+        using var first = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
 
-        Assert.Null(clean.Afterward());
+        Assert.Equal(AgentIsolation.ItsOwnDirectory, await File.ReadAllTextAsync(pointer, Token));
+        Assert.Contains(new IsolatedWrite(pointer, Directory: false, Writable: false), first.Commands!.Writes);
+        Assert.Contains(new IsolatedWrite(Path.Combine(git, "worktrees"), Directory: true, Writable: false), first.Commands.Writes);
 
-        var git = Path.Combine(kit.Main, ".git");
-        var linked = Directory.CreateDirectory(Path.Combine(git, "worktrees", "planted")).FullName;
-        await File.WriteAllTextAsync(Path.Combine(linked, "gitdir"), "/elsewhere/.git", Token);
+        var named = (await kit.Harness.GitClient.RunAsync(kit.Main, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], cancellationToken: Token)).OutputLines;
 
-        Assert.Equal(
-            $"'{Path.Combine(linked, "gitdir")}' was made while it ran: a pointer git follows to another repository's own files, its configuration and hooks among them, which every git started outside would read - so nothing goes on over the trees; look at where it leads, and remove it",
-            clean.Afterward());
+        Assert.Equal(2, named.Count);
+        Assert.All(named, line => PathAssert.Same(git, Path.GetFullPath(line.Trim())));
 
-        Directory.Delete(linked, recursive: true);
-        using var hooks = await Isolation().ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
-        var pointer = Path.Combine(git, "commondir");
+        using var again = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
 
-        Assert.Null(hooks.Afterward());
+        Assert.Equal((false, "test"), (again.Refused, again.Mechanism?.Name));
 
         await File.WriteAllTextAsync(pointer, "/elsewhere/.git", Token);
-
-        Assert.StartsWith($"'{pointer}' was made while it ran", clean.Afterward(), StringComparison.Ordinal);
-        Assert.StartsWith($"'{pointer}' was made while it ran", hooks.Afterward(), StringComparison.Ordinal);
-
-        // A replacement named in packed-refs - the one place a main checkout's git directory, written whole, names one in
-        // while refs/replace/ is sealed - is answered too; one there before the launch, or no replacement, is not.
-        File.Delete(pointer);
-        var packed = Path.Combine(git, "packed-refs");
-        var before = $"# pack-refs with: peeled fully-peeled sorted \n{new string('a', 40)} refs/heads/kept\n{new string('b', 40)} refs/replace/{new string('b', 40)}\n";
-        await File.WriteAllTextAsync(packed, before, Token);
-
-        using var replacing = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
-        var name = $"refs/replace/{new string('c', 40)}";
-        await File.AppendAllTextAsync(packed, $"{new string('d', 40)} refs/heads/other\n", Token);
-
-        Assert.Null(replacing.Afterward());
-
-        await File.AppendAllTextAsync(packed, $"{new string('e', 40)} {name}\n", Token);
-
-        Assert.Equal(
-            $"'{packed}' came to name {name} while it ran: a replacement, which puts other content in place of an object for every git started outside that reads it - so nothing goes on over the trees; look at what it puts in place, and remove it with git update-ref -d {name}",
-            replacing.Afterward());
-
-        File.Delete(packed);
-        await File.WriteAllTextAsync(pointer, "/elsewhere/.git", Token);
-
         using var planted = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
 
         Assert.Equal(
-            (true, (string?)null, $"'think' is refused: agentPolicy.isolation is \"required\" and '{pointer}' is a pointer git follows to another repository's own files, which a main checkout's git directory never holds - something made it, so no agent that may run a command starts here; look at where '{pointer}' leads, and remove it"),
+            (true, (string?)null, $"'think' is refused: agentPolicy.isolation is \"required\" and '{pointer}' leads git to another repository's own files, where a main checkout's git directory holds none but one naming itself - something made it, so no agent that may run a command starts here; look at where '{pointer}' leads, and remove it"),
             (planted.Refused, planted.Mechanism?.Name, planted.Refusal("'think'")));
+
+        File.Delete(pointer);
+        await File.WriteAllTextAsync(Path.Combine(git, "gitdir"), "/elsewhere/.git", Token);
+        using var beside = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
+
+        Assert.Equal((false, "test"), (beside.Refused, beside.Mechanism?.Name));
+    }
+
+    /// <summary>
+    /// A worktree added while a launch ran - beside a step in another worktree, or beside a side-task in the main checkout,
+    /// by the tool or by a person - fails nothing once it has: the work writes no worktree's git directory but its own, so
+    /// nothing made there can be its; and every linked worktree's .git file standing inside a place the work writes is held.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreeAddedWhileALaunchRan_FailsNothing_AndEveryLinkedWorktreesGitFileWhereTheWorkWrites_IsHeld()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("a1");
+        var inside = Path.Combine(kit.Main, "inside");
+        await kit.Harness.RunGitAsync(kit.Main, ["worktree", "add", "--quiet", inside, "-b", "inside"], Token);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var step = AgentStepGround.Of(
+            config,
+            definition: null,
+            new WorkflowStep { Name = "think", Type = "reason" },
+            new AgentWorkspace(worktree, kit.Layout.WorkDirectory("a1"), kit.Main, [], worktree, kit.Layout.Directory),
+            webSearchGiven: false,
+            []);
+
+        using var sideTask = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        using var inWorktree = await isolation.ForLaunchAsync(config, step, kit.Main, Path.Combine(kit.Layout.Directory, "steps", "think"), Token);
+
+        _ = await kit.CreateAgentAsync("a2");
+        await kit.Harness.RunGitAsync(kit.Main, ["worktree", "add", "--quiet", Path.Combine(temp.Path, "by-hand"), "-b", "by-hand"], Token);
+
+        Assert.Equal(((string?)null, (string?)null), (await sideTask.AfterwardAsync(Token), await inWorktree.AfterwardAsync(Token)));
+        Assert.Contains(new IsolatedWrite(Path.Combine(inside, ".git"), Directory: false, Writable: false), sideTask.Commands!.Writes);
+        Assert.DoesNotContain(inWorktree.Commands!.Writes, write => write.Path == Path.Combine(inside, ".git"));
+    }
+
+    /// <summary>
+    /// The state of an operation under way made in a git directory the work wrote - a main checkout's, a worktree's own -
+    /// or changed there while it ran is what its decision answers once it has, naming it and the remedy: remove it, never
+    /// continue or abort it; one there before and left as it was, and one in a git directory the work did not write, are
+    /// not.
+    /// </summary>
+    [Fact]
+    public async Task AnOperationsStateMadeOrChangedWhereTheWorkWrote_IsAnsweredAfterward_ButOneLeftAsItWasIsNot()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("a1");
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var git = Path.Combine(kit.Main, ".git");
+        var linked = Assert.Single(Directory.GetDirectories(Path.Combine(git, "worktrees")));
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var step = AgentStepGround.Of(
+            config,
+            definition: null,
+            new WorkflowStep { Name = "think", Type = "reason" },
+            new AgentWorkspace(worktree, kit.Layout.WorkDirectory("a1"), kit.Main, [], worktree, kit.Layout.Directory),
+            webSearchGiven: false,
+            []);
+        static string Said(string place, string how) => $"'{place}' {how} while it ran: the state of an operation under way, which git's next continue outside - the user's, an editor's - goes on with as it lies, running each exec line its todo holds - so nothing goes on over the trees; look at what it holds, and remove it - never continue the operation, nor abort it, which puts the branch where the state says";
+
+        using var hooks = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
+        using var inWorktree = await isolation.ForLaunchAsync(config, step, kit.Main, Path.Combine(kit.Layout.Directory, "steps", "think"), Token);
+        var rebase = Directory.CreateDirectory(Path.Combine(git, "rebase-merge")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(rebase, "git-rebase-todo"), "exec touch ran\n", Token);
+        var applying = Directory.CreateDirectory(Path.Combine(linked, "rebase-apply")).FullName;
+
+        Assert.Equal(Said(rebase, "was made"), await hooks.AfterwardAsync(Token));
+        Assert.Equal(Said(applying, "was made"), await inWorktree.AfterwardAsync(Token));
+
+        Directory.Delete(applying);
+        using var leftAsItWas = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
+        using var stillInWorktree = await isolation.ForLaunchAsync(config, step, kit.Main, Path.Combine(kit.Layout.Directory, "steps", "think"), Token);
+
+        Assert.Equal(((string?)null, (string?)null), (await leftAsItWas.AfterwardAsync(Token), await stillInWorktree.AfterwardAsync(Token)));
+
+        await File.AppendAllTextAsync(Path.Combine(rebase, "git-rebase-todo"), "exec touch more\n", Token);
+
+        Assert.Equal(Said(rebase, "changed"), await leftAsItWas.AfterwardAsync(Token));
+        Assert.Null(await stillInWorktree.AfterwardAsync(Token));
+    }
+
+    /// <summary>
+    /// A replacement made or moved in a repository whose refs the work wrote is what its decision answers once it has -
+    /// as git lists the replacements, loose or packed, so the tool opens no ref file the work wrote itself - and one there
+    /// before and left as it was is not.
+    /// </summary>
+    [Fact]
+    public async Task AReplacementMadeOrMoved_IsAnsweredAfterward_AsGitListsIt_NoRefFileOpenedByTheTool()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var ground = SideTaskPolicy.Ground(layout, config, []);
+        var records = SideTaskLayout.Of(layout, "one").Directory;
+        var git = Path.Combine(kit.Main, ".git");
+        var opened = new OpeningFileSystem(kit.Harness.FileSystem);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, opened, new HomedPlatform(home.Path), _ => null);
+        var replaced = (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "in its place"], Token);
+        var inItsPlace = (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        await kit.Harness.RunGitAsync(kit.Main, ["commit", "--quiet", "--allow-empty", "-m", "moved to"], Token);
+        var movedTo = (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        var name = $"refs/replace/{replaced}";
+        var said = $"'{git}' came to hold {name} while it ran: a replacement, which puts other content in place of an object for every git started outside that reads it - so nothing goes on over the trees; look at what it puts in place, and remove it with git update-ref -d {name}";
+
+        using var making = await isolation.ForLaunchAsync(config, ground, kit.Main, records, Token);
+        await kit.Harness.RunGitAsync(kit.Main, ["replace", replaced, inItsPlace], Token);
+
+        Assert.Equal(said, await making.AfterwardAsync(Token));
+
+        await kit.Harness.RunGitAsync(kit.Main, ["pack-refs", "--all"], Token);
+        using var moving = await isolation.ForLaunchAsync(config, ground, kit.Main, records, Token);
+
+        Assert.Null(await moving.AfterwardAsync(Token));
+
+        await kit.Harness.RunGitAsync(kit.Main, ["replace", "-f", replaced, movedTo], Token);
+
+        Assert.Equal(said, await moving.AfterwardAsync(Token));
+        Assert.DoesNotContain(opened.Opened, path => Path.GetFileName(path) == "packed-refs" || path.Contains(Path.Combine(".git", "refs"), StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// In a repository that keeps its refs in a reftable, a step in a linked worktree writes the common directory's
+    /// reftable/ - where git writes every ref of it, its refs/ a stub - and a replacement made there, where no file under
+    /// refs/replace/ and no packed-refs line names it, is what its decision answers once it has.
+    /// </summary>
+    [Fact]
+    public async Task InAReftableRepository_AWorktreeWritesItsRefsWhereGitKeepsThem_AndAReplacementThereIsAnswered()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var harness = new HarnessFactory();
+        var main = Directory.CreateDirectory(Path.Combine(temp.Path, "main")).FullName;
+        var made = await harness.GitClient.RunAsync(main, ["init", "--quiet", "--ref-format=reftable", "-b", "main", "."], cancellationToken: Token);
+
+        Assert.SkipUnless(made.Succeeded, $"this git keeps no refs in a reftable: {made.FailureMessage}");
+
+        await harness.RunGitAsync(main, ["config", "user.email", "test@example.com"], Token);
+        await harness.RunGitAsync(main, ["config", "user.name", "Test"], Token);
+        await harness.RunGitAsync(main, ["commit", "--quiet", "--allow-empty", "-m", "base"], Token);
+        var linkedTree = Path.Combine(temp.Path, "linked");
+        await harness.RunGitAsync(main, ["worktree", "add", "--quiet", linkedTree, "-b", "linked"], Token);
+        var git = Path.Combine(main, ".git");
+        var config = new HarnessConfig();
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), harness.GitClient, harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+
+        using var legs = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfLegs(config, main, linkedTree), main, Token);
+        var replaced = (await harness.RunGitAsync(main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        await harness.RunGitAsync(linkedTree, ["commit", "--quiet", "--allow-empty", "-m", "in its place"], Token);
+        await harness.RunGitAsync(linkedTree, ["replace", replaced, "HEAD"], Token);
+
+        Assert.Contains(new IsolatedWrite(Path.Combine(git, "reftable"), Directory: true, Writable: true), legs.Profile!.Writes);
+        Assert.Contains(new IsolatedWrite(Path.Combine(git, "refs"), Directory: true, Writable: true), legs.Profile.Writes);
+        Assert.Equal(
+            $"'{git}' came to hold refs/replace/{replaced} while it ran: a replacement, which puts other content in place of an object for every git started outside that reads it - so nothing goes on over the trees; look at what it puts in place, and remove it with git update-ref -d refs/replace/{replaced}",
+            await legs.AfterwardAsync(Token));
     }
 
     /// <summary>
@@ -699,6 +842,19 @@ public sealed class AgentIsolationTests
 
         public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)
             => (program, [.. arguments, "inside"]);
+    }
+
+    /// <summary>The machine's file system, keeping every path it was asked to open for reading.</summary>
+    private sealed class OpeningFileSystem(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        /// <summary>Every path opened for reading, in order.</summary>
+        public List<string> Opened { get; } = [];
+
+        public override Stream OpenRead(string path)
+        {
+            Opened.Add(path);
+            return base.OpenRead(path);
+        }
     }
 
     /// <summary>A file system that finds every name in any case, as a Windows drive under WSL does.</summary>

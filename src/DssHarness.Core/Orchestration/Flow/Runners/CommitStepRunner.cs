@@ -24,9 +24,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// stage that the index marks assume-unchanged or skip-worktree, which <c>git add</c> would not stage, fails it 13. With
 /// anything left, its message is filled (<see cref="CommitTemplate"/>) - none fails it 12 - and the rest is written to the
 /// ledger as one staged set before the first <c>git add</c>, staged by explicit path, committed once (<c>-s</c> where
-/// <c>commit.signOff</c>), and marked committed where the commit holds the set and nothing else; git refusing - a hook
-/// among the reasons - unstages it and fails the step 20, and a commit that is not the set's alone - a hook staged more -
-/// is left as it is for a person, the set left staged with it in the ledger, and fails the step 20. A staged set an attempt
+/// <c>commit.signOff</c>), and marked committed where the commit stands on the commit the branch named before it alone and
+/// changes the set against it and nothing else; git refusing - a hook among the reasons - unstages it and fails the step
+/// 20, and a commit that is not the set's alone - a hook staged more, or moved the branch to a commit of its own on
+/// another parent - is left as it is for a person, the set left staged with it in the ledger, and fails the step 20. A staged set an attempt
 /// before left is settled first: committed where HEAD moved and holds each of its paths as the set staged it, else
 /// unstaged, its paths owed still. The folds upstream are those the engine read where the step started (<c>folds</c>).
 /// The commit runs the repository's commit hooks inside the operating system's isolation of the agents' work
@@ -229,29 +230,39 @@ public sealed class CommitStepRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, $"'{run.Instance}': {refused.Message}; what it staged was unstaged: fix what git reported, then resume.", Isolated(hooks));
         }
 
-        // What the hooks made in the main checkout's git directory that no git may go on over ends the step before any is.
-        if (hooks.Afterward() is { } made)
+        // What the hooks left in the main checkout's git directory that no git may go on over ends the step before any is.
+        if (await hooks.AfterwardAsync(CancellationToken.None).ConfigureAwait(false) is { } made)
         {
             return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, $"'{run.Instance}' made {ReportText.Commit(sha)}, and {made}.", Isolated(hooks));
         }
 
-        // The commit is held to the set: a hook may stage more into it, and git may leave a path of it out. One that is not
-        // the set's alone is never undone - history is a person's to rewrite - and the set stays staged beside it, for the
-        // next attempt to settle from what the person made of it.
-        var took = await TookAsync(main, sha, cancellationToken).ConfigureAwait(false);
+        // The commit is held to the set, over the commit the branch named before it: it stands on that one alone - a hook
+        // may move the branch to a commit of its own, standing on another that carries anything - and changes the set's
+        // paths alone against it - a hook may stage more into it, and git may leave a path of it out. One that is not the
+        // set's alone is never undone - history is a person's to rewrite - and the set stays staged beside it, for the next
+        // attempt to settle from what the person made of it.
+        var parents = await git.ParentsOfAsync(main, sha, cancellationToken).ConfigureAwait(false);
+        var standsElsewhere = !parents.SequenceEqual(head is null ? [] : [head], StringComparer.Ordinal);
+        var took = await TookAsync(main, head, sha, cancellationToken).ConfigureAwait(false);
         var besides = took.Where(path => !paths.Contains(path, StringComparer.Ordinal)).ToList();
         var without = paths.Where(path => !took.Contains(path, StringComparer.Ordinal)).ToList();
 
-        if (besides.Count > 0 || without.Count > 0)
+        if (standsElsewhere || besides.Count > 0 || without.Count > 0)
         {
-            ledger.Strayed(layout, id, new FlowCommitStray(sha, besides, without));
+            if (besides.Count > 0 || without.Count > 0)
+            {
+                ledger.Strayed(layout, id, new FlowCommitStray(sha, besides, without));
+            }
 
             return FlowStepResult.Ended(
                 passed: false,
                 HarnessExit.CommandFailed,
                 $"'{run.Instance}' made {ReportText.Commit(sha)}, and it is not what its folds left alone: "
-                + string.Join(", and ", [.. besides.Count > 0 ? [$"it took {Quoted(besides)} besides"] : Array.Empty<string>(), .. without.Count > 0 ? [$"it left {Quoted(without)} out"] : Array.Empty<string>()])
-                + " - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft HEAD^, then resume, which settles it.",
+                + string.Join(", and ", [
+                    .. standsElsewhere ? [$"it stands on {Standing(parents)}, not on {(head is null ? "nothing" : ReportText.Commit(head))} alone, the commit the branch named before it"] : Array.Empty<string>(),
+                    .. besides.Count > 0 ? [$"it took {Quoted(besides)} besides"] : Array.Empty<string>(),
+                    .. without.Count > 0 ? [$"it left {Quoted(without)} out"] : Array.Empty<string>()])
+                + $" - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with {(head is null ? "git update-ref -d HEAD" : $"git reset --soft {head}")}, then resume, which settles it.",
                 Isolated(hooks));
         }
 
@@ -330,18 +341,21 @@ public sealed class CommitStepRunner(
     }
 
     /// <summary>
-    /// The paths the commit <paramref name="sha"/> took: each it changes against its parent, or each it holds where it has
-    /// none - a name that is not UTF-8 as git quotes it.
+    /// The paths the commit <paramref name="sha"/> took over <paramref name="head"/>, the commit the branch named before it:
+    /// each it changes against that one, or each it holds where there was none - a name that is not UTF-8 as git quotes it.
     /// </summary>
-    private async Task<IReadOnlyList<string>> TookAsync(string main, string sha, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> TookAsync(string main, string? head, string sha, CancellationToken cancellationToken)
     {
-        var parent = await git.ResolveCommitAsync(main, $"{sha}^", cancellationToken).ConfigureAwait(false);
-        var names = parent is null
+        var names = head is null
             ? await git.ListFilesAtCommitAsync(main, sha, cancellationToken).ConfigureAwait(false)
-            : await git.ListNamesChangedBetweenAsync(main, parent, sha, cancellationToken).ConfigureAwait(false);
+            : await git.ListNamesChangedBetweenAsync(main, head, sha, cancellationToken).ConfigureAwait(false);
 
         return [.. names.Select(name => name.IsUtf8 ? name.Text : name.Quoted).Distinct(StringComparer.Ordinal)];
     }
+
+    /// <summary>What a commit stands on, as a refusal says it: its parents' short ids, or nothing.</summary>
+    private static string Standing(IReadOnlyList<string> parents)
+        => parents.Count == 0 ? "nothing" : ReportText.Listed([.. parents.Select(ReportText.Commit)]);
 
     /// <summary>
     /// The step done with nothing left to commit: with the commit an attempt of it made before - its ending cut off before

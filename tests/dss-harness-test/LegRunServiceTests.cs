@@ -1134,7 +1134,7 @@ public sealed class LegRunServiceTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         const string Made = "'x' was made while it ran";
-        var leaving = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" }, IsolationProfile.Nothing, null, null) { After = () => Made });
+        var leaving = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" }, IsolationProfile.Nothing, null, null) { After = _ => Task.FromResult<string?>(Made) });
         var sink = new RecordingSink();
         Dictionary<string, (string? Verdict, string? Detail)> verdicts;
 
