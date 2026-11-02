@@ -801,7 +801,10 @@ public sealed class CommandWordsPolicyTests
     /// What a find or an fd walk removes is read as the walk reaches it - its start points, its depth, its prunes and its
     /// excludes, its name and kind filters, and its <c>-delete</c>, its <c>-exec</c> running a remover on what it finds
     /// or fd's <c>-x</c> - against git's own and every place no command of an agent touches, as each stands: a walk that
-    /// may remove one is refused on both grounds, and one whose filters reach none runs.
+    /// may remove one is refused on both grounds, and one whose filters reach none runs. Each word is read before what the
+    /// command does, so a walk that also names such a place is refused for that word; and every place a case names but the
+    /// one it means holds none on any platform - the suite's temporary root, which holds the Claude Code directory the
+    /// policies are given, lies in <c>/tmp</c> on Linux.
     /// </summary>
     [Fact]
     public void AWalkThatRemoves_IsRefusedOnlyWhereItMayReachWhatNoCommandTouches()
@@ -820,7 +823,7 @@ public sealed class CommandWordsPolicyTests
                 ("find . -mindepth 1 -maxdepth 1 -exec rm -rf {} \\;", "./.git"),
                 ("fd -H -x rm -rf", "./.git"),
                 ("fd -Hx rm -rf", "./.git"),
-                ("find . -exec mv {} /tmp/ \\;", "."),
+                ("find . -exec mv {} out/ \\;", "."),
             })
             {
                 var whole = string.Join(' ', CommandAnalysis.Commands(command)[0].Whole);
@@ -829,6 +832,12 @@ public sealed class CommandWordsPolicyTests
                     new AgentPolicyAnswer.Denied(AgentPolicy.GitsOwnRule, AgentPolicySource.Builtin, $"'{whole}' may remove '{entry}' by its walk of '.', and '{entry}' is or holds git's own, '{git}': no command of an agent removes or moves one"),
                     policy.Run(command));
             }
+
+            // A walk that also names a place no command touches is refused for the word it names, read before what it does.
+            var moved = $"{tree.Claude.Replace('\\', '/')}/moved/";
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied("the Claude Code directories", AgentPolicySource.Builtin, $"'{moved}' lies in a Claude Code directory this run reads: no command of an agent touches one"),
+                policy.Run($"find . -exec mv {{}} {moved} \\;"));
 
             foreach (var command in new[]
             {
@@ -1429,6 +1438,9 @@ public sealed class CommandWordsPolicyTests
         }
 
         public string Main => _nested ? Path.Combine(_main.Path, "repo") : _main.Path;
+
+        /// <summary>The Claude Code directory the policies are given, beside the main checkout under <see cref="Home"/>.</summary>
+        public string Claude => _claude.Path;
 
         /// <summary>The home the policies are built over: the suite's temporary root, which holds the main checkout and the Claude Code directory.</summary>
         public static string Home => TestHost.TemporaryRoot;
