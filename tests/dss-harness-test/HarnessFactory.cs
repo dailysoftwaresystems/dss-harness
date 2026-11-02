@@ -34,7 +34,10 @@ public sealed class HarnessFactory
     /// </param>
     public HarnessFactory(bool verbose = false, HomeShorthand? home = null)
     {
-        Platform = new HostPlatform();
+        // This machine as a user's process on it, whatever account runs the suite - an administrator's on a hosted Windows
+        // runner, where every agent the real answer reaches would be refused as elevated; a test of that refusal asks for
+        // an elevated platform of its own.
+        Platform = Elevation.User;
         FilePermissions = FilePermissionsFactory.Create();
 
         // The real console output, writing to buffers: a hand-written recorder would test
