@@ -999,10 +999,21 @@ public sealed class RunnerRunService(
 
         // Created before the step runs, not lazily by whatever the step happens to do. A program
         // told to write into a directory that is not there fails in its own words, which is a worse
-        // message than the one this would have given.
+        // message than the one this would have given. Made from the tree's root down through no link
+        // (UnfollowedFiles): an earlier step writes the run's build directory, and the tool makes
+        // this one outside every isolation, so a link put where it goes fails the leg, nothing made.
         if (paths.StepBuild is { } stepBuild)
         {
-            _fileSystem.CreateDirectory(stepBuild);
+            if (UnfollowedFiles.LinkOnTheWay(_fileSystem, request.TreeRoot, stepBuild, itself: true) is { } link)
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"'{values.Redact(phase.Name)}' was not run: its own directory '{stepBuild}' is reached through the link '{link}', which the tool never "
+                    + "follows in a place an isolated process writes, so nothing was made through it; an earlier step put the link there - "
+                    + "write each step's work in its own {stepBuild}");
+            }
+
+            UnfollowedFiles.CreateDirectory(_fileSystem, request.TreeRoot, stepBuild);
         }
 
         var (program, arguments, working) = Starting(request, phase, paths, Supplied(values, inputs));
@@ -1527,6 +1538,19 @@ public sealed class RunnerRunService(
 
                 try
                 {
+                    // An output reached through a link - the step's directory, or the output itself, put in place as one
+                    // by an earlier step - is kept from nowhere and listed nowhere: what it leads to may be anything of the
+                    // machine's, which the step's work could not read, and whose names alone would carry it out.
+                    if (UnfollowedFiles.LinkOnTheWay(_fileSystem, scratch.Root, source, itself: true) is { } link)
+                    {
+                        _output.Warn(
+                            CommandName,
+                            $"'{phase.StepName}' asked to keep '{output}', which is reached through the link '{link}', which the tool never "
+                            + "follows in a place an isolated process writes, so nothing of it was kept");
+
+                        continue;
+                    }
+
                     if (_fileSystem.DirectoryExists(source))
                     {
                         // A directory is as ordinary an output as a file: a step that emits a run of
@@ -1617,7 +1641,7 @@ public sealed class RunnerRunService(
     /// <returns>
     /// The links under it, relative to it, which were not followed: a link can lead out of the output - to a place the
     /// step's work may not read - or back into it and round again, so what it leads to is not copied, and is named
-    /// rather than left out without a word. Where the output itself is reached through a link, every file is.
+    /// rather than left out without a word. An output reached through a link is never handed here.
     /// </returns>
     private List<string> KeepDirectory(string root, string source, string destination)
     {

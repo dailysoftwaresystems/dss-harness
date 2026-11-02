@@ -290,16 +290,20 @@ public static class ExecutionGrounds
 
     /// <summary>
     /// The ground of one leg's phases on this machine: the tree it works in - the step's tree itself, or the leg's copy of
-    /// it - written; the step's tree's git files and state, and the leg's own, written by nobody, but what the leg writes
-    /// inside them - its copy, and <paramref name="besides"/>. The run's records are none of it: every log, the ledger, the
-    /// run's claim and its stop are the tool's own, written from what each phase prints, so nothing a phase runs plants a
-    /// link the tool would then write through, or read a hidden place by.
+    /// it - written; the step's tree's git files, configuration directory and state, and the leg's own, written by nobody,
+    /// but what the leg writes inside them - its copy, and <paramref name="besides"/>. The run's records are none of it:
+    /// every log, the ledger, the run's claim and its stop are the tool's own, written from what each phase prints, so
+    /// nothing a phase runs plants a link the tool would then write through, or read a hidden place by.
     /// </summary>
     /// <param name="config">The configuration, whose worktrees root is among the state.</param>
     /// <param name="mainCheckout">The main checkout, whose slots are hidden.</param>
     /// <param name="tree">The tree the step works in.</param>
     /// <param name="legTree">The tree the leg works in: <paramref name="tree"/>, or its copy.</param>
-    /// <param name="besides">What else the leg's work writes inside the tool's state: a sweep's workers.</param>
+    /// <param name="besides">
+    /// What else the leg's work writes inside the tool's own places: a sweep's workers in the state, and each action's
+    /// build directory for the run in the configuration directory (<see cref="Legs.LegWorkload.WritesIn"/>), where its
+    /// steps write what they declare.
+    /// </param>
     public static ExecutionGround OfLeg(HarnessConfig config, string mainCheckout, string tree, string legTree, IReadOnlyList<string> besides)
     {
         ArgumentNullException.ThrowIfNull(besides);
@@ -364,6 +368,15 @@ public sealed record ExecutionIsolation(
     public ProcessIsolation? ForProcess => Mechanism is not null && Profile is not null ? new ProcessIsolation(Mechanism, Profile) : null;
 
     /// <summary>
+    /// An empty directory of the execution's own under the isolation's own (<see cref="IsolationCaches.OutsideDirectory"/>),
+    /// with no tree above it and no place any isolated child writes: where what the tool runs outside the isolation for a
+    /// leg's work starts - a set-up's lines - so nothing it finds where it runs, or above it, is the agents'. Taken away
+    /// with the decision; null where there is no mechanism, and for a commit's or a push's hooks, which start nothing
+    /// outside.
+    /// </summary>
+    public string? Outside { get; init; }
+
+    /// <summary>
     /// What is said wherever it runs with no mechanism under <see cref="AgentIsolationMode.Preferred"/>: why there is none,
     /// what then runs outside, and what would give one; or, under a mechanism that leaves something reached, what. Null
     /// where it runs under one that leaves nothing.
@@ -384,6 +397,17 @@ public sealed record ExecutionIsolation(
     /// machine's drives under <c>/mnt</c> as the user, written - the credential slots and every tree's git files among
     /// them - so required refuses the leg, and preferred runs it there saying so.
     /// </summary>
+    /// <remarks>
+    /// A host reached over ssh is decided by nothing here: it is taken to be another machine, which reaches none of this
+    /// one's files. One that is this machine, or a WSL distribution, a virtual machine or a container reached over ssh that
+    /// shares this machine's drives, would run the agents' work outside the isolation as a distribution does, but cannot be
+    /// told from another machine before it is reached: ssh's own configuration may point the name anywhere - a
+    /// <c>HostName</c>, a <c>ProxyJump</c>, a <c>ProxyCommand</c> - a loopback address may be a port forwarded into a
+    /// distribution, a virtual machine or a container, and a network address may be a virtual machine's that mounts this
+    /// machine's drives; and asked once reached, the host answers with what the agents' work there may already have
+    /// written. A check that held for some such hosts would read as a guarantee for all, so none is made, and help says to
+    /// name no such host where the agents' work must be held.
+    /// </remarks>
     /// <param name="mode">The configuration's mode.</param>
     /// <param name="distribution">The distribution, as the leg's host names it.</param>
     public static ExecutionIsolation InDistribution(string mode, string distribution)
@@ -393,7 +417,7 @@ public sealed record ExecutionIsolation(
             null,
             null,
             $"the leg runs in the WSL distribution '{distribution}', which this machine's isolation does not hold and which reaches this machine's drives under /mnt",
-            "place the leg on this machine, or on a host reached over ssh");
+            "place the leg on this machine, or on another machine reached over ssh");
 }
 
 
@@ -510,10 +534,11 @@ public interface IAgentIsolation
 /// The owner of the operating system's isolation of what an agent runs, and of what the tool runs of an agent's work: the
 /// configuration's mode, this machine's mechanism as its platform proved it once, and each profile built from its ground -
 /// the machine read-only; written only the ground's writable roots, what git writes of a tree that is itself written - by
-/// its kind (<see cref="GitWritten"/>) - the launch's own temporary directory and the declared tool caches
-/// (<see cref="IsolationCaches"/>); neither read nor written the credential slots, every Claude Code directory
-/// (<see cref="ClaudeCodeDirectories"/>) and every place the user keeps credentials in (<see cref="UserCredentials"/>),
-/// but the files each leaves read; reached outside no Unix socket but the one the ground names - the user's SSH
+/// its kind (<see cref="GitWritten"/>) - the launch's own temporary directory and the declared tool caches of its write
+/// scope's own (<see cref="IsolationCaches"/>), which no child of another reach shares; neither read nor written the
+/// credential slots, every Claude Code directory (<see cref="ClaudeCodeDirectories"/>) and every place the user keeps
+/// credentials in (<see cref="UserCredentials"/>), but the files each leaves read; reached outside no Unix socket but the
+/// one the ground names - the user's SSH
 /// agent's, for a push over ssh or a commit signed with an ssh key, named to the child at its real spelling, which no
 /// hidden place stands on the way to; and inside what is written, written by nobody git's
 /// code-running files and its pointers to its own directories, every git directory's submodules, its replacements and
@@ -615,9 +640,11 @@ public sealed class AgentIsolation(
     /// Its profile is built as an agent's command's is, from the same places: the slots, every Claude Code directory and
     /// every place the user keeps credentials in hidden, git's code-running files of each tree, every configuration file
     /// git reads and the tool's state written by nobody, the ground's own places written again inside them, the private
-    /// temporary directory and the declared caches written - for what it runs is the agents' work however it is started.
-    /// Where git's own work signs or pushes through it - a push over ssh, a commit signed with an ssh key - the user's SSH
-    /// agent's socket is reached alone.
+    /// temporary directory and the declared caches
+    /// of its write scope written - for what it runs is the agents' work however it is started. Where git's own work signs
+    /// or pushes through it - a push over ssh, a commit signed with an ssh key - the user's SSH agent's socket is reached
+    /// alone. A leg's work is given an empty directory outside every tree for what the tool starts outside it
+    /// (<see cref="ExecutionIsolation.Outside"/>).
     /// </remarks>
     public async Task<ExecutionIsolation> ForExecutionAsync(HarnessConfig config, ExecutionGround ground, string mainCheckout, CancellationToken cancellationToken)
     {
@@ -628,7 +655,29 @@ public sealed class AgentIsolation(
         var credentials = UserCredentials.Of(config, host.HomeDirectory, host.Current, _environment);
         var held = await HeldAsync(config, IsolationGround.Of(ground, _claudeCode.Of(config, mainCheckout), credentials, socket), mainCheckout, "make sure git 2.31 or newer answers in the trees the run works over", cancellationToken).ConfigureAwait(false);
 
-        return new ExecutionIsolation(ground.Kind, held.Mode, held.Mechanism, held.Profile, held.Without, held.Remedy) { Release = held.Release, After = held.After };
+        // A leg's set-ups start outside the isolation, in a directory of the execution's own beside its caches and temporary
+        // directories, which no child writes.
+        var outside = ground.Kind == IsolatedExecution.Legs && held.Mechanism is not null
+            ? Path.Combine(IsolationCaches.Root(host.HomeDirectory, host.Current, _environment), IsolationCaches.OutsideDirectory, Guid.NewGuid().ToString("N")[..12])
+            : null;
+
+        if (outside is not null)
+        {
+            fileSystem.CreateDirectory(outside);
+        }
+
+        var release = held.Release;
+
+        return new ExecutionIsolation(ground.Kind, held.Mode, held.Mechanism, held.Profile, held.Without, held.Remedy)
+        {
+            Release = outside is null ? release : () =>
+            {
+                release?.Invoke();
+                Removed(outside);
+            },
+            After = held.After,
+            Outside = outside,
+        };
     }
 
     /// <summary>
@@ -656,8 +705,8 @@ public sealed class AgentIsolation(
 
         // What the work may leave in the git directories it writes that no rule holds is looked at once it has run, against
         // what is there before it starts.
-        var written = Written(ground, gitPlaces);
-        var before = await LeftAsync(written, cancellationToken).ConfigureAwait(false);
+        var writtenTrees = Written(ground, gitPlaces);
+        var before = await LeftAsync(writtenTrees, cancellationToken).ConfigureAwait(false);
 
         if (before.Unread is { } unreadBefore)
         {
@@ -665,19 +714,29 @@ public sealed class AgentIsolation(
         }
 
         var root = IsolationCaches.Root(host.HomeDirectory, host.Current, _environment);
-        var caches = Path.Combine(root, IsolationCaches.Directory);
+        var cachesRoot = Path.Combine(root, IsolationCaches.Directory);
+        var comparer = StringComparer.FromComparison(host.PathComparison);
+
+        // What is written: the ground's roots, and what git writes of a tree that is itself written - its objects, index
+        // and refs, which git add and fetch write. Its caches are its write scope's own, those of every scope gone swept.
+        var written = ground.WritableRoots
+            .Concat(writtenTrees.SelectMany(directory => GitWritten(directory, gitPlaces.Reftables.Contains(directory.CommonDirectory, comparer))))
+            .Select(Real)
+            .Distinct(comparer)
+            .ToList();
+        IsolationCaches.Sweep(fileSystem, cachesRoot);
+        var caches = IsolationCaches.Prepared(fileSystem, cachesRoot, written, ground.AgentSocket is { } reached ? [Real(reached)] : []);
 
         // A mechanism that gives the child a temporary directory of its own is named none.
         var temp = mechanism.OwnTemp ? null : Path.Combine(root, IsolationCaches.TempDirectory, TempName(ground.LaunchDirectory));
         var shared = temp is not null && fileSystem.DirectoryExists(temp);
-        fileSystem.CreateDirectory(caches);
 
         if (temp is not null)
         {
             fileSystem.CreateDirectory(temp);
         }
 
-        var built = Built(ground, gitPlaces, caches, temp, mechanism);
+        var built = Built(ground, gitPlaces, [.. written, Real(caches)], caches, temp, mechanism);
 
         if (built.Unheld is { } unheld)
         {
@@ -697,7 +756,7 @@ public sealed class AgentIsolation(
             pins?.Pin(tree, gitDirectory, commonDirectory);
         }
 
-        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, temp is null ? null : () => Removed(temp), async token => LeftSince(before, await LeftAsync(written, token).ConfigureAwait(false)));
+        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, temp is null ? null : () => Removed(temp), async token => LeftSince(before, await LeftAsync(writtenTrees, token).ConfigureAwait(false)));
     }
 
     /// <summary>A decision as the builder makes it, before it is a launch's or an execution's.</summary>
@@ -1138,21 +1197,12 @@ public sealed class AgentIsolation(
 
     /// <summary>
     /// The profile of <paramref name="ground"/> as this machine's mechanism holds it - a command's, and a Claude Code
-    /// launch's whole process's, which reads the Claude Code directories it keeps its login in - or why it cannot be held.
+    /// launch's whole process's, which reads the Claude Code directories it keeps its login in - or why it cannot be held:
+    /// <paramref name="written"/> written, its write scope's <paramref name="caches"/> among them.
     /// </summary>
-    private (IsolationProfile Profile, IsolationProfile ClaudeCode, (string Why, string Remedy)? Unheld) Built(IsolationGround ground, GitPlaces gitPlaces, string caches, string? temp, IIsolationMechanism mechanism)
+    private (IsolationProfile Profile, IsolationProfile ClaudeCode, (string Why, string Remedy)? Unheld) Built(IsolationGround ground, GitPlaces gitPlaces, IReadOnlyList<string> written, string caches, string? temp, IIsolationMechanism mechanism)
     {
         var comparer = StringComparer.FromComparison(host.PathComparison);
-
-        // What is written: the ground's roots, what git writes of a tree that is itself written - its objects, index and
-        // refs, which git add and fetch write - and the tool caches.
-        var written = ground.WritableRoots
-            .Concat(Written(ground, gitPlaces).SelectMany(directory => GitWritten(directory, gitPlaces.Reftables.Contains(directory.CommonDirectory, comparer))))
-            .Append(caches)
-            .Select(Real)
-            .Distinct(comparer)
-            .ToList();
-
         var open = new IsolationProfile([], [.. written.Select(root => new IsolatedWrite(root, Directory: true, Writable: true))]) { Temp = temp is null ? null : Real(temp) };
 
         // A place the user keeps credentials in that holds a tree or a place written would hide it with them.
@@ -1417,19 +1467,22 @@ public sealed class AgentIsolation(
     /// <summary>A place's real spelling: every link along it followed, as the mechanism meets it.</summary>
     private string Real(string path) => Path.TrimEndingDirectorySeparator(fileSystem.ResolveLinks(path));
 
-    /// <summary>Removes a launch's temporary directory, whatever its commands left in it; one that cannot be removed is left.</summary>
-    private void Removed(string temp)
+    /// <summary>
+    /// Removes a directory of a launch's or an execution's own under the isolation's own - its temporary directory, the
+    /// one its set-ups ran from - whatever was left in it; one that cannot be removed is left.
+    /// </summary>
+    private void Removed(string directory)
     {
         try
         {
-            if (fileSystem.DirectoryExists(temp))
+            if (fileSystem.DirectoryExists(directory))
             {
-                fileSystem.DeleteDirectory(temp);
+                fileSystem.DeleteDirectory(directory);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // A temporary directory left under the isolation's own is harmless, and the next launch makes its own.
+            // A directory left under the isolation's own is harmless, and the next launch or execution makes its own.
         }
     }
 

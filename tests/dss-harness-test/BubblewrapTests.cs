@@ -190,6 +190,33 @@ public sealed class BubblewrapTests
     }
 
     /// <summary>
+    /// A package an agent's command plants in its caches is not in the caches the repository's hooks over the main
+    /// checkout are given - another write scope's, which the agent's command can neither find by its variable nor write.
+    /// </summary>
+    [Fact]
+    public async Task APackageAnAgentPlantsInItsCaches_IsNotInTheCachesOfTheHooksOverTheMainCheckout()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var config = new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        using var hooks = await new Core.Agents.Isolation.AgentIsolation(platform, launch.Kit.Harness.GitClient, launch.Kit.Harness.FileSystem, new HomedPlatform(home.Path))
+            .ForExecutionAsync(config, Core.Agents.Isolation.ExecutionGrounds.OfHooks(config, launch.Kit.Main, launch.Kit.Main, sshAgent: false), launch.Kit.Main, Token);
+
+        var planted = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "mkdir -p \"$NUGET_PACKAGES\" && printf planted > \"$NUGET_PACKAGES/planted.targets\" && printf %s \"$NUGET_PACKAGES\"");
+        var found = await RealIsolation.InsideAsync(hooks.ForProcess!, launch.Kit.Main, "/bin/sh", "-c", "test -e \"$NUGET_PACKAGES/planted.targets\"");
+        var written = await RealIsolation.InsideAsync(hooks.ForProcess!, launch.Kit.Main, "/bin/sh", "-c", ": > \"$1/more.targets\"", "sh", planted.StandardOutput);
+
+        Assert.Equal(0, planted.ExitCode);
+        Assert.Equal("planted", await File.ReadAllTextAsync(Path.Combine(planted.StandardOutput, "planted.targets"), Token));
+        Assert.Equal(1, found.ExitCode);
+        Assert.NotEqual(0, written.ExitCode);
+        Assert.False(File.Exists(Path.Combine(planted.StandardOutput, "more.targets")), "the hooks wrote the agent's caches");
+    }
+
+    /// <summary>
     /// A run's commit and push, whose hooks write the main checkout's git directory whole, lead no git elsewhere: a command
     /// inside neither rewrites nor removes its commondir - made naming that directory itself, which git takes as no pointer
     /// - makes no worktree's git directory under its worktrees/, and rewrites no .git file of a linked worktree standing in

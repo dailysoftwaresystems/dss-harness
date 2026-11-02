@@ -3806,11 +3806,26 @@ public sealed partial class AgentPolicy
     /// and the shell's other tildes: <c>~+</c> where it stands, <c>~name</c> that user's home beside the user's own.
     /// </summary>
     /// <exception cref="NotSupportedException">It begins with <c>~-</c>, where the shell stood before, which this does not know.</exception>
-    private string HomeExpanded(string path)
+    private string HomeExpanded(string path) => HomeExpanded(path, _platform.HomeDirectory);
+
+    /// <summary>
+    /// <paramref name="path"/> with a home at its start expanded to <paramref name="home"/>: <c>~</c>, <c>$HOME</c>,
+    /// <c>${HOME}</c>, <c>$env:HOME</c>, <c>$USERPROFILE</c>, <c>${USERPROFILE}</c>, <c>$env:USERPROFILE</c> and
+    /// <c>%USERPROFILE%</c> - and the shell's other tildes: <c>~+</c> where it stands, <c>~name</c> that user's home beside
+    /// <paramref name="home"/>. The one reading of a home a command's word names, for an agent's commands and for every
+    /// line the tool reads as such.
+    /// </summary>
+    /// <param name="path">The path, as a word of a command spells it.</param>
+    /// <param name="home">The user's home.</param>
+    /// <exception cref="NotSupportedException">It begins with <c>~-</c>, where the shell stood before, which this does not know.</exception>
+    internal static string HomeExpanded(string path, string home)
     {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(home);
+
         if (path == "~" || path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith(@"~\", StringComparison.Ordinal))
         {
-            return _platform.HomeDirectory + path[1..];
+            return home + path[1..];
         }
 
         // bash's ~+ is where the shell stands, the path after it read there; its ~- is where the shell stood before, which
@@ -3824,17 +3839,17 @@ public sealed partial class AgentPolicy
             {
                 "+" => rest.Length > 0 ? rest[1..] : ".",
                 "-" => throw new NotSupportedException($"'{path}' names where the shell stood before this command, which this does not know"),
-                _ when Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(_platform.HomeDirectory)) is { } homes => Path.Join(homes, name) + rest,
+                _ when Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(home)) is { } homes => Path.Join(homes, name) + rest,
                 _ => path,
             };
         }
 
-        foreach (var home in new[] { "${HOME}", "$HOME", "$env:HOME", "${USERPROFILE}", "$USERPROFILE", "$env:USERPROFILE", "%USERPROFILE%" })
+        foreach (var named in new[] { "${HOME}", "$HOME", "$env:HOME", "${USERPROFILE}", "$USERPROFILE", "$env:USERPROFILE", "%USERPROFILE%" })
         {
-            if (path.StartsWith(home, StringComparison.OrdinalIgnoreCase)
-                && (path.Length == home.Length || path[home.Length] is '/' or '\\'))
+            if (path.StartsWith(named, StringComparison.OrdinalIgnoreCase)
+                && (path.Length == named.Length || path[named.Length] is '/' or '\\'))
             {
-                return _platform.HomeDirectory + path[home.Length..];
+                return home + path[named.Length..];
             }
         }
 

@@ -946,6 +946,16 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
+            "each pointed by its variable into the cache directory of the child's write scope - the places it writes and the "
+                + "Unix sockets outside it reaches - under the isolation's own (dssharness-isolation/caches under XDG_CACHE_HOME, "
+                + "else ~/.cache - ~/Library/Caches on macOS - and under LOCALAPPDATA on Windows, each scope's directory beside a "
+                + ".scope file naming its places), so a package one child plants is run only by a child that writes everything it "
+                + "writes - the next launch of the agent, the next run of the leg - never by one that writes another tree or the "
+                + "main checkout, a commit's or a push's hooks among them, or reaches the user's SSH agent, and a scope's caches are "
+                + "taken away once none of its places is left:",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
             string.Join(", ", DssHarness.Core.Agents.Isolation.IsolationCaches.Declared.Select(cache => $"{cache.Variable} ({cache.Tool})"))
                 + ". The user's own caches stay read-only, for a cache is code a later build runs as it lies; Cargo, Gradle and pub "
                 + "keep theirs in a home the variable moves whole, so what the user keeps there - a registry, a property, a tool "
@@ -956,7 +966,7 @@ public sealed partial class HelpTests
             "Moving XDG_CACHE_HOME moves what the user installed under it too: on Linux Playwright's browsers are read where they "
                 + $"are ({DssHarness.Core.Agents.Isolation.IsolationCaches.PlaywrightBrowsersVariable} at the user's ms-playwright, "
                 + "where it is there and the variable names none already), so a browser installed inside fails; everything else there "
-                + "- Hugging Face's models, pre-commit's environments - is fetched again into the isolation's own.",
+                + "- Hugging Face's models, pre-commit's environments - is fetched again into the scope's own.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1162,22 +1172,40 @@ public sealed partial class HelpTests
             "is held inside it, its own profile from the leg's ground, built as a launch's is: the machine read-only; every "
                 + "credential slot of the main checkout, every Claude Code directory and every place the user keeps credentials in "
                 + "hidden; the tree the leg works in - "
-                + "the step's tree or its copy under .legs - a sweep's workers under .mutations, a temporary directory of its own "
-                + "and the declared tool caches written,",
+                + "the step's tree or its copy under .legs - a sweep's workers under .mutations, the build directory of the leg's "
+                + "run of each runner action it runs, its own and a run check's ({actionBuild}, each step's {stepBuild} in it), a "
+                + "temporary directory of its own and the declared tool caches written, and inside them git's code-running files, "
+                + "the configuration directory - but those build directories, under it - and the tool's state written by nobody.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "The run's records are no place the work writes: every log, the ledger, the run's claim and its stop are the tool's "
                 + "own, written from what each phase prints. What the tool itself reads out of, or writes into, a place such work "
-                + "writes - a runner's kept outputs, a test's evidence kept on failure, a sweep's sites mutated and put back in "
+                + "writes - a runner's step's own directory and its kept outputs, a test's evidence kept on failure, a sweep's sites mutated and put back in "
                 + "its workers, a sync's every read, write, removal and listing in a copy - goes through no link below that "
                 + "place's root",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "where the leg's work is held inside it under required, each runs from the leg's own records, never in a tree, and "
-                + "one whose program or any argument names a place in the tree the leg works in, the run's or the main checkout - a "
-                + "compose file, a script - skips the leg (skipped-unavailable) before any set-up comes up;",
+            "where the leg's work is held inside it under required, each runs from an empty directory outside every tree "
+                + "(outside/ under the isolation's own), so a program that looks for its project where it runs or above it - a "
+                + "compose file, a package's scripts, a makefile, a repository - finds none of the agents', and each is read first "
+                + "as the policy reads an agent's command - its words, every command it runs, every path a word names, a "
+                + "source:target's and a search path's parts among them, and every value the leg's environment gives it. One that "
+                + "names a place in the tree the leg works in, the run's or the main checkout, or a directory holding one, that "
+                + "names a place by what its shell would expand, that moves to a directory that is no whole path, or that cannot "
+                + "be read whole skips the leg (skipped-unavailable) before any set-up comes up; one that fails says where it ran, "
+                + "where nothing of the tree is found - keep what a line reads outside the trees and name it by its whole path, or "
+                + "bring what it serves up by hand.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an ssh host holds none of this machine's slots, state or git's files, which a sync never carries, for an ssh host "
+                + "is taken to be another machine that reaches none of this one's files - one that is this machine, or a WSL "
+                + "distribution, a virtual machine or a container reached over ssh that shares its drives, cannot be told from "
+                + "another by its name or its address, which ssh's own configuration may point anywhere and a loopback port may "
+                + "forward anywhere, and runs the agents' work outside the isolation, this machine's files written: name no such "
+                + "host for a run's legs where the agents' work must be held;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1271,6 +1299,11 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Agents.Isolation.IsolationDecision)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationDecision.AfterwardAsync)}",
             $"{nameof(DssHarness.Core.Git.IGitClient)}.{nameof(DssHarness.Core.Git.IGitClient.ParentsOfAsync)}",
             $"{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches.Installed)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches.ScopeName)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches.Prepared)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches)}.{nameof(DssHarness.Core.Agents.Isolation.IsolationCaches.Sweep)}",
+            $"{nameof(DssHarness.Core.Agents.Isolation.ExecutionIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.ExecutionIsolation.Outside)}",
+            $"{nameof(DssHarness.Core.Legs.LegWorkload)}.{nameof(DssHarness.Core.Legs.LegWorkload.WritesIn)}",
             $"{nameof(DssHarness.Core.Agents.Isolation.ExecutionGround)}.{nameof(DssHarness.Core.Agents.Isolation.ExecutionGround.ReachesSshAgent)}",
             $"{nameof(DssHarness.Core.Git.GitSsh)}.{nameof(DssHarness.Core.Git.GitSsh.PushesOverSshAsync)}",
             $"{nameof(DssHarness.Core.Git.GitSsh)}.{nameof(DssHarness.Core.Git.GitSsh.SignsCommitsWithSshAsync)}",
@@ -4195,6 +4228,10 @@ public sealed partial class HelpTests
             "--input name=value gives an input its value, once per input, over its default;",
             "\"projects\": [ { \"name\": \"core\", \"test\": { \"all\": { \"setUp\": [\"e2e\"] } } } ]",
             "and 13 where a line a leg would run could not run on its system",
+            "Where a run's step holds a leg's work inside the operating system's isolation under agentPolicy.isolation required "
+                + "('help agent-clients'), the leg's set-ups' lines run outside it from an empty directory outside every tree, so a "
+                + "relative argument is read there and finds nothing of the tree, and a line whose program or any word names a "
+                + "place in a tree the agents wrote - a script of the repository's among them - skips the leg, nothing brought up.",
         })
         {
             Assert.Contains(said, text, StringComparison.Ordinal);

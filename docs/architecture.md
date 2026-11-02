@@ -2373,7 +2373,12 @@ it, which no rule at a path grants one name at a time, but its `commondir` and i
 own, every branch, tag, stash and remote-tracking ref and their reflogs; the push step sends the commit the run's
 commit steps recorded, never what the branch names later - the launch's own temporary directory under the isolation's own (`IsolationCaches.Root`, then `tmp/`;
 none where the mechanism gives one, `OwnTemp`) and the declared tool caches (`IsolationCaches.Declared`, each variable
-pointed into `caches/`; a cache is code a later build runs, so the user's own stay read-only; on Linux Playwright's
+pointed into the directory of the child's write scope under `caches/`, `IsolationCaches.Prepared`: one for each set of
+outermost places written and sockets reached, named by their hash, `IsolationCaches.ScopeName`, beside a `.scope`
+record naming them, so a package one child plants is run only by a child that writes everything it writes - never by
+one writing another tree, the main checkout's hooks or reaching the user's SSH agent - and taken away with its record
+once none of its places is left, every directory no record names with it, `IsolationCaches.Sweep`, before each held
+decision; a cache is code a later build runs, so the user's own stay read-only; on Linux Playwright's
 browsers, which the moved `XDG_CACHE_HOME` would hide, named where the user has them, `IsolationCaches.Installed`);
 hidden, every credential slot (`AgentPolicyGround.SlotDirectories`) and every Claude Code directory - one list for a
 launch and an execution alike, `ClaudeCodeDirectories.Of`: `~/.claude`, the tool's own and the one the slot names for
@@ -2557,18 +2562,36 @@ launch's, from one base (`IsolationDecision`),
 with words of their own. A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here
 under `required` ends the step 14, nothing run - and hands the leg service an `ILegIsolation`
 (`LegRunRequest.Isolation`, carried by each leg command's request) that asks it again for each leg this machine runs,
-of its own ground (`ExecutionGrounds.OfLeg`: the tree it works in, and what `LegStepRunner.WritesBeside` names - a
-sweep's workers - never the run's records, every one of which the tool writes itself from what each phase prints);
+of its own ground (`ExecutionGrounds.OfLeg`: the tree it works in, what `LegStepRunner.WritesBeside` names - a
+sweep's workers - and the build directory of the leg's run of each runner action its work runs, its runner's and its
+run checks' runners', under the sealed configuration directory, `LegWorkload.WritesIn`, which `LegRunService` hands
+`ILegIsolation.ForLegAsync` - never the run's records, every one of which the tool writes itself from what each phase
+prints, nor the configuration around those build directories);
 `LegRunService` skips a leg whose own is refused (`skipped-unavailable`), says the notice on its line, and holds the
 rest for its work alone (`PhaseIsolation`, an ambient value each leg's flow holds), which `PhaseRunner` gives every
 phase that names none of its own and is not left running - a set-up's lines, run around the work, are never inside
-it: under `required` (`SetUpConfinement`) each runs from the leg's own records, and `LegSetUps` skips the leg before
-any set-up is held where a line, either way, names in its program or an argument a place in the leg's tree, the run's
-or the main checkout. A leg another machine runs is that machine's, outside this one's isolation: the request never
+it: under `required` (`SetUpConfinement`) each runs from an empty directory of the execution's own outside every tree
+(`ExecutionIsolation.Outside`, `outside/<id>` under the isolation's own beside `caches/` and `tmp/`, made with the
+held decision and removed with it), so a program that finds its project where it runs or above it finds none of the
+agents', and `LegSetUps` skips the leg before any set-up is held where a line, read by the policy's own reader
+(`CommandAnalysis.Commands`, every command it runs, `CommandAnalysis.PathsNamed` with each part of a `source:target`
+or a search path, a home at a word's start expanded by `AgentPolicy.HomeExpanded`, each against the directory it runs
+from and every whole directory an `AgentPolicy.Movers` command moves to), or a value of the leg's environment, names a
+place in the leg's tree, the run's or the main checkout, or a directory holding one, as spelt or as its links lead;
+names a place by an expansion its shell makes (`CommandAnalysis.Expansion`); moves to a directory that is no whole
+path; or cannot be read whole. A line that fails there says where it ran and that nothing of the tree is found there,
+with the remedy. A leg another machine runs is that machine's, outside this one's isolation: the request never
 sends it, but a leg placed in a WSL distribution, which reaches this machine's drives under `/mnt`, is decided there
 (`ILegIsolation.ForDistribution`, `ExecutionIsolation.InDistribution`): skipped under `required`, run saying so under
-`preferred`. What the tool reads out of, or writes into, a place such work writes - `RunnerRunService`'s kept outputs,
-`KeptOnFailure`'s evidence, `WorkerSite`'s sites a sweep mutates and puts back in a worker, `LocalSyncTransport`'s
+`preferred`. An ssh host is taken to be another machine that reaches none of this one's files and is not decided: one
+that is this machine, or a WSL distribution, a virtual machine or a container reached over ssh that shares its drives,
+cannot be told from another by its name or its address - ssh's configuration (`HostName`, `ProxyJump`, `ProxyCommand`)
+may point a name anywhere, a loopback port may forward into a distribution, a virtual machine or a container, and a
+LAN address may be a virtual machine's mounting this machine's drives - so no test of one would hold, and a check that
+held for some would read as a guarantee for all; help says to name no such host where the agents' work must be held.
+What the tool reads out of, or writes into, a place such work writes - `RunnerRunService`'s step directories, made
+through `UnfollowedFiles.CreateDirectory`, a link where one goes failing the leg before its step runs, and its kept
+outputs, `KeptOnFailure`'s evidence, `WorkerSite`'s sites a sweep mutates and puts back in a worker, `LocalSyncTransport`'s
 every read, write, removal, listing and emptied directory in a copy - and the engine's own over an agent's places
 (`AgentEvidence`, `AgentFold`'s fold and hand-over, `AgentContinuation`'s and `AgentSkills`' copies, the tool runtime's
 writes) goes through `UnfollowedFiles`, over the one owner of a file operation relative to a held directory

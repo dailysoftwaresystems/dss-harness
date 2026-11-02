@@ -1,8 +1,11 @@
+using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Isolation;
+using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Git;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -45,7 +48,8 @@ public sealed class ExecutionIsolationTests
 
         var isolated = await isolation.ForExecutionAsync(config, ground, kit.Main, Token);
 
-        var caches = Path.Combine(IsolationCaches.Root(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.Directory);
+        // The copy's own caches: the workers it writes inside it are the copy's, and change nothing of its scope.
+        var caches = Path.Combine(IsolationCaches.Root(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.Directory, IsolationCaches.ScopeName([copy], []));
         IReadOnlyList<IsolatedWrite> writes =
         [
             new(copy, Directory: true, Writable: true),
@@ -78,9 +82,15 @@ public sealed class ExecutionIsolationTests
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Required) { Mechanism = "test", Version = "1.0" }, isolated.Record);
         Assert.True(Directory.Exists(isolated.Profile.Temp));
 
+        // The empty directory its set-ups' lines run from, outside every tree, beside the isolation's caches - written by no child.
+        Assert.Equal(Path.Combine(IsolationCaches.Root(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.OutsideDirectory), Path.GetDirectoryName(isolated.Outside));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(isolated.Outside!));
+        Assert.False(isolated.Profile.Writable(isolated.Outside!));
+
         isolated.Dispose();
 
         Assert.False(Directory.Exists(isolated.Profile.Temp));
+        Assert.False(Directory.Exists(isolated.Outside));
     }
 
     /// <summary>
@@ -111,7 +121,106 @@ public sealed class ExecutionIsolationTests
         Assert.Equal([socket], hooks.Profile!.Sockets);
         Assert.Empty(unsigned.Profile!.Sockets);
         Assert.Empty(legs.Profile!.Sockets);
+
+        // Hooks that reach the user's SSH agent run no package planted by a child that reaches none.
+        Assert.NotEqual(Caches(hooks.Profile), Caches(unsigned.Profile));
+        Assert.Equal((Caches(legs.Profile), (string?)null, (string?)null), (Caches(unsigned.Profile), hooks.Outside, unsigned.Outside));
     }
+
+    /// <summary>
+    /// A package planted in a child's caches is run only by a child that writes - and reaches - everything it does: each
+    /// write scope has caches of its own. Two agents' launches, an agent's launch and the legs over its worktree, and either
+    /// and the hooks over the main checkout never share them; the same scope asked again - the agent's next launch, a leg's
+    /// next run, whatever action's build directory it writes inside its tree - is given the same, with what was cached there.
+    /// </summary>
+    [Fact]
+    public async Task TheCaches_AreEachWriteScopesOwn_SharedOnlyByChildrenOfTheSameReach()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var first = await kit.CreateAgentAsync("a1");
+        var second = await kit.CreateAgentAsync("a2");
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+
+        async Task<string> LaunchCachesAsync(string worktree, string agent)
+        {
+            var work = Directory.CreateDirectory(kit.Layout.WorkDirectory(agent)).FullName;
+            var ground = AgentStepGround.Of(config, definition: null, new WorkflowStep { Name = "think", Type = "reason" }, new AgentWorkspace(worktree, work, kit.Main, [], worktree, kit.Layout.Directory), webSearchGiven: false, [], []);
+            using var launched = await isolation.ForLaunchAsync(config, ground, kit.Main, Path.Combine(kit.Layout.Directory, "steps", agent), Token);
+
+            return Caches(launched.Commands!);
+        }
+
+        async Task<string> ExecutionCachesAsync(ExecutionGround ground)
+        {
+            using var executed = await isolation.ForExecutionAsync(config, ground, kit.Main, Token);
+
+            return Caches(executed.Profile!);
+        }
+
+        var agent = await LaunchCachesAsync(first, "a1");
+        File.WriteAllText(Path.Combine(agent, "planted.targets"), "<Project />");
+        var again = await LaunchCachesAsync(first, "a1");
+        var other = await LaunchCachesAsync(second, "a2");
+        var legs = await ExecutionCachesAsync(ExecutionGrounds.OfLeg(config, kit.Main, first, first, []));
+        var legsOfAnotherRun = await ExecutionCachesAsync(ExecutionGrounds.OfLeg(config, kit.Main, first, first, [Path.Combine(first, HarnessLayout.ActionBuildRelative("corpus", "r2", "native"))]));
+        var hooks = await ExecutionCachesAsync(ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false));
+
+        var git = Path.Combine(kit.Main, ".git");
+        var cachesRoot = Path.Combine(IsolationCaches.Root(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.Directory);
+
+        Assert.Equal(agent, again);
+        Assert.True(File.Exists(Path.Combine(again, "planted.targets")));
+        Assert.Equal(legs, legsOfAnotherRun);
+        Assert.Equal(4, new[] { agent, other, legs, hooks }.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(new[] { agent, other, legs, hooks }, caches => Assert.Equal(cachesRoot, Path.GetDirectoryName(caches)));
+
+        // Its record names the outermost places the scope writes: the agent's worktree, its work directory, and what git
+        // writes of a linked worktree.
+        Assert.Equal(
+            new[] { first, kit.Layout.WorkDirectory("a1"), Path.Combine(git, "worktrees", Path.GetFileName(first)), Path.Combine(git, "objects"), Path.Combine(git, "refs"), Path.Combine(git, "logs") }
+                .Order(StringComparer.Ordinal)
+                .Select(place => $"written {place}"),
+            File.ReadAllLines(agent + IsolationCaches.ScopeRecordExtension));
+    }
+
+    /// <summary>
+    /// The sweep takes away the caches of every write scope none of whose places is there any more, and every cache
+    /// directory no record names - the one cache every child shared before each scope had its own among them - and leaves
+    /// a scope with a place still there, its record and what it cached.
+    /// </summary>
+    [Fact]
+    public void TheSweep_TakesAwayTheCachesOfEveryScopeGone_AndEveryDirectoryNoRecordNames()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var caches = temp.Combine("caches");
+        var kept = Directory.CreateDirectory(temp.Combine("kept")).FullName;
+        var gone = temp.Combine("gone");
+        var live = IsolationCaches.Prepared(harness.FileSystem, caches, [kept], []);
+        var dead = IsolationCaches.Prepared(harness.FileSystem, caches, [gone], []);
+        var shared = Directory.CreateDirectory(Path.Combine(caches, "nuget-packages")).FullName;
+        File.WriteAllText(Path.Combine(live, "cached"), "x");
+        File.WriteAllText(Path.Combine(dead, "planted"), "x");
+        File.WriteAllText(Path.Combine(shared, "planted"), "x");
+
+        IsolationCaches.Sweep(harness.FileSystem, caches);
+
+        Assert.Equal(
+            [Path.GetFileName(live), Path.GetFileName(live) + IsolationCaches.ScopeRecordExtension],
+            Directory.EnumerateFileSystemEntries(caches).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.Equal($"written {kept}\n", File.ReadAllText(live + IsolationCaches.ScopeRecordExtension));
+        Assert.True(File.Exists(Path.Combine(live, "cached")));
+    }
+
+    /// <summary>The cache directory a profile points its children's caches at: the one every declared cache's variable names a directory of.</summary>
+    private static string Caches(IsolationProfile profile)
+        => Assert.Single(profile.Environment
+            .Where(variable => IsolationCaches.Declared.Any(cache => cache.Variable == variable.Key))
+            .Select(variable => Path.GetDirectoryName(variable.Value)!)
+            .Distinct(StringComparer.Ordinal));
 
     /// <summary>
     /// git's own transport reads an address as ssh where it names ssh's scheme or is scp-like, and as none where it names

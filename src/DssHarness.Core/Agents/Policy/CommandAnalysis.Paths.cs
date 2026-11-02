@@ -26,8 +26,13 @@ public static partial class CommandAnalysis
     /// </summary>
     /// <param name="word">The word, as the command's reading spells it.</param>
     /// <param name="braces">Whether the shell expands the word's braces: false for a here-document's or a here-string's text.</param>
+    /// <param name="lists">
+    /// Whether each part of every path read that a <c>:</c> or a <c>;</c> separates is a path too, as it is to a container
+    /// engine's <c>source:target</c> and to a search path's list of directories - a drive's own colon kept with its path
+    /// (<c>C:\x</c>): false for a command an agent runs, whose rules read the word whole.
+    /// </param>
     /// <exception cref="NotSupportedException">The word's braces spell more words than <see cref="BraceBound"/>.</exception>
-    public static IReadOnlyList<NamedPath> PathsNamed(string word, bool braces = true)
+    public static IReadOnlyList<NamedPath> PathsNamed(string word, bool braces = true, bool lists = false)
     {
         ArgumentNullException.ThrowIfNull(word);
 
@@ -101,9 +106,51 @@ public static partial class CommandAnalysis
             }
         }
 
+        if (lists)
+        {
+            foreach (var listed in named.Where(path => path.Path.IndexOfAny([':', ';']) >= 0).ToList())
+            {
+                foreach (var part in ListParts(listed.Path))
+                {
+                    Add(part, listed.Whole);
+                }
+            }
+        }
+
         // Each path once, given whole where any reading gives it whole.
         return [.. named
             .GroupBy(path => path.Path, StringComparer.Ordinal)
             .Select(group => new NamedPath(group.Key, group.Any(path => path.Whole)))];
+    }
+
+    /// <summary>
+    /// The parts of <paramref name="path"/> a <c>:</c> or a <c>;</c> separates, each not empty: a drive's letter and its
+    /// colon kept with the part after it, where that part begins with a separator or there is none (<c>C:\x</c>, <c>C:</c>).
+    /// </summary>
+    private static IEnumerable<string> ListParts(string path)
+    {
+        var start = 0;
+
+        for (var at = 0; at <= path.Length; at++)
+        {
+            if (at < path.Length && path[at] is not (':' or ';'))
+            {
+                continue;
+            }
+
+            // A drive's colon: one letter before it, at a part's start, and a separator or nothing after it.
+            if (at < path.Length && path[at] == ':' && at == start + 1 && char.IsAsciiLetter(path[start])
+                && (at + 1 == path.Length || path[at + 1] is '\\' or '/' or ';'))
+            {
+                continue;
+            }
+
+            if (at > start)
+            {
+                yield return path[start..at];
+            }
+
+            start = at + 1;
+        }
     }
 }

@@ -120,8 +120,12 @@ public interface ILegIsolation
 {
     /// <summary>The isolation the phases of the leg that works in <paramref name="legTree"/> run inside, or why none.</summary>
     /// <param name="legTree">The tree the leg works in.</param>
+    /// <param name="writes">
+    /// What the leg's work writes inside its tree's configuration directory, written there and nothing else of it
+    /// (<see cref="LegWorkload.WritesIn"/>): each action's build directory for the run and the leg.
+    /// </param>
     /// <param name="cancellationToken">Stops the questions of the trees.</param>
-    Task<Agents.Isolation.ExecutionIsolation> ForLegAsync(string legTree, CancellationToken cancellationToken);
+    Task<Agents.Isolation.ExecutionIsolation> ForLegAsync(string legTree, IReadOnlyList<string> writes, CancellationToken cancellationToken);
 
     /// <summary>
     /// The isolation of the work of a leg placed in the WSL distribution <paramref name="distribution"/>: none, which the
@@ -1063,11 +1067,17 @@ public sealed class LegRunService(
     /// <summary>
     /// What a set-up's lines - run outside the operating system's isolation - may not read where the leg's work is held
     /// inside it under required (<paramref name="held"/>): the tree the leg works in, the run's and the main checkout,
-    /// each of which the agents wrote. Null where the leg holds no such isolation.
+    /// each of which the agents wrote; and the empty directory outside them the decision made for the lines to run from.
+    /// Null where the leg holds no such isolation.
     /// </summary>
-    private static SetUpConfinement? Confinement(HarnessContext context, PlacedLeg leg, Agents.Isolation.ExecutionIsolation? held)
+    /// <exception cref="InvalidOperationException">The decision holds the leg's work under required and made no such directory.</exception>
+    private SetUpConfinement? Confinement(HarnessContext context, PlacedLeg leg, Agents.Isolation.ExecutionIsolation? held)
         => held is { Mode: Agents.Isolation.AgentIsolationMode.Required }
-            ? new SetUpConfinement([.. new[] { leg.HostTreeRoot, context.Layout.RepositoryRoot, context.Layout.MainCheckoutRoot }.Distinct(StringComparer.OrdinalIgnoreCase)])
+            ? new SetUpConfinement(
+                [.. new[] { leg.HostTreeRoot, context.Layout.RepositoryRoot, context.Layout.MainCheckoutRoot }.Distinct(StringComparer.OrdinalIgnoreCase)],
+                held.Outside ?? throw new InvalidOperationException("A leg's work held inside the isolation under required was given no directory outside the trees for its set-ups' lines."),
+                _fileSystem,
+                _platform)
             : null;
 
     /// <summary>What <paramref name="leg"/> does once its lock is taken and, where it is heavy, its machine has taken it.</summary>
@@ -1196,9 +1206,12 @@ public sealed class LegRunService(
         // The work of a run's machine step's leg builds, tests and runs what its agents wrote: held inside the operating
         // system's isolation, the leg's own, decided before anything of it starts. Where the isolation is required and
         // cannot be had for the leg's tree, the leg is skipped saying why; where it is preferred and there is none, the
-        // leg's line says what runs outside it. Its temporary directory goes with the leg.
+        // leg's line says what runs outside it. Its temporary directory goes with the leg. What its work writes in the tree's
+        // configuration directory - an action's build directory for this run - is written there, and nothing else of it.
         ProcessIsolation? isolated = null;
-        using var held = request.Isolation is { } isolation ? await isolation.ForLegAsync(runsAs.HostTreeRoot, cancellationToken).ConfigureAwait(false) : null;
+        using var held = request.Isolation is { } isolation
+            ? await isolation.ForLegAsync(runsAs.HostTreeRoot, request.Workload.WritesIn(runsAs.HostTreeRoot, runId.Value, runsAs.Name), cancellationToken).ConfigureAwait(false)
+            : null;
 
         if (held is not null)
         {

@@ -30,7 +30,11 @@ namespace DssHarness.Core.SetUps;
 /// <para>
 /// A set-up's lines run outside the operating system's isolation, always: what an up line brings up outlives every
 /// isolation, and a container engine's socket is hidden inside one. Where the leg's work is held inside it under
-/// <c>required</c>, they read none of what the agents wrote (<see cref="SetUpConfinement"/>).
+/// <c>required</c>, they read none of what the agents wrote (<see cref="SetUpConfinement"/>): each runs from an empty
+/// directory outside every tree, and a line that names a place in one is refused, its leg skipped, before any set-up of
+/// it is held. A line that needs the tree - its compose file, its package's scripts - cannot run so: it finds nothing of
+/// the tree where it runs, and its failure says so, with the remedy - keep what it reads outside the trees, named by its
+/// whole path, or bring what it serves up by hand.
 /// </para>
 /// </remarks>
 /// <param name="setUps">Reads what a set-up's line starts.</param>
@@ -150,7 +154,8 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
     /// <param name="work">The leg's work.</param>
     /// <param name="confinement">
     /// Where the leg's work is held inside the operating system's isolation under <c>required</c>, the trees the agents
-    /// wrote, none of which a set-up's line - run outside it - may read; null where there is no such hold.
+    /// wrote, none of which a set-up's line - run outside it - may read, and the empty directory outside them each line runs
+    /// from; null where there is no such hold.
     /// </param>
     /// <param name="cancellationToken">
     /// Stops the work. What came up is brought down all the same, until a little before the command line stops waiting,
@@ -337,7 +342,8 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
     }
 
     /// <summary>
-    /// Why a line of <paramref name="uses"/>, either way, would read a tree <paramref name="confinement"/> names - the leg
+    /// Why a line of <paramref name="uses"/>, either way, with the leg's environment, would read a tree
+    /// <paramref name="confinement"/> names, or cannot be told not to (<see cref="SetUpConfinement.Refusal"/>) - the leg
     /// skipped for it - or null where none would. A line that cannot be resolved is said where it would run, as it always is.
     /// </summary>
     private string? Confined(HarnessConfig config, PlacedLeg leg, IReadOnlyList<SetUpUse> uses, SetUpConfinement confinement)
@@ -362,11 +368,12 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
                     continue;
                 }
 
-                if (confinement.Reads(line) is { } tree)
+                if (confinement.Refusal(line, leg.Environment) is { } why)
                 {
-                    return $"set-up '{use.Name}' {SetUpService.CommandName(direction)} line '{line.Line}' names a place in '{tree}', which the agents wrote, and a set-up's "
-                        + $"lines run outside the operating system's isolation, which agentPolicy.isolation \"{Agents.Isolation.AgentIsolationMode.Required}\" holds the leg's "
-                        + "work in; nothing of the leg was run: bring what it serves up by hand, or name nothing of the tree in its lines";
+                    return $"set-up '{use.Name}' {SetUpService.CommandName(direction)} line '{line.Line}' {why}, and a set-up's lines run outside the "
+                        + $"operating system's isolation, which agentPolicy.isolation \"{Agents.Isolation.AgentIsolationMode.Required}\" holds the leg's work in - "
+                        + "each from an empty directory outside every tree, reading nothing the agents wrote; nothing of the leg was run: keep what the line "
+                        + "reads outside the trees and name it by its whole path, or bring what it serves up by hand";
                 }
             }
         }
@@ -378,8 +385,8 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
     /// Runs one of a set-up's lines as a phase of <paramref name="leg"/>: why it did not pass, or <see langword="null"/>
     /// where it did. A line that cannot be resolved or started is a reason, never an exception, and so is one stopped
     /// while it brings the set-up down; one stopped while it brings it up stops the leg. <c>started</c> is told just
-    /// before the line's program is asked to start. Under <paramref name="confinement"/> it runs from the leg's own
-    /// records, never in the tree.
+    /// before the line's program is asked to start. Under <paramref name="confinement"/> it runs from the confinement's
+    /// empty directory outside every tree, never in the tree, and a line that does not pass says it ran there.
     /// </summary>
     private async Task<string?> RunAsync(
         HarnessConfig config,
@@ -419,8 +426,9 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
                         Arguments = line.Arguments,
                         LogFile = new LegRecords(runDirectory, leg.Name).PhaseLog(log),
 
-                        // Its log's own directory, made before the line starts, where nothing the agents wrote is.
-                        WorkingDirectory = confinement is null ? leg.HostTreeRoot : new LegRecords(runDirectory, leg.Name).Directory,
+                        // Under a confinement the empty directory outside every tree, so nothing a program finds where it runs,
+                        // or above it, is the agents'.
+                        WorkingDirectory = confinement?.Directory ?? leg.HostTreeRoot,
                         Environment = PhaseEnvironment.Layered(leg.Environment),
                         ProgramDirectories = leg.Host.ProgramDirectories,
                         StallSeconds = config.Defaults.StallSeconds,
@@ -434,7 +442,8 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
 
             return result.Passed
                 ? null
-                : $"'{line.Line}' {(result.Stopped == PhaseStop.Silence ? "stalled" : $"exited {result.ExitCode}")}; its log is '{log}{PhaseLogs.Extension}' among the leg's records";
+                : $"'{line.Line}' {(result.Stopped == PhaseStop.Silence ? "stalled" : $"exited {result.ExitCode}")}; its log is '{log}{PhaseLogs.Extension}' among the leg's records"
+                    + (confinement is null ? string.Empty : Outside(confinement));
         }
         catch (ProgramStartException ex)
         {
@@ -472,6 +481,17 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
     }
 
     private static string Joined(string? first, string then) => first is null ? then : $"{first}; {then}";
+
+    /// <summary>
+    /// Where a line that did not pass under <paramref name="confinement"/> ran, and what is not there: a line that needs a
+    /// file of the tree finds none in the empty directory it runs from, and is told so rather than left to read as one that
+    /// failed on its own.
+    /// </summary>
+    private static string Outside(SetUpConfinement confinement)
+        => $"; it ran from '{confinement.Directory}', an empty directory outside every tree, as agentPolicy.isolation "
+            + $"\"{Agents.Isolation.AgentIsolationMode.Required}\" runs a set-up's lines, where nothing of the tree is found - a file the line names "
+            + "relatively, the project a program looks for where it runs, a compose file, a package's scripts: keep what the line reads outside the "
+            + "trees and name it by its whole path, or bring what it serves up by hand";
 
     /// <summary>
     /// A set-up this leg holds: which, with what values, its fact, whether another leg had it up already, and whether its

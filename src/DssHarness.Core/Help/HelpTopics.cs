@@ -875,6 +875,13 @@ public static class HelpTopics
         builder.AppendLine("its system - no line for its platform, a program not allowed, a value its inputs");
         builder.AppendLine("cannot be given, one set-up named twice with other values - every one named before");
         builder.AppendLine("anything runs.");
+        builder.AppendLine();
+        builder.AppendLine("Where a run's step holds a leg's work inside the operating system's isolation under");
+        builder.AppendLine("agentPolicy.isolation required ('help agent-clients'), the leg's set-ups' lines run");
+        builder.AppendLine("outside it from an empty directory outside every tree, so a relative argument is");
+        builder.AppendLine("read there and finds nothing of the tree, and a line whose program or any word names");
+        builder.AppendLine("a place in a tree the agents wrote - a script of the repository's among them - skips");
+        builder.AppendLine("the leg, nothing brought up.");
 
         return builder.ToString();
     }
@@ -3100,9 +3107,14 @@ public static class HelpTopics
             + "a run's push sends the commit its commit step recorded, never what the branch names later. Written too are a "
             + "temporary directory of the launch's own, "
             + "named by TMPDIR - on Linux the system's /tmp inside, so nothing another process keeps there is reached, on "
-            + "Windows MXC's own; and the declared tool caches, each pointed by its variable into the isolation's own cache "
-            + "directory (dssharness-isolation/caches under XDG_CACHE_HOME, else ~/.cache - ~/Library/Caches on macOS - and "
-            + $"under LOCALAPPDATA on Windows): {string.Join(", ", Agents.Isolation.IsolationCaches.Declared.Select(cache => $"{cache.Variable} ({cache.Tool})"))}. "
+            + "Windows MXC's own; and the declared tool caches, each pointed by its variable into the cache directory of the "
+            + "child's write scope - the places it writes and the Unix sockets outside it reaches - under the isolation's own "
+            + "(dssharness-isolation/caches under XDG_CACHE_HOME, else ~/.cache - ~/Library/Caches on macOS - and under "
+            + "LOCALAPPDATA on Windows, each scope's directory beside a .scope file naming its places), so a package one child "
+            + "plants is run only by a child that writes everything it writes - the next launch of the agent, the next run of "
+            + "the leg - never by one that writes another tree or the main checkout, a commit's or a push's hooks among them, "
+            + "or reaches the user's SSH agent, and a scope's caches are taken away once none of its places is left: "
+            + $"{string.Join(", ", Agents.Isolation.IsolationCaches.Declared.Select(cache => $"{cache.Variable} ({cache.Tool})"))}. "
             + "The user's own caches stay read-only, for a cache is code a later build runs as it lies; Cargo, Gradle and "
             + "pub keep theirs in a home the variable moves whole, so what the user keeps there - a registry, a property, a "
             + "tool pub activated - is not read inside, "
@@ -3110,7 +3122,7 @@ public static class HelpTopics
             + "XDG_CACHE_HOME moves what the user installed under it too: on Linux Playwright's browsers are read where they "
             + $"are ({Agents.Isolation.IsolationCaches.PlaywrightBrowsersVariable} at the user's ms-playwright, where it is "
             + "there and the variable names none already), so a browser installed inside fails; everything else there - "
-            + "Hugging Face's models, pre-commit's environments - is fetched again into the isolation's own. Hidden - an "
+            + "Hugging Face's models, pre-commit's environments - is fetched again into the scope's own. Hidden - an "
             + "empty place under bubblewrap, refused by macOS's sandbox, denied by MXC's container - are every credential "
             + "slot of the main checkout and every Claude Code directory - ~/.claude, the tool's own and the one the slot "
             + "names for the claude-code client's logins, one list for a launch and for the tool's executions alike - with "
@@ -3296,11 +3308,13 @@ public static class HelpTopics
             + "test commands, a runner's steps, a sweep's arms - is held inside it, its own profile from the leg's ground, "
             + "built as a launch's is: the machine read-only; every credential slot of the main checkout, every Claude "
             + "Code directory and every place the user keeps credentials in hidden; the tree the leg works in - the step's tree or its copy under .legs - a sweep's "
-            + "workers under .mutations, a temporary directory of its own and the declared tool caches written, and inside "
-            + "them git's code-running files, the configuration directory and the tool's state written by nobody. The run's "
+            + "workers under .mutations, the build directory of the leg's run of each runner action it runs, its own and a "
+            + "run check's ({actionBuild}, each step's {stepBuild} in it), a temporary directory of its own and the declared "
+            + "tool caches written, and inside them git's code-running files, the configuration directory - but those build "
+            + "directories, under it - and the tool's state written by nobody. The run's "
             + "records are no place the work writes: every log, the ledger, the run's claim and its stop are the tool's own, "
             + "written from what each phase prints. What the tool itself reads out of, or writes into, a place such work "
-            + "writes - a runner's kept outputs, a test's evidence kept on failure, a sweep's sites mutated and put back in "
+            + "writes - a runner's step's own directory and its kept outputs, a test's evidence kept on failure, a sweep's sites mutated and put back in "
             + "its workers, a sync's every read, write, removal and listing in a copy - goes through no link below that "
             + "place's root: each acts relative to a directory held open from that root, every entry on the way opened as "
             + "itself and never looked up by its path again, so a link on the way - or one the work swaps in while the tool "
@@ -3311,12 +3325,24 @@ public static class HelpTopics
             + "values and secrets reach its steps as values "
             + "in their environment, read by this tool, never as the slot's files, which they cannot read. A set-up's lines "
             + "are the configuration's and bring up what outlives the leg, which no isolation outlives, so they run outside "
-            + "it: where the leg's work is held inside it under required, each runs from the leg's own records, never in a "
-            + "tree, and one whose program or any argument names a place in the tree the leg works in, the run's or the main "
-            + "checkout - a compose file, a script - skips the leg (skipped-unavailable) before any set-up comes up; under "
+            + "it: where the leg's work is held inside it under required, each runs from an empty directory outside every "
+            + "tree (outside/ under the isolation's own), so a program that looks for its project where it runs or above it "
+            + "- a compose file, a package's scripts, a makefile, a repository - finds none of the agents', and each is read "
+            + "first as the policy reads an agent's command - its words, every command it runs, every path a word names, a "
+            + "source:target's and a search path's parts among them, and every value the leg's environment gives it. One "
+            + "that names a place in the tree the leg works in, the run's or the main checkout, or a directory holding one, "
+            + "that names a place by what its shell would expand, that moves to a directory that is no whole path, or that "
+            + "cannot be read whole skips the leg (skipped-unavailable) before any set-up comes up; one that fails says "
+            + "where it ran, where nothing of the tree is found - keep what a line reads outside the trees and name it by "
+            + "its whole path, or bring what it serves up by hand. Under "
             + "preferred they run in the tree as the configuration gives them. A leg another machine runs - an ssh host, a WSL "
             + "distribution - runs there as that machine's tool runs any leg, outside this machine's isolation: an ssh host "
-            + "holds none of this machine's slots, state or git's files, which a sync never carries; a WSL distribution runs "
+            + "holds none of this machine's slots, state or git's files, which a sync never carries, for an ssh host is "
+            + "taken to be another machine that reaches none of this one's files - one that is this machine, or a WSL "
+            + "distribution, a virtual machine or a container reached over ssh that shares its drives, cannot be told from "
+            + "another by its name or its address, which ssh's own configuration may point anywhere and a loopback port may "
+            + "forward anywhere, and runs the agents' work outside the isolation, this machine's files written: name no such "
+            + "host for a run's legs where the agents' work must be held; a WSL distribution runs "
             + "on this machine and reaches its drives under /mnt, written, its slots and every tree's git files among them, so "
             + "a run's step whose legs' work is held inside the isolation skips such a leg under required "
             + "(skipped-unavailable) and runs it there under preferred, its line saying so. A run's commit and push run git and the repository's "

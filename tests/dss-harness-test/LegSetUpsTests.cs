@@ -145,23 +145,110 @@ public sealed class LegSetUpsTests
     }
 
     /// <summary>
-    /// A set-up's line reads a tree the agents wrote where its program or any argument names the tree or a place in it,
-    /// spelled with either separator and in any case, inside an option's value too - never where it names a sibling whose
-    /// name the tree's begins, nor where it names no place at all.
+    /// A set-up's line reads a tree the agents wrote where a path any word names lies in it, as the policy's reader reads
+    /// the word: its program, an option's value, a container's source:target, a word of a shell's script, a home at its
+    /// start, spelled with either separator and in any case, and a relative path read against the empty directory it runs
+    /// from - climbing out of it too - or the leg's environment gives it one. Never a sibling whose name the tree's begins,
+    /// nor a word that names no place, nor a relative path that stays where it runs.
     /// </summary>
     [Fact]
-    public void ALineReadsATree_WhereAWordNamesItOrAPlaceInIt_AndNeverASibling()
+    public void ALine_IsRefused_WhereAPathAWordNamesLiesInATree_HoweverItIsSpelt()
     {
-        var tree = Path.Combine(Path.GetTempPath(), "work", "tree");
-        var confinement = new SetUpConfinement([tree]);
-        var inside = Path.Combine(tree, "compose.yml");
+        using var home = new TempDirectory();
+        var (tree, outside, confinement) = Confined(home);
+        var compose = Path.Combine(tree, "compose.yml");
+        var climbing = Path.GetRelativePath(outside, compose);
+        IReadOnlyDictionary<string, string> none = new Dictionary<string, string>();
 
-        Assert.Equal(tree, confinement.Reads(new SetUpCommandLine("x", Path.Combine(tree, "scripts", "db.sh"), [])));
-        Assert.Equal(tree, confinement.Reads(new SetUpCommandLine("x", "docker", ["compose", $"--file={inside.Replace('\\', '/').ToUpperInvariant()}", "up"])));
-        Assert.Equal(tree, confinement.Reads(new SetUpCommandLine("x", "docker", ["run", "-v", $"{tree}:/src", "image"])));
-        Assert.Equal(tree, confinement.Reads(new SetUpCommandLine("x", "docker", ["build", tree + Path.DirectorySeparatorChar])));
-        Assert.Null(confinement.Reads(new SetUpCommandLine("x", "docker", ["run", "-v", $"{tree}-cache:/cache", "postgres:16"])));
-        Assert.Null(confinement.Reads(new SetUpCommandLine("x", "docker", ["compose", "up", "-d"])));
+        string? Refusal(string program, params string[] arguments) => confinement.Refusal(new SetUpCommandLine("x", program, arguments), none);
+        string In(string place) => $"names '{place}', a place in '{tree}', which the agents wrote";
+
+        Assert.Equal(In(Path.Combine(tree, "scripts", "db.sh")), Refusal(Path.Combine(tree, "scripts", "db.sh")));
+        Assert.Equal(In(Path.GetFullPath(compose.Replace('\\', '/').ToUpperInvariant())), Refusal("docker", "compose", $"--file={compose.Replace('\\', '/').ToUpperInvariant()}", "up"));
+        Assert.Equal(In(tree), Refusal("docker", "run", "-v", $"{tree}:/src", "image"));
+        Assert.Equal(In(compose), Refusal("docker", "compose", "-f", climbing, "up"));
+        Assert.Equal(In(compose), Refusal("docker", "compose", "-f", "~/" + Path.GetRelativePath(home.Path, compose).Replace('\\', '/'), "up"));
+        Assert.Equal(In(tree), Refusal("sh", "-c", $"cd '{tree}' && docker compose up -d"));
+        Assert.Equal(
+            $"is given COMPOSE_FILE by the leg's environment, which {In(compose)}",
+            confinement.Refusal(new SetUpCommandLine("x", "docker", ["compose", "up", "-d"]), new Dictionary<string, string> { ["COMPOSE_FILE"] = compose }));
+        Assert.Null(Refusal("docker", "run", "-v", $"{tree}-cache:/cache", "postgres:16"));
+        Assert.Null(Refusal("docker", "compose", "-f", "compose.yml", "up", "-d"));
+        Assert.Null(Refusal("sh", "-c", "docker compose -f ./compose.yml up -d >> up.log 2>&1"));
+    }
+
+    /// <summary>
+    /// A set-up's line is refused where what it reads cannot be held to no tree: a whole path that holds a tree, which a
+    /// program handed it may walk; a word its shell expands into a place before it runs - a substitution, a variable - but a
+    /// home at its start; a move to a directory that is no whole path; a relative path read where a move to a whole one took
+    /// it; a line the reader cannot read whole; and a directory to run from that is itself in a tree.
+    /// </summary>
+    [Fact]
+    public void ALine_IsRefused_WhereWhatItReadsCannotBeHeldToNoTree()
+    {
+        using var home = new TempDirectory();
+        var (tree, _, confinement) = Confined(home);
+        var beside = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(tree)!, "beside")).FullName;
+        IReadOnlyDictionary<string, string> none = new Dictionary<string, string>();
+
+        string? Refusal(string program, params string[] arguments) => confinement.Refusal(new SetUpCommandLine("x", program, arguments), none);
+
+        Assert.Equal(
+            $"names '{home.Path}', which holds '{tree}', which the agents wrote - a program handed it may walk it",
+            Refusal("docker", "run", "-v", $"{home.Path}:/h", "image"));
+        Assert.Equal(
+            "names a place by a substitution in '$(git rev-parse --show-toplevel)', which cannot be told before it runs",
+            Refusal("sh", "-c", "cd \"$(git rev-parse --show-toplevel)\" && docker compose up -d"));
+        Assert.Equal(
+            "names a place by a variable in '$REPO/compose.yml', which cannot be told before it runs",
+            Refusal("sh", "-c", "docker compose -f \"$REPO/compose.yml\" up -d"));
+        Assert.Equal(
+            "moves to 'db', which is no whole path, so where it then reads cannot be told before it runs",
+            Refusal("sh", "-c", "cd db && docker compose up -d"));
+        Assert.Equal(
+            $"names '{Path.Combine(tree, "compose.yml")}', a place in '{tree}', which the agents wrote",
+            Refusal("sh", "-c", $"cd '{beside}' && docker compose -f ../{Path.GetFileName(tree)}/compose.yml up -d"));
+        Assert.Equal(
+            "could not be read whole: '$X' names the program it runs by a variable, which this does not read",
+            Refusal("sh", "-c", "$X up"));
+        Assert.Null(Refusal("sh", "-c", "docker compose -f ~/setups/compose.yml up -d"));
+        Assert.Null(Refusal("sh", "-c", $"cd '{beside}' && docker compose up -d"));
+
+        var inTree = new SetUpConfinement([tree], Path.Combine(tree, "outside"), new HarnessFactory().FileSystem, new HomedPlatform(home.Path));
+
+        Assert.Equal(
+            $"would run from '{Path.Combine(tree, "outside")}', which lies in '{tree}', which the agents wrote",
+            inTree.Refusal(new SetUpCommandLine("x", "docker", ["compose", "up", "-d"]), none));
+    }
+
+    /// <summary>
+    /// A path a set-up's line names outside every tree, whose link leads into one, reads that tree: the place is read as the
+    /// system follows it.
+    /// </summary>
+    [Fact]
+    public void ALine_NamingALinkThatLeadsIntoATree_ReadsTheTree()
+    {
+        using var home = new TempDirectory();
+        var (tree, _, confinement) = Confined(home);
+        var link = Path.Combine(home.Path, "link");
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(link, tree));
+
+        Assert.Equal(
+            $"names '{Path.Combine(link, "compose.yml")}', a place in '{tree}', which the agents wrote",
+            confinement.Refusal(new SetUpCommandLine("x", "docker", ["compose", "-f", Path.Combine(link, "compose.yml"), "up"]), new Dictionary<string, string>()));
+    }
+
+    /// <summary>
+    /// A confinement over a tree under <paramref name="home"/>, its lines run from an empty directory under the isolation's
+    /// own there, as the decision makes one.
+    /// </summary>
+    private static (string Tree, string Outside, SetUpConfinement Confinement) Confined(TempDirectory home)
+    {
+        var tree = Directory.CreateDirectory(Path.Combine(home.Path, "work", "tree")).FullName;
+        var outside = Directory.CreateDirectory(Path.Combine(home.Path, ".cache", "dssharness-isolation", "outside", "0123456789ab")).FullName;
+
+        return (tree, outside, new SetUpConfinement([tree], outside, new HarnessFactory().FileSystem, new HomedPlatform(home.Path)));
     }
 
     private static List<string> Names(IEnumerable<SetUpUse> uses) => [.. uses.Select(use => use.Name)];

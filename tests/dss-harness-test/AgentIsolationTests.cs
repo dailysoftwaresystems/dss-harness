@@ -170,7 +170,9 @@ public sealed class AgentIsolationTests
         var git = Path.Combine(kit.Main, ".git");
         var linked = Assert.Single(Directory.GetDirectories(Path.Combine(git, "worktrees")));
         var root = IsolationRoot(home.Path);
-        var caches = Path.Combine(root, IsolationCaches.Directory);
+
+        // The caches of what the launch writes - its write scope - alone.
+        var caches = Path.Combine(root, IsolationCaches.Directory, IsolationCaches.ScopeName([worktree, work, linked, Path.Combine(git, "objects"), Path.Combine(git, "refs"), Path.Combine(git, "logs")], []));
         var settings = Path.Combine(worktree, HarnessLayout.DirectoryName);
         var commands = isolated.Commands!;
         IReadOnlyList<IsolatedWrite> writes =
@@ -276,8 +278,11 @@ public sealed class AgentIsolationTests
         var slots = HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Where(Directory.Exists).Select(slot => new IsolatedPath(slot, Directory: true)).ToList();
         var whole = isolated.ForClaudeCode!;
 
-        Assert.Equal((null, false), (isolated.Commands!.Temp, Directory.Exists(Path.Combine(root, IsolationCaches.TempDirectory))));
-        Assert.Equal(IsolationCaches.Environment(Path.Combine(root, IsolationCaches.Directory)), isolated.Commands.Environment);
+        var caches = Path.Combine(root, IsolationCaches.Directory);
+        var scope = IsolationCaches.ScopeName(isolated.Commands!.Writes.Where(write => write.Writable && Path.GetDirectoryName(write.Path) != caches).Select(write => write.Path), []);
+
+        Assert.Equal((null, false), (isolated.Commands.Temp, Directory.Exists(Path.Combine(root, IsolationCaches.TempDirectory))));
+        Assert.Equal(IsolationCaches.Environment(Path.Combine(caches, scope)), isolated.Commands.Environment);
         Assert.Equal([.. slots, new IsolatedPath(claude, Directory: true), new IsolatedPath(claude + ".json", Directory: false)], isolated.Commands.Hidden);
         Assert.Same(mechanism, whole.Mechanism);
         Assert.Equal(slots, whole.Profile.Hidden);

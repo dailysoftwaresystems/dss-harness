@@ -217,6 +217,178 @@ public sealed class RunnerRunServiceTests
     }
 
     /// <summary>
+    /// A runner's step whose leg's work is held inside this machine's real isolation writes what it declares in its own
+    /// build directory - the run's, which the leg's ground writes - and the run keeps it; nothing else of the tree's
+    /// configuration directory is written from inside: not the action's own file, nor what a run keeps of it.
+    /// </summary>
+    [Fact]
+    public async Task AStepInsideItsLegsRealIsolation_WritesWhatItDeclares_AndNothingElseOfTheConfiguration()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        Core.Platform.IIsolationPlatform platform;
+
+        if (OperatingSystem.IsWindows())
+        {
+            // MXC's container itself, as its own tests take it: the probe also asks it to run Git Bash's sh, which this
+            // step does not run.
+            var support = Core.Platform.WindowsContainerHost.ThisMachine.Support();
+
+            Assert.SkipWhen(support.Unavailable is not null, $"This machine has no container of MXC's: {support.Unavailable}.");
+
+            platform = new FixedIsolationPlatform(Core.Platform.IsolationAvailability.Of(new MxcProcessContainer(support.Version!, (CliRunner.CliProgram, []))));
+        }
+        else
+        {
+            var real = RealIsolation.Platform();
+
+            await RealIsolation.ProvedAsync(real, temp.Path, true, "", OperatingSystem.IsLinux() ? "bubblewrap" : "sandbox-exec");
+            platform = real;
+        }
+
+        var factory = new HarnessFactory();
+        var shell = OperatingSystem.IsWindows() ? "cmd" : "sh";
+        var interpreter = OperatingSystem.IsWindows() ? Path.Combine(Environment.SystemDirectory, "cmd.exe") : "/bin/sh";
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            steps:
+              - name: pack
+                outputs:
+                  - payload.txt
+                persist: true
+                run: |
+                  {{(OperatingSystem.IsWindows() ? @"cmd /d /c echo carried>{stepBuild}\payload.txt" : "sh -c \"printf carried > '{stepBuild}/payload.txt'\"")}}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = shell });
+        var workload = Core.Legs.LegWorkload.Copy with { Actions = ["corpus"] };
+        var ground = Core.Agents.Isolation.ExecutionGrounds.OfLeg(config, temp.Path, temp.Path, temp.Path, workload.WritesIn(temp.Path, RunId, Leg));
+        using var isolated = await new Core.Agents.Isolation.AgentIsolation(platform, factory.GitClient, factory.FileSystem, new HomedPlatform(home.Path))
+            .ForExecutionAsync(config, ground, temp.Path, TestContext.Current.CancellationToken);
+        RunnerLegResult result;
+
+        using (PhaseIsolation.Enter(isolated.ForProcess!))
+        {
+            result = await Service(factory, RealIsolation.Runner()).RunAsync(config, Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }), TestContext.Current.CancellationToken);
+        }
+
+        var action = Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus");
+
+        Assert.True(LegVerdict.Passed == result.Verdict.Verdict, result.Verdict.Detail);
+        Assert.Equal("carried", (await File.ReadAllTextAsync(Path.Combine(action, "artifacts", RunId, Leg, "pack", "payload.txt"), TestContext.Current.CancellationToken)).TrimEnd());
+
+        foreach (var place in new[] { Path.Combine(action, "corpus.yml"), Path.Combine(action, "artifacts", RunId, Leg, "pack", "payload.txt"), Path.Combine(action, "build", "planted") })
+        {
+            var before = File.Exists(place) ? await File.ReadAllTextAsync(place, TestContext.Current.CancellationToken) : null;
+            var written = OperatingSystem.IsWindows()
+                ? await RealIsolation.InsideAsync(isolated.ForProcess!, temp.Path, interpreter, "/d", "/c", "copy", "/y", "nul", place)
+                : await RealIsolation.InsideAsync(isolated.ForProcess!, temp.Path, interpreter, "-c", "printf planted > \"$1\"", "sh", place);
+
+            Assert.True(written.ExitCode != 0, $"'{place}' was written from inside");
+            Assert.Equal(before, File.Exists(place) ? await File.ReadAllTextAsync(place, TestContext.Current.CancellationToken) : null);
+        }
+    }
+
+    /// <summary>
+    /// What a step asked to keep is kept from nowhere a link put in its place leads: an output that is itself a link to a
+    /// directory outside - one an earlier step could plant where the run's build directory is written - is not kept, and
+    /// is named as a link the tool did not follow, nothing of what it leads to listed.
+    /// </summary>
+    [Fact]
+    public async Task AnOutputThatIsALink_IsNotKept_AndNothingOfWhereItLeadsIsNamed()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var outside = temp.WriteFile(Path.Combine("outside", "secret-name.txt"), "x");
+        var target = Path.GetDirectoryName(outside)!;
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("can-link"), target));
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            steps:
+              - name: pack
+                outputs:
+                  - runs
+                persist: true
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{stepBuild}/runs" "{{target}}"
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "link-itself" },
+        };
+
+        var result = await Service(factory).RunAsync(config, Request(temp, runner), TestContext.Current.CancellationToken);
+
+        var built = Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus", "build", RunId, Leg, "pack", "runs");
+        var kept = Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus", "artifacts", RunId, Leg, "pack", "runs");
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.False(Directory.Exists(kept) || File.Exists(kept), "an output that is a link was kept");
+        Assert.Contains(
+            $"'pack' asked to keep 'runs', which is reached through the link '{built}', which the tool never follows in a place an isolated process writes, so nothing of it was kept",
+            factory.StandardError.ToString(),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-name", factory.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.True(File.Exists(outside));
+    }
+
+    /// <summary>
+    /// A step's own directory is made by the tool through no link: a link an earlier step put where the next step's
+    /// directory goes, leading outside, has nothing made where it leads, and the next step does not run.
+    /// </summary>
+    [Fact]
+    public async Task AStepsDirectory_ALinkAnEarlierStepPutInItsPlace_IsNotMadeThroughIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var target = temp.Combine("outside");
+        Directory.CreateDirectory(target);
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("can-link"), target));
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            steps:
+              - name: pack
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{actionBuild}/next" "{{target}}"
+              - name: next
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{stepBuild}/ran" "{{target}}"
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "link-itself" },
+        };
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(config, Request(temp, runner), TestContext.Current.CancellationToken));
+
+        var next = Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus", "build", RunId, Leg, "next");
+
+        Assert.Equal(
+            (HarnessExit.CommandFailed, $"'next' was not run: its own directory '{next}' is reached through the link '{next}', which the tool never follows in a "
+                + "place an isolated process writes, so nothing was made through it; an earlier step put the link there - write each step's work in its "
+                + "own {stepBuild}"),
+            (refused.ExitCode, refused.Message));
+        Assert.Equal((LegVerdict.Failed, refused.Message), (Verdicts.ForFailure(refused)!.Verdict, Verdicts.ForFailure(refused)!.Detail));
+        Assert.Empty(Directory.GetFileSystemEntries(target));
+    }
+
+    /// <summary>
     /// A step that produced exactly what it declared and then failed keeps nothing. Carrying
     /// evidence out of work that did not pass is the misattribution this tool exists to refuse: a
     /// later step, on another host, would read a payload from a leg that never succeeded and have no
