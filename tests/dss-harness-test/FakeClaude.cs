@@ -41,6 +41,13 @@ namespace DssHarness.Tests;
 /// the host's to a call is written back, as the CLI writes it. Its <c>ignoreEof</c> keeps the process running once its
 /// input is closed, as a launch that does not end by itself.
 /// <para>
+/// Where its environment names an isolation file, an allowed <c>Bash</c> call hands the command the host gave back to the
+/// isolated shell as Claude Code's shell prefix does - its whole line prepared as the isolated shell prepares it, the
+/// receipt at its head written - before its result; its <c>handedAfterMs</c> hands it that long after its result, as a call
+/// run in the background is, and its <c>skipsPrefix</c> never hands it over, as a version that skipped the prefix would.
+/// An allowed call's <c>pauseAfterMs</c> waits that long after its result before the turn plays on.
+/// </para>
+/// <para>
 /// Where <c>--mcp-config</c> names a server of type <c>sdk</c>, it connects it before its first init as the probe saw
 /// Claude Code do - <c>initialize</c>, <c>notifications/initialized</c>, <c>tools/list</c>, each an <c>mcp_message</c> it
 /// waits on - and its init lists the server, <c>connected</c>, and its tools as <c>mcp__&lt;server&gt;__&lt;tool&gt;</c>. A
@@ -728,7 +735,32 @@ internal static class FakeClaude
                 }
                 else if (behavior == "allow")
                 {
+                    // A shell command of a launch that hands its commands over goes through the prefix, as Claude Code's does,
+                    // unless the call skips it: at once, or - a call run in the background - that long after its result.
+                    if (tool == "Bash" && Environment.GetEnvironmentVariable(DssHarness.Core.Processes.IsolatedShell.FileVariable) is { } handed && !Flag(call, "skipsPrefix"))
+                    {
+                        var command = Text(node["response"]?["response"]?["updatedInput"]?["command"]) ?? string.Empty;
+
+                        if (call["handedAfterMs"] is JsonValue after && after.TryGetValue<int>(out var handedAfter))
+                        {
+                            _ = Task.Run(() =>
+                            {
+                                Thread.Sleep(handedAfter);
+                                HandOver(handed, command);
+                            });
+                        }
+                        else
+                        {
+                            HandOver(handed, command);
+                        }
+                    }
+
                     ToolResult(id, ok: true, Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));
+
+                    if (call["pauseAfterMs"] is JsonValue pause && pause.TryGetValue<int>(out var paused))
+                    {
+                        Thread.Sleep(paused);
+                    }
                 }
                 else if (Flag(call, "calledThoughDenied") && tool.StartsWith("mcp__", StringComparison.Ordinal))
                 {
@@ -762,6 +794,35 @@ internal static class FakeClaude
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// A shell command handed to the isolated shell as Claude Code hands it: the whole line it builds - the snapshot sourced,
+    /// the command evaluated, its last working directory written to its own temporary directory - prepared as the isolated
+    /// shell prepares it, its receipt written; then the command's own write of where it ended, where it was given the file.
+    /// </summary>
+    private static void HandOver(string file, string command)
+    {
+        var handing = JsonNode.Parse(File.ReadAllText(file))?["handing"];
+        var receipts = Text(handing?["receipts"]);
+        var temp = Text(handing?["programTemp"]);
+
+        if (receipts is null || temp is null)
+        {
+            return;
+        }
+
+        var end = temp + "/claude-1a2b-cwd";
+        var line = $"source /home/me/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval '{command.Replace("'", "'\"'\"'", StringComparison.Ordinal)}' < /dev/null && pwd -P >| {end}";
+        var (prepared, _) = DssHarness.Core.Processes.IsolatedShell.Prepared(
+            new DssHarness.Core.Processes.ProcessIsolation(new DssHarness.Core.Processes.Bubblewrap("/usr/bin/bwrap", "0.9.0", []), DssHarness.Core.Processes.IsolationProfile.Nothing),
+            new DssHarness.Core.Processes.IsolatedShellHanding(receipts, temp),
+            line);
+
+        if (prepared?.Profile.Writes.Any(write => write.Path == end) == true)
+        {
+            File.WriteAllText(end, Environment.CurrentDirectory + "\n");
+        }
     }
 
     /// <summary>The servers of type <c>sdk</c> an <c>--mcp-config</c> file names, by name; none where it names no file.</summary>

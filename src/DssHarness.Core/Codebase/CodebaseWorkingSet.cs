@@ -223,10 +223,13 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
             return new CodebaseWorkingSet([.. nodes.Take(MostNodes)], Math.Max(0, nodes.Count - MostNodes), _unplaced);
         }
 
-        /// <summary>One call of a client's file tools, as its client names it: a read by the lines its answer gave, a write by the lines it wrote.</summary>
+        /// <summary>
+        /// One call of a client's file tools, as its client names it - a call Claude Code made of the engine's tool server as
+        /// the runtime's tool it is: a read by the lines its answer gave, a write by the lines it wrote.
+        /// </summary>
         private void Call(string tool, JsonObject input, string result)
         {
-            switch (tool)
+            switch (ClaudeCodeTools.ServedAs(tool) ?? tool)
             {
                 case ClaudeCodeTools.Read or AgentTools.ViewFile:
                     if (Held(input, tool) is { } read && Numbered(result) is { } given)

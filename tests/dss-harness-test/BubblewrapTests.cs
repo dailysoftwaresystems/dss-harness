@@ -75,6 +75,21 @@ public sealed class BubblewrapTests
     }
 
     /// <summary>
+    /// A command handed over writes the one file it ends by writing its working directory to in place - bound alone - and
+    /// nothing removes it, puts a link in its stead or writes beside it in Claude Code's own temporary directory.
+    /// </summary>
+    [Fact]
+    public async Task ACommandHandedOver_WritesItsEndFileInPlace_AndNothingElseThere()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+
+        await RealIsolation.EndFileWrittenInPlaceAsync(await RealIsolation.StepLaunchAsync(temp, home, platform));
+    }
+
+    /// <summary>
     /// A command inside moves no directory above a guarded place, for a place moved away would take its rule with it and
     /// leave its name free to make again: the repository's git directory and the directory that holds the credential slots
     /// stand in the main checkout, and the worktrees directory and the worktree's own git directory stand in the common

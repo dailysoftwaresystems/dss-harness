@@ -3032,7 +3032,8 @@ public static class HelpTopics
         builder.AppendLine("call it denies it, never allows: nothing runs while the host that would answer is");
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
         builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call it");
-        builder.AppendLine("runs - the web's of the claude-code client, served through the engine's tool server, and");
+        builder.AppendLine("runs - the web's of the claude-code client, and its file tools' where Claude Code's own");
+        builder.AppendLine("process runs outside the isolation, served through the engine's tool server, and");
         builder.AppendLine("every call of the API clients, the claude-api and glm clients below - for every agent a");
         builder.AppendLine("command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a");
         builder.AppendLine("side-task.");
@@ -3158,14 +3159,32 @@ public static class HelpTopics
             + "reading its login and the key it is handed there, and every shell command it starts is handed to the "
             + "isolation through its shell prefix (CLAUDE_CODE_SHELL_PREFIX: this tool and --isolated-shell, which becomes "
             + "the mechanism with /bin/bash inside, the launch's isolation read from the file DSSHARNESS_ISOLATED_SHELL names) "
-            + "- so no command it runs reaches its directories, its login or its environment - and Claude Code's own sandbox "
+            + "- so no command it runs reaches its directories, its login or its environment. There Claude Code opens no file "
+            + "of the agent's in its own process: its file tools are not given, --tools names its shell alone, and the engine's "
+            + $"tool server serves the tool runtime's ({string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.FileTools)}) in their "
+            + "place, each file opened by the engine and decided again by where the system names the open file, so a link a "
+            + "command - one left running in the background among them - puts on a path between the decision and the open "
+            + "reaches nothing. Each shell command the engine allows is given back with a receipt at its head (: "
+            + $"{IsolatedShell.ReceiptWord} <32 hexadecimal digits>;, the shell's no-op), which --isolated-shell writes in the "
+            + $"step's {Agents.ClaudeCode.ClaudeShell.ReceiptsDirectoryName} directory, where no command writes, before it runs "
+            + "the command; a call that comes back with none - a Claude Code that skipped its prefix, the command run outside "
+            + "- ends the launch failed at once, a call run in the background within "
+            + $"{Agents.ClaudeCode.ClaudeCodeClient.ReceiptBound.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s or by its turn's end. "
+            + $"Claude Code's own temporary directory is the step's {Agents.ClaudeCode.ClaudeShell.TempDirectoryName}, where no "
+            + "command writes but the one file each ends by writing its working directory to - made empty, given that command "
+            + "alone, written in place, never removed or replaced - so nothing Claude Code writes or reads there in its own process is a "
+            + "command's to replace with a link; it goes with the launch. Claude Code's own sandbox "
             + "is turned off in its settings, for none nests in this one; where this tool runs as a runtime handed its "
             + "assembly, or from a path holding \" -\", neither of which the prefix can name, the launch is not started, "
             + "saying why. On Windows, where nothing "
             + "becomes another program and every command Claude Code runs is Git Bash's, the launch runs whole inside "
             + "MXC's container with its directories read alone: its commands read its login there, and a login whose token "
             + "has run out is not renewed inside until a claude run outside renews it - written, they would let a command "
-            + "plant what Claude Code runs outside later. The API clients' run_command starts "
+            + "plant what Claude Code runs outside later. There its own file tools are given, for they open each file inside "
+            + "the container, which holds every place they reach as it holds the commands, and its temporary directory is "
+            + "MXC's own inside it; nothing is handed over, so no receipt is asked. Where there is no isolation at all - "
+            + "preferred, on a machine with none - Claude Code's own file tools open each file by the path the engine "
+            + "decided, the words policy alone between them. The API clients' run_command starts "
             + "each command inside it. The mechanism is proved once per process, before the first launch whose agent may "
             + "run a command, on the tree's own file system under its runs directory: a canary in a hidden place unread, by "
             + "its name and by another case of it, a place written by nobody unwritten by either, a place outside every "
@@ -3423,7 +3442,11 @@ public static class HelpTopics
             + "directory, with every other root it reaches added. It is given its model and no fallback, the step's effort, "
             + "turns and budget, and the tools of the agent's capabilities and no other - "
             + tools
-            + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. The run's reporter is given "
+            + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}; where its own process runs "
+            + "outside the isolation it hands its commands to (above), the engine's tool server serves read's "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.ServedOf(Agents.AgentCapability.Read, ownFiles: false))} and write's "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.ServedOf(Agents.AgentCapability.Write, ownFiles: false))} in place of "
+            + "Claude Code's own, each call asked of the engine and run by the tool runtime below as on the API clients. The run's reporter is given "
             + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. A step with the web takes the harness's own "
             + $"{Agents.Runtime.AgentTools.WebFetch} - and {Agents.Runtime.AgentTools.WebSearch}, where it has a source to search - from the engine's tool server: the one MCP "
             + $"server, of type sdk, named {Agents.ClaudeCode.ClaudeCodeTools.Server}, that the launch's --mcp-config names beside --strict-mcp-config (the step's "
@@ -3489,7 +3512,8 @@ public static class HelpTopics
 
         return "The tool runtime is the harness's own tools, built for the API clients to give their agents in place of a "
             + "client's own - the claude-api and glm clients below - and serving the claude-code client the web's through "
-            + "the engine's tool server, each under the "
+            + "the engine's tool server, and its file tools there too where Claude Code's own process runs outside the "
+            + "isolation, each under the "
             + $"capability that gives it: {tools}. The run's reporter is given "
             + $"{string.Join(", ", Agents.Runtime.AgentTools.All(defaults).Where(tool => Agents.Policy.AgentPolicyGround.ReporterCapabilities.Contains(tool.Needs)).Select(tool => tool.Name))}, "
             + "those that read, and no other. Each call is decided before it runs and recorded: a tool the step was not given, or "

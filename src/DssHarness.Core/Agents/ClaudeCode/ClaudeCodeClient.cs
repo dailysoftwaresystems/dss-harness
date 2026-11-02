@@ -74,6 +74,15 @@ public sealed class ClaudeCodeClient(
     /// <summary>The id of the host's <c>initialize</c> request, which its answer names.</summary>
     public const string InitializeId = "initialize";
 
+    /// <summary>
+    /// How long the receipt of a shell call run in the background is awaited once its result came back - before its command
+    /// was handed over - before the launch is ended for a command that was not.
+    /// </summary>
+    public static readonly TimeSpan ReceiptBound = TimeSpan.FromSeconds(20);
+
+    /// <summary>The member of a shell call's input that runs its command in the background.</summary>
+    private const string BackgroundMember = "run_in_background";
+
     /// <summary>What a run that is no chat's - a one shot - ends with where its interrupt cut its turn: every client's words for it.</summary>
     public const string TurnCut = AgentTurnInterrupt.Cut;
 
@@ -168,16 +177,20 @@ public sealed class ClaudeCodeClient(
             return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"Claude Code's commands could not be handed to the isolation: {unprefixed}", run);
         }
 
+        // Where Claude Code's own process runs outside the isolation it hands its commands to, it opens no agent's file
+        // itself: the engine's tool server serves the runtime's file tools in place of its own.
+        var ownFiles = HandedTo(run) is null;
         var totals = new Totals();
-        var tools = ClaudeCodeTools.Of(ground.Given, ground.SideTask);
+        var tools = ClaudeCodeTools.Of(ground.Given, ground.SideTask, ownFiles);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
 
-        // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web.
-        var served = ClaudeCodeTools.Served(AgentTools.Offered(ground, run.Commands, run.WebSearch));
+        // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web, and the
+        // file tools where Claude Code's own are not given.
+        var served = ClaudeCodeTools.Served(AgentTools.Offered(ground, run.Commands, run.WebSearch), ownFiles);
 
         if (served.Count > 0 && _tools is null)
         {
-            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"the step has the web, which this client serves through the engine's tool server ({string.Join(", ", served)}), and it was given no tool runtime to serve it with", run);
+            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"the launch takes {string.Join(", ", served)} from the engine's tool server, and this client was given no tool runtime to serve them with", run);
         }
 
         for (var entry = 0; ; entry++)
@@ -244,6 +257,7 @@ public sealed class ClaudeCodeClient(
             ToolCalls = totals.Calls,
             Denials = totals.Denials,
             WebRequests = totals.WebRequests,
+            FilesWritten = totals.FilesWritten,
             Duration = duration,
             Session = totals.Session,
             Usage = totals.Used.Report(totals.Cost is { } reported ? new AgentCost(Reported: reported) : null),
@@ -272,6 +286,8 @@ public sealed class ClaudeCodeClient(
         public int Denials { get; set; }
 
         public int WebRequests { get; set; }
+
+        public int FilesWritten { get; set; }
 
         public bool Worked { get; set; }
 
@@ -334,6 +350,9 @@ public sealed class ClaudeCodeClient(
 
         /// <summary>The bound a launch the person left reads on to its cut turn's result in passed.</summary>
         public sealed record LeaveBound : Arrival;
+
+        /// <summary>The bound a background shell call's receipt is awaited in passed.</summary>
+        public sealed record ReceiptDue(string CallId) : Arrival;
     }
 
     /// <summary>Where a launch stands with the handoff.</summary>
@@ -382,6 +401,14 @@ public sealed class ClaudeCodeClient(
 
         // Every call of the engine's tool server run, by its id: each runs once.
         private readonly HashSet<string> _served = new(StringComparer.Ordinal);
+
+        // Where the launch hands its commands to the isolation: the directory each command's receipt is written in, Claude
+        // Code's own temporary directory, each shell call the engine allowed with the receipt at its command's head and
+        // whether it runs in the background, and each background call whose receipt is awaited.
+        private string? _receipts;
+        private string? _claudeTemp;
+        private readonly Dictionary<string, (string Receipt, bool Background)> _receipted = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string Tool, string Receipt)> _awaited = new(StringComparer.Ordinal);
 
         // Every call Claude Code refused by itself, by its id: each is told once, by its permission_denied line, its
         // result, or both.
@@ -454,8 +481,15 @@ public sealed class ClaudeCodeClient(
                 var (self, leading) = client._self();
                 var prefix = ClaudeShell.PrefixOf(self, leading).Prefix!;
                 var isolationFile = Path.Combine(directory, ClaudeShell.FileName);
-                files.WriteAllTextAtomic(isolationFile, IsolatedShell.Written(isolation));
-                shell = ClaudeShell.Variables(prefix, isolationFile, isolation.Profile.Temp ?? directory);
+
+                // The receipts and Claude Code's own temporary directory stand in the step's directory, which no command
+                // writes: each command's receipt is written there outside, and Claude Code's own files kept from them.
+                _receipts = Path.Combine(directory, ClaudeShell.ReceiptsDirectoryName);
+                _claudeTemp = Path.Combine(directory, ClaudeShell.TempDirectoryName);
+                files.CreateDirectory(_receipts);
+                files.CreateDirectory(_claudeTemp);
+                files.WriteAllTextAtomic(isolationFile, IsolatedShell.Written(isolation, new IsolatedShellHanding(_receipts, _claudeTemp)));
+                shell = ClaudeShell.Variables(prefix, isolationFile, _claudeTemp);
             }
 
             files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, run.Commands, client._platform.PathComparison, isolated: shell is not null || whole is not null, shell));
@@ -581,6 +615,7 @@ public sealed class ClaudeCodeClient(
                 {
                     totals.Denials += runtime.Tally.Denials;
                     totals.WebRequests += runtime.Tally.WebRequests;
+                    totals.FilesWritten += runtime.Tally.FilesWritten;
                 }
 
                 try
@@ -594,6 +629,19 @@ public sealed class ClaudeCodeClient(
                 {
                     // The run stopped with no room left in its record: what is left to say reaches nothing, and how the
                     // launch ended stands as it is.
+                }
+
+                // Claude Code's own temporary directory goes once the launch has gone: nothing in it is a record.
+                if (_claudeTemp is not null)
+                {
+                    try
+                    {
+                        files.DeleteDirectory(_claudeTemp);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // Left in the step's directory, which no command writes.
+                    }
                 }
             }
         }
@@ -627,6 +675,7 @@ public sealed class ClaudeCodeClient(
                     Arrival.ChatEnded => ChatEnded(),
                     Arrival.TurnInterrupted => await OnTurnInterruptedAsync().ConfigureAwait(false),
                     Arrival.LeaveBound => _leaving ? Left(withItsLastTurn: false) : null,
+                    Arrival.ReceiptDue due => OnReceiptDue(due),
                     _ => null,
                 };
 
@@ -720,7 +769,7 @@ public sealed class ClaudeCodeClient(
             }
 
             // No MCP server but the engine's own, and that one only where the launch takes its tools: connected, every tool
-            // of it taken - a launch that did not take it has not the web it was given.
+            // of it taken - a launch that did not take it has not the web, or the file tools, it was given.
             if (init.McpServers.Select(server => server.Name).FirstOrDefault(name => name != ClaudeCodeTools.Server || _server is null) is { } other)
             {
                 return NotHost($"{Claude} connected the MCP server '{other}', which this launch was not given: --strict-mcp-config names none but the engine's own");
@@ -732,7 +781,7 @@ public sealed class ClaudeCodeClient(
 
                 if (status != "connected")
                 {
-                    return NotHost($"{Claude} did not connect the engine's tool server ({(status is null ? "its init names none" : $"it says '{status}'")}), which serves this step's {string.Join(" and ", served)}: this tool serves the web to Claude Code through it alone");
+                    return NotHost($"{Claude} did not connect the engine's tool server ({(status is null ? "its init names none" : $"it says '{status}'")}), which serves this launch {string.Join(", ", served)}, given to Claude Code through it alone");
                 }
 
                 if (served.Select(ClaudeCodeTools.ServedName).FirstOrDefault(name => !init.Tools.Contains(name, StringComparer.Ordinal)) is { } untaken)
@@ -847,6 +896,11 @@ public sealed class ClaudeCodeClient(
                 if (!decided.Allowed)
                 {
                     return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code ran '{call.Tool}' though the engine refused it ({Claude})"), KillNow: true);
+                }
+
+                if (HeldToItsReceipt(result.CallId, call.Tool) is { } unreceipted)
+                {
+                    return unreceipted;
                 }
             }
 
@@ -981,9 +1035,69 @@ public sealed class ClaudeCodeClient(
                 return null;
             }
 
-            Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = asked.Input?.DeepClone() ?? new JsonObject() }));
+            Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = Receipted(asked.CallId, tool, asked.Input) }));
             return null;
         }
+
+        /// <summary>
+        /// The input an allowed call is given back to run with: as asked, but a shell command of a launch that hands its
+        /// commands to the isolation, which is given back with a new receipt at its head (<see cref="IsolatedShell.Marked"/>)
+        /// - the receipt the isolated shell writes before it runs the command, and the call's result is held to.
+        /// </summary>
+        private JsonNode Receipted(string? callId, string tool, JsonNode? input)
+        {
+            var given = input?.DeepClone() ?? new JsonObject();
+
+            if (_receipts is not null
+                && callId is not null
+                && ClaudeCodeTools.Find(tool) is { Capability: AgentCapability.Run } row
+                && given is JsonObject holding
+                && holding[row.Tool.Subject] is JsonValue value
+                && value.TryGetValue<string>(out var command))
+            {
+                var receipt = IsolatedShell.NewReceipt();
+                holding[row.Tool.Subject] = IsolatedShell.Marked(command, receipt);
+                _receipted[callId] = (receipt, holding[BackgroundMember] is JsonValue background && background.TryGetValue<bool>(out var behind) && behind);
+            }
+
+            return given;
+        }
+
+        /// <summary>
+        /// Holds a shell call that ran to the receipt of its command: none written means the command ran without being handed
+        /// to the isolation - a Claude Code that skips its shell prefix - and ends the launch at once. A call run in the
+        /// background comes back before its command is handed over, so its receipt is awaited for <see cref="ReceiptBound"/>,
+        /// and at the latest by its turn's end.
+        /// </summary>
+        private LaunchOutcome? HeldToItsReceipt(string callId, string tool)
+        {
+            if (!_receipted.Remove(callId, out var receipted) || client._fileSystem.FileExists(Path.Combine(_receipts!, receipted.Receipt)))
+            {
+                return null;
+            }
+
+            if (!receipted.Background)
+            {
+                return Unreceipted(tool, callId);
+            }
+
+            _awaited[callId] = (tool, receipted.Receipt);
+            After(ReceiptBound, new Arrival.ReceiptDue(callId));
+
+            return null;
+        }
+
+        /// <summary>A background call's receipt awaited past its bound: there by now, or the launch ends.</summary>
+        private LaunchOutcome? OnReceiptDue(Arrival.ReceiptDue due)
+            => _awaited.Remove(due.CallId, out var awaited) && !client._fileSystem.FileExists(Path.Combine(_receipts!, awaited.Receipt))
+                ? Unreceipted(awaited.Tool, due.CallId)
+                : null;
+
+        /// <summary>A shell call whose command left no receipt: the launch ends at once, failed, saying so.</summary>
+        private LaunchOutcome Unreceipted(string tool, string callId)
+            => new(
+                Failed(AgentRunStatus.Failed, $"Claude Code ran the command of its '{tool}' call {callId} with no receipt of it in '{_receipts}': it was not handed to the isolation through Claude Code's shell prefix, so it may have run outside it ({Claude})"),
+                KillNow: true);
 
         /// <summary>
         /// A message of the engine's tool server: answered at once, but a call, which is run in the background by the tool
@@ -1322,6 +1436,18 @@ public sealed class ClaudeCodeClient(
 
             await Emit(new TurnFinished(totals.Turns, served, result.Usage, result.StopReason)).ConfigureAwait(false);
             await Emit(new UsageReported(result.Usage, totals.Used.Total)).ConfigureAwait(false);
+
+            // A shell call run in the background has its receipt by the turn's end, its command long since handed over - or
+            // its command was not, and the launch ends here.
+            foreach (var (callId, awaited) in _awaited.ToList())
+            {
+                _awaited.Remove(callId);
+
+                if (!client._fileSystem.FileExists(Path.Combine(_receipts!, awaited.Receipt)))
+                {
+                    return Unreceipted(awaited.Tool, callId);
+                }
+            }
 
             switch (_handing)
             {

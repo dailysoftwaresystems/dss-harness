@@ -7,12 +7,25 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// stays outside it: Claude Code starts each through its shell prefix (<c>CLAUDE_CODE_SHELL_PREFIX</c>), which names this
 /// tool and <see cref="IsolatedShell.Option"/>, and this tool becomes the mechanism with the command inside
 /// (<see cref="IsolatedShell"/>), the launch's isolation read from the file its variable names. Claude Code is told the one
-/// shell the command runs in, and its own temporary directory is the launch's, written inside. So Claude Code reads its
-/// login and its key in its own process while no command it runs reaches either - its environment behind a process
-/// namespace of the command's own, its directories hidden but the shell snapshots it sources.
+/// shell the command runs in, and its own temporary directory is a directory of the launch's beside its records, which no
+/// command writes but the one file each ends by writing its working directory to - so nothing Claude Code writes or reads
+/// there in its own process is a command's to replace with a link. So Claude Code reads its login and its key in its own
+/// process while no command it runs reaches either - its environment behind a process namespace of the command's own, its
+/// directories hidden but the shell snapshots it sources.
 /// </summary>
+/// <remarks>
+/// Each command the engine allows is given back to Claude Code with a receipt at its head (<see cref="IsolatedShell.Marked"/>),
+/// which the isolated shell writes in the launch's receipts' directory before it runs the command; a call that comes back
+/// with no receipt of its command ran outside the isolation, and ends the launch.
+/// </remarks>
 public static class ClaudeShell
 {
+    /// <summary>The directory, in the step's directory, each command's receipt is written in.</summary>
+    public const string ReceiptsDirectoryName = "claude-receipts";
+
+    /// <summary>The directory, in the step's directory, that is Claude Code's own temporary directory, removed once the launch has ended.</summary>
+    public const string TempDirectoryName = "claude-tmp";
+
     /// <summary>The variable Claude Code wraps every shell command it starts with.</summary>
     public const string PrefixVariable = "CLAUDE_CODE_SHELL_PREFIX";
 
@@ -54,7 +67,7 @@ public static class ClaudeShell
     /// </summary>
     /// <param name="prefix">The prefix (<see cref="PrefixOf"/>).</param>
     /// <param name="file">The launch's isolation file.</param>
-    /// <param name="temp">The launch's temporary directory.</param>
+    /// <param name="temp">Claude Code's own temporary directory, the launch's (<see cref="TempDirectoryName"/>).</param>
     public static IReadOnlyList<KeyValuePair<string, string>> Variables(string prefix, string file, string temp)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(prefix);

@@ -199,7 +199,18 @@ public sealed class SandboxExec(string version, Func<string, string> realPath) :
 
         foreach (var write in profile.Writes)
         {
-            lines.Add($"({(write.Writable ? "allow" : "deny")} file-write* {Filter("WRITE", write.Path, write.Directory, parameters)})");
+            var filter = Filter("WRITE", write.Path, write.Directory, parameters);
+
+            // A file written alone is written in place: its data alone, never removed, made or renamed onto, so nothing -
+            // a link among it - is put in its stead.
+            if (write.Writable && !write.Directory)
+            {
+                lines.Add($"(allow file-write-data {filter})");
+                lines.Add($"(deny file-write-unlink file-write-create {filter})");
+                continue;
+            }
+
+            lines.Add($"({(write.Writable ? "allow" : "deny")} file-write* {filter})");
         }
 
         foreach (var hidden in profile.Hidden)

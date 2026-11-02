@@ -1018,8 +1018,30 @@ public sealed partial class HelpTests
                 + "handed there, and every shell command it starts is handed to the isolation through its shell prefix "
                 + "(CLAUDE_CODE_SHELL_PREFIX: this tool and --isolated-shell, which becomes the mechanism with /bin/bash inside, the "
                 + "launch's isolation read from the file DSSHARNESS_ISOLATED_SHELL names) - so no command it runs reaches its "
-                + "directories, its login or its environment - and Claude Code's own sandbox is turned off in its settings, for none "
-                + "nests in this one;",
+                + "directories, its login or its environment. There Claude Code opens no file of the agent's in its own process: its "
+                + "file tools are not given, --tools names its shell alone, and the engine's tool server serves the tool runtime's "
+                + "(view_file, find_files, search_files, create_file, replace_in_file, insert_in_file, create_directory, delete_file, "
+                + "delete_directory, move_path) in their place, each file opened by the engine and decided again by where the system "
+                + "names the open file, so a link a command - one left running in the background among them - puts on a path between "
+                + "the decision and the open reaches nothing.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Each shell command the engine allows is given back with a receipt at its head (: dssharness-receipt <32 hexadecimal "
+                + "digits>;, the shell's no-op), which --isolated-shell writes in the step's claude-receipts directory, where no command "
+                + "writes, before it runs the command; a call that comes back with none - a Claude Code that skipped its prefix, the "
+                + "command run outside - ends the launch failed at once, a call run in the background within 20 s or by its turn's end. "
+                + "Claude Code's own temporary directory is the step's claude-tmp, where no command writes but the one file each ends "
+                + "by writing its working directory to - made empty, given that command alone, written in place, never removed or replaced - so "
+                + "nothing Claude Code writes or reads there in its own process is a command's to replace with a link; it goes with the "
+                + "launch. Claude Code's own sandbox is turned off in its settings, for none nests in this one;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "There its own file tools are given, for they open each file inside the container, which holds every place they reach as "
+                + "it holds the commands, and its temporary directory is MXC's own inside it; nothing is handed over, so no receipt is "
+                + "asked. Where there is no isolation at all - preferred, on a machine with none - Claude Code's own file tools open each "
+                + "file by the path the engine decided, the words policy alone between them.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1121,6 +1143,13 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Agents.Isolation.LaunchIsolation)}.{nameof(DssHarness.Core.Agents.Isolation.LaunchIsolation.ForClaudeCode)}",
             nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeShell),
             $"{nameof(DssHarness.Core.Processes.IsolatedShell)}.{nameof(DssHarness.Core.Processes.IsolatedShell.Run)}",
+            $"{nameof(DssHarness.Core.Processes.IsolatedShell)}.{nameof(DssHarness.Core.Processes.IsolatedShell.Marked)}",
+            $"{nameof(DssHarness.Core.Processes.IsolatedShell)}.{nameof(DssHarness.Core.Processes.IsolatedShell.Prepared)}",
+            nameof(DssHarness.Core.Processes.IsolatedShell.ReceiptOf),
+            nameof(DssHarness.Core.Processes.IsolatedShell.EndFileOf),
+            nameof(DssHarness.Core.Processes.IsolatedShellHanding),
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.FileTools)}",
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient.ReceiptBound)}",
             $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.Apply)}",
             nameof(DssHarness.Core.Git.GitDirectoryPins),
             nameof(DssHarness.Core.Git.GitHooks),
@@ -1169,6 +1198,15 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
 
         Assert.Contains(
+            "where its own process runs outside the isolation it hands its commands to (above), the engine's tool server serves read's "
+                + "mcp__dssharness__view_file, mcp__dssharness__find_files, mcp__dssharness__search_files and write's mcp__dssharness__create_file, "
+                + "mcp__dssharness__replace_in_file, mcp__dssharness__insert_in_file, mcp__dssharness__create_directory, mcp__dssharness__delete_file, "
+                + "mcp__dssharness__delete_directory, mcp__dssharness__move_path in place of Claude Code's own, each call asked of the engine and run by the "
+                + "tool runtime below as on the API clients.",
+            prose,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
             "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed and never continued, "
                 + "keeping no session file (one a launch leaves all the same is removed once it has ended, however it ended, and said), "
                 + "streamed both ways - the step's prompt is "
@@ -1178,7 +1216,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "the tools of the agent's capabilities and no other - read: Read, Grep, Glob; write: Write, Edit, NotebookEdit; run: Bash; web: "
                 + "none of Claude Code's, but mcp__dssharness__web_fetch and mcp__dssharness__web_search of the engine's tool server beside them "
-                + "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode.",
+                + "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1207,8 +1245,8 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "the claude-code client below asks it of every call, the tool runtime below decides by it each call it runs - the web's of the claude-code client, served through "
-                + "the engine's tool server, and every call of the API clients, the claude-api and glm clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
+            "the claude-code client below asks it of every call, the tool runtime below decides by it each call it runs - the web's of the claude-code client, and its file tools' "
+                + "where Claude Code's own process runs outside the isolation, served through the engine's tool server, and every call of the API clients, the claude-api and glm clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("a second layer, for the engine is asked about every other call and answers from this policy in its own process, and a call those rules refuse first is counted and recorded as Claude Code's own denial.", prose, StringComparison.Ordinal);
@@ -1235,7 +1273,7 @@ public sealed partial class HelpTests
                 + "alone in its turn); run_command (run, alone in its turn); web_fetch (web); web_search (web).",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("built for the API clients to give their agents in place of a client's own - the claude-api and glm clients below - and serving the claude-code client the web's through the engine's tool server,", prose, StringComparison.Ordinal);
+        Assert.Contains("built for the API clients to give their agents in place of a client's own - the claude-api and glm clients below - and serving the claude-code client the web's through the engine's tool server, and its file tools there too where Claude Code's own process runs outside the isolation, each under the capability that gives it:", prose, StringComparison.Ordinal);
         Assert.Contains("The run's reporter is given view_file, find_files, search_files, those that read, and no other.", prose, StringComparison.Ordinal);
         Assert.Contains("A replace or an insert needs its file viewed first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a newline.", prose, StringComparison.Ordinal);
         Assert.Contains(
@@ -1367,12 +1405,36 @@ public sealed partial class HelpTests
         Assert.Contains("a call of it the engine did not allow runs nothing and fails the step.", readme, StringComparison.Ordinal);
         Assert.Contains("a call those rules refuse before the engine is asked is counted and recorded as Claude Code's own denial.", readme, StringComparison.Ordinal);
         Assert.Contains(
-            "the tool runtime below decides by it each call it runs - the web's of the `claude-code` client, served through the engine's tool "
-                + "server, and every call of the API clients, the `claude-api` and `glm` clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
+            "the tool runtime below decides by it each call it runs - the web's of the `claude-code` client, and its file tools' where Claude Code's own process runs "
+                + "outside the isolation, served through the engine's tool server, and every call of the API clients, the `claude-api` and `glm` clients below - for every agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a side-task.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
             "`web`: none of Claude Code's, but `mcp__dssharness__web_fetch` and `mcp__dssharness__web_search` of the engine's tool server beside them)",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "where its own process runs outside the isolation it hands its commands to (above), the engine's tool server serves the tool runtime's file tools in place "
+                + "of Claude Code's own - `read`: `mcp__dssharness__view_file`, `mcp__dssharness__find_files`, `mcp__dssharness__search_files`; `write`: "
+                + "`mcp__dssharness__create_file`, `mcp__dssharness__replace_in_file`, `mcp__dssharness__insert_in_file`, `mcp__dssharness__create_directory`, "
+                + "`mcp__dssharness__delete_file`, `mcp__dssharness__delete_directory`, `mcp__dssharness__move_path` - each call asked of the engine and run by the "
+                + "tool runtime below as on the API clients.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "There Claude Code opens no file of the agent's in its own process: its file tools are not given, `--tools` names its shell alone,",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Each shell command the engine allows is given back with a receipt at its head (`: dssharness-receipt <32 hexadecimal digits>;`, the shell's no-op), "
+                + "which `--isolated-shell` writes in the step's `claude-receipts` directory, where no command writes, before it runs the command; a call that comes "
+                + "back with none - a Claude Code that skipped its prefix, the command run outside - ends the launch failed at once, a call run in the background "
+                + "within 20 s or by its turn's end. Claude Code's own temporary directory is the step's `claude-tmp`,",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "There its own file tools are given, for they open each file inside the container, which holds every place they reach as it holds the commands, "
+                + "and its temporary directory is MXC's own inside it; nothing is handed over, so no receipt is asked.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1738,7 +1800,8 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("the run's reporter is given those that read and no other.", readme, StringComparison.Ordinal);
         Assert.Contains(
-            "built for the API clients to give their agents in place of a client's own - the `claude-api` and `glm` clients below - and serving the `claude-code` client the web's through the engine's tool server:",
+            "built for the API clients to give their agents in place of a client's own - the `claude-api` and `glm` clients below - and serving the `claude-code` client the web's through the engine's tool server, and its file tools there too "
+                + "where Claude Code's own process runs outside the isolation:",
             readme,
             StringComparison.Ordinal);
         Assert.Contains($"its links followed (one whose links cannot be followed refused as {DssHarness.Core.Agents.Policy.AgentPolicy.UndecidedRule}) and held to the agent's roots", readme, StringComparison.Ordinal);

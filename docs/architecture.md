@@ -2019,7 +2019,9 @@ API clients - `claude-api` and `glm` - each run's opened by `AgentToolHost.Open`
 the `claude-code` client the web's through the engine's tool server (`AgentToolServer`, opened by
 `AgentToolHost.Serve` for one launch: the server's tools alone, written to the launch's own
 `AgentCallRecords`, each call answered by `AgentToolRuntime.ServeAsync`, whose end the launch's
-stream tells): the tools are the one
+stream tells), and the file tools there too where Claude Code's own process runs outside the isolation
+it hands its commands to (`ClaudeCodeTools.FileTools`, `Of` and `Served` given `ownFiles: false`): the
+tools are the one
 table `AgentTools` holds (what a step is offered, what help prints and what runs); each call is
 held to its tool's schema (`JsonSchemaSubset`), each path to the agent's roots by `ConfinedPaths` -
 its spelling, its links followed, a write through no link below its root - before the policy is
@@ -2415,13 +2417,39 @@ through its shell prefix (`ClaudeShell`, `CLAUDE_CODE_SHELL_PREFIX` naming this 
 `DSSHARNESS_ISOLATED_SHELL` names (`claude-isolation.json` in the step's directory) and becomes the mechanism with
 `/bin/bash` inside - so no command reaches Claude Code's directories, its login or its environment
 (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` among the controlled variables, a process namespace of the command's own), and a
-login whose token has run out is renewed by Claude Code outside, which writes its directories. A tool run as a runtime
+login whose token has run out is renewed by Claude Code outside, which writes its directories. Claude Code's own process
+opens no file of the agent's there: Claude Code would open a file by the path the engine decided earlier, outside,
+where a link a command - one left running in the background among them - put on the path in between would reach what
+the isolation keeps from every command; so its file tools are given no such launch (`ClaudeCodeTools.Of` with
+`ownFiles: false`, `--tools` its shell alone), and the engine's tool server serves the runtime's in their place
+(`ClaudeCodeTools.FileTools`, `Served`), each file opened by `AgentFiles` and decided again by where the system names
+the open file. Every shell call the engine allows is given back with a receipt at its command's head
+(`IsolatedShell.Marked`: `: dssharness-receipt <32 hexadecimal digits>; <command>`, the shell's no-op, a new one from
+the system's random source for each call), which `IsolatedShell.Prepared` reads off the line it is handed
+(`ReceiptOf`) and writes, new and never through a link, in the step's `claude-receipts` directory - named in the
+isolation file's handing (`IsolatedShellHanding`), where no command writes - before the shell runs; a call whose result
+comes back with no receipt of its command (`HeldToItsReceipt`) ran without being handed over, by a Claude Code that
+skipped its prefix, and ends the launch failed at once, killed, a call run in the background - whose result comes back
+before its command is handed over - awaited for `ClaudeCodeClient.ReceiptBound` (20 s) and at the latest by its turn's
+end. Claude Code's own temporary directory (`CLAUDE_CODE_TMPDIR`) is the step's `claude-tmp`, beside the receipts and
+equally beyond every command's writes, so nothing Claude Code writes or reads there in its own process - a task's
+output, a prompt's file - is a command's to replace with a link; each command ends by writing the working directory it
+ended in to a file there (`pwd -P >| <claude-tmp>/claude-<hex>-cwd`, the form Claude Code ends every handed command
+with), which `Prepared` reads off the line as the shell reads the word (`EndFileOf`), makes empty and hands that command
+alone, written in place, never removed or replaced - bubblewrap binds the file alone, a mount point no command
+removes or renames onto, and macOS's sandbox allows its data alone written and refuses its removal and its making, a
+rename onto it among them - a line that ends no such way given no file, so its command's last write fails rather than
+reaching further. The directory goes with the launch; the receipts stay beside its records. A tool run as a runtime
 handed its assembly, or from a path holding ` -`, has no prefix Claude Code can split (`ClaudeShell.PrefixOf`), and
 the launch is not started. Where the mechanism takes no handed command (MXC's container, on Windows, where every
 command Claude Code runs is Git Bash's), the whole `claude` runs inside the profile that leaves the Claude Code
 directories and `~/.claude.json` read alone (`LaunchIsolation.ForClaudeCode`): written, they would let a command plant
 what Claude Code runs outside later - its settings' hooks, its own file's servers - so a login whose token has run out
-is not renewed inside until a `claude` run outside renews it, and the launch's commands read its login there. Claude
+is not renewed inside until a `claude` run outside renews it, and the launch's commands read its login there; its own
+file tools are given, for they open each file inside the container, which holds every place they reach as it holds
+the commands, its temporary directory MXC's own inside it, and nothing is handed over, so no receipt is asked. Where a
+launch has no isolation at all (`preferred` on a machine with none), Claude Code's own file tools open each file by
+the path the engine decided, the words policy alone between them. Claude
 Code's own Bash sandbox is not used: the tool's own mechanism holds every command, one mechanism for every client, and
 nothing rests on how that sandbox treats the network in print mode or weighs its own write rules against the profile -
 and the launch's settings turn it off (`ClaudeSettings.Render`'s `isolated`, `"sandbox": {"enabled": false}`) over any

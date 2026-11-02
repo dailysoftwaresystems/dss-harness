@@ -218,7 +218,8 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.Equal([AgentTools.WebFetch, AgentTools.WebSearch], ClaudeCodeTools.ServerTools);
         Assert.Equal("mcp__dssharness__web_search", ClaudeCodeTools.ServedName(AgentTools.WebSearch));
         Assert.Equal(AgentTools.WebFetch, ClaudeCodeTools.ServedAs("mcp__dssharness__web_fetch"));
-        Assert.Null(ClaudeCodeTools.ServedAs("mcp__dssharness__view_file"));
+        Assert.Equal(AgentTools.ViewFile, ClaudeCodeTools.ServedAs("mcp__dssharness__view_file"));
+        Assert.Null(ClaudeCodeTools.ServedAs("mcp__dssharness__run_command"));
         Assert.Null(ClaudeCodeTools.ServedAs("mcp__other__web_fetch"));
         Assert.Null(ClaudeCodeTools.ServedAs("web_fetch"));
         Assert.Null(ClaudeCodeTools.ServedAs("WebFetch"));
@@ -228,6 +229,36 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.Equal([AgentTools.WebFetch], ClaudeCodeTools.Served(AgentTools.Offered(ground, AgentCommandSettings.Default)));
         Assert.Equal([AgentTools.WebFetch, AgentTools.WebSearch], ClaudeCodeTools.Served(AgentTools.Offered(ground, AgentCommandSettings.Default, search)));
         Assert.Empty(ClaudeCodeTools.Served(AgentTools.Offered(ground with { Capabilities = [AgentCapability.Read] }, AgentCommandSettings.Default, search)));
+    }
+
+    /// <summary>
+    /// Where Claude Code's own file tools are not given - its process outside the isolation it hands its commands to - a
+    /// launch's --tools names its shell alone, and the engine's tool server serves the runtime's file tools in their place,
+    /// those of the step's capabilities, beside the web's: from the runtime's one table, the file tools those of the read and
+    /// write capabilities.
+    /// </summary>
+    [Fact]
+    public void WhereClaudeCodesOwnFileToolsAreNotGiven_TheServerServesTheRuntimes()
+    {
+        Assert.Equal([AgentCapability.Read, AgentCapability.Write], ClaudeCodeTools.FileCapabilities);
+        Assert.Equal(
+            [AgentTools.ViewFile, AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.CreateFile, AgentTools.ReplaceInFile, AgentTools.InsertInFile, AgentTools.CreateDirectory, AgentTools.DeleteFile, AgentTools.DeleteDirectory, AgentTools.MovePath],
+            ClaudeCodeTools.FileTools);
+        Assert.Equal(ClaudeCodeTools.ServerTools, ClaudeCodeTools.ServedTools(ownFiles: true));
+        Assert.Equal([.. ClaudeCodeTools.FileTools, .. ClaudeCodeTools.ServerTools], ClaudeCodeTools.ServedTools(ownFiles: false));
+
+        Assert.Equal(["Bash"], ClaudeCodeTools.Of(AgentPolicyGround.EveryCapability, ownFiles: false));
+        Assert.Equal(["Bash", "WebFetch", "WebSearch"], ClaudeCodeTools.Of(AgentPolicyGround.EveryCapability, ownWeb: true, ownFiles: false));
+        Assert.Equal(["mcp__dssharness__view_file", "mcp__dssharness__find_files", "mcp__dssharness__search_files"], ClaudeCodeTools.ServedOf(AgentCapability.Read, ownFiles: false));
+        Assert.Empty(ClaudeCodeTools.ServedOf(AgentCapability.Read));
+
+        var ground = PolicyGrounds.Of(_worktree, [_worktree], [_worktree], [], [], []);
+        Assert.Equal(
+            [AgentTools.CreateDirectory, AgentTools.CreateFile, AgentTools.DeleteDirectory, AgentTools.DeleteFile, AgentTools.FindFiles, AgentTools.InsertInFile, AgentTools.MovePath, AgentTools.ReplaceInFile, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch],
+            ClaudeCodeTools.Served(AgentTools.Offered(ground, AgentCommandSettings.Default), ownFiles: false));
+        Assert.Equal(
+            [AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.ViewFile],
+            ClaudeCodeTools.Served(AgentTools.Offered(ground with { Capabilities = [AgentCapability.Read, AgentCapability.Run] }, AgentCommandSettings.Default), ownFiles: false));
     }
 
     /// <summary>

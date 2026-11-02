@@ -183,6 +183,32 @@ public sealed class SandboxExecTests
     }
 
     /// <summary>
+    /// A file a child writes alone - the one a handed command ends by writing its working directory to, in a place written by
+    /// nobody - is written in place: its data alone allowed, its removal and its making - a rename onto it among them -
+    /// refused after, so nothing is put in its stead, a link among it.
+    /// </summary>
+    [Fact]
+    public void AFileWrittenAlone_IsWrittenInPlace_NeverRemoved()
+    {
+        var mechanism = new SandboxExec("15.3", path => path);
+        var profile = new IsolationProfile(
+            [],
+            [new IsolatedWrite("/r/s1", Directory: true, Writable: false), new IsolatedWrite("/r/s1/claude-tmp/claude-1a2b-cwd", Directory: false, Writable: true)]);
+
+        var (text, parameters) = mechanism.Policy(profile);
+
+        Assert.Equal(
+            [
+                "(deny file-write* (subpath (param \"WRITE_0\")))",
+                "(allow file-write-data (literal (param \"WRITE_1\")))",
+                "(deny file-write-unlink file-write-create (literal (param \"WRITE_1\")))",
+                "(deny system-fcntl (fcntl-command 80 110))",
+            ],
+            text.TrimEnd('\n').Split('\n').TakeLast(4));
+        Assert.Equal([("WRITE_0", "/r/s1"), ("WRITE_1", "/r/s1/claude-tmp/claude-1a2b-cwd")], parameters);
+    }
+
+    /// <summary>
     /// On macOS the probe proves the system's sandbox once for the process: its program at the one path it is taken from,
     /// this process inside no sandbox, and a trial run of the probe's command under the tree's runs directory - contained,
     /// inside the sandbox, a hidden place, an open place and a place written by nobody inside it in its profile, the
@@ -338,6 +364,22 @@ public sealed class SandboxExecTests
             Assert.True(Directory.Exists(anchor), anchor);
             Assert.False(Directory.Exists(anchor + "-moved"), anchor);
         }
+    }
+
+    /// <summary>
+    /// A command handed over writes the one file it ends by writing its working directory to in place - its data alone - and
+    /// nothing removes it, puts a link in its stead, by its name or by a rename onto it, or writes beside it in Claude Code's
+    /// own temporary directory.
+    /// </summary>
+    [Fact]
+    public async Task ACommandHandedOver_WritesItsEndFileInPlace_AndNothingElseThere()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+
+        await RealIsolation.EndFileWrittenInPlaceAsync(await RealIsolation.StepLaunchAsync(temp, home, platform));
     }
 
     /// <summary>The sandbox the probe proved: the test skipped where this is not macOS.</summary>

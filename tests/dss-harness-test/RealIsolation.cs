@@ -1,4 +1,5 @@
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
@@ -98,6 +99,54 @@ internal static class RealIsolation
                 Isolation = isolation,
             },
             Token);
+
+    /// <summary>
+    /// Holds a command handed over in <paramref name="launch"/> to the one file it ends by writing its working directory to,
+    /// in Claude Code's own temporary directory under the launch's own: the isolated shell makes it outside and gives it that
+    /// command, which writes it in place; a command removes it by no name, puts no link in its stead - by its name or by a
+    /// rename onto it - and writes nothing beside it, the file left as the write left it.
+    /// </summary>
+    /// <param name="launch">The step's launch.</param>
+    public static async Task EndFileWrittenInPlaceAsync(StepLaunch launch)
+    {
+        var handing = new IsolatedShellHanding(
+            Path.Combine(launch.Directory, ClaudeShell.ReceiptsDirectoryName),
+            Path.Combine(launch.Directory, ClaudeShell.TempDirectoryName));
+        Directory.CreateDirectory(handing.Receipts);
+        Directory.CreateDirectory(handing.ProgramTemp);
+        var end = handing.ProgramTemp + "/claude-1a2b-cwd";
+        var beside = handing.ProgramTemp + "/planted";
+        var aimed = Path.Combine(launch.Worktree, "aimed.txt");
+        await File.WriteAllTextAsync(aimed, "aimed", Token);
+
+        var (prepared, problem) = IsolatedShell.Prepared(launch.Commands, handing, $"{IsolatedShell.Marked("true", IsolatedShell.NewReceipt())} && pwd -P >| {end}");
+
+        Assert.Null(problem);
+
+        var wrote = await InsideAsync(prepared!, launch.Worktree, "/bin/sh", "-c", "pwd -P >| \"$1\"", "sh", end);
+
+        Assert.Equal(0, wrote.ExitCode);
+
+        var written = await File.ReadAllTextAsync(end, Token);
+
+        Assert.EndsWith("/" + Path.GetFileName(launch.Worktree) + "\n", written, StringComparison.Ordinal);
+
+        foreach (var (how, script) in new[]
+        {
+            ("removed", "rm -f \"$1\""),
+            ("linked by its name", "ln -sf \"$2\" \"$1\""),
+            ("renamed onto", "ln -s \"$2\" link && mv -f link \"$1\""),
+            ("written beside", ": > \"$3\""),
+        })
+        {
+            var tried = await InsideAsync(prepared!, launch.Worktree, "/bin/sh", "-c", script, "sh", end, aimed, beside);
+
+            Assert.True(tried.ExitCode != 0, $"the file was {how}");
+            File.Delete(Path.Combine(launch.Worktree, "link"));
+        }
+
+        Assert.Equal((null, written, false), (new FileInfo(end).LinkTarget, await File.ReadAllTextAsync(end, Token), File.Exists(beside)));
+    }
 
     /// <summary>A step's launch over a real repository, made by <see cref="StepLaunchAsync"/>.</summary>
     /// <param name="Kit">The repository.</param>
