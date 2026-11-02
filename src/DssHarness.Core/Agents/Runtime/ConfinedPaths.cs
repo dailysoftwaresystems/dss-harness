@@ -82,7 +82,7 @@ public sealed class ConfinedPaths
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tree);
 
-        return new ConfinedPaths(fileSystem, platform, new AgentPolicyGround(tree, [], [tree], [], [], [], [], null, null, null, WorktreeRules: false, ProtectedPaths: false, []));
+        return new ConfinedPaths(fileSystem, platform, new AgentPolicyGround(tree, [], [tree], [], [], [], [], [], null, null, null, WorktreeRules: false, ProtectedPaths: false, []));
     }
 
     /// <summary>

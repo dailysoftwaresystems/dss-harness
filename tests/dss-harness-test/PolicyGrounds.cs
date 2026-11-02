@@ -1,4 +1,5 @@
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Agents.Policy;
 
 namespace DssHarness.Tests;
@@ -22,13 +23,15 @@ internal static class PolicyGrounds
         string? reporterRoot = null,
         bool worktreeRules = true,
         bool protectedPaths = true,
-        IReadOnlyList<string>? stateDirectories = null)
+        IReadOnlyList<string>? stateDirectories = null,
+        IReadOnlyList<HiddenPlace>? credentialPlaces = null)
         => new(
             workingDirectory,
             readRoots,
             writableRoots,
             slotDirectories,
             claudeCodeDirectories,
+            credentialPlaces ?? [],
             restrictions,
             capabilities ?? AgentPolicyGround.EveryCapability,
             webDomains,

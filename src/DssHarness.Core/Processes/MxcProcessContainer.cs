@@ -14,7 +14,9 @@ namespace DssHarness.Core.Processes;
 /// <para>
 /// The container grants nothing it is not told to (<see cref="Request"/>): every fixed drive is granted to read, each
 /// writable root to write, each place written by nobody to read again inside a writable root, and each hidden place is
-/// denied outright - read, written and listed. MXC meets a place by its path alone, so a directory renamed would carry the
+/// denied outright - read, written and listed - whole: what a profile reads again inside one
+/// (<see cref="IsolationProfile.Reopened"/>) is not handed over, for the container grants nothing beneath a denial, and a
+/// hidden directory denied entry by entry would leave an entry made after the start read. MXC meets a place by its path alone, so a directory renamed would carry the
 /// places beneath it out from under their rules and leave its name free to make again; every directory above a guarded
 /// place whose own directory may be written - and so whose name may be moved - is granted to read alone, each entry it
 /// holds granted again as the profile has it, so nothing is renamed, made or removed directly inside it.

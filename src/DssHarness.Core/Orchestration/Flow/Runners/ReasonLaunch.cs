@@ -12,7 +12,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// What an agent's run is launched with beyond its model - a reason step's, the advisor's, the reporter's and a
 /// side-task's alike: where a run of the engine's works, the order its model is reached by with each entry's credential,
-/// the Claude Code directories no action of the agent's reaches, the mask its records and its answer are held to, the
+/// the Claude Code directories and the places the user keeps credentials in, which no action of the agent's reaches, the mask its records and its answer are held to, the
 /// program a client that starts one starts, and the operating system's isolation its agent's commands run under. The one builder of each for every launch of an agent, so a rule of where an
 /// agent works or what it may not reach is written once.
 /// </summary>
@@ -78,6 +78,14 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
 
         return _claudeCode.Of(config, layout.MainCheckoutRoot);
     }
+
+    /// <summary>
+    /// Every place the user keeps credentials in on this machine (<see cref="UserCredentials.Of"/>), which the agent's
+    /// ground keeps each of its actions from - the same the tool's own executions of its work are kept from.
+    /// </summary>
+    /// <param name="config">The configuration, whose <c>agentPolicy.hiddenPlaces</c> adds places.</param>
+    public IReadOnlyList<HiddenPlace> CredentialPlaces(Configuration.HarnessConfig config)
+        => UserCredentials.Of(config, platform.HomeDirectory, platform.Current, Environment.GetEnvironmentVariable);
 
     /// <summary>
     /// The mask the run's records and its answer are held to: the value of every secret the configuration appoints that

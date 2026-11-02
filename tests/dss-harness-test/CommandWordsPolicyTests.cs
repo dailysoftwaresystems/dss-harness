@@ -1454,7 +1454,7 @@ public sealed class CommandWordsPolicyTests
 
         /// <summary>The side-task's policy, over the main checkout, its programs found on <paramref name="programPath"/> where one is given.</summary>
         public AgentPolicy Side(PlatformId platform = PlatformId.Linux, string? programPath = null)
-            => Policy(platform, SideTaskPolicy.Ground(new HarnessLayout(Main, Main), new HarnessConfig { Worktrees = new WorktreeSettings() }, [_claude.Path]), programPath);
+            => Policy(platform, SideTaskPolicy.Ground(new HarnessLayout(Main, Main), new HarnessConfig { Worktrees = new WorktreeSettings() }, [_claude.Path], []), programPath);
 
         /// <summary>A reason step's policy with no worktree: it reads the main tree and works in its work directory.</summary>
         public AgentPolicy ReadOnlyStep()
@@ -1466,7 +1466,8 @@ public sealed class CommandWordsPolicyTests
                     new WorkflowStep { Name = "s", Type = "reason" },
                     new AgentWorkspace(null, Work, Main, [], Work, Path.Combine(Main, ".orchestrators", "r1")),
                     webSearchGiven: true,
-                    [_claude.Path]),
+                    [_claude.Path],
+                    []),
                 programPath: null);
 
         /// <summary>
@@ -1482,7 +1483,8 @@ public sealed class CommandWordsPolicyTests
                     new WorkflowStep { Name = "s", Type = "reason", Restrictions = restrictions ?? [] },
                     new AgentWorkspace(Worktree, Work, Main, [], Worktree, Path.Combine(Main, ".orchestrators", "r1")),
                     webSearchGiven: true,
-                    [_claude.Path]),
+                    [_claude.Path],
+                    []),
                 programPath);
 
         public void Dispose()

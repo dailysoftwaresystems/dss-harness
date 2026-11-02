@@ -10,7 +10,7 @@ namespace DssHarness.Core.Agents.SideTasks;
 /// <summary>
 /// What a side-task's agent runs under: every limit of a run's dropped - no restriction list, no allow list of pages, the main checkout its writable root, the worktree
 /// rules and the protected paths off, every capability - and the built-in refusals kept, as they are kept for every
-/// agent: the root actions, every credential slot, the tool's own state (written by its verbs alone, and the verbs are
+/// agent: the root actions, every credential slot and every place the user keeps credentials in, the tool's own state (written by its verbs alone, and the verbs are
 /// open to it), <c>Write(.git/**)</c>, and <c>run-side-task</c>. The one builder of a side-task's ground and its web
 /// search, beside the policy that decides by one.
 /// </summary>
@@ -24,17 +24,20 @@ public static class SideTaskPolicy
     /// <summary>
     /// The ground of a side-task working over the main checkout: the main tree readable and writable, every capability,
     /// no restriction and no allow list, the worktree rules and the protected paths off - git's own files excepted,
-    /// which no ground opens - and the tool's own state and every credential slot of the main checkout
-    /// (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>) still no action of its reaches.
+    /// which no ground opens - and the tool's own state, every credential slot of the main checkout
+    /// (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), every Claude Code directory and every place the user
+    /// keeps credentials in still no action of its reaches.
     /// </summary>
     /// <param name="layout">The repository's layout: the main checkout is both where the agent works and what it writes.</param>
     /// <param name="config">The configuration, whose worktrees root and state paths are guarded.</param>
     /// <param name="claudeDirectories">Every Claude Code directory a client of the side-task uses, and the tool's own.</param>
-    public static AgentPolicyGround Ground(HarnessLayout layout, HarnessConfig config, IReadOnlyList<string> claudeDirectories)
+    /// <param name="credentialPlaces">Every place the user keeps credentials in on this machine (<see cref="Isolation.UserCredentials.Of"/>).</param>
+    public static AgentPolicyGround Ground(HarnessLayout layout, HarnessConfig config, IReadOnlyList<string> claudeDirectories, IReadOnlyList<Isolation.HiddenPlace> credentialPlaces)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(claudeDirectories);
+        ArgumentNullException.ThrowIfNull(credentialPlaces);
 
         var tree = layout.MainCheckoutRoot;
 
@@ -46,6 +49,7 @@ public static class SideTaskPolicy
             WritableRoots: [tree],
             SlotDirectories: HarnessLayout.SecretSlotDirectoriesUnder(tree),
             ClaudeCodeDirectories: [.. claudeDirectories.Distinct(StringComparer.OrdinalIgnoreCase)],
+            CredentialPlaces: credentialPlaces,
             Restrictions: [],
             Capabilities: AgentPolicyGround.EveryCapability,
             WebDomains: null,

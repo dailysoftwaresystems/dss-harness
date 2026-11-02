@@ -589,7 +589,7 @@ public sealed class SideTaskServiceTests
     public async Task ASideTaskWithNoIsolationWhereItIsRequired_IsRefused_AndEachTurnRecordsItsIsolation()
     {
         var unavailable = TestIsolation.Unavailable("bubblewrap is not here", "install it");
-        var (_, refusedTemp, refusedService, refusedStored, _) = await RepoAsync(isolation: unavailable);
+        var (refusedHarness, refusedTemp, refusedService, refusedStored, _) = await RepoAsync(isolation: unavailable);
         using var refusedTree = refusedTemp;
 
         var refused = await refusedService.RunAsync(new SideTaskCall(refusedTemp.Path, Prompt: "add a search source", Model: "glm-5.3", Name: "one"), Token);
@@ -602,6 +602,7 @@ public sealed class SideTaskServiceTests
         var (ground, launchDirectory) = Assert.Single(unavailable.Asked);
 
         Assert.Equal((true, LayoutOf(refusedTemp, "one").Directory), (ground.SideTask, launchDirectory));
+        Assert.Contains(Path.Combine(refusedHarness.Platform.HomeDirectory, ".ssh"), ground.CredentialPlaces.Select(place => place.Path));
 
         var under = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism("bubblewrap", "0.9.0"), DssHarness.Core.Processes.IsolationProfile.Nothing, null, null);
         var (harness, temp, service, stored, _) = await RepoAsync(isolation: new TestIsolation((_, _) => under));

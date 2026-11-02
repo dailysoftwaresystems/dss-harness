@@ -300,7 +300,7 @@ public sealed class RunReporterTests
     /// <summary>
     /// The reporter's answer is masked as the run's records are: a secret the slot holds that its words repeat reaches
     /// neither the person's terminal nor the call's own record - and its ground keeps the tool's own Claude Code
-    /// directory from it, whatever client it is on.
+    /// directory and the places the user keeps credentials in from it, whatever client it is on.
     /// </summary>
     [Fact]
     public async Task TheReportersAnswer_IsMaskedAsTheRunsRecordsAre()
@@ -317,6 +317,7 @@ public sealed class RunReporterTests
             Directory.EnumerateFiles(Path.Combine(temp.Path, ".orchestrators", run, "asks"), "*", SearchOption.AllDirectories),
             file => Assert.DoesNotContain("sk-test-one", File.ReadAllText(file), StringComparison.Ordinal));
         Assert.Equal([new ClaudeTranscripts(harness.FileSystem, harness.Platform).ConfigDirectory], reporter.Asked.Single().Ground!.ClaudeCodeDirectories);
+        Assert.Contains(Path.Combine(harness.Platform.HomeDirectory, ".ssh"), reporter.Asked.Single().Ground!.CredentialPlaces.Select(place => place.Path));
     }
 
     /// <summary>

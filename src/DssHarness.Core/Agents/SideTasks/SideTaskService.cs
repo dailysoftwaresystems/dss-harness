@@ -591,7 +591,7 @@ public sealed class SideTaskService(
             return (null, new CommandOutcome(program.ExitCode, program.Message, program.Details));
         }
 
-        var ground = SideTaskPolicy.Ground(layout, common.Context.Config, _launch.ClaudeDirectories(common.Context.Config, layout));
+        var ground = SideTaskPolicy.Ground(layout, common.Context.Config, _launch.ClaudeDirectories(common.Context.Config, layout), _launch.CredentialPlaces(common.Context.Config));
 
         // The operating system's isolation the agent's commands run under: where agentPolicy.isolation is required and this
         // machine has none, the side-task is refused (14), saying why and what would give it one.

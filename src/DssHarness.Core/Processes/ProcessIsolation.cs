@@ -32,7 +32,10 @@ public sealed record IsolationProfile(IReadOnlyList<IsolatedPath> Hidden, IReadO
     /// </summary>
     public IReadOnlyList<string> Reads { get; init; } = [];
 
-    /// <summary>The directories read again inside a hidden place, each beneath one: what a launch's own program reads there.</summary>
+    /// <summary>
+    /// The places - directories or files - read again inside a hidden place, each beneath one: what a program reads there by
+    /// itself, Claude Code's shell snapshots and ssh's <c>known_hosts</c> and <c>config</c> among them.
+    /// </summary>
     public IReadOnlyList<string> Reopened { get; init; } = [];
 
     /// <summary>

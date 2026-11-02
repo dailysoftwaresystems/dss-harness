@@ -309,8 +309,7 @@ public sealed partial class AgentPolicy
     private readonly IReadOnlyList<string> _writableRoots;
     private readonly IReadOnlyList<string> _refusalReadRoots;
     private readonly IReadOnlyList<string> _allRoots;
-    private readonly IReadOnlyList<string> _slots;
-    private readonly IReadOnlyList<string> _claudeDirectories;
+    private readonly IReadOnlyList<Unreachable> _unreachable;
     private readonly IReadOnlyList<string> _state;
     private readonly IReadOnlyList<(AgentRule Rule, AgentRestriction Declared)> _rules;
     private readonly IReadOnlyList<string> _webDomains;
@@ -348,8 +347,12 @@ public sealed partial class AgentPolicy
         // The places a refusal names, one by any case of its spelling, as every path asked is compared.
         _refusalReadRoots = [.. _readRoots.Distinct(StringComparer.OrdinalIgnoreCase)];
         _allRoots = [.. Resolve(ground.Roots(platform.PathComparison)).Distinct(StringComparer.OrdinalIgnoreCase)];
-        _slots = Resolve(ground.SlotDirectories);
-        _claudeDirectories = Resolve(ground.ClaudeCodeDirectories);
+        _unreachable =
+        [
+            new(Resolve(ground.SlotDirectories), "the credential slots", "a credential slot of this tool", "is a credential slot of this tool", "names a credential slot of this tool"),
+            new(Resolve(ground.ClaudeCodeDirectories), "the Claude Code directories", "a Claude Code directory this run reads", "lies in a Claude Code directory this run reads", "lies in a Claude Code directory this run reads"),
+            new(Resolve([.. ground.CredentialPlaces.Select(place => place.Path)]), "the user's credentials", "a place the user keeps credentials in", "lies in a place the user keeps credentials in", "lies in a place the user keeps credentials in"),
+        ];
         _state = Resolve(ground.StateDirectories);
         _rules = [.. ground.Restrictions.Select(declared => (AgentRule.Parse(declared.Text), declared))];
 
@@ -384,7 +387,7 @@ public sealed partial class AgentPolicy
 
         // Every name a guard holds - each segment of a place no command reaches and of git's own directory of each tree,
         // and each literal segment of a path rule - which a short name may stand for on Windows.
-        _guardedNames = [.. _slots.Concat(_claudeDirectories).Concat(_state).Concat(_gitTrees.Select(tree => Path.Combine(tree, ".git")))
+        _guardedNames = [.. _unreachable.SelectMany(kind => kind.Places).Concat(_state).Concat(_gitTrees.Select(tree => Path.Combine(tree, ".git")))
             .Concat(_rules.Where(pair => pair.Rule.Verb is AgentRuleVerb.Read or AgentRuleVerb.Write).Select(pair => pair.Rule.Pattern))
             .Concat(_protectedPaths.Select(pair => pair.Text))
             .Concat(_worktreePolicyWrites.Select(pair => pair.Text))
@@ -429,6 +432,7 @@ public sealed partial class AgentPolicy
                 config.AgentPolicy,
                 AgentProviders.Resolve(config).Providers?.Appointed().Select(key => key.Name).ToList() ?? []),
             .. Isolation.AgentIsolationMode.Problem(config.AgentPolicy) is { } isolation ? (IReadOnlyList<string>)[isolation] : [],
+            .. Isolation.UserCredentials.Problems(config.AgentPolicy),
         ];
     }
 
@@ -497,9 +501,9 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>
-    /// Whether a path an agent would read may be read: a credential slot and a Claude Code
-    /// directory never, a <c>Read</c> rule where one matches; everything else is allowed, for
-    /// reading is what an agent is for.
+    /// Whether a path an agent would read may be read: a credential slot, a Claude Code directory
+    /// and a place the user keeps credentials in never, a <c>Read</c> rule where one matches;
+    /// everything else is allowed, for reading is what an agent is for.
     /// </summary>
     /// <param name="path">The path as the agent's tool asks it, relative to its working directory or absolute.</param>
     public AgentPolicyAnswer Read(string path)
@@ -511,8 +515,8 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// Whether a directory an agent would search may be searched: as a read of it, and never where a
-    /// credential slot or a Claude Code directory lies beneath it, for a search reads what is
-    /// beneath. What a <c>Read</c> rule refuses beneath it is left out by the client's own deny rules,
+    /// credential slot, a Claude Code directory or a place the user keeps credentials in lies
+    /// beneath it, for a search reads what is beneath. What a <c>Read</c> rule refuses beneath it is left out by the client's own deny rules,
     /// which this tool writes for each launch.
     /// </summary>
     /// <param name="path">The directory as the agent's tool asks it, relative to its working directory or absolute.</param>
@@ -524,8 +528,9 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>
-    /// Whether a path an agent would write may be written: a credential slot and a Claude Code
-    /// directory never, a path under no writable root never, a <c>Write</c> rule where one matches.
+    /// Whether a path an agent would write may be written: a credential slot, a Claude Code
+    /// directory and a place the user keeps credentials in never, a path under no writable root
+    /// never, a <c>Write</c> rule where one matches.
     /// </summary>
     /// <param name="path">The path as the agent's tool asks it, relative to its working directory or absolute.</param>
     public AgentPolicyAnswer Write(string path)
@@ -538,8 +543,8 @@ public sealed partial class AgentPolicy
     /// <summary>
     /// Whether a command an agent would run may run: flattened whole by
     /// <see cref="CommandAnalysis"/>, refused where any command it runs names a root action, a
-    /// credential slot or a Claude Code directory, or where a <c>Run</c> rule matches one - and
-    /// denied where it cannot be read whole.
+    /// credential slot, a Claude Code directory or a place the user keeps credentials in, or where
+    /// a <c>Run</c> rule matches one - and denied where it cannot be read whole.
     /// </summary>
     /// <param name="argv">The command as the tool runtime hands it: a program and its arguments, never a shell string.</param>
     public AgentPolicyAnswer Run(IReadOnlyList<string> argv) => Run(argv, directory: null);
@@ -579,8 +584,8 @@ public sealed partial class AgentPolicy
     /// Whether a command an agent would run may run: the shell string is flattened whole by
     /// <see cref="CommandAnalysis"/> - its separators, substitutions, subshells, wrappers and the
     /// scripts it goes into - and each command it runs is refused where it names a root action, a
-    /// credential slot or a Claude Code directory, or where a <c>Run</c> rule matches it; a string
-    /// it cannot read whole is denied.
+    /// credential slot, a Claude Code directory or a place the user keeps credentials in, or where
+    /// a <c>Run</c> rule matches it; a string it cannot read whole is denied.
     /// </summary>
     /// <param name="shell">The command as Claude Code's shell tool hands it: one string the system's own shell would run.</param>
     public AgentPolicyAnswer Run(string shell)
@@ -729,7 +734,7 @@ public sealed partial class AgentPolicy
         return candidate[whole.Length..].TrimStart('/', '\\').Replace('\\', '/');
     }
 
-    /// <summary>A read, decided: a slot and a Claude Code directory never, then the reporter's one root, then the <c>Read</c> rules on the path as asked and as resolved.</summary>
+    /// <summary>A read, decided: a place no action reaches never (<see cref="Unreached"/>), then the reporter's one root, then the <c>Read</c> rules on the path as asked and as resolved.</summary>
     private AgentPolicyAnswer ReadDecision(string asked, string resolved)
     {
         if (Unreached(asked, resolved) is { } unreached)
@@ -745,32 +750,27 @@ public sealed partial class AgentPolicy
         return Matched(AgentRuleVerb.Read, asked, resolved);
     }
 
-    /// <summary>A search past its read: no credential slot and no Claude Code directory beneath what it searches.</summary>
+    /// <summary>A search past its read: no place no action reaches (<see cref="Unreachable"/>) beneath what it searches.</summary>
     private AgentPolicyAnswer SearchedPast(string asked, string resolved)
     {
         foreach (var form in new[] { asked, resolved })
         {
-            if (_slots.FirstOrDefault(slot => PathContainment.IsStrictlyInside(form, slot, Refusals)) is { } slot)
+            foreach (var kind in _unreachable)
             {
-                return new AgentPolicyAnswer.Denied(
-                    "the credential slots",
-                    AgentPolicySource.Builtin,
-                    $"'{form}' holds a credential slot of this tool, '{slot}': a search of it would read one, and no file tool of an agent reads one");
-            }
-
-            if (_claudeDirectories.FirstOrDefault(directory => PathContainment.IsStrictlyInside(form, directory, Refusals)) is { } directory)
-            {
-                return new AgentPolicyAnswer.Denied(
-                    "the Claude Code directories",
-                    AgentPolicySource.Builtin,
-                    $"'{form}' holds a Claude Code directory this run reads, '{directory}': a search of it would read one, and no file tool of an agent reads one");
+                if (kind.Places.FirstOrDefault(place => PathContainment.IsStrictlyInside(form, place, Refusals)) is { } held)
+                {
+                    return new AgentPolicyAnswer.Denied(
+                        kind.Rule,
+                        AgentPolicySource.Builtin,
+                        $"'{form}' holds {kind.What}, '{held}': a search of it would read one, and no file tool of an agent reads one");
+                }
             }
         }
 
         return AgentPolicyAnswer.Allow;
     }
 
-    /// <summary>A write, decided: a slot and a Claude Code directory never, then the worktree rules, protected paths and the tool's own state, then the step's <c>writes</c>, the writable roots and the <c>Write</c> rules.</summary>
+    /// <summary>A write, decided: a place no action reaches never (<see cref="Unreached"/>), then the worktree rules, protected paths and the tool's own state, then the step's <c>writes</c>, the writable roots and the <c>Write</c> rules.</summary>
     private AgentPolicyAnswer WriteDecision(string asked, string resolved)
     {
         if (Unreached(asked, resolved) is { } unreached)
@@ -977,8 +977,8 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// The refusal of a git pathspec's pattern read as git reads one by default - a star and a question mark matching a
-    /// separator too, a directory it matches reaching all it holds - where, read from a place, it may match a credential
-    /// slot or a Claude Code directory, a directory between the place and one, or a path beneath one.
+    /// separator too, a directory it matches reaching all it holds - where, read from a place, it may match a place no
+    /// action reaches (<see cref="Unreachable"/>), a directory between the place and one, or a path beneath one.
     /// </summary>
     private AgentPolicyAnswer.Denied? GitPatternRefusal(string pattern, IReadOnlyList<string> places)
     {
@@ -989,7 +989,7 @@ public sealed partial class AgentPolicy
 
         var expression = SegmentPattern(pattern.Replace('\\', '/'));
 
-        foreach (var (unreachable, rule, what) in new[] { (_slots, "the credential slots", "a credential slot of this tool"), (_claudeDirectories, "the Claude Code directories", "a Claude Code directory this run reads") })
+        foreach (var (unreachable, rule, what, _, _) in _unreachable)
         {
             foreach (var (place, guarded) in places.SelectMany(place => unreachable.Select(guarded => (place, guarded))))
             {
@@ -1111,7 +1111,7 @@ public sealed partial class AgentPolicy
     /// <summary>
     /// The places no command of an agent removes or moves, nor removes what they hold, each with the rule that keeps it
     /// and what it is: git's own directory of every tree the agent touches where the worktree rules or a side-task's
-    /// ground keep it, the tool's own state, each credential slot, each Claude Code directory.
+    /// ground keep it, the tool's own state, and each place no action reaches (<see cref="Unreachable"/>).
     /// </summary>
     private IEnumerable<(string Place, string Rule, string What)> KeptFromRemoval()
     {
@@ -1128,14 +1128,12 @@ public sealed partial class AgentPolicy
             yield return (state, "the tool's own state", "the tool's own state");
         }
 
-        foreach (var slot in _slots)
+        foreach (var kind in _unreachable)
         {
-            yield return (slot, "the credential slots", "a credential slot of this tool");
-        }
-
-        foreach (var directory in _claudeDirectories)
-        {
-            yield return (directory, "the Claude Code directories", "a Claude Code directory this run reads");
+            foreach (var place in kind.Places)
+            {
+                yield return (place, kind.Rule, kind.What);
+            }
         }
     }
 
@@ -3220,24 +3218,38 @@ public sealed partial class AgentPolicy
     /// <summary>The schemes whose host a reader of addresses finds even with no slash after them (<c>https:host</c>).</summary>
     public static IReadOnlyList<string> SlashedSchemes { get; } = ["http", "https", "ws", "wss", "ftp"];
 
-    /// <summary>Whether the path, as asked or as resolved, is a credential slot of this tool or lies in a Claude Code directory: no file tool of an agent reads or writes either.</summary>
+    /// <summary>
+    /// Whether the path, as asked or as resolved, lies in a place no action reaches (<see cref="Unreachable"/>) - a
+    /// credential slot of this tool, a Claude Code directory, a place the user keeps credentials in: no file tool of an
+    /// agent reads or writes one.
+    /// </summary>
     private AgentPolicyAnswer.Denied? Unreached(string asked, string resolved)
     {
         foreach (var form in new[] { asked, resolved })
         {
-            if (_slots.Any(slot => PathContainment.IsInsideOrSame(slot, form, Refusals)))
+            foreach (var kind in _unreachable)
             {
-                return new AgentPolicyAnswer.Denied("the credential slots", AgentPolicySource.Builtin, $"'{form}' is a credential slot of this tool: no file tool of an agent reads or writes one");
-            }
-
-            if (_claudeDirectories.Any(directory => PathContainment.IsInsideOrSame(directory, form, Refusals)))
-            {
-                return new AgentPolicyAnswer.Denied("the Claude Code directories", AgentPolicySource.Builtin, $"'{form}' lies in a Claude Code directory this run reads: no file tool of an agent reads or writes one");
+                if (kind.Places.Any(place => PathContainment.IsInsideOrSame(place, form, Refusals)))
+                {
+                    return new AgentPolicyAnswer.Denied(kind.Rule, AgentPolicySource.Builtin, $"'{form}' {kind.Is}: no file tool of an agent reads or writes one");
+                }
             }
         }
 
         return null;
     }
+
+    /// <summary>
+    /// One kind of place no action of any agent reaches, as every refusal of one names it - the one list each such refusal
+    /// is read from: the credential slots of this tool, the Claude Code directories, the places the user keeps credentials
+    /// in.
+    /// </summary>
+    /// <param name="Places">Its places, resolved.</param>
+    /// <param name="Rule">The rule a refusal names.</param>
+    /// <param name="What">One of them, as a refusal names it.</param>
+    /// <param name="Is">What a path inside one is, as a file tool's refusal says it.</param>
+    /// <param name="Named">What a word naming one does, as a command's refusal says it.</param>
+    private sealed record Unreachable(IReadOnlyList<string> Places, string Rule, string What, string Is, string Named);
 
     /// <summary>
     /// The commands that move the commands after them to another directory, by their names in any case: the shell's
@@ -3394,8 +3406,8 @@ public sealed partial class AgentPolicy
     public const int MaxPlaces = 64;
 
     /// <summary>
-    /// Whether <paramref name="word"/> names a credential slot or a Claude Code directory, a path beneath one, or a
-    /// directory that holds one, resolved as a tool's path resolves against each place the command may stand in: every
+    /// Whether <paramref name="word"/> names a place no action reaches (<see cref="Unreachable"/>) - a credential slot, a
+    /// Claude Code directory, a place the user keeps credentials in - a path beneath one, or a directory that holds one, resolved as a tool's path resolves against each place the command may stand in: every
     /// path the word may name (<see cref="CommandAnalysis.PathsNamed"/>) - itself, a redirect's file or text among them,
     /// a value after an <c>=</c>, an <c>@</c> or a <c>&lt;</c>, a short option's glued value, a PowerShell parameter's
     /// after its <c>:</c>, each word of a script inside it, each word its braces spell where <paramref name="braces"/>
@@ -3442,7 +3454,7 @@ public sealed partial class AgentPolicy
             // Claude Code directory, lie beneath one, or - given whole - be a directory that holds one.
             foreach (var asked in readings.Where(reading => globbed && reading.IndexOfAny(['*', '?', '[']) >= 0))
             {
-                foreach (var (unreachable, rule, what) in Unreachable())
+                foreach (var (unreachable, rule, what, _, _) in _unreachable)
                 {
                     if (unreachable.FirstOrDefault(unreached => GlobReaches(asked, unreached, dotNames)) is not null)
                     {
@@ -3461,20 +3473,12 @@ public sealed partial class AgentPolicy
 
             foreach (var form in readings.SelectMany(asked => new[] { asked, Resolved(asked) }))
             {
-                if (_slots.Any(slot => PathContainment.IsInsideOrSame(slot, form, Refusals)))
+                if (_unreachable.FirstOrDefault(kind => kind.Places.Any(place => PathContainment.IsInsideOrSame(place, form, Refusals))) is { } inside)
                 {
                     return new AgentPolicyAnswer.Denied(
-                        "the credential slots",
+                        inside.Rule,
                         AgentPolicySource.Builtin,
-                        $"'{word}' names a credential slot of this tool: no command of an agent touches one");
-                }
-
-                if (_claudeDirectories.Any(directory => PathContainment.IsInsideOrSame(directory, form, Refusals)))
-                {
-                    return new AgentPolicyAnswer.Denied(
-                        "the Claude Code directories",
-                        AgentPolicySource.Builtin,
-                        $"'{word}' lies in a Claude Code directory this run reads: no command of an agent touches one");
+                        $"'{word}' {inside.Named}: no command of an agent touches one");
                 }
 
                 if (!holds || !named.Whole)
@@ -3482,7 +3486,7 @@ public sealed partial class AgentPolicy
                     continue;
                 }
 
-                foreach (var (unreachable, rule, what) in Unreachable())
+                foreach (var (unreachable, rule, what, _, _) in _unreachable)
                 {
                     if (unreachable.FirstOrDefault(unreached => PathContainment.IsStrictlyInside(form, unreached, Refusals) && !ThroughWorkingDirectory(form, unreached)) is { } held)
                     {
@@ -3496,12 +3500,6 @@ public sealed partial class AgentPolicy
         }
 
         return null;
-
-        IEnumerable<(IReadOnlyList<string> Places, string Rule, string What)> Unreachable()
-        {
-            yield return (_slots, "the credential slots", "a credential slot of this tool");
-            yield return (_claudeDirectories, "the Claude Code directories", "a Claude Code directory this run reads");
-        }
     }
 
     /// <summary>

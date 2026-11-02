@@ -416,8 +416,8 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// A step's launch is built as every launch's is: the tool's own Claude Code directory among those no action of its
-    /// agent reaches, whatever client it is on; every secret the slot answers in its mask; and the retries its workflow
+    /// A step's launch is built as every launch's is: the tool's own Claude Code directory and the places the user keeps
+    /// credentials in among those no action of its agent reaches, whatever client it is on; every secret the slot answers in its mask; and the retries its workflow
     /// allows a step.
     /// </summary>
     [Fact]
@@ -432,6 +432,7 @@ public sealed class ReasonStepRunnerTests
         Assert.True(result.Passed, result.Error);
         var asked = agents.Asked.Single();
         Assert.Equal([new ClaudeTranscripts(kit.Harness.FileSystem, kit.Harness.Platform).ConfigDirectory], asked.Ground!.ClaudeCodeDirectories);
+        Assert.Contains(Path.Combine(kit.Harness.Platform.HomeDirectory, ".ssh"), asked.Ground.CredentialPlaces.Select(place => place.Path));
         Assert.Equal($"the key {DssHarness.Core.Runners.ActionValues.Mask}", asked.Mask!.Redact("the key sk-test-one"));
         Assert.Equal(WorkflowDefinition.DefaultMaxRetries, asked.Retries);
     }

@@ -288,7 +288,9 @@ public sealed partial class HelpTests
                 + "'help agent-clients' names; keepEnvironment, the secret-shaped names a command an agent runs keeps; "
                 + "commandTimeoutSeconds (120) and maxCommandTimeoutSeconds (3600), how long one runs where its call names no time, "
                 + "and the most it may name, 2147483 at most; isolation, required or preferred (required where nothing is said), whether "
-                + "an agent that may run a command starts where this machine cannot isolate its commands ('help agent-clients')",
+                + "an agent that may run a command starts where this machine cannot isolate its commands; hiddenPlaces, more places "
+                + "the user keeps credentials in, each a whole path or one under ~/, hidden beside the declared ones, which it never "
+                + "takes away ('help agent-clients')",
             config,
             StringComparison.Ordinal);
 
@@ -675,7 +677,7 @@ public sealed partial class HelpTests
                 + "deletes and writes nothing, and their kind), a word that moves a command (a cd's, git -C's, tar -C's, make -C's), which reads nothing "
                 + "where it goes, a word that names where a program writes, which the write rules decide, and the agent's working directory and those "
                 + "above it, which reach the slots only through it - every command over the tree names it (.) and every program given no path works "
-                + "over it. A recursive removal or a move of a directory that holds a tree's .git, the tool's state, a slot or a Claude Code directory "
+                + "over it. A recursive removal or a move of a directory that holds a tree's .git, the tool's state, a slot, a Claude Code directory or a place the user keeps credentials in "
                 + "(rm -rf ., Remove-Item -Recurse, mv, rsync --delete, git clean -dx), the working directory among them, is refused, and so is a find "
                 + "or fd walk that may remove or move one or what one holds - its -delete, a remover its -exec, -execdir or -ok runs, fd's -x and -X - "
                 + "read as the walk reaches it: its depth, prunes, excludes and name, path, regex, kind and emptiness filters read, what a guarded "
@@ -717,7 +719,7 @@ public sealed partial class HelpTests
             $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too - nor does any command print a credential, whatever the worktree rules say ({string.Join(", ", AgentPolicy.CredentialPrintingCommands)}; a * any helper's name, and the words after a command met anywhere after it, options before or between them): a credential leaves its slot only by the key store that holds it, never through an agent's words.",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
+        Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's, or of a place the user keeps credentials in (the isolation's list, below), and every search over one", prose, StringComparison.Ordinal);
         Assert.Contains(
             "a refusal's places compare in any case on every system. On Windows each segment of a path is read as the name Windows reaches by it "
                 + "before any refusal compares it - in a command's words, its moves, its writes and its removals and in a file tool's path alike: its "
@@ -867,7 +869,7 @@ public sealed partial class HelpTests
                 + "robocopy's and xcopy's destination, dotnet -o, a compiler's -o, ssh-keygen -f, Invoke-WebRequest -OutFile, Expand-Archive "
                 + "-DestinationPath, Tee-Object and their kind - and a pattern among them is refused where it may reach git's own files or the state; a "
                 + "command that removes or moves a directory whole - rm -r, Remove-Item -Recurse, rd /s, mv, Move-Item, rsync --delete, "
-                + "git clean -dx - is refused where the directory holds a tree's .git, the state, a credential slot or a Claude Code directory, the "
+                + "git clean -dx - is refused where the directory holds a tree's .git, the state, a credential slot, a Claude Code directory or a place the user keeps credentials in, the "
                 + "working directory among them, and a find or fd walk where it may remove or move one or what one holds.",
             prose,
             StringComparison.Ordinal);
@@ -960,7 +962,12 @@ public sealed partial class HelpTests
                 + "slot of the main checkout and every Claude Code directory - ~/.claude, the tool's own and the one the slot names for "
                 + "the claude-code client's logins, one list for a launch and for the tool's executions alike - with ~/.claude.json "
                 + "beside each, the shell snapshots Claude Code sources read again, and on Windows a claude-code launch's own read, "
-                + "below. Written by nobody, inside what is written, are git's code-running files and its pointers to its own "
+                + "below. Hidden too, from every isolated command and every execution of the agents' work alike,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "leaves the launch or the execution with no isolation, saying which. Written by nobody, inside what is written, are "
+                + "git's code-running files and its pointers to its own "
                 + "directories and to other content: the hooks git runs and the common directory's hooks/ beside them, which git runs "
                 + "again once core.hooksPath is gone; the common directory's config, config.worktree and info/; its refs/replace/ and "
                 + "objects/info/, whose replacements and alternates would put other content in place of what every checkout reads; "
@@ -974,6 +981,40 @@ public sealed partial class HelpTests
                 + "checkout makes true among them -",
             prose,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "Hidden too, from every isolated command and every execution of the agents' work alike, are the places the user keeps "
+                + "credentials in: ssh's keys (~/.ssh but its known_hosts and config), AWS's credentials and sign-in caches (~/.aws, "
+                + "$AWS_SHARED_CREDENTIALS_FILE, $AWS_CONFIG_FILE), Azure's sign-in tokens (~/.azure, $AZURE_CONFIG_DIR), gh's login "
+                + "($XDG_CONFIG_HOME/gh, $GH_CONFIG_DIR, %APPDATA%/GitHub CLI on Windows), Kubernetes' cluster credentials (~/.kube, "
+                + "$KUBECONFIG, each it lists), Docker's registry logins (~/.docker/config.json, $DOCKER_CONFIG/config.json), the logins "
+                + "curl and git read (~/.netrc, ~/_netrc on Windows), git's credential store (~/.git-credentials, "
+                + "$XDG_CONFIG_HOME/git/credentials), GnuPG's private keys (~/.gnupg/private-keys-v1.d, ~/.gnupg/secring.gpg, "
+                + "$GNUPGHOME/private-keys-v1.d, $GNUPGHOME/secring.gpg, %APPDATA%/gnupg/private-keys-v1.d on Windows, "
+                + "%APPDATA%/gnupg/secring.gpg on Windows), Google Cloud's credentials (~/.config/gcloud, $CLOUDSDK_CONFIG, "
+                + "%APPDATA%/gcloud on Windows), npm's tokens (~/.npmrc, $NPM_CONFIG_USERCONFIG, $npm_config_userconfig), PyPI's upload "
+                + "tokens (~/.pypirc), Cargo's registry tokens (~/.cargo/credentials.toml, ~/.cargo/credentials, "
+                + "$CARGO_HOME/credentials.toml, $CARGO_HOME/credentials), Maven's master password (~/.m2/settings-security.xml), "
+                + "Gradle's properties with their publishing and signing credentials (~/.gradle/gradle.properties, "
+                + "$GRADLE_USER_HOME/gradle.properties) - $NAME where this tool's own environment names one, $XDG_CONFIG_HOME "
+                + "~/.config where it names none, %APPDATA% AppData\\Roaming in the home where it names none. ssh's known_hosts and "
+                + "config are read again, for ssh reads them itself to reach a host - but under MXC's container, which grants nothing "
+                + "beneath a denial, where ssh's directory is hidden whole. agentPolicy.hiddenPlaces adds more and takes none away: "
+                + "each a whole path or one under ~/, a directory where it ends with a separator, else a file. The words policy "
+                + "refuses a file tool's read and write in one, a search over one, and a command that names one - ssh's own files "
+                + "among them, which inside only the program that needs them reads - or a directory that holds one and may read it, "
+                + "as it refuses a slot. Left out, for builds read them: ~/.nuget/NuGet/NuGet.Config and "
+                + "%APPDATA%/NuGet/NuGet.Config, for every restore reads its package sources there and refuses one it cannot read; "
+                + "~/.m2/settings.xml, for every Maven build reads its mirrors and repositories there and refuses one it cannot read - "
+                + "a password either holds is better given as a value. A build that reads a hidden place fails inside - a private "
+                + "registry's token in ~/.npmrc, a cloud's key in ~/.aws, a git dependency fetched over ssh with the user's own key - "
+                + "so hand it the secret as a value instead: the runner's environment carries it, read by this tool. A place that is "
+                + "not there is made, empty, only where a command could make it, inside a place written: the home is read alone by "
+                + "every isolated child, so nothing is made there and the user's home is left as it is. One that holds a tree, or a "
+                + "place written, leaves the launch or the execution with no isolation, saying which.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.All(DssHarness.Core.Agents.Isolation.UserCredentials.Declared, place => Assert.Contains(place.Spelled, prose, StringComparison.Ordinal));
+        Assert.All(DssHarness.Core.Agents.Isolation.UserCredentials.LeftOut, place => Assert.Contains(place.Spelled, prose, StringComparison.Ordinal));
         Assert.Contains(
             "No directory above a guarded place whose own directory is written, and no writable root itself, is renamed or removed - "
                 + "a place moved away would take its rule with it and leave its name free to be made again, and a root put back as a "
@@ -1092,14 +1133,17 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "the mechanism and its version - macOS's own for its sandbox, MXC's library's for its container - what it leaves reached "
-                + "and what its anchors cost, or why there was none. Where it ends: the machine stays readable as the user reads it - "
-                + "their ssh keys and every credential outside the slots among it, and on macOS the login keychain through the "
-                + "system's security service - the network is theirs, and what no rule at a path reaches - a hard link made before the "
-                + "launch, another path bound to the same files - is reached. git's refs and object store, and Git LFS's, are written "
-                + "as git needs them - a linked worktree's agent writes the refs and objects of the common directory it shares with "
-                + "the main checkout and every other worktree, a main checkout's its own - and only a repository of the agent's own "
-                + "would keep them apart: so a command can move any branch, tag, stash or remote-tracking ref, which a person's "
-                + "checkout outside then takes, and, as git's checkout reads an object as it lies without hashing it again, put other "
+                + "and what its anchors cost, or why there was none. Where it ends: the machine stays readable as the user reads it but "
+                + "the hidden places - a credential kept anywhere else among it - and the system's own credential stores are services, "
+                + "not places: on macOS the login keychain is reached through the system's security service, which the sandbox lets "
+                + "through for the trust of certificates; on Windows MXC's container shows the Credential Manager empty; on Linux the "
+                + "keyring sits behind the user's message bus, hidden with the runtime directory. The network is theirs, and what no "
+                + "rule at a path reaches - a hard link made before the launch, another path bound to the same files - is reached. "
+                + "git's refs and object store, and Git LFS's, are written as git needs them - a linked worktree's agent writes the "
+                + "refs and objects of the common directory it shares with the main checkout and every other worktree, a main "
+                + "checkout's its own - and only a repository of the agent's own would keep them apart: so a command can move any "
+                + "branch, tag, stash or remote-tracking ref, which a person's checkout outside then takes, and, as git's checkout "
+                + "reads an object as it lies without hashing it again, put other "
                 + "content under a name the store already holds, which a checkout outside then writes.",
             prose,
             StringComparison.Ordinal);
@@ -1113,7 +1157,8 @@ public sealed partial class HelpTests
         // The tool's own executions of the agents' work inside the same isolation, the codes the mode turns into its own.
         Assert.Contains(
             "is held inside it, its own profile from the leg's ground, built as a launch's is: the machine read-only; every "
-                + "credential slot of the main checkout and every Claude Code directory hidden; the tree the leg works in - "
+                + "credential slot of the main checkout, every Claude Code directory and every place the user keeps credentials in "
+                + "hidden; the tree the leg works in - "
                 + "the step's tree or its copy under .legs - a sweep's workers under .mutations, a temporary directory of its own "
                 + "and the declared tool caches written,",
             prose,
@@ -1139,15 +1184,21 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "one over ssh reads the user's keys as the read-only machine shows them. Under bubblewrap and macOS's sandbox a push to "
+            "one over ssh signs through the user's SSH agent alone, for their keys under ~/.ssh are hidden, its known_hosts and "
+                + "config read. Under bubblewrap and macOS's sandbox a push to "
                 + "a remote over ssh (ssh://, git+ssh:// or host:path, as git reads its push address), and a commit the repository "
                 + "signs with an ssh key (commit.gpgsign with gpg.format ssh), reach the one Unix socket outside that is the user's SSH "
-                + $"agent's ({DssHarness.Core.Agents.Isolation.AgentIsolation.SshAgentSocketVariable}), wherever it stands - their "
+                + $"agent's ({DssHarness.Core.Agents.Isolation.AgentIsolation.SshAgentSocketVariable}), wherever it stands - inside "
+                + "ssh's hidden directory among it, named to them at its real spelling, so a link there leads nowhere hidden - their "
                 + "hooks with them - and no other; every other commit and push, and every leg, reaches none, so a hook reaches the "
-                + "user's SSH agent only where git's own work does; MXC's container is handed none. A commit the repository signs with "
+                + "user's SSH agent only where git's own work does; MXC's container is handed none, and as it hides ~/.ssh whole a "
+                + "push over ssh inside it finds neither key nor known_hosts and fails - a push over https, whose credential this "
+                + "tool hands in as values, works there. A commit the repository signs with "
                 + "gpg or x509 reaches no agent of the user's where its socket is hidden - in the user's runtime directory under "
                 + "bubblewrap, and every one under macOS's sandbox and MXC's container - and fails there, as does one signed with an "
-                + "ssh key under MXC. Every other git command of this tool's runs none "
+                + "ssh key under MXC. One signed with an ssh key whose user.signingKey names a file under ~/.ssh fails as well, for "
+                + "the file is hidden: name the public key itself (key:: and its line) and keep the private key in the agent. Every "
+                + "other git command of this tool's runs none "
                 + "of the repository's hooks - core.hooksPath pointed at the null device, set as every git of the tool's sets its own "
                 + "settings, through GIT_CONFIG_PARAMETERS - so a fold, a refresh, a rebase, a sync or a question of the tool's never "
                 + "runs the agents' work as a side effect of a checkout, an index written or a ref moved;",
@@ -1232,7 +1283,7 @@ public sealed partial class HelpTests
                 + "path, an archive of it or a search - is not told from one over its sources, and reaches their files; and code an interpreter "
                 + "runs (python -c, perl -e, awk's system) or a process apart from the agent's tree does what no word the policy reads says. This "
                 + "is a policy of what a command names, not a sandbox; beneath it, where this machine has one, the operating system's isolation "
-                + "('help agent-clients') hides every credential slot from each command - one over the main tree whole finds each slot empty, or is refused it - "
+                + "('help agent-clients') hides every credential slot, and every place the user keeps credentials in, from each command - one over the main tree whole finds each slot empty, or is refused it - "
                 + "and keeps it from git's code-running files and the tool's state.",
             Prose.Words(HelpText.Of("side-tasks").StandardOutput),
             StringComparison.Ordinal);
@@ -5157,12 +5208,12 @@ public sealed partial class HelpTests
             Prose.Words(layout.StandardOutput),
             StringComparison.Ordinal);
 
-        // workflows, keepEnvironment and keepOnFailure are refused given empty though leaving each out means none,
-        // which neither of the other two kinds of list the topic names is: said apart from both, with the spelling the
-        // refusal itself asks for.
+        // workflows, keepEnvironment, hiddenPlaces and keepOnFailure are refused given empty though leaving each out means
+        // none, which neither of the other two kinds of list the topic names is: said apart from both, with the spelling
+        // the refusal itself asks for.
         Assert.Contains(
             "workflows, which declares no workflow left out, agentPolicy.keepEnvironment, which gives no name back left "
-                + "out, and a test invocation's keepOnFailure, which keeps no evidence left out, are refused given empty "
+                + "out, agentPolicy.hiddenPlaces, which adds no place left out, and a test invocation's keepOnFailure, which keeps no evidence left out, are refused given empty "
                 + "too, so none is spelt one way: leave the key out for none.",
             Prose.Words(config.StandardOutput),
             StringComparison.Ordinal);

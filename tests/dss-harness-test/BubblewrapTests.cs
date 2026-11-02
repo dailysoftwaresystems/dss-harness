@@ -7,9 +7,10 @@ namespace DssHarness.Tests;
 /// The system's bubblewrap: from doubles of the machine on every system, the probe refuses one the user could replace and
 /// proves one only the system writes, scoped by Landlock where the kernel has it; then run for real on Linux, the probe
 /// proves it once for the process, and the profile a step's launch is given over a real repository keeps a command inside
-/// from a credential slot's file, git's hooks, the tool's state, the launch's own directory and every place outside its
-/// roots, and from moving any directory above them, while it writes its worktree, its own temporary directory and its
-/// caches and git stages there. The real tests are skipped where this machine's bubblewrap does not prove itself, saying
+/// from a credential slot's file, every place the user keeps credentials in but ssh's known_hosts and config, git's hooks,
+/// the tool's state, the launch's own directory and every place outside its roots, and from moving any directory above
+/// them, while it writes its worktree, its own temporary directory and its caches and git stages there; and a push reaches
+/// the user's SSH agent inside ssh's hidden directory, where its key stays unread. The real tests are skipped where this machine's bubblewrap does not prove itself, saying
 /// why and the remedy - and failed instead where the machine says it holds every build tool, as the continuous
 /// integration runners do.
 /// </summary>
@@ -228,6 +229,114 @@ public sealed class BubblewrapTests
         Assert.Equal((0, 0), (staged.ExitCode, status.ExitCode));
         Assert.Equal(["made.txt"], (await kit.Harness.GitClient.RunAsync(kit.Main, ["diff", "--cached", "--name-only"], cancellationToken: Token)).OutputLines);
         Assert.Null(await isolated.AfterwardAsync(Token));
+    }
+
+    /// <summary>
+    /// A command inside a step's launch reads no place the user keeps credentials in: ssh's directory is an empty place
+    /// that holds its known_hosts and config alone, read and never written; AWS's directory is an empty place; and the
+    /// logins curl and git read are the null device, which nothing opens there - every one of them left as it was outside.
+    /// </summary>
+    [Fact]
+    public async Task ACommandInside_ReadsNoPlaceTheUserKeepsCredentialsIn_ButSshsKnownHostsAndConfig()
+    {
+        using var temp = new TempDirectory();
+        using var home = RealIsolation.Home();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var credentials = await RealIsolation.CredentialsAsync(home);
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+
+        var listed = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "ls -A \"$1\"", "sh", Path.GetDirectoryName(credentials.Key)!);
+        var hidden = new[] { credentials.Key, credentials.Aws }.Select(place => (place, RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "cat \"$1\"", "sh", place))).ToList();
+        var netrc = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "cat \"$1\"", "sh", credentials.Netrc);
+        var read = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "cat \"$1\" \"$2\"", "sh", credentials.KnownHosts, credentials.Config);
+        var written = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", ": > \"$1\"", "sh", credentials.KnownHosts);
+
+        Assert.Equal(0, listed.ExitCode);
+        Assert.Equal(["config", "known_hosts"], listed.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+
+        foreach (var (place, reading) in hidden)
+        {
+            var result = await reading;
+
+            Assert.Equal((1, string.Empty), (result.ExitCode, result.StandardOutput));
+            Assert.True(result.StandardError.Contains("No such file or directory", StringComparison.Ordinal), $"{place}: {result.StandardError}");
+        }
+
+        Assert.Equal((1, string.Empty), (netrc.ExitCode, netrc.StandardOutput));
+        Assert.Contains("Permission denied", netrc.StandardError, StringComparison.Ordinal);
+        Assert.Equal((0, "knownHost *"), (read.ExitCode, read.StandardOutput));
+        Assert.NotEqual(0, written.ExitCode);
+        Assert.Contains("Read-only file system", written.StandardError, StringComparison.Ordinal);
+        Assert.Equal(
+            ["secret", "known", "Host *", "secret", "secret"],
+            await Task.WhenAll(new[] { credentials.Key, credentials.KnownHosts, credentials.Config, credentials.Aws, credentials.Netrc }.Select(file => File.ReadAllTextAsync(file, Token))));
+    }
+
+    /// <summary>
+    /// A push over ssh reaches the user's SSH agent inside ssh's hidden directory - its socket there, or a link there to
+    /// one elsewhere, named to the push at its real spelling - while the key beside it stays unread; a commit, which reaches
+    /// no agent, reaches neither socket by any name.
+    /// </summary>
+    [Fact]
+    public async Task APushInside_ReachesTheUsersSshAgent_InsideSshsHiddenDirectory_AndNoKeyThere()
+    {
+        using var temp = new TempDirectory();
+        using var home = RealIsolation.Home();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var runner = RealIsolation.Runner();
+        BuildTools.Need(runner, "a push's SSH agent", "ssh-agent", "ssh-add");
+        var credentials = await RealIsolation.CredentialsAsync(home);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var inside = home.Combine(".ssh", "agent");
+        var elsewhere = temp.Combine("agent");
+        var linked = home.Combine(".ssh", "linked");
+        File.CreateSymbolicLink(linked, elsewhere);
+        var agents = new List<int>();
+
+        try
+        {
+            foreach (var socket in new[] { inside, elsewhere })
+            {
+                var started = await runner.RunAsync(new ProcessRequest { FileName = "ssh-agent", Arguments = ["-s", "-a", socket], Timeout = TimeSpan.FromSeconds(30) }, Token);
+
+                Assert.Equal(0, started.ExitCode);
+                agents.Add(int.Parse(System.Text.RegularExpressions.Regex.Match(started.StandardOutput, "SSH_AGENT_PID=([0-9]+);").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            foreach (var named in new[] { inside, linked })
+            {
+                var isolation = new Core.Agents.Isolation.AgentIsolation(platform, kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), name => name == Core.Agents.Isolation.AgentIsolation.SshAgentSocketVariable ? named : null);
+                using var push = await isolation.ForExecutionAsync(config, Core.Agents.Isolation.ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: true), kit.Main, Token);
+                using var commit = await isolation.ForExecutionAsync(config, Core.Agents.Isolation.ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
+
+                var reached = await RealIsolation.InsideAsync(push.ForProcess!, kit.Main, "ssh-add", "-l");
+                var key = await RealIsolation.InsideAsync(push.ForProcess!, kit.Main, "/bin/sh", "-c", "cat \"$1\"", "sh", credentials.Key);
+                var unreached = await RealIsolation.InsideAsync(commit.ForProcess!, kit.Main, "/bin/sh", "-c", "SSH_AUTH_SOCK=\"$1\" ssh-add -l", "sh", named);
+
+                Assert.Equal((named, 1, "The agent has no identities."), (named, reached.ExitCode, reached.StandardOutput.Trim()));
+                Assert.Equal((named, 1, string.Empty), (named, key.ExitCode, key.StandardOutput));
+                Assert.Contains("No such file or directory", key.StandardError, StringComparison.Ordinal);
+                Assert.Equal((named, 2), (named, unreached.ExitCode));
+            }
+        }
+        finally
+        {
+            foreach (var agent in agents)
+            {
+                try
+                {
+                    using var process = System.Diagnostics.Process.GetProcessById(agent);
+                    process.Kill();
+                }
+                catch (ArgumentException)
+                {
+                    // The agent has ended already.
+                }
+            }
+        }
     }
 
     /// <summary>

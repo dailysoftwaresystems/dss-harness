@@ -1665,7 +1665,7 @@ pattern is read as one only where the shell that reads it expands it, a PowerShe
 wildcard among them (`CommandAnalysis.HasOpenPattern`); a command that removes or moves a directory
 whole (`CommandAnalysis.RemovalTargets`: `rm -r`, `Remove-Item -Recurse`, `rd /s`, `mv`,
 `Move-Item`, `rsync --delete`, `git clean -dx`) is refused where it holds a tree's `.git`, the state,
-a slot or a Claude Code directory, with no working-directory exception (`AgentPolicy.RemovalRefusal`),
+a slot, a Claude Code directory or a place the user keeps credentials in, with no working-directory exception (`AgentPolicy.RemovalRefusal`),
 a `git clean`'s or stash's pathspecs read as git reads them; a `find` or an `fd` walk is read once
 (`CommandAnalysis.WalkOf`, `FileWalk`: its start points, its depths, `-depth`, and its expression as a
 tree of tests and actions - names, paths and regexes in either case, kinds, emptiness, prunes, fd's
@@ -1892,8 +1892,8 @@ ones that only shape what git prints, `--exec-path`, clone's own `-c` or `--conf
 `HOMEDRIVE`, `HOMEPATH`, `USERPROFILE`) its assignments set, never a word of data that spells one - is the `git config` it is, and still the command it runs,
 each reading met by the rules. A word that names a path is read
 as each candidate it may be (`CommandAnalysis.PathsNamed`) - and a pattern the shell expands is
-refused where it may reach a credential slot or a Claude Code directory or match a directory that
-holds one, a `*`, a `?` or a bracket matching a name that begins with a dot only where its shell
+refused where it may reach a credential slot, a Claude Code directory or a place the user keeps
+credentials in, or match a directory that holds one, a `*`, a `?` or a bracket matching a name that begins with a dot only where its shell
 would (`AgentPolicy.DotNamed`: a segment that begins with a dot; a string any of whose words names
 `dotglob` or `globdots` as bash and zsh read an option's name - split at blanks, `=`, `:` and `,`,
 in any case, its underscores and dashes and its `no` taken off, so `BASHOPTS=dotglob`,
@@ -1965,7 +1965,8 @@ refused on every client; a step's `writes` is the one source that narrows, and t
 are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,
 no web). For Claude Code the policy is rendered, never re-decided, into the launch's settings
 (`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, a read of each
-credential slot and Claude Code directory as a deny rule - which Claude Code applies to its searches
+credential slot and Claude Code directory, and of each place the user keeps credentials in (all a
+directory holds, a file itself), as a deny rule - which Claude Code applies to its searches
 too - and the restriction rules as deny rules, absolute once for each root, but where a rule's
 pattern there would cover a root the launch writes, each path in the POSIX form Claude Code matches
 (`//c/x` for `C:\x`) and a `Write` rule as an `Edit` rule, for Claude Code holds every file tool to
@@ -2364,7 +2365,22 @@ browsers, which the moved `XDG_CACHE_HOME` would hide, named where the user has 
 hidden, every credential slot (`AgentPolicyGround.SlotDirectories`) and every Claude Code directory - one list for a
 launch and an execution alike, `ClaudeCodeDirectories.Of`: `~/.claude`, the tool's own and the one the slot names for
 the claude-code client's logins - with `~/.claude.json` beside `~/.claude`, the shell snapshots Claude Code sources
-read again (`Reopened`); written by nobody, git's code-running files and its pointers to its own directories and to
+read again (`Reopened`); hidden too, every place the user keeps credentials in (`AgentPolicyGround.CredentialPlaces`,
+from the one declared list `UserCredentials.Declared` and `agentPolicy.hiddenPlaces`, which adds and never takes away,
+resolved by `UserCredentials.Of` against the home, `XDG_CONFIG_HOME`, `APPDATA` and each tool's own variable that moves
+its place - `GNUPGHOME`, `DOCKER_CONFIG`, `KUBECONFIG` and their kind - in this process's environment, which every
+child inherits): ssh's directory with its `known_hosts` and `config` read again, for ssh reads them itself to reach a
+host, and AWS's, Azure's, gh's, Kubernetes', Google Cloud's and Docker's logins, `.netrc`, git's credential store,
+GnuPG's private keys and npm's, PyPI's, Cargo's, Maven's and Gradle's credential files whole - each decided by what
+reads it: none is a file a build needs but for a secret it can be handed as a value in the runner's environment,
+and Cargo's and Gradle's homes are moved into the isolation's caches anyway; NuGet's user configuration and Maven's
+`settings.xml` are left out (`UserCredentials.LeftOut`), for every restore and every Maven build reads them for their
+feeds and refuses one it cannot read. A credential place that is not there is made empty only inside a written place,
+as every guarded place is - never in the home, which every child reads alone, so nothing of the user's is changed -
+and one that holds a tree or a written place leaves the launch with no isolation, for hiding it would hide them. The
+words policy holds the same list (`AgentPolicy`'s one list of the places no action reaches: the slots, the Claude
+Code directories and these, each refusal of one read from it): a file tool's read and write in one, a search over one and every command naming
+one or a directory holding one are refused, ssh's own files among them, which inside only ssh reads; written by nobody, git's code-running files and its pointers to its own directories and to
 other content as git names them (the hooks git runs and the common directory's own `hooks/`, which git runs again once
 `core.hooksPath` is gone; the common directory's `config`, `config.worktree`, `info/`, `refs/replace/` and
 `objects/info/`; its own `commondir` (`AgentIsolation.CommonDirectoryFile`), made where a main checkout's `.git`
@@ -2489,10 +2505,13 @@ nothing rests on how that sandbox treats the network in print mode or weighs its
 and the launch's settings turn it off (`ClaudeSettings.Render`'s `isolated`, `"sandbox": {"enabled": false}`) over any
 the user's own settings ask for, for no mechanism of the tool's nests another (macOS no sandbox inside a sandbox,
 bubblewrap no namespace inside its own) and each command would fail in it; on Windows Claude Code has none of its own.
-The machine stays readable as the user reads it: their `~/.ssh`, every credential outside the slots, and on macOS the
-login keychain, reached through the services that trust certificates, which are the keychain's; the network is theirs;
-and what no rule at a path reaches - a hard link made before the launch, another path bound to the same files - is
-reached. Inside the isolation a verb of this tool's that reads a slot or writes state or its install would fail part
+The machine stays readable as the user reads it but the hidden places - a credential kept anywhere else among it - and
+the system's own credential stores are services, not places: on macOS the login keychain is reached through the
+services that trust certificates, which are the keychain's; on Windows MXC's container shows the Credential Manager
+empty; on Linux the keyring sits behind the user's message bus, hidden with the runtime directory. Under MXC, which
+grants nothing beneath a denial, a hidden directory is hidden whole - `Reopened` is never handed to the container, so
+ssh's `known_hosts` and `config` are not read there. The network is theirs; and what no rule at a path reaches - a
+hard link made before the launch, another path bound to the same files - is reached. Inside the isolation a verb of this tool's that reads a slot or writes state or its install would fail part
 way, so the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a
 step and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's
 own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one or the other.
@@ -2500,18 +2519,26 @@ own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one
 The same owner decides the isolation of the tool's own executions of what the agents wrote
 (`IAgentIsolation.ForExecutionAsync`, an `ExecutionIsolation`, from an `ExecutionGround` that `ExecutionGrounds` alone
 builds, `IsolationGround.Of` making the builder's ground of it): the profile a launch's is - the machine read-only,
-the slots and every Claude Code directory a launch hides (`ClaudeCodeDirectories.Of`) hidden, git's code-running files
+the slots, every Claude Code directory a launch hides (`ClaudeCodeDirectories.Of`) and every place the user keeps
+credentials in (`UserCredentials.Of`, asked of the tool's own home and environment) hidden, git's code-running files
 of each tree, the configuration directory and the tool's state under each written by nobody, the ground's own places,
 a temporary directory of its own and the declared tool caches written - a state place the execution writes whole, a
 sweep's workers' slot, left unsealed, for the profile keeps a place both sealed and written sealed. A hooks' ground
 alone reaches a socket outside, and only where git's own work needs it (`ExecutionGround.ReachesSshAgent`, set by
 `ExecutionGrounds.OfHooks` from what its caller asked of `GitSsh`: a push whose remote's push address is ssh's,
 `GitSsh.PushesOverSshAsync`, a commit the repository signs with an ssh key, `GitSsh.SignsCommitsWithSshAsync`): the
-user's SSH agent's (`SSH_AUTH_SOCK`, taken at its real path where it is there), bound alone under bubblewrap - inside
-the hidden runtime directory or the launch's own `/tmp` among them - and reached alone under macOS's sandbox
-(`IsolationProfile.Sockets`), so such a push or commit signs with the user's agent and nothing else outside is
-reached, and every other commit's, push's and leg's work reaches none; MXC is handed none. A commit signed with gpg or
-x509 reaches no gpg agent hidden with the runtime directory, and fails there. Its refusal, notice and record are a
+user's SSH agent's (`SSH_AUTH_SOCK`, taken at its real path where it is there, and named to the child at that path in
+the profile's `Environment`, for the name the user gives it may be a link inside ssh's hidden directory),
+bound alone under bubblewrap - inside the hidden runtime directory, ssh's hidden directory or the launch's own `/tmp`
+among them - and reached alone under macOS's sandbox
+(`IsolationProfile.Sockets`), so such a push or commit signs with the user's agent - their keys under `~/.ssh` are
+hidden - and nothing else outside is
+reached, and every other commit's, push's and leg's work reaches none; MXC is handed none, and as it hides `~/.ssh` whole
+a push over ssh inside it finds neither key nor `known_hosts` and fails, where a push over https is handed its
+credential as values. A commit signed with gpg or
+x509 reaches no gpg agent hidden with the runtime directory, and fails there; one signed with an ssh key whose
+`user.signingKey` names a file under `~/.ssh` reads no such file, and fails too, where `key::` and the public key's line
+sign through the agent. Its refusal, notice and record are a
 launch's, from one base (`IsolationDecision`),
 with words of their own. A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here
 under `required` ends the step 14, nothing run - and hands the leg service an `ILegIsolation`
@@ -3174,14 +3201,14 @@ ground (`SideTaskPolicy`) - no restriction list, no allow list of pages, all fou
 main checkout the writable root, the worktree rules and the protected paths off, this tool's own
 verbs open to it as the person's own session's are, but those that read a credential slot or write
 its state (`AgentPolicy.SlotOrStateVerbs`) - with the built-in refusals kept (root
-actions, every credential slot of the main checkout and every Claude Code directory its clients
-use, to its file tools and to every path a word of its commands names (`CommandAnalysis.PathsNamed`),
+actions, every credential slot of the main checkout, every Claude Code directory its clients
+use and every place the user keeps credentials in (`AgentPolicyGround.CredentialPlaces`), to its file tools and to every path a word of its commands names (`CommandAnalysis.PathsNamed`),
 a directory that holds one given whole to a program that may read it among them but the main tree
 it works in and those above it - a command over that tree whole, `.` or no path, is not told from
 one over its sources and reaches the slots' files: the policy decides what a command names, it is
 not a sandbox - `Write(.git/**)` and a command's write into `.git`, a removal or a move of a
-directory that holds the main tree's `.git`, the state, a slot or a Claude Code directory, the main
-tree itself among them
+directory that holds the main tree's `.git`, the state, a slot, a Claude Code directory or a place
+the user keeps credentials in, the main tree itself among them
 (`AgentPolicy.RemovalRefusal`), the tool's own state - each state path under the main tree,
 `HarnessLayout.StatePathsUnder`, never the tree itself - the commands that print a credential, a
 git or gh command called by a name none of its own commands is, and `run-side-task` itself,

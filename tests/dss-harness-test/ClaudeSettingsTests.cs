@@ -168,6 +168,27 @@ public sealed class ClaudeSettingsTests
     }
 
     /// <summary>
+    /// Each place the user keeps credentials in is a read deny rule after the slots' and the Claude Code directories': a
+    /// directory for all it holds, a file for itself.
+    /// </summary>
+    [Theory]
+    [InlineData("windows", @"C:\Users\dev", "Read(//c/Users/dev/.ssh/**)", "Read(//c/Users/dev/.netrc)")]
+    [InlineData("posix", "/home/dev", "Read(//home/dev/.ssh/**)", "Read(//home/dev/.netrc)")]
+    public void EachPlaceTheUserKeepsCredentialsIn_IsAReadDenyRule_ADirectoryForAllItHolds(string system, string home, string directoryRule, string fileRule)
+    {
+        var (main, worktree, work) = Ground(system);
+        var separator = system == "windows" ? @"\" : "/";
+
+        var rendered = ClaudeSettings.Render(
+            ["Read", "Grep"],
+            PolicyGrounds.Of(worktree, [main], [worktree, work], [], [], [], credentialPlaces: [new(home + separator + ".ssh", Directory: true), new(home + separator + ".netrc", Directory: false)]),
+            AgentCommandSettings.Default,
+            StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal([directoryRule, fileRule], Deny(rendered));
+    }
+
+    /// <summary>
     /// Each restriction is written once for each root, absolute in the POSIX form Claude Code matches every path in - a
     /// Windows drive a lowercase segment of its own, its colon gone - and a write refused by an Edit rule, which Claude
     /// Code holds its Write, Edit and NotebookEdit tools to: it matches a file tool's path against Read and Edit rules

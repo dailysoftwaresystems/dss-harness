@@ -399,7 +399,7 @@ public sealed record ExecutionIsolation(
 
 /// <summary>
 /// What an isolation profile is built from, whoever asks: the trees worked over, the places written, read and kept from the
-/// child, the Unix sockets it reaches outside, and the launch's own directory - an agent's ground (<see cref="Of(AgentPolicyGround, string)"/>), or an
+/// child, the user's SSH agent it reaches outside, and the launch's own directory - an agent's ground (<see cref="Of(AgentPolicyGround, string)"/>), or an
 /// execution of the tool's over what an agent wrote (<see cref="ExecutionGround"/>).
 /// </summary>
 /// <param name="Trees">Every tree worked over, whose git's code-running files, git's own pointers, configuration directory and state no write reaches.</param>
@@ -407,18 +407,20 @@ public sealed record ExecutionIsolation(
 /// <param name="ReadRoots">The places read as they stand, wherever the mechanism gives the child a place of its own in their stead.</param>
 /// <param name="SlotDirectories">The credential slots, neither read nor written.</param>
 /// <param name="ClaudeCodeDirectories">The Claude Code directories, neither read nor written - but each one's shell snapshots, read.</param>
+/// <param name="CredentialPlaces">The places the user keeps credentials in, neither read nor written - but the files each leaves read.</param>
 /// <param name="StateDirectories">The tool's own state under each tree, written by nobody but where a writable root stands in it.</param>
 /// <param name="LaunchDirectory">The launch's own directory, which holds its settings and records; null for an execution with none.</param>
-/// <param name="Sockets">The Unix sockets the child reaches outside, each alone; none for an agent's own commands.</param>
+/// <param name="AgentSocket">The user's SSH agent's socket, which the child reaches outside alone and is named at its real spelling; null for an agent's own commands, and for an execution that signs and pushes through none.</param>
 internal sealed record IsolationGround(
     IReadOnlyList<string> Trees,
     IReadOnlyList<string> WritableRoots,
     IReadOnlyList<string> ReadRoots,
     IReadOnlyList<string> SlotDirectories,
     IReadOnlyList<string> ClaudeCodeDirectories,
+    IReadOnlyList<HiddenPlace> CredentialPlaces,
     IReadOnlyList<string> StateDirectories,
     string? LaunchDirectory,
-    IReadOnlyList<string> Sockets)
+    string? AgentSocket)
 {
     /// <summary>The ground of an agent's launch, from its policy's ground.</summary>
     /// <param name="ground">The agent's ground.</param>
@@ -434,23 +436,26 @@ internal sealed record IsolationGround(
             ground.Roots(StringComparison.Ordinal),
             ground.SlotDirectories,
             ground.ClaudeCodeDirectories,
+            ground.CredentialPlaces,
             ground.StateDirectories,
             launchDirectory,
-            []);
+            null);
     }
 
     /// <summary>
     /// The ground of one of the tool's own executions: its trees and writable roots read as they stand, every Claude Code
-    /// directory hidden as from an agent's own launch, no launch directory - and, where git's own work signs or pushes
-    /// through it, the user's SSH agent's socket.
+    /// directory and every place the user keeps credentials in hidden as from an agent's own launch, no launch directory -
+    /// and, where git's own work signs or pushes through it, the user's SSH agent's socket.
     /// </summary>
     /// <param name="ground">The execution's ground.</param>
     /// <param name="claudeCode">Every Claude Code directory on this machine (<see cref="ClaudeCodeDirectories"/>).</param>
+    /// <param name="credentials">Every place the user keeps credentials in on this machine (<see cref="UserCredentials.Of"/>).</param>
     /// <param name="agentSocket">The user's SSH agent's socket, whole; null where there is none.</param>
-    public static IsolationGround Of(ExecutionGround ground, IReadOnlyList<string> claudeCode, string? agentSocket)
+    public static IsolationGround Of(ExecutionGround ground, IReadOnlyList<string> claudeCode, IReadOnlyList<HiddenPlace> credentials, string? agentSocket)
     {
         ArgumentNullException.ThrowIfNull(ground);
         ArgumentNullException.ThrowIfNull(claudeCode);
+        ArgumentNullException.ThrowIfNull(credentials);
 
         return new(
             ground.Trees,
@@ -458,9 +463,10 @@ internal sealed record IsolationGround(
             [.. ground.Trees.Concat(ground.WritableRoots)],
             ground.SlotDirectories,
             claudeCode,
+            credentials,
             ground.StateDirectories,
             null,
-            ground.ReachesSshAgent && agentSocket is not null ? [agentSocket] : []);
+            ground.ReachesSshAgent ? agentSocket : null);
     }
 }
 
@@ -495,9 +501,11 @@ public interface IAgentIsolation
 /// configuration's mode, this machine's mechanism as its platform proved it once, and each profile built from its ground -
 /// the machine read-only; written only the ground's writable roots, what git writes of a tree that is itself written - by
 /// its kind (<see cref="GitWritten"/>) - the launch's own temporary directory and the declared tool caches
-/// (<see cref="IsolationCaches"/>); neither read nor written the credential slots and every Claude Code directory
-/// (<see cref="ClaudeCodeDirectories"/>); reached outside no Unix socket but the one the ground names - the user's SSH
-/// agent's, for a push over ssh or a commit signed with an ssh key; and inside what is written, written by nobody git's
+/// (<see cref="IsolationCaches"/>); neither read nor written the credential slots, every Claude Code directory
+/// (<see cref="ClaudeCodeDirectories"/>) and every place the user keeps credentials in (<see cref="UserCredentials"/>),
+/// but the files each leaves read; reached outside no Unix socket but the one the ground names - the user's SSH
+/// agent's, for a push over ssh or a commit signed with an ssh key, named to the child at its real spelling, which no
+/// hidden place stands on the way to; and inside what is written, written by nobody git's
 /// code-running files and its pointers to its own directories, every git directory's submodules, its replacements and
 /// its alternates, every configuration file git reads and every file one includes, each tree's configuration directory,
 /// the tool's state and the launch's own directory. Every place is ruled at its real spelling; one inside a written place
@@ -510,14 +518,15 @@ public interface IAgentIsolation
 /// cannot be held: git cannot say where a tree keeps its files or what replacements its repository holds, a main
 /// checkout's git directory holds a <c>commondir</c> leading to another repository's, a file git's configuration includes
 /// is not there inside a written place, a guarded place stands on a file system that ignores letter case and the
-/// mechanism holds the one spelling, or a link stands where the child writes on the way to a guarded place, which a
-/// command could replace with one leading elsewhere.
+/// mechanism holds the one spelling, a link stands where the child writes on the way to a guarded place, which a command
+/// could replace with one leading elsewhere, or a place the user keeps credentials in holds a tree or a place written,
+/// which hiding it would hide too.
 /// </remarks>
 /// <param name="platform">Finds and proves this machine's mechanism, once per process.</param>
 /// <param name="git">Asks git where each tree keeps its own files, its worktrees and its replacements.</param>
 /// <param name="fileSystem">Finds what each place is and where it leads, and makes one that is not there.</param>
 /// <param name="host">This machine: its home, and how it compares paths.</param>
-/// <param name="environment">Reads this process's environment, for where the user's cache directory and the user's SSH agent are; this process's own where left out.</param>
+/// <param name="environment">Reads this process's environment, for where the user's cache directory, the places the user keeps credentials in and the user's SSH agent are; this process's own where left out.</param>
 /// <param name="pins">Keeps each tree's git directories, as git named them, for every later git of this tool's in it; none where left out.</param>
 /// <param name="claudeCode">Every Claude Code directory on this machine, which an execution hides as a launch does; this machine's own alone, the slot unread, where left out.</param>
 public sealed class AgentIsolation(
@@ -584,11 +593,12 @@ public sealed class AgentIsolation(
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Its profile is built as an agent's command's is, from the same places: the slots and every Claude Code directory
-    /// hidden, git's code-running files of each tree, every configuration file git reads and the tool's state written by
-    /// nobody, the ground's own places written again inside them, the private temporary directory and the declared caches
-    /// written - for what it runs is the agents' work however it is started. Where git's own work signs or pushes through
-    /// it - a push over ssh, a commit signed with an ssh key - the user's SSH agent's socket is reached alone.
+    /// Its profile is built as an agent's command's is, from the same places: the slots, every Claude Code directory and
+    /// every place the user keeps credentials in hidden, git's code-running files of each tree, every configuration file
+    /// git reads and the tool's state written by nobody, the ground's own places written again inside them, the private
+    /// temporary directory and the declared caches written - for what it runs is the agents' work however it is started.
+    /// Where git's own work signs or pushes through it - a push over ssh, a commit signed with an ssh key - the user's SSH
+    /// agent's socket is reached alone.
     /// </remarks>
     public async Task<ExecutionIsolation> ForExecutionAsync(HarnessConfig config, ExecutionGround ground, string mainCheckout, CancellationToken cancellationToken)
     {
@@ -596,7 +606,8 @@ public sealed class AgentIsolation(
         ArgumentNullException.ThrowIfNull(ground);
 
         var socket = _environment(SshAgentSocketVariable) is { Length: > 0 } named && Path.IsPathFullyQualified(named) && fileSystem.KindOf(named) != PathKind.None ? Real(named) : null;
-        var held = await HeldAsync(config, IsolationGround.Of(ground, _claudeCode.Of(config, mainCheckout), socket), mainCheckout, "make sure git 2.31 or newer answers in the trees the run works over", cancellationToken).ConfigureAwait(false);
+        var credentials = UserCredentials.Of(config, host.HomeDirectory, host.Current, _environment);
+        var held = await HeldAsync(config, IsolationGround.Of(ground, _claudeCode.Of(config, mainCheckout), credentials, socket), mainCheckout, "make sure git 2.31 or newer answers in the trees the run works over", cancellationToken).ConfigureAwait(false);
 
         return new ExecutionIsolation(ground.Kind, held.Mode, held.Mechanism, held.Profile, held.Without, held.Remedy) { Release = held.Release, After = held.After };
     }
@@ -1125,10 +1136,24 @@ public sealed class AgentIsolation(
 
         var open = new IsolationProfile([], [.. written.Select(root => new IsolatedWrite(root, Directory: true, Writable: true))]) { Temp = temp is null ? null : Real(temp) };
 
+        // A place the user keeps credentials in that holds a tree or a place written would hide it with them.
+        foreach (var credential in ground.CredentialPlaces)
+        {
+            var real = Real(credential.Path);
+
+            if (ground.Trees.Select(Real).Concat(written).Concat(open.Temp is { } own ? [own] : []).FirstOrDefault(root => IsolationProfile.Covers(real, root)) is { } held)
+            {
+                return (IsolationProfile.Nothing, IsolationProfile.Nothing, (
+                    $"'{credential.Path}' is hidden as a place the user keeps credentials in, and holds '{held}', which the isolated work needs, so hiding it would hide that too",
+                    "keep the trees and the isolation's own directory outside it - a place agentPolicy.hiddenPlaces adds may be taken out of it"));
+            }
+        }
+
         var hidden = ground.SlotDirectories.Concat(ground.ClaudeCodeDirectories).Select(place => (place, directory: true))
             .Concat(ground.ClaudeCodeDirectories
                 .Where(directory => Path.GetFileName(Path.TrimEndingDirectorySeparator(directory)) == ".claude")
                 .Select(directory => (place: Path.TrimEndingDirectorySeparator(directory) + ".json", directory: false)))
+            .Concat(ground.CredentialPlaces.Select(credential => (place: credential.Path, directory: credential.Directory)))
             .ToList();
 
         // A file git's configuration includes is held as it stands; one not there, where a command could make it, cannot be.
@@ -1201,23 +1226,44 @@ public sealed class AgentIsolation(
                 "keep the trees and every guarded place on a file system that tells letter case apart - WSL's own, not a Windows drive under /mnt"));
         }
 
+        // What a program reads by itself inside a hidden directory of the user's credentials - ssh's known_hosts and config -
+        // is read again there, at the hidden directory's real spelling, whatever the file itself leads to.
+        var hiddenDirectories = keptHidden.Where(place => place.Directory).Select(place => place.Path).ToHashSet(comparer);
+        IReadOnlyList<string> readable =
+        [
+            .. ground.CredentialPlaces
+                .Select(credential => (credential, real: Real(credential.Path)))
+                .Where(pair => hiddenDirectories.Contains(pair.real))
+                .SelectMany(pair => pair.credential.Readable.Select(file => Path.Combine(pair.real, Path.GetRelativePath(pair.credential.Path, file))))
+                .Distinct(comparer),
+        ];
+
+        var socket = ground.AgentSocket is { } agent ? Real(agent) : null;
         var profile = new IsolationProfile(
             [.. keptHidden.DistinctBy(place => place.Path, comparer)],
             IsolationProfiles.Ordered(keptSealed, written, comparer))
         {
             Reads = [.. ground.Trees.Concat(ground.ReadRoots).Select(Real).Distinct(comparer)],
-            Reopened = [.. ground.ClaudeCodeDirectories.Select(directory => Path.Combine(Real(directory), ShellSnapshots)).Distinct(comparer)],
+            Reopened = [.. ground.ClaudeCodeDirectories.Select(directory => Path.Combine(Real(directory), ShellSnapshots)).Distinct(comparer), .. readable],
             Temp = open.Temp,
-            Environment = [.. TempVariable(open.Temp), .. IsolationCaches.Environment(Real(caches)), .. IsolationCaches.Installed(host.HomeDirectory, host.Current, _environment, fileSystem.DirectoryExists)],
-            Sockets = [.. ground.Sockets.Select(Real).Distinct(comparer)],
+            Environment = [.. TempVariable(open.Temp), .. IsolationCaches.Environment(Real(caches)), .. IsolationCaches.Installed(host.HomeDirectory, host.Current, _environment, fileSystem.DirectoryExists), .. AgentSocketVariable(socket)],
+            Sockets = socket is null ? [] : [socket],
         };
 
         // The whole Claude Code process reads its login in its directories, read alone like the machine: written, they would
         // let a command plant what Claude Code runs outside later - its settings' hooks, its own file's servers.
         var claudeCode = hidden.Where(entry => !ground.ClaudeCodeDirectories.Contains(entry.place, comparer) && !IsClaudeFile(entry.place)).Select(entry => Real(entry.place)).ToHashSet(comparer);
 
-        return (profile, profile with { Hidden = [.. profile.Hidden.Where(place => claudeCode.Contains(place.Path))], Reopened = [] }, null);
+        return (profile, profile with { Hidden = [.. profile.Hidden.Where(place => claudeCode.Contains(place.Path))], Reopened = readable }, null);
     }
+
+    /// <summary>
+    /// The variable that names the user's SSH agent's socket to a child that reaches it, at its real spelling: the name the
+    /// user's environment gives it may be a link inside a hidden place - ssh's own directory among them - which the child
+    /// cannot follow. None where it reaches no agent.
+    /// </summary>
+    private static IEnumerable<KeyValuePair<string, string>> AgentSocketVariable(string? socket)
+        => socket is null ? [] : [new(SshAgentSocketVariable, socket)];
 
     /// <summary>
     /// What git writes of a tree that is itself written, by its kind: a linked worktree's own git directory and, of the

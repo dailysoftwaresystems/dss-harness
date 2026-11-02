@@ -19,7 +19,8 @@ public static class AgentStepGround
     /// always - or, for an agent with none, the main checkout, which it only reads. The tool's own state under each tree
     /// it touches - its worktree, and always the main checkout, whose run records and other worktrees a command reaches
     /// from the worktree - git's own files beneath both under the worktree rules, and every credential slot of the main
-    /// checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), no action of the agent's reaches.
+    /// checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), every Claude Code directory and every place the
+    /// user keeps credentials in, no action of the agent's reaches.
     /// </summary>
     /// <param name="config">The configuration, whose <c>agentPolicy</c> restricts and whose state paths are guarded.</param>
     /// <param name="definition">The agent definition the step works by, where there is one; null where it names none.</param>
@@ -27,6 +28,7 @@ public static class AgentStepGround
     /// <param name="workspace">Where the run works, as the step's agent answers it.</param>
     /// <param name="webSearchGiven">Whether the run is given a web search, which without it the agent has not.</param>
     /// <param name="claudeDirectories">Every Claude Code directory a client of this run uses, and the tool's own.</param>
+    /// <param name="credentialPlaces">Every place the user keeps credentials in on this machine (<see cref="Isolation.UserCredentials.Of"/>).</param>
     /// <param name="readsOnly">
     /// Whether the run only reads whatever its definition gives it - the run's advisor, which works where the asking step
     /// works and writes nothing there, and its reporter: its own work directory is all it writes.
@@ -38,12 +40,14 @@ public static class AgentStepGround
         AgentWorkspace workspace,
         bool webSearchGiven,
         IReadOnlyList<string> claudeDirectories,
+        IReadOnlyList<Isolation.HiddenPlace> credentialPlaces,
         bool readsOnly = false)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(step);
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(claudeDirectories);
+        ArgumentNullException.ThrowIfNull(credentialPlaces);
 
         var policy = config.AgentPolicy ?? new AgentPolicyConfig();
 
@@ -93,6 +97,7 @@ public static class AgentStepGround
             writable,
             HarnessLayout.SecretSlotDirectoriesUnder(workspace.MainCheckout),
             Distinct([.. claudeDirectories]),
+            credentialPlaces,
             restrictions,
             capabilities,
             policy.WebDomains is { Count: > 0 } domains ? [.. domains] : null,

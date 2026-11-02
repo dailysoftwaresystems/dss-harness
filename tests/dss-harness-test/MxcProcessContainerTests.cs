@@ -15,7 +15,8 @@ namespace DssHarness.Tests;
 /// every grant of its files - an anchor whose holder is written read alone, its entries written again - and every decision
 /// of its probe, each from doubles of the machine on every system; then the container run for real on Windows where MXC's
 /// library says the machine has it: the probe's decision as node, git and Git Bash's sh really behave inside it, and a
-/// launch's commands kept from a credential slot's file, git's hooks, the tool's state and the launch's own directory, its
+/// launch's commands kept from a credential slot's file, every place the user keeps credentials in - ssh's directory
+/// whole - git's hooks, the tool's state and the launch's own directory, its
 /// git directory and its harness directory never moved. The real tests are skipped where MXC's container is not on the
 /// machine - no runner image is meant to hold it.
 /// </summary>
@@ -428,6 +429,40 @@ public sealed class MxcProcessContainerTests
     }
 
     /// <summary>
+    /// A command inside MXC's container in a step's launch reads no place the user keeps credentials in - ssh's directory
+    /// whole, its known_hosts and config among it, for the container grants nothing beneath a denial; AWS's credentials;
+    /// the logins curl and git read - while it reads the rest of the home, and every one of them is left as it was.
+    /// </summary>
+    [Fact]
+    public async Task OnWindows_ACommandInside_ReadsNoPlaceTheUserKeepsCredentialsIn_SshsDirectoryWhole_ForReal()
+    {
+        var version = Supported();
+        using var temp = new TempDirectory();
+        using var home = RealIsolation.Home();
+        var platform = new FixedIsolationPlatform(IsolationAvailability.Of(new MxcProcessContainer(version, (CliRunner.CliProgram, []))));
+        var credentials = await RealIsolation.CredentialsAsync(home);
+        var gitconfig = home.WriteFile(".gitconfig", "visible");
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var hidden = new[] { credentials.Key, credentials.KnownHosts, credentials.Config, credentials.Aws, credentials.Netrc };
+        var refused = new List<(string Place, ProcessResult Result)>();
+
+        foreach (var place in hidden)
+        {
+            refused.Add((place, await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, Interpreter, "/d", "/c", "type", place)));
+        }
+
+        var visible = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, Interpreter, "/d", "/c", "type", gitconfig);
+
+        foreach (var (place, result) in refused)
+        {
+            Assert.Equal((place, false, string.Empty), (place, result.ExitCode == 0, result.StandardOutput));
+        }
+
+        Assert.Equal((0, "visible"), (visible.ExitCode, visible.StandardOutput));
+        Assert.Equal(["secret", "known", "Host *", "secret", "secret"], await Task.WhenAll(hidden.Select(file => File.ReadAllTextAsync(file, Token))));
+    }
+
+    /// <summary>
     /// A command inside MXC's container over a side-task's main tree, which it writes, moves neither the tree's git
     /// directory, whose hooks it may not write, nor the directory that holds the credential slots - MXC meets a place by its
     /// path, and a directory moved away would carry its guarded places out from under their rules.
@@ -443,7 +478,7 @@ public sealed class MxcProcessContainerTests
         var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(container)), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings, AgentPolicy = new AgentPolicyConfig { Isolation = AgentIsolationMode.Required } };
         var layout = new HarnessLayout(kit.Main, kit.Main);
-        var launched = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        var launched = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
         var commands = Assert.IsType<ProcessIsolation>(launched.ForCommands);
 
         foreach (var anchor in new[] { Path.Combine(kit.Main, ".git"), Path.Combine(kit.Main, HarnessLayout.DirectoryName) })

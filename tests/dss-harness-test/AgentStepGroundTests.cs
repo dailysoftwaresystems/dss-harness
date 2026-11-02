@@ -23,7 +23,7 @@ public sealed class AgentStepGroundTests
             Step(),
             new AgentWorkspace("C:/trees/w1", "C:/runs/r1/agents/a1/work", "C:/source/repo", [], "C:/trees/w1", "C:/source/repo/.orchestrators/r1"),
             webSearchGiven: false,
-            claudeDirectories: []);
+            claudeDirectories: [], credentialPlaces: []);
 
         Assert.Equal("C:/trees/w1", ground.WorkingDirectory);
         Assert.Equal(["C:/trees/w1", "C:/runs/r1/agents/a1/work"], ground.ReadRoots);
@@ -39,7 +39,7 @@ public sealed class AgentStepGroundTests
             Step(),
             new AgentWorkspace(null, "C:/runs/r1/agents/a1/work", "C:/source/repo", [], "C:/runs/r1/agents/a1/work", "C:/source/repo/.orchestrators/r1"),
             webSearchGiven: false,
-            claudeDirectories: []);
+            claudeDirectories: [], credentialPlaces: []);
 
         Assert.Equal(["C:/runs/r1/agents/a1/work", "C:/source/repo"], ground.ReadRoots);
         Assert.Equal(["C:/runs/r1/agents/a1/work"], ground.WritableRoots);
@@ -54,7 +54,7 @@ public sealed class AgentStepGroundTests
             Step(restrictions: ["Read(secrets/**)"]),
             Workspace(),
             webSearchGiven: false,
-            claudeDirectories: []);
+            claudeDirectories: [], credentialPlaces: []);
 
         Assert.Equal(
             [
@@ -68,8 +68,8 @@ public sealed class AgentStepGroundTests
     [Fact]
     public void TheWebCapabilityIsKeptOnlyWhereTheRunIsGivenASearch()
     {
-        var without = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
-        var with = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: true, claudeDirectories: []);
+        var without = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], credentialPlaces: []);
+        var with = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: true, claudeDirectories: [], credentialPlaces: []);
 
         Assert.Equal([AgentCapability.Read, AgentCapability.Write, AgentCapability.Run], without.Capabilities);
         Assert.Equal([AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web], with.Capabilities);
@@ -84,11 +84,11 @@ public sealed class AgentStepGroundTests
             Step(writes: new FlowList(["src/**"], Expression: null)),
             Workspace(),
             webSearchGiven: false,
-            claudeDirectories: []);
+            claudeDirectories: [], credentialPlaces: []);
 
         Assert.Equal(["src/**"], narrowed.Writes);
 
-        var open = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
+        var open = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], credentialPlaces: []);
 
         Assert.Null(open.Writes);
     }
@@ -102,8 +102,8 @@ public sealed class AgentStepGroundTests
     public void ADefinitionThatWritesNothing_AndARunThatOnlyReads_LeaveTheWorktreeUnwritten()
     {
         var readOnly = new AgentDefinition("planner", "what it is for", "the system prompt", Writes: false);
-        var byDefinition = AgentStepGround.Of(new HarnessConfig(), readOnly, Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
-        var byRun = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], readsOnly: true);
+        var byDefinition = AgentStepGround.Of(new HarnessConfig(), readOnly, Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], credentialPlaces: []);
+        var byRun = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], credentialPlaces: [], readsOnly: true);
 
         foreach (var ground in new[] { byDefinition, byRun })
         {
@@ -120,8 +120,8 @@ public sealed class AgentStepGroundTests
     [Fact]
     public void EveryCredentialSlotOfTheMainCheckout_IsGuarded_OnAStepsGroundAndASideTasks()
     {
-        var ground = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
-        var side = DssHarness.Core.Agents.SideTasks.SideTaskPolicy.Ground(new DssHarness.Core.Repository.HarnessLayout("C:/source/repo", "C:/source/repo"), new HarnessConfig(), []);
+        var ground = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], credentialPlaces: []);
+        var side = DssHarness.Core.Agents.SideTasks.SideTaskPolicy.Ground(new DssHarness.Core.Repository.HarnessLayout("C:/source/repo", "C:/source/repo"), new HarnessConfig(), [], []);
 
         string[] every =
         [
@@ -145,7 +145,7 @@ public sealed class AgentStepGroundTests
     [Fact]
     public void TheStateGuarded_IsEachStatePathUnderEachTree_TheMainCheckoutAlways_NeverATreeItself()
     {
-        var ground = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: []);
+        var ground = AgentStepGround.Of(new HarnessConfig(), Definition(), Step(), Workspace(), webSearchGiven: false, claudeDirectories: [], credentialPlaces: []);
         var statePaths = DssHarness.Core.Repository.HarnessLayout.StatePaths(WorktreeSettings.DefaultRoot);
 
         Assert.Equal(
@@ -159,7 +159,7 @@ public sealed class AgentStepGroundTests
             Step(),
             new AgentWorkspace(null, "C:/runs/r1/agents/a1/work", "C:/source/repo", [], "C:/runs/r1/agents/a1/work", "C:/source/repo/.orchestrators/r1"),
             webSearchGiven: false,
-            claudeDirectories: []);
+            claudeDirectories: [], credentialPlaces: []);
 
         Assert.Equal([.. statePaths.Select(path => Path.Combine("C:/source/repo", path))], readOnly.StateDirectories);
         Assert.Equal(["C:/source/repo"], readOnly.Trees);
@@ -190,7 +190,7 @@ public sealed class AgentStepGroundTests
             Step(),
             new AgentWorkspace(worktree, work, main.Path, [], worktree, run),
             webSearchGiven: false,
-            claudeDirectories: []);
+            claudeDirectories: [], credentialPlaces: []);
         var policy = new AgentPolicy(new PhysicalFileSystem(FilePermissionsFactory.Create()), HostDoubles.Platform(), ground);
         var whole = Path.GetFullPath(main.Path).Replace('\\', '/');
 

@@ -162,7 +162,8 @@ public sealed class AgentIsolationTests
             new WorkflowStep { Name = "think", Type = "reason" },
             new AgentWorkspace(worktree, work, kit.Main, [], worktree, kit.Layout.Directory),
             webSearchGiven: false,
-            [claude]);
+            [claude],
+            []);
 
         var isolated = await isolation.ForLaunchAsync(config, ground, kit.Main, launch, Token);
 
@@ -243,7 +244,7 @@ public sealed class AgentIsolationTests
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
         var layout = new HarnessLayout(kit.Main, kit.Main);
 
-        using var isolated = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [claude]), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        using var isolated = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [claude], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
 
         var root = IsolationRoot(home.Path);
         var slots = HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Where(Directory.Exists).Select(slot => new IsolatedPath(slot, Directory: true)).ToList();
@@ -277,7 +278,7 @@ public sealed class AgentIsolationTests
         var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings, AgentPolicy = new AgentPolicyConfig { Isolation = AgentIsolationMode.Preferred } };
         var layout = new HarnessLayout(kit.Main, kit.Main);
-        var ground = SideTaskPolicy.Ground(layout, config, []);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
         var records = SideTaskLayout.Of(layout, "one").Directory;
 
         // Hooks run from elsewhere, and a file included only on another branch, which includes another in turn: the common
@@ -322,7 +323,7 @@ public sealed class AgentIsolationTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
         var layout = new HarnessLayout(kit.Main, kit.Main);
-        var ground = SideTaskPolicy.Ground(layout, config, []);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
         var records = SideTaskLayout.Of(layout, "one").Directory;
         var git = Path.Combine(kit.Main, ".git");
         var pointer = Path.Combine(git, AgentIsolation.CommonDirectoryFile);
@@ -591,7 +592,7 @@ public sealed class AgentIsolationTests
         var layout = new HarnessLayout(kit.Main, kit.Main);
         var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, HostDoubles.Platform(PlatformId.Linux, home: user.Path), _ => null);
 
-        using var launched = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        using var launched = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
 
         Assert.Equal(new KeyValuePair<string, string>(IsolationCaches.PlaywrightBrowsersVariable, installed), launched.Commands!.Environment[^1]);
     }
@@ -609,7 +610,7 @@ public sealed class AgentIsolationTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
         var layout = new HarnessLayout(kit.Main, kit.Main);
-        var ground = SideTaskPolicy.Ground(layout, config, []);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
         var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
         await kit.Harness.RunGitAsync(kit.Main, ["config", "include.path", "~/not-there.config"], Token);
         await kit.Harness.RunGitAsync(kit.Main, ["config", "includeIf.onbranch:elsewhere.path", "../shared.config"], Token);
@@ -669,7 +670,7 @@ public sealed class AgentIsolationTests
         TestLinks.DirectoryLink(linked, elsewhere);
         var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
 
-        using var isolated = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        using var isolated = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
 
         Assert.Equal(
             (true, $"'{linked}' is a link inside a place the agent writes, on the way to '{linked}', which a command could replace with one leading elsewhere", $"replace the link '{linked}' with the directory or file it leads to"),
@@ -695,8 +696,8 @@ public sealed class AgentIsolationTests
         AgentIsolation IsolationFor(bool holdsEveryCase)
             => new(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism("test", "1.0", holdsEveryCase))), kit.Harness.GitClient, folding, new HomedPlatform(home.Path), _ => null);
 
-        using var one = await IsolationFor(holdsEveryCase: false).ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
-        using var every = await IsolationFor(holdsEveryCase: true).ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        using var one = await IsolationFor(holdsEveryCase: false).ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        using var every = await IsolationFor(holdsEveryCase: true).ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
 
         Assert.True(one.Refused);
         Assert.Matches("^'.+' stands on a file system that ignores letter case, where test's rules hold the one spelling they are made at$", one.Record.None);
@@ -728,7 +729,7 @@ public sealed class AgentIsolationTests
         using var temp = new TempDirectory();
         var platform = new FixedIsolationPlatform(IsolationAvailability.None("never asked", "nothing"));
         var isolation = new AgentIsolation(platform, new HarnessFactory().GitClient, new HarnessFactory().FileSystem, new HomedPlatform(temp.Path), _ => null);
-        var ground = new AgentPolicyGround(temp.Path, [temp.Path], [temp.Path], [], [], [], AgentPolicyGround.EveryCapability, null, null, ReporterRoot: temp.Path, WorktreeRules: true, ProtectedPaths: true, []);
+        var ground = new AgentPolicyGround(temp.Path, [temp.Path], [temp.Path], [], [], [], [], AgentPolicyGround.EveryCapability, null, null, ReporterRoot: temp.Path, WorktreeRules: true, ProtectedPaths: true, []);
 
         var isolated = await isolation.ForLaunchAsync(new HarnessConfig(), ground, temp.Path, temp.Path, Token);
 
@@ -747,7 +748,7 @@ public sealed class AgentIsolationTests
     {
         using var temp = new TempDirectory();
         var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.None("bubblewrap is not here", "install it")), new HarnessFactory().GitClient, new HarnessFactory().FileSystem, new HomedPlatform(temp.Path), _ => null);
-        var ground = new AgentPolicyGround(temp.Path, [temp.Path], [temp.Path], [], [], [], AgentPolicyGround.EveryCapability, null, null, null, WorktreeRules: true, ProtectedPaths: true, []);
+        var ground = new AgentPolicyGround(temp.Path, [temp.Path], [temp.Path], [], [], [], [], AgentPolicyGround.EveryCapability, null, null, null, WorktreeRules: true, ProtectedPaths: true, []);
 
         var required = await isolation.ForLaunchAsync(new HarnessConfig(), ground, temp.Path, temp.Path, Token);
         var preferred = await isolation.ForLaunchAsync(new HarnessConfig { AgentPolicy = new AgentPolicyConfig { Isolation = AgentIsolationMode.Preferred } }, ground, temp.Path, temp.Path, Token);
@@ -816,6 +817,129 @@ public sealed class AgentIsolationTests
         var unscoped = await Assert.ThrowsAsync<ProgramStartException>(() => runner.RunAsync(request, Token));
 
         Assert.Contains("enter Landlock's scope of abstract sockets and signals", unscoped.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A launch's commands are kept from every place the user keeps credentials in that is there, as from the slots - a
+    /// directory whole, a file alone - ssh's known_hosts and config read again inside its directory; a Claude Code launch's
+    /// whole process is kept from them too, with the same files read again. A place that is not there, where no command
+    /// could make it, is not made: nothing of the user's home is changed.
+    /// </summary>
+    [Fact]
+    public async Task ThePlacesTheUserKeepsCredentialsIn_AreHiddenLikeTheSlots_SshsKnownHostsAndConfigReadAgain()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var ssh = Directory.CreateDirectory(Path.Combine(home.Path, ".ssh")).FullName;
+        var aws = Directory.CreateDirectory(Path.Combine(home.Path, ".aws")).FullName;
+        var netrc = Path.Combine(home.Path, ".netrc");
+        await File.WriteAllTextAsync(Path.Combine(ssh, "id_ed25519"), "secret", Token);
+        await File.WriteAllTextAsync(Path.Combine(ssh, "known_hosts"), "known", Token);
+        await File.WriteAllTextAsync(netrc, "secret", Token);
+        var mechanism = new PassThroughMechanism { TakesHandedCommands = false };
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(mechanism)), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var credentials = UserCredentials.Of(config, home.Path, new HostPlatform().Current, _ => null);
+
+        using var isolated = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], credentials), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        var slots = HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Where(Directory.Exists).Select(slot => new IsolatedPath(slot, Directory: true)).ToList();
+        IReadOnlyList<IsolatedPath> hidden = [.. slots, new(ssh, Directory: true), new(aws, Directory: true), new(netrc, Directory: false)];
+
+        Assert.Equal(hidden, isolated.Commands!.Hidden);
+        Assert.Equal([Path.Combine(ssh, "known_hosts"), Path.Combine(ssh, "config")], isolated.Commands.Reopened);
+        Assert.Equal(hidden, isolated.ForClaudeCode!.Profile.Hidden);
+        Assert.Equal(isolated.Commands.Reopened, isolated.ForClaudeCode.Profile.Reopened);
+        Assert.Equal(
+            [".aws", ".netrc", ".ssh"],
+            Directory.GetFileSystemEntries(home.Path).Where(entry => !IsolationProfile.Covers(entry, IsolationRoot(home.Path))).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A place agentPolicy.hiddenPlaces adds that is not there is made empty first where a command could make it - inside a
+    /// tree the launch writes - so no command makes it inside and has it read outside later: a file where it is spelt as
+    /// one, a directory where it ends with a separator; both are hidden.
+    /// </summary>
+    [Fact]
+    public async Task AnAddedPlaceThatIsNotThere_IsMadeEmpty_WhereACommandCouldMakeIt()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var token = Path.Combine(kit.Main, "vault", "token");
+        var keys = Path.Combine(kit.Main, "keys");
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings, AgentPolicy = new AgentPolicyConfig { HiddenPlaces = [token, keys + Path.DirectorySeparatorChar] } };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var ground = SideTaskPolicy.Ground(layout, config, [], UserCredentials.Of(config, home.Path, new HostPlatform().Current, _ => null));
+
+        using var isolated = await isolation.ForLaunchAsync(config, ground, kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        Assert.Equal([new IsolatedPath(token, Directory: false), new IsolatedPath(keys, Directory: true)], isolated.Commands!.Hidden.TakeLast(2));
+        Assert.Equal((string.Empty, true), (await File.ReadAllTextAsync(token, Token), Directory.Exists(keys)));
+        Assert.Empty(Directory.GetFileSystemEntries(keys));
+    }
+
+    /// <summary>
+    /// A place the user keeps credentials in that holds a tree the work runs over keeps it from any isolation - hiding it
+    /// would hide the tree - saying which and the remedy.
+    /// </summary>
+    [Fact]
+    public async Task APlaceTheUserKeepsCredentialsInThatHoldsATree_LeavesNoIsolation()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings, AgentPolicy = new AgentPolicyConfig { HiddenPlaces = [temp.Path] } };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var ground = SideTaskPolicy.Ground(layout, config, [], UserCredentials.Of(config, home.Path, new HostPlatform().Current, _ => null));
+
+        using var isolated = await isolation.ForLaunchAsync(config, ground, kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        Assert.Equal(
+            (true,
+                $"'{temp.Path}' is hidden as a place the user keeps credentials in, and holds '{kit.Main}', which the isolated work needs, so hiding it would hide that too",
+                "keep the trees and the isolation's own directory outside it - a place agentPolicy.hiddenPlaces adds may be taken out of it"),
+            (isolated.Refused, isolated.Record.None, isolated.Remedy));
+    }
+
+    /// <summary>
+    /// The tool's executions of the agents' work are kept from the places the user keeps credentials in as a launch is -
+    /// found in its own home and where a tool's variable moves one - and a push over ssh reaches the user's SSH agent
+    /// inside ssh's hidden directory, named to it at its real spelling, while an execution that reaches no agent is named
+    /// none and reaches none.
+    /// </summary>
+    [Fact]
+    public async Task AnExecution_IsKeptFromThePlacesTheUserKeepsCredentialsIn_AndAPushReachesTheAgentInsideOne()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var ssh = Directory.CreateDirectory(Path.Combine(home.Path, ".ssh")).FullName;
+        var keys = Directory.CreateDirectory(Path.Combine(elsewhere.Path, "private-keys-v1.d")).FullName;
+        var socket = Path.Combine(ssh, "agent.sock");
+        await File.WriteAllTextAsync(socket, string.Empty, Token);
+        var variables = new Dictionary<string, string>(StringComparer.Ordinal) { [AgentIsolation.SshAgentSocketVariable] = socket, ["GNUPGHOME"] = elsewhere.Path };
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), name => variables.GetValueOrDefault(name));
+
+        using var push = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: true), kit.Main, Token);
+        using var leg = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfLegs(config, kit.Main, kit.Main), kit.Main, Token);
+
+        foreach (var profile in new[] { push.Profile!, leg.Profile! })
+        {
+            Assert.Equal([new IsolatedPath(ssh, Directory: true), new IsolatedPath(keys, Directory: true)], profile.Hidden.Where(place => !IsolationProfile.Covers(kit.Main, place.Path)));
+            Assert.Equal([Path.Combine(ssh, "known_hosts"), Path.Combine(ssh, "config")], profile.Reopened.Where(place => IsolationProfile.Covers(ssh, place)));
+        }
+
+        Assert.Equal([socket], push.Profile!.Sockets);
+        Assert.Equal(new KeyValuePair<string, string>(AgentIsolation.SshAgentSocketVariable, socket), push.Profile.Environment[^1]);
+        Assert.Empty(leg.Profile!.Sockets);
+        Assert.DoesNotContain(leg.Profile.Environment, variable => variable.Key == AgentIsolation.SshAgentSocketVariable);
     }
 
     /// <summary>The isolation's own directory under a test's home, as this machine places it.</summary>

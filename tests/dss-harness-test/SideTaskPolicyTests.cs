@@ -44,7 +44,7 @@ public sealed class SideTaskPolicyTests
             },
         };
         var layout = new HarnessLayout(main.Path, main.Path);
-        var ground = SideTaskPolicy.Ground(layout, config, [claude.Path]);
+        var ground = SideTaskPolicy.Ground(layout, config, [claude.Path], []);
 
         return (new AgentPolicy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), HostDoubles.Platform(platform), ground), main.Path, claude.Path);
     }
@@ -67,7 +67,7 @@ public sealed class SideTaskPolicyTests
         return new AgentPolicy(
             new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
             HostDoubles.Platform(platform),
-            AgentStepGround.Of(config, null, step, workspace, webSearchGiven: webDomains is null, [claude ?? new TempDirectory().Path]));
+            AgentStepGround.Of(config, null, step, workspace, webSearchGiven: webDomains is null, [claude ?? new TempDirectory().Path], []));
     }
 
     /// <summary>

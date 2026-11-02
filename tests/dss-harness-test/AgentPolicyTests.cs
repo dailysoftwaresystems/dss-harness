@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
@@ -147,6 +148,32 @@ public sealed class AgentPolicyTests
         Assert.Contains("names a credential slot of this tool: no command of an agent touches one", slot.Reason, StringComparison.Ordinal);
         Assert.Contains("names a credential slot", shell.Reason, StringComparison.Ordinal);
         Assert.Contains("lies in a Claude Code directory this run reads: no command of an agent touches one", claude.Reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The places the user keeps credentials in are refused as the slots are: a file tool's read and write in one; a
+    /// command naming one by the home's spelling - a file ssh reads by itself among them, which inside the isolation only a
+    /// program that needs it reads; a search of a directory that holds one; a command over a directory that holds one that
+    /// may read it. A file beside them in the home is the agent's to read.
+    /// </summary>
+    [Fact]
+    public void NoFileToolReadsAPlaceTheUserKeepsCredentialsIn_AndNoCommandNamesOne()
+    {
+        using var ground = Ground();
+        using var home = new TempDirectory();
+        var ssh = Directory.CreateDirectory(Path.Combine(home.Path, ".ssh")).FullName;
+        var credentials = Path.Combine(Directory.CreateDirectory(Path.Combine(home.Path, ".aws")).FullName, "credentials");
+        var policy = ground.Policy(home: home.Path, credentialPlaces: UserCredentials.Of(new HarnessConfig(), home.Path, PlatformId.Linux, _ => null));
+        const string Rule = "the user's credentials";
+
+        Assert.Equal(new AgentPolicyAnswer.Denied(Rule, AgentPolicySource.Builtin, $"'{credentials}' lies in a place the user keeps credentials in: no file tool of an agent reads or writes one"), policy.Read(credentials));
+        Assert.Equal(new AgentPolicyAnswer.Denied(Rule, AgentPolicySource.Builtin, $"'{credentials}' lies in a place the user keeps credentials in: no file tool of an agent reads or writes one"), policy.Write(credentials));
+        Assert.Equal(new AgentPolicyAnswer.Denied(Rule, AgentPolicySource.Builtin, "'~/.aws/credentials' lies in a place the user keeps credentials in: no command of an agent touches one"), policy.Run("cat ~/.aws/credentials"));
+        Assert.Equal(new AgentPolicyAnswer.Denied(Rule, AgentPolicySource.Builtin, "'~/.ssh/known_hosts' lies in a place the user keeps credentials in: no command of an agent touches one"), policy.Run("cat ~/.ssh/known_hosts"));
+        Assert.Equal(new AgentPolicyAnswer.Denied(Rule, AgentPolicySource.Builtin, $"'{home.Path}' holds a place the user keeps credentials in, '{ssh}': a search of it would read one, and no file tool of an agent reads one"), policy.Search(home.Path));
+        Assert.Equal(new AgentPolicyAnswer.Denied(Rule, AgentPolicySource.Builtin, $"'~' names '{home.Path}', which holds a place the user keeps credentials in, '{ssh}': a command over it may read one, and no command of an agent touches one"), policy.Run("grep -r token ~"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("cat ~/.gitconfig"));
+        Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(home: home.Path).Run("cat ~/.aws/credentials"));
     }
 
     [Fact]
@@ -2991,7 +3018,8 @@ public sealed class AgentPolicyTests
             IReadOnlyList<string>? stateDirectories = null,
             string? home = null,
             string? worktree = null,
-            string? workDirectory = null)
+            string? workDirectory = null,
+            IReadOnlyList<HiddenPlace>? credentialPlaces = null)
             => new(
                 new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
                 HostDoubles.Platform(platform, home: home),
@@ -3008,7 +3036,8 @@ public sealed class AgentPolicyTests
                     reporterRoot: reporterRoot,
                     worktreeRules: worktreeRules,
                     protectedPaths: protectedPaths,
-                    stateDirectories: stateDirectories));
+                    stateDirectories: stateDirectories,
+                    credentialPlaces: credentialPlaces));
 
         public void Dispose()
         {

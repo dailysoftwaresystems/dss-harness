@@ -2506,7 +2506,7 @@ public static class HelpTopics
             + "among them - one failed part of the search saying why; on Claude "
             + "Code its own WebSearch kept in the side-task's tools; on Z.AI none - and web_fetch takes any address. What "
             + "stays, and why: the built-in refusals - no root action, no agent while the tool runs elevated, no file "
-            + "tool's read or write of a credential slot or a Claude Code directory, no command whose words name one or a "
+            + "tool's read or write of a credential slot, a Claude Code directory or a place the user keeps credentials in, no command whose words name one or a "
             + $"directory that holds one to a program that may read it, other than its working directory and those above it ('{ToolPackage.Command} help agent-clients' says how a word is read), no "
             + "command that prints a credential, no git or gh command called by a name none of their own commands is, no "
             + "verb of this tool's that reads a credential slot or writes its state ('help agent-clients' names them) - "
@@ -2527,7 +2527,8 @@ public static class HelpTopics
             + "archive of it or a search - is not told from one over its sources, and reaches their files; and code an "
             + "interpreter runs (python -c, perl -e, awk's system) or a process apart from the agent's tree does what no "
             + "word the policy reads says. This is a policy of what a command names, not a sandbox; beneath it, where this "
-            + "machine has one, the operating system's isolation ('help agent-clients') hides every credential slot from "
+            + "machine has one, the operating system's isolation ('help agent-clients') hides every credential slot, and "
+            + "every place the user keeps credentials in, from "
             + "each command - one over the main tree whole finds each slot empty, or is refused it - and keeps it from git's code-running "
             + "files and the tool's state.");
         builder.AppendLine();
@@ -2925,7 +2926,8 @@ public static class HelpTopics
         builder.AppendLine("not configurable: the root actions (sudo, su, doas, pkexec, run0, gsudo, sudoedit, runas,");
         builder.AppendLine("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever a");
         builder.AppendLine("command names one), writes outside an agent's writable roots, every read and write of a");
-        builder.AppendLine("credential slot or a Claude Code directory of the run's and every search over one, any");
+        builder.AppendLine("credential slot or a Claude Code directory of the run's, or of a place the user keeps");
+        builder.AppendLine("credentials in (the isolation's list, below), and every search over one, any");
         builder.AppendLine("command naming one - by ~ or $HOME, as a redirect's file, an option's value after an =");
         builder.AppendLine("or a PowerShell parameter's :, a value glued to a short option (ssh -i./key), the file an");
         builder.AppendLine("@ or a < makes curl, httpie or gh read (-d @x, -F f=@x;type=y), a word of a script, a");
@@ -2940,7 +2942,8 @@ public static class HelpTopics
         builder.AppendLine("which the write rules decide, and the agent's working directory and those above it, which");
         builder.AppendLine("reach the slots only through it - every command over the tree names it (.) and every");
         builder.AppendLine("program given no path works over it. A recursive removal or a move of a directory that");
-        builder.AppendLine("holds a tree's .git, the tool's state, a slot or a Claude Code directory (rm -rf .,");
+        builder.AppendLine("holds a tree's .git, the tool's state, a slot, a Claude Code directory or a place the user");
+        builder.AppendLine("keeps credentials in (rm -rf .,");
         builder.AppendLine("Remove-Item -Recurse, mv, rsync --delete, git clean -dx), the working directory among");
         builder.AppendLine("them, is refused, and so is a find or fd walk that may remove or move one or what one");
         builder.AppendLine("holds - its -delete, a remover its -exec, -execdir or -ok runs, fd's -x and -X - read as");
@@ -3108,7 +3111,9 @@ public static class HelpTopics
             + "slot of the main checkout and every Claude Code directory - ~/.claude, the tool's own and the one the slot "
             + "names for the claude-code client's logins, one list for a launch and for the tool's executions alike - with "
             + "~/.claude.json beside each, the shell snapshots Claude Code sources read again, and on Windows a claude-code "
-            + "launch's own read, below. Written by nobody, inside what is written, are git's code-running files and its "
+            + "launch's own read, below. "
+            + UserCredentialsProse()
+            + " Written by nobody, inside what is written, are git's code-running files and its "
             + "pointers to its own directories and to other content: the hooks git runs and the common directory's hooks/ "
             + "beside them, which git runs again once core.hooksPath is gone; the common directory's config, "
             + "config.worktree and info/; its refs/replace/ and objects/info/, whose replacements and alternates would put "
@@ -3225,8 +3230,11 @@ public static class HelpTopics
             + "what it ran under - isolation in result.json and in each turn of a side-task's task.json: the mode, with "
             + "the mechanism and its version - macOS's own for its sandbox, MXC's library's for its container - what it "
             + "leaves reached and what its anchors cost, or why there was none. Where it ends: the machine stays readable "
-            + "as the user reads it - their ssh keys and every credential outside the slots among it, and on macOS the "
-            + "login keychain through the system's security service - the network is theirs, and what no rule at a path "
+            + "as the user reads it but the hidden places - a credential kept anywhere else among it - and the system's own "
+            + "credential stores are services, not places: on macOS the login keychain is reached through the system's "
+            + "security service, which the sandbox lets through for the trust of certificates; on Windows MXC's container "
+            + "shows the Credential Manager empty; on Linux the keyring sits behind the user's message bus, hidden with the "
+            + "runtime directory. The network is theirs, and what no rule at a path "
             + "reaches - a hard link made before the launch, another path bound to the same files - is reached. git's "
             + "refs and object store, and Git LFS's, are written as git needs them - a linked worktree's agent writes the "
             + "refs and objects of the common directory it shares with the main checkout and every other worktree, a main "
@@ -3240,6 +3248,39 @@ public static class HelpTopics
             + "write only the tree's own files, stay open.";
 
     /// <summary>
+    /// The places the user keeps credentials in that the isolation hides, said from their one list
+    /// (<see cref="Agents.Isolation.UserCredentials.Declared"/>) with the places it leaves out and why, the key that adds
+    /// more, what the words policy refuses of them, and what fails inside.
+    /// </summary>
+    private static string UserCredentialsProse()
+    {
+        static string Said(Agents.Isolation.UserCredential place)
+            => place.Spelled
+                + (place.Readable.Count > 0 ? $" but its {string.Join(" and ", place.Readable)}" : string.Empty)
+                + (place.Only is { } only ? $" on {only}" : string.Empty)
+                + (place.Listed ? ", each it lists" : string.Empty);
+
+        var declared = Agents.Isolation.UserCredentials.Declared.GroupBy(place => place.Holds, StringComparer.Ordinal).Select(group => $"{group.Key} ({string.Join(", ", group.Select(Said))})");
+        var leftOut = Agents.Isolation.UserCredentials.LeftOut.GroupBy(place => place.Why, StringComparer.Ordinal).Select(group => $"{string.Join(" and ", group.Select(place => place.Spelled))}, for {group.Key}");
+
+        return "Hidden too, from every isolated command and every execution of the agents' work alike, are the places the user "
+            + $"keeps credentials in: {string.Join(", ", declared)} - $NAME where this tool's own environment names one, "
+            + $"$XDG_CONFIG_HOME ~/.config where it names none, %APPDATA% AppData\\Roaming in the home where it names none. ssh's "
+            + "known_hosts and config are read again, for ssh reads them itself to reach a host - but under MXC's container, "
+            + "which grants nothing beneath a denial, where ssh's directory is hidden whole. agentPolicy.hiddenPlaces adds "
+            + "more and takes none away: each a whole path or one under ~/, a directory where it ends with a separator, else a "
+            + "file. The words policy refuses a file tool's read and write in one, a search over one, and a command that names "
+            + "one - ssh's own files among them, which inside only the program that needs them reads - or a directory that "
+            + $"holds one and may read it, as it refuses a slot. Left out, for builds read them: {string.Join("; ", leftOut)} - "
+            + "a password either holds is better given as a value. A build that reads a hidden place fails inside - a private "
+            + "registry's token in ~/.npmrc, a cloud's key in ~/.aws, a git dependency fetched over ssh with the user's own "
+            + "key - so hand it the secret as a value instead: the runner's environment carries it, read by this tool. A place "
+            + "that is not there is made, empty, only where a command could make it, inside a place written: the home is read "
+            + "alone by every isolated child, so nothing is made there and the user's home is left as it is. One that holds a "
+            + "tree, or a place written, leaves the launch or the execution with no isolation, saying which.";
+    }
+
+    /// <summary>
     /// The operating system's isolation of the tool's own executions of the agents' work: a run's machine steps' legs on
     /// this machine, and a run's commit and push with the repository's hooks; the tool's other git, which runs no hook;
     /// a push's credential handed in as values; and the legs another machine runs.
@@ -3248,8 +3289,8 @@ public static class HelpTopics
         => "What the agents wrote runs inside the same isolation when this tool runs it. The work of each leg of a run's "
             + "build, test, run and check-mutations step that this machine runs - every phase it starts: configure, build and "
             + "test commands, a runner's steps, a sweep's arms - is held inside it, its own profile from the leg's ground, "
-            + "built as a launch's is: the machine read-only; every credential slot of the main checkout and every Claude "
-            + "Code directory hidden; the tree the leg works in - the step's tree or its copy under .legs - a sweep's "
+            + "built as a launch's is: the machine read-only; every credential slot of the main checkout, every Claude "
+            + "Code directory and every place the user keeps credentials in hidden; the tree the leg works in - the step's tree or its copy under .legs - a sweep's "
             + "workers under .mutations, a temporary directory of its own and the declared tool caches written, and inside "
             + "them git's code-running files, the configuration directory and the tool's state written by nobody. The run's "
             + "records are no place the work writes: every log, the ledger, the run's claim and its stop are the tool's own, "
@@ -3278,16 +3319,22 @@ public static class HelpTopics
             + "http or https is handed the credential git's own helpers give for its address, asked outside (git credential "
             + "fill), as values in its environment read by a helper its command line names in place of every helper the "
             + "configuration names - so it needs no keyring behind the user's message bus, which the isolation hides - and "
-            + "whatever runs inside the push, its pre-push hook among it, can read them, as in any push; one over ssh reads "
-            + "the user's keys as the read-only machine shows them. Under bubblewrap and macOS's sandbox a push to a remote "
+            + "whatever runs inside the push, its pre-push hook among it, can read them, as in any push; one over ssh signs "
+            + "through the user's SSH agent alone, for their keys under ~/.ssh are hidden, its known_hosts and config read. "
+            + "Under bubblewrap and macOS's sandbox a push to a remote "
             + "over ssh (ssh://, git+ssh:// or host:path, as git reads its push address), and a commit the repository signs "
             + "with an ssh key (commit.gpgsign with gpg.format ssh), reach the one Unix socket outside that is the user's "
-            + $"SSH agent's ({Agents.Isolation.AgentIsolation.SshAgentSocketVariable}), wherever it stands - their hooks with "
+            + $"SSH agent's ({Agents.Isolation.AgentIsolation.SshAgentSocketVariable}), wherever it stands - inside ssh's "
+            + "hidden directory among it, named to them at its real spelling, so a link there leads nowhere hidden - their hooks with "
             + "them - and no other; every other commit and push, and every leg, reaches none, so a hook reaches the user's "
-            + "SSH agent only where git's own work does; MXC's container is handed none. A commit the repository signs with "
+            + "SSH agent only where git's own work does; MXC's container is handed none, and as it hides ~/.ssh whole a push "
+            + "over ssh inside it finds neither key nor known_hosts and fails - a push over https, whose credential this tool "
+            + "hands in as values, works there. A commit the repository signs with "
             + "gpg or x509 reaches no agent of the user's where its socket is hidden - in the user's runtime directory under "
             + "bubblewrap, and every one under macOS's sandbox and MXC's container - and fails there, as does one signed "
-            + "with an ssh key under MXC. Every other "
+            + "with an ssh key under MXC. One signed with an ssh key whose user.signingKey names a file under ~/.ssh fails "
+            + "as well, for the file is hidden: name the public key itself (key:: and its line) and keep the private key in "
+            + "the agent. Every other "
             + "git command of this tool's runs none of the repository's hooks - core.hooksPath pointed at the null device, "
             + "set as every git of the tool's sets its own settings, through GIT_CONFIG_PARAMETERS - so a fold, a refresh, "
             + "a rebase, a sync or a question of the tool's never runs the agents' work as a side effect of a checkout, an index written or a ref "
@@ -3368,7 +3415,7 @@ public static class HelpTopics
             + "wildcards; an alias given a command line - git config's setting of a key git runs, -c's, gh alias set's "
             + "expansion - is read as that command where it is given, gh alias import's file refused; the rule a refusal "
             + "names is the one that decided, a rule the command is before one it may be, and of those the person's "
-            + "own first; a pattern or a brace that may name a credential slot or a Claude Code directory, or a "
+            + "own first; a pattern or a brace that may name a credential slot, a Claude Code directory or a place the user keeps credentials in, or a "
             + "directory holding one, is refused as naming it, and a file:// address is read as the path it names; a "
             + "pathspec git expands itself is read as git reads it, quoted or not - its wildcards matching a dot-name, :/ "
             + "and :(top) the repository's root, its icase and glob magic - where git reaches what it does not track (add -f, "
@@ -3436,7 +3483,7 @@ public static class HelpTopics
             + "Expand-Archive -DestinationPath, Tee-Object and their kind - and a pattern among them is refused where it "
             + "may reach git's own files or the state; a command that removes or moves a directory whole - rm -r, "
             + "Remove-Item -Recurse, rd /s, mv, Move-Item, rsync --delete, git clean -dx - is refused where "
-            + "the directory holds a tree's .git, the state, a credential slot or a Claude Code directory, the working "
+            + "the directory holds a tree's .git, the state, a credential slot, a Claude Code directory or a place the user keeps credentials in, the working "
             + "directory among them, and a find or fd walk where it may remove or move one or what one holds. A "
             + "star, a question mark or a bracket matches a name that begins with a dot only where its shell would: a "
             + "segment that begins with a dot itself; anywhere in a string any of whose words names dotglob or globdots "
@@ -5589,7 +5636,10 @@ public static class HelpTopics
         builder.AppendLine($"                 names no time, and the most it may name, {Agents.AgentCommandSettings.MostTimeoutSeconds} at most;");
         builder.AppendLine($"                 isolation, {string.Join(" or ", Agents.Isolation.AgentIsolationMode.Modes)} ({Agents.Isolation.AgentIsolationMode.Required} where nothing is");
         builder.AppendLine("                 said), whether an agent that may run a command starts where this");
-        builder.AppendLine("                 machine cannot isolate its commands ('help agent-clients')");
+        builder.AppendLine("                 machine cannot isolate its commands; hiddenPlaces, more places the");
+        builder.AppendLine("                 user keeps credentials in, each a whole path or one under ~/,");
+        builder.AppendLine("                 hidden beside the declared ones, which it never takes away ('help");
+        builder.AppendLine("                 agent-clients')");
         AppendWrapped(
             builder,
             $"the harness's own web search: sources, each by its name - its {string.Join(", ", Web.Search.WebSearchSource.OwnKeys.Select(key => key.Name))} "
@@ -5615,7 +5665,8 @@ public static class HelpTopics
         builder.AppendLine("Leave the key out instead. A list whose empty form means none - such as");
         builder.AppendLine("sync.neverTransfer, sync.exclude or");
         builder.AppendLine("contention.buildTools - takes [] as that. workflows, which declares no workflow left");
-        builder.AppendLine("out, agentPolicy.keepEnvironment, which gives no name back left out, and a test");
+        builder.AppendLine("out, agentPolicy.keepEnvironment, which gives no name back left out,");
+        builder.AppendLine("agentPolicy.hiddenPlaces, which adds no place left out, and a test");
         builder.AppendLine("invocation's keepOnFailure, which keeps no evidence left out, are refused");
         builder.AppendLine("given empty too, so none is spelt one way: leave the key out for none. A runner's list");
         builder.AppendLine("under mutations.runReads, which would say nothing given empty, is refused so: leave the");

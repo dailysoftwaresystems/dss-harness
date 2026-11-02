@@ -161,7 +161,8 @@ public sealed class ReasonStepRunner(
             step,
             workspace,
             webSearch is not null,
-            launch.ClaudeDirectories(context.Config, context.Layout));
+            launch.ClaudeDirectories(context.Config, context.Layout),
+            launch.CredentialPlaces(context.Config));
 
         // The operating system's isolation the agent's commands run under, decided before anything of the step is handed
         // over: where agentPolicy.isolation is required and this machine has none, the step does not start, saying why and

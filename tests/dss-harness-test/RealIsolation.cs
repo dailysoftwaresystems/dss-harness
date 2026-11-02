@@ -79,11 +79,44 @@ internal static class RealIsolation
             new WorkflowStep { Name = "think", Type = "reason" },
             new AgentWorkspace(worktree, kit.Layout.WorkDirectory("a1"), kit.Main, [], worktree, kit.Layout.Directory),
             webSearchGiven: false,
-            []);
+            [],
+            UserCredentials.Of(config, home.Path, new HostPlatform().Current, _ => null));
         var isolated = await new AgentIsolation(platform, kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path))
             .ForLaunchAsync(config, ground, kit.Main, launch, Token);
 
         return new StepLaunch(kit, worktree, canary, launch, Assert.IsType<ProcessIsolation>(isolated.ForCommands));
+    }
+
+    /// <summary>
+    /// A home of a test's own where an isolated child reads it as it reads the user's: beside this build's own program,
+    /// outside the system's temporary directory, which bubblewrap gives each launch its own of - its name short, so a Unix
+    /// socket in it fits the system's bound on a socket's path.
+    /// </summary>
+    public static TempDirectory Home() => new(AppContext.BaseDirectory, "h");
+
+    /// <summary>
+    /// The places a user keeps credentials in, written in <paramref name="home"/> as a user has them: ssh's key beside its
+    /// known_hosts and config, AWS's credentials and the logins curl and git read, each key and login holding
+    /// <c>secret</c>.
+    /// </summary>
+    /// <param name="home">The home.</param>
+    public static async Task<HomeCredentials> CredentialsAsync(TempDirectory home)
+    {
+        var credentials = new HomeCredentials(
+            home.Combine(".ssh", "id_ed25519"),
+            home.Combine(".ssh", "known_hosts"),
+            home.Combine(".ssh", "config"),
+            home.Combine(".aws", "credentials"),
+            home.Combine(OperatingSystem.IsWindows() ? "_netrc" : ".netrc"));
+        Directory.CreateDirectory(Path.GetDirectoryName(credentials.Key)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(credentials.Aws)!);
+
+        foreach (var (file, text) in new[] { (credentials.Key, "secret"), (credentials.KnownHosts, "known"), (credentials.Config, "Host *"), (credentials.Aws, "secret"), (credentials.Netrc, "secret") })
+        {
+            await File.WriteAllTextAsync(file, text, Token);
+        }
+
+        return credentials;
     }
 
     /// <summary>Runs <paramref name="program"/> contained and inside <paramref name="isolation"/>, in <paramref name="directory"/>.</summary>
@@ -155,4 +188,12 @@ internal static class RealIsolation
     /// <param name="Directory">The launch's own directory.</param>
     /// <param name="Commands">The isolation its commands run inside.</param>
     public sealed record StepLaunch(OrchestrationKit Kit, string Worktree, string Canary, string Directory, ProcessIsolation Commands);
+
+    /// <summary>The places a user keeps credentials in, made by <see cref="CredentialsAsync"/>.</summary>
+    /// <param name="Key">ssh's private key.</param>
+    /// <param name="KnownHosts">ssh's known_hosts.</param>
+    /// <param name="Config">ssh's config.</param>
+    /// <param name="Aws">AWS's credentials.</param>
+    /// <param name="Netrc">The logins curl and git read: ~/.netrc, ~/_netrc on Windows.</param>
+    public sealed record HomeCredentials(string Key, string KnownHosts, string Config, string Aws, string Netrc);
 }
