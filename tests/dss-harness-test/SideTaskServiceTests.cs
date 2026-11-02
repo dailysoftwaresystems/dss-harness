@@ -401,7 +401,8 @@ public sealed class SideTaskServiceTests
         Dictionary<string, AgentClientConfig>? clients = null,
         ClientGates? gates = null,
         Func<HarnessFactory, IReadOnlyList<IAgentClient>>? apis = null,
-        DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null)
+        DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null,
+        TimeProvider? runnerClock = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -450,7 +451,7 @@ public sealed class SideTaskServiceTests
         var stored = new StoredClient();
         var rendered = new RenderedClient();
         IReadOnlyList<IAgentClient> serving = apis is null ? [stored, rendered] : [.. apis(harness), rendered];
-        var runner = new AgentRunner(serving, harness.FileSystem, harness.Platform, TimeProvider.System, gates);
+        var runner = new AgentRunner(serving, harness.FileSystem, harness.Platform, runnerClock ?? TimeProvider.System, gates);
         var keys = new AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform);
         var service = new SideTaskService(
             harness.ContextLoader,
@@ -1251,11 +1252,14 @@ public sealed class SideTaskServiceTests
     [Fact]
     public async Task ThePersonLeavingWhileALaunchWaitsAtTheGate_BeginsNoLaunch()
     {
-        var gates = new ClientGates(TimeProvider.System, (wait, token) => Task.Delay(wait, TimeProvider.System, token));
-        var (_, temp, service, _, rendered) = await RepoAsync(gates: gates);
+        // The wait is said from the time the limit lifts at and the gate's own clock, neither moving while the run goes on,
+        // so a busy machine says the same wait; the person's leaving ends it.
+        var wall = new FrozenWall();
+        var gates = new ClientGates(new ManualClock(), (_, token) => Task.Delay(Timeout.InfiniteTimeSpan, token));
+        var (_, temp, service, _, rendered) = await RepoAsync(gates: gates, runnerClock: wall);
         using var tree = temp;
         rendered.EndsWith = (launch, turn) => launch == 1 && turn == 1
-            ? new AgentRunResult(AgentRunStatus.RateLimited, Model: "claude-sonnet-5-5", Error: "limit") { Limit = new AgentAccountLimit(false, DateTimeOffset.UtcNow.AddSeconds(25), null, "claude-sonnet-5-5") }
+            ? new AgentRunResult(AgentRunStatus.RateLimited, Model: "claude-sonnet-5-5", Error: "limit") { Limit = new AgentAccountLimit(false, wall.GetUtcNow().AddSeconds(25), null, "claude-sonnet-5-5") }
             : null;
         var interrupts = new SideTaskInterrupts();
         var lines = new Queue<string>(["first"]);
@@ -1309,11 +1313,22 @@ public sealed class SideTaskServiceTests
     [Fact]
     public async Task AChatsFirstInterruptWhileItsLaunchWaitsAtTheGate_CutsNothing_AndTheLaunchBeginsAfterTheWait()
     {
-        var gates = new ClientGates(TimeProvider.System, (wait, token) => Task.Delay(wait, TimeProvider.System, token));
-        var (harness, temp, service, _, rendered) = await RepoAsync(gates: gates);
+        // The wait is said from the time the limit lifts at and the gate's own clock, neither moving while the run goes on,
+        // so a busy machine says the same wait; it passes once the person's interrupt is in, the gate's clock moved past it.
+        var wall = new FrozenWall();
+        var pressed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lane = new ManualClock();
+        var gates = new ClientGates(
+            lane,
+            async (wait, token) =>
+            {
+                await pressed.Task.WaitAsync(TimeSpan.FromMinutes(1), token);
+                lane.Advance(wait);
+            });
+        var (harness, temp, service, _, rendered) = await RepoAsync(gates: gates, runnerClock: wall);
         using var tree = temp;
         rendered.EndsWith = (launch, turn) => launch == 1 && turn == 1
-            ? new AgentRunResult(AgentRunStatus.RateLimited, Model: "claude-sonnet-5-5", Error: "limit") { Limit = new AgentAccountLimit(false, DateTimeOffset.UtcNow.AddSeconds(2), null, "claude-sonnet-5-5") }
+            ? new AgentRunResult(AgentRunStatus.RateLimited, Model: "claude-sonnet-5-5", Error: "limit") { Limit = new AgentAccountLimit(false, wall.GetUtcNow().AddSeconds(2), null, "claude-sonnet-5-5") }
             : null;
         var terminal = new SideTaskTerminal(harness.Output, chat: true);
         var lines = new Queue<string>(["first"]);
@@ -1331,6 +1346,7 @@ public sealed class SideTaskServiceTests
                 // The next launch waits at the gate: the person presses Ctrl+C once, and leaves once the line is answered.
                 await waiting.Task.WaitAsync(TimeSpan.FromMinutes(1), token);
                 terminal.Interrupted();
+                pressed.TrySetResult();
                 await answered.Task.WaitAsync(TimeSpan.FromMinutes(1), token);
                 return null;
             },
@@ -1869,6 +1885,17 @@ public sealed class SideTaskServiceTests
     /// A process table whose reading takes the person's interrupts - pressed as it is read - and waits, as a slow machine
     /// does, until it is stopped or a while has passed.
     /// </summary>
+    /// <summary>
+    /// The machine's timers and the time that passes, its time of day held where it began: what a run computes from the
+    /// time of day - how long a limit has left - is the same however long the machine takes to get there.
+    /// </summary>
+    private sealed class FrozenWall : TimeProvider
+    {
+        private readonly DateTimeOffset _at = DateTimeOffset.UtcNow;
+
+        public override DateTimeOffset GetUtcNow() => _at;
+    }
+
     private sealed class PressingTable(SideTaskInterrupts interrupts, int presses) : IProcessTable
     {
         public bool Stopped { get; private set; }
