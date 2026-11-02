@@ -381,9 +381,10 @@ public sealed class AgentIsolationTests
             new WorkflowStep { Name = "think", Type = "reason" },
             new AgentWorkspace(worktree, kit.Layout.WorkDirectory("a1"), kit.Main, [], worktree, kit.Layout.Directory),
             webSearchGiven: false,
+            [],
             []);
 
-        using var sideTask = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        using var sideTask = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
         using var inWorktree = await isolation.ForLaunchAsync(config, step, kit.Main, Path.Combine(kit.Layout.Directory, "steps", "think"), Token);
 
         _ = await kit.CreateAgentAsync("a2");
@@ -418,6 +419,7 @@ public sealed class AgentIsolationTests
             new WorkflowStep { Name = "think", Type = "reason" },
             new AgentWorkspace(worktree, kit.Layout.WorkDirectory("a1"), kit.Main, [], worktree, kit.Layout.Directory),
             webSearchGiven: false,
+            [],
             []);
         static string Said(string place, string how) => $"'{place}' {how} while it ran: the state of an operation under way, which git's next continue outside - the user's, an editor's - goes on with as it lies, running each exec line its todo holds - so nothing goes on over the trees; look at what it holds, and remove it - never continue the operation, nor abort it, which puts the branch where the state says";
 
@@ -455,7 +457,7 @@ public sealed class AgentIsolationTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
         var layout = new HarnessLayout(kit.Main, kit.Main);
-        var ground = SideTaskPolicy.Ground(layout, config, []);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
         var records = SideTaskLayout.Of(layout, "one").Directory;
         var git = Path.Combine(kit.Main, ".git");
         var opened = new OpeningFileSystem(kit.Harness.FileSystem);
