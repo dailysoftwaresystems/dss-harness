@@ -1,0 +1,10 @@
+[
+  {
+    "task": "Compute the total and the largest of the shapes' areas",
+    "needs": ["total_area", "largest_area", "area_circle"]
+  },
+  {
+    "task": "Describe each circle for the report table",
+    "needs": ["describe_circle", "report_table"]
+  }
+]

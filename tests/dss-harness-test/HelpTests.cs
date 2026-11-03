@@ -1494,6 +1494,8 @@ public sealed partial class HelpTests
         Assert.Contains("written to the step's web.jsonl before anything leaves the machine", prose, StringComparison.Ordinal);
         Assert.Contains("Calls that read run together, at most 4 at once", prose, StringComparison.Ordinal);
         Assert.Contains("an answer past 32,768 characters is given as its first 8,192 and its last 24,576, the whole kept in the step's tool-results/.", prose, StringComparison.Ordinal);
+        Assert.Contains("A step whose graph is tools - a graphify-codebase step upstream of it, 'help workflows' - is offered the graph tool among these, under read, with the operations its agent's capabilities give, edit among them where it may write, and its context pack at the head of its first message", prose, StringComparison.Ordinal);
+        Assert.Contains("its graphReads narrow (the default) denies a whole view_file of a file the graph parsed over 200 lines, saying the way to the graph instead - a range, a search and a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's wholeFile lifts the narrowing for one file for the rest of the step, an escape stated", prose, StringComparison.Ordinal);
     }
 
     /// <summary>
