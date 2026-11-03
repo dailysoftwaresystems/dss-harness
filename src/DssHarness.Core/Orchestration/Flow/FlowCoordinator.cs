@@ -153,6 +153,9 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>The step's output, as later steps read it; <see langword="null"/> where it wrote none.</summary>
     public JsonNode? Output { get; internal set; }
 
+    /// <summary>What the step's codebase graph gave and what it saved (<see cref="FlowStepRecord.Graph"/>); <see langword="null"/> where it was given none.</summary>
+    public JsonNode? Graph { get; internal set; }
+
     /// <summary>The code the step's own work ended with.</summary>
     public int? Exit { get; internal set; }
 
@@ -6159,6 +6162,7 @@ public sealed class FlowCoordinator
         instance.Legs = result.Legs;
         instance.RedLegs = FlowLegVerdicts.OfClass(result.Legs, FlowLegClass.Red);
         instance.Output = result.Output;
+        instance.Graph = result.Graph?.DeepClone();
 
         // A triage instance's answer is read before it ends: one that says no course the engine takes, or an issue to
         // list that does not read back, fails the step - a record is never guessed at, and nothing vanishes unsaid.
@@ -10333,7 +10337,8 @@ public sealed class FlowCoordinator
             instance.EndedFor,
             instance.ScopeOf?.PieceOf,
             instance.ScopeOf?.AgainOf?.GroupInstance?.Id,
-            instance.Skills is [_, ..] skills ? [.. skills] : null);
+            instance.Skills is [_, ..] skills ? [.. skills] : null,
+            instance.Graph?.DeepClone());
 
     /// <summary>
     /// The agent this step works in: the one stored on it (<see cref="FlowInstance.WorksIn"/>), or - before it was stored -
@@ -11059,6 +11064,7 @@ public sealed class FlowCoordinator
             instance.Failure = record.FailureOf();
             instance.EndedByQuestion = record.EndedByQuestion;
             instance.Output = record.Output?.DeepClone();
+            instance.Graph = record.Graph?.DeepClone();
             instance.StartedAt = record.StartedAt;
             instance.FinishedAt = record.FinishedAt;
             instance.Made = record.Made;

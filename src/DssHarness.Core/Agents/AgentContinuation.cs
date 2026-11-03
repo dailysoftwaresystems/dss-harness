@@ -459,12 +459,16 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
 
 /// <summary>
 /// The parts of a step's first user message, and the one owner of
-/// their order: the run context, the plan updates, the continuation record - only where the conversation is a new one,
+/// their order: the codebase section (a reason step's context pack, or the sentence for a graph the run never built),
+/// the run context, the plan updates, the continuation record - only where the conversation is a new one,
 /// which is every conversation on Claude Code and a fallback's or a compaction's on the API clients - and the step's
 /// filled prompt as the task. A run given no part sends its prompt as it always did, shaped by nothing.
 /// </summary>
 public static class AgentPromptParts
 {
+    /// <summary>The codebase section's tag, as the first user message wraps it: the step's context pack, first of all.</summary>
+    public const string CodebaseTag = "codebase";
+
     /// <summary>The run context's tag, as the first user message wraps it.</summary>
     public const string RunContextTag = "run-context";
 
@@ -480,8 +484,9 @@ public static class AgentPromptParts
     private static string NL => Environment.NewLine;
 
     /// <summary>
-    /// The first user message of <paramref name="run"/>: its parts in their order, the continuation record only where
-    /// <paramref name="newConversation"/> says the conversation is a new one, and the run's prompt as the task - the
+    /// The first user message of <paramref name="run"/>: its parts in their order - the codebase section first, where
+    /// the run was given one, then the run context, the plan updates and the continuation record, the last only where
+    /// <paramref name="newConversation"/> says the conversation is a new one - and the run's prompt as the task - the
     /// prompt alone, shaped by nothing, where the run was given no part.
     /// </summary>
     /// <param name="run">The run.</param>
@@ -491,6 +496,11 @@ public static class AgentPromptParts
         ArgumentNullException.ThrowIfNull(run);
 
         var parts = new List<(string Tag, string Text)>();
+
+        if (run.Codebase is { Length: > 0 } codebase)
+        {
+            parts.Add((CodebaseTag, codebase));
+        }
 
         if (run.RunContext is { Length: > 0 } context)
         {
@@ -555,5 +565,5 @@ public static class AgentPromptParts
     }
 
     /// <summary>The tags of the parts a first message may hold before its task, in their order.</summary>
-    private static readonly string[] PartTags = [RunContextTag, PlanUpdatesTag, ContinuationTag];
+    private static readonly string[] PartTags = [CodebaseTag, RunContextTag, PlanUpdatesTag, ContinuationTag];
 }

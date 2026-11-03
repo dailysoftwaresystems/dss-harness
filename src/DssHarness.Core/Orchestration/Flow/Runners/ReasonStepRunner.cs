@@ -38,6 +38,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
 /// <param name="configStore">Reads the repository's configuration, for the bounds of the engine's own account of a stream.</param>
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
+/// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
+/// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
 public sealed class ReasonStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -52,7 +54,9 @@ public sealed class ReasonStepRunner(
     Agents.Isolation.IAgentIsolation isolation,
     Git.IGitClient? gitClient = null,
     Configuration.IConfigStore? configStore = null,
-    ClaudeCodeUpdateService? updates = null) : IFlowStepTypeRunner, IFlowHandoffRunner
+    ClaudeCodeUpdateService? updates = null,
+    Codebase.ICodebaseGraphService? graphService = null,
+    TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
     /// <inheritdoc/>
     public string Type => "reason";
@@ -243,6 +247,29 @@ public sealed class ReasonStepRunner(
         // at the head of its prompt, and is spent once the prompt holds it.
         filled = WithHandoff(run.Handoff, filled);
 
+        // The step's serving of the run's codebase graph: its pack made from the filled prompt and given as the
+        // <codebase> part of its first message, the graph tool offered where its step says tools, its view the one the
+        // engine syncs at the step's start. A step whose mode is off is served nothing.
+        var stepGraph = graphService is null
+            ? null
+            : await FlowStepGraph.OfAsync(
+                graphService,
+                store,
+                fileSystem,
+                platform,
+                gitClient,
+                graphClock ?? clock,
+                run,
+                place,
+                context,
+                definition,
+                root,
+                agent,
+                agentRecord,
+                ground,
+                filled,
+                cancellationToken).ConfigureAwait(false);
+
         // The conversation this attempt goes on with, where its answers gave it one to go on with: the session the
         // step's own stream names last, there for the handing only where the engine stored one. A client that renders
         // its conversations - Claude Code - is handed none, and the attempt's own continuation record stands in its
@@ -307,6 +334,11 @@ public sealed class ReasonStepRunner(
             Skills = skills,
             SessionId = conversation is null ? session : null,
 
+            // The step's codebase graph: its pack the <codebase> part of its first message, and the graph tool offered
+            // with the operations and the narrowing of reads its step says.
+            Codebase = stepGraph?.Section,
+            Graph = stepGraph?.Support,
+
             // What the engine tells the attempt's agent while it works - a plan update's message into the
             // conversation, its handoff where one ends the step in order - and what a plan update that told this
             // work said, in the part of its own the attempt's first message holds.
@@ -338,7 +370,11 @@ public sealed class ReasonStepRunner(
             // agent that never started, which was given nothing.
             var ended = Ended(result, run.Instance, stored, FlowRunBudget.RunsShareBinds(definition?.MaxBudgetUsd, run.BudgetLeftUsd));
 
-            return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills };
+            // The step's graph, where it was given one, ends with the step: its working set written beside its output,
+            // the seeds of the packs of the steps after it, and its figures gathered for its record.
+            var graphUse = stepGraph?.Ended(graphService!, store, fileSystem, platform.PathComparison, layout, run.Instance, agent, cancellationToken);
+
+            return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills, Graph = graphUse };
         }
         catch (HarnessException refused)
         {

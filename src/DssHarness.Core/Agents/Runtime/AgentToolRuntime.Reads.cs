@@ -86,7 +86,56 @@ public sealed partial class AgentToolRuntime
 
         var lines = CodeFileText.Lines(reading.Text.Text);
 
+        // A whole read of a parsed file the graph holds is narrowed (graphReads: narrow): denied with the way to the
+        // graph, let by as an escape where the graph is not sure of the file or a wholeFile lifted it - each escape and
+        // each denial a line of the run's graph lines, the denial recorded as every denial is.
+        if (start is null && end is null && Narrow(path, full!, lines, reading.Text.Text) is { } answer)
+        {
+            return answer;
+        }
+
         return Paged($"'{Said(full)}' has {ReportText.Counted(lines.Count, "line")}", lines, "lines", start, end, numbered: true);
+    }
+
+    /// <summary>
+    /// What a whole read of the file at <paramref name="full"/> is under the narrowing of reads, where the run is given a
+    /// graph that narrows (<c>graphReads: narrow</c>): the refusal, recorded as every denial is, where the graph holds
+    /// the file as parsed and it is over <see cref="CodebaseGraphTool.NarrowLines"/> lines; an escape let by, recorded,
+    /// where the graph is not sure of the file; null where the read passes plainly - a range, a search and a write are
+    /// never narrowed, and neither is a file the graph does not parse.
+    /// </summary>
+    /// <param name="path">The file as the agent's tool asked it.</param>
+    /// <param name="full">The file, absolute.</param>
+    /// <param name="lines">The file's lines, as they were read.</param>
+    /// <param name="text">The file's text, as it was read.</param>
+    private Answer? Narrow(string path, string full, IReadOnlyList<string> lines, string text)
+    {
+        if (_run.Graph is not { Narrow: true, Tool: { } tool } graph)
+        {
+            return null;
+        }
+
+        var tree = _run.Workspace.Worktree ?? _run.Workspace.MainCheckout;
+
+        if (AgentPolicy.Beneath(tree, full, _host.Platform.PathComparison) is not { } relative)
+        {
+            return null;
+        }
+
+        var whole = tool.WholeRead(relative, lines.Count);
+
+        if (whole.Narrowed)
+        {
+            graph.Recorded?.Invoke(new GraphDeniedLine(relative, lines.Count, EstimatedTokens.Of(text)));
+            return Answer.Refused(path, new AgentPolicyAnswer.Denied("graphReads: narrow", AgentPolicySource.Builtin, whole.Text));
+        }
+
+        if (whole.Escape is { } escape)
+        {
+            graph.Recorded?.Invoke(new GraphEscapeLine(relative, lines.Count, EstimatedTokens.Of(text), escape, whole.Text));
+        }
+
+        return null;
     }
 
     /// <summary>

@@ -194,8 +194,8 @@ public sealed partial class AgentToolRuntime
     {
         Tally.Wrote(file, count);
 
-        // The run's graph, where it is given one, is synced after each of its writes - the side-task's own graph, kept
-        // under its records and read by its tool, its map standing as the cache it was made to be.
+        // The run's graph, where it is given one, is synced after each of its writes - a side-task's own, kept under its
+        // records, a reason step's the run's own, scoped to its view.
         if (_run.Graph is { AfterWriteAsync: { } sync })
         {
             await sync(file, CancellationToken.None).ConfigureAwait(false);

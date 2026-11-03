@@ -533,6 +533,70 @@ public sealed class CodebaseGraphQueries
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
     public bool Dynamic(string path) => (_extracts.TryGetValue(path, out var extract) ? extract : _read.Extract(path)) is { Dynamic.Count: > 0 };
 
+    /// <summary>
+    /// Whether the view holds the file at <paramref name="path"/> as one it parsed - the state the narrowing of a whole
+    /// read is held to, for a file the graph parsed is one it can serve an outline and bodies of instead.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
+    public bool Parsed(string path)
+        => HeldPath(path) is { } held && _read.Files.TryGetValue(held, out var entry)
+            && string.Equals(entry.State, CodeFileStates.Parsed, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Why the graph is not sure of the file at <paramref name="path"/> - a whole read of it is let past the narrowing
+    /// as an escape <c>lowConfidence</c> - or null where it is sure: the file carries a <c>dynamic</c> mark, is marked
+    /// <c>generated</c>, or more than a quarter of the references its nodes make are edges of <c>candidates</c> or were
+    /// left unresolved by the linker.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
+    public string? UnsureOfFile(string path)
+    {
+        if (HeldPath(path) is not { } held)
+        {
+            return null;
+        }
+
+        if (Dynamic(held))
+        {
+            return "the graph cannot bind part of it";
+        }
+
+        if (Generated(held))
+        {
+            return "the graph holds it as generated code";
+        }
+
+        var edges = 0;
+        var unsure = 0;
+
+        foreach (var id in _inFile.TryGetValue(held, out var own) ? own : [])
+        {
+            foreach (var edge in _out[id])
+            {
+                if (string.Equals(edge.Kind, CodeEdgeKinds.Contains, StringComparison.Ordinal)
+                    || string.Equals(edge.Kind, CodeEdgeKinds.Declares, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                edges++;
+
+                if (string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal))
+                {
+                    unsure++;
+                }
+            }
+
+            var unresolved = _read.Symbols.Unresolved.GetValueOrDefault(id);
+            edges += unresolved;
+            unsure += unresolved;
+        }
+
+        return edges > 0 && unsure * 4 > edges
+            ? $"more than a quarter of its {edges.ToString(CultureInfo.InvariantCulture)} references the linker left candidates or unresolved"
+            : null;
+    }
+
     /// <summary>The nodes in the file at <paramref name="path"/>, as a text hit is turned to a card where one covers its line.</summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
     /// <param name="line">A line of that file, from 1.</param>

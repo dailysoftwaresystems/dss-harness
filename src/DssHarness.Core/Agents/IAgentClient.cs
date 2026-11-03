@@ -523,11 +523,19 @@ public sealed record AgentStepRequest(
     public Policy.AgentPolicyGround? Ground { get; init; }
 
     /// <summary>
-    /// The codebase graph the run is given - today a side-task's, its own under its records: the <c>graph</c> tool the
-    /// runtime offers among the harness's own with every operation and no narrowing, what records each of its calls, and
-    /// what syncs the graph after each of the run's writes. Null where none is given, and every step of every run today.
+    /// The codebase graph the run is given - a side-task's, its own under its records, or a reason step's, the run's own
+    /// scoped to its view: the <c>graph</c> tool the runtime offers among the harness's own with the operations and the
+    /// narrowing of reads its step says, what records each of its calls and each escape of the narrowing, and what syncs
+    /// the graph after each of the run's writes. Null where none is given.
     /// </summary>
     public AgentGraphSupport? Graph { get; init; }
+
+    /// <summary>
+    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part at the head of its first user message
+    /// (<see cref="AgentPromptParts"/>): a reason step's context pack, or the sentence for a graph the run never built;
+    /// null where the run was given none.
+    /// </summary>
+    public string? Codebase { get; init; }
 
     /// <summary>
     /// The operating system's isolation the launch's agent runs under - the mechanism and what it denies each command, or
@@ -747,11 +755,19 @@ public sealed record AgentRun(
     public IReadOnlyList<string> Withheld { get; init; } = [];
 
     /// <summary>
-    /// The codebase graph the run is given - today a side-task's, its own under its records: the <c>graph</c> tool the
-    /// runtime offers among the harness's own with every operation and no narrowing, what records each of its calls, and
-    /// what syncs the graph after each of the run's writes. Null where none is given, and every step of every run today.
+    /// The codebase graph the run is given - a side-task's, its own under its records, or a reason step's, the run's own
+    /// scoped to its view: the <c>graph</c> tool the runtime offers among the harness's own with the operations and the
+    /// narrowing of reads its step says, what records each of its calls and each escape of the narrowing, and what syncs
+    /// the graph after each of the run's writes. Null where none is given.
     /// </summary>
     public AgentGraphSupport? Graph { get; init; }
+
+    /// <summary>
+    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part at the head of its first user message
+    /// (<see cref="AgentPromptParts"/>): a reason step's context pack, or the sentence for a graph the run never built;
+    /// null where the run was given none.
+    /// </summary>
+    public string? Codebase { get; init; }
 
     /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
     public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
@@ -862,17 +878,28 @@ public sealed record AgentEntries(Configuration.AgentProviderConfig Provider, Co
 /// <summary>
 /// The codebase graph a run is given with: its <see cref="Runtime.CodebaseGraphTool">graph tool</see>, offered by the
 /// tool runtime among the harness's own tools on every client, each of its calls recorded where the run's graph lines
-/// are kept, and its graph synced after each of the run's writes - today a side-task's, unlimited: every operation,
-/// <c>edit</c> among them, and no narrowing of reads.
+/// are kept, and its graph synced after each of the run's writes - a side-task's own under its records, unlimited (every
+/// operation, no narrowing), a reason step's the run's own, scoped to its view, its operations and its narrowing of
+/// reads said by its step (<c>graph</c> and <c>graphReads</c>).
 /// </summary>
-/// <param name="Tool">The tool, answering from the run's own view of its graph.</param>
-/// <param name="Recorded">Told of each call's line, where the run keeps them; null where it keeps none.</param>
+/// <param name="Tool">
+/// The tool, answering from the run's own view of its graph; null where none was built, and every call of the tool then
+/// answers <see cref="Gone"/>.
+/// </param>
+/// <param name="Recorded">Told of each line the graph leaves - a call, an escape, a denied read - where the run keeps them; null where it keeps none.</param>
 /// <param name="AfterWriteAsync">Syncs the graph by the path a write of the run's changed; null where nothing syncs.</param>
+/// <param name="Operations">The operations the run's step is given; null where it is given every one (a side-task's).</param>
+/// <param name="Narrow">Whether the run's whole-file reads are narrowed to the graph (<c>graphReads: narrow</c>).</param>
 public sealed record AgentGraphSupport(
-    Runtime.CodebaseGraphTool Tool,
+    Runtime.CodebaseGraphTool? Tool,
     Action<Runtime.GraphStepLine>? Recorded = null,
-    Func<string, CancellationToken, Task>? AfterWriteAsync = null)
+    Func<string, CancellationToken, Task>? AfterWriteAsync = null,
+    IReadOnlySet<Runtime.GraphOp>? Operations = null,
+    bool Narrow = false)
 {
     /// <summary>The tool's name, as the runtime offers it and an agent calls it.</summary>
     public const string ToolName = "graph";
+
+    /// <summary>Why no graph was built, where none was - every call of the tool answers it, and the run's codebase section says it; null where one was.</summary>
+    public string? Gone { get; init; }
 }

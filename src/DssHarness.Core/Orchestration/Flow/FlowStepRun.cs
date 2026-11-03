@@ -505,6 +505,13 @@ public sealed record FlowStepResult
     public IReadOnlyList<Agents.AgentSkill> Skills { get; init; } = [];
 
     /// <summary>
+    /// What the step's codebase graph gave and what it saved, as its <c>step.json</c> holds it (part 08): its mode, its
+    /// view, what the map and the pack cost, what the tool served, and what the agent still read whole; null where the
+    /// step was given no graph, and its working set is written beside its output either way.
+    /// </summary>
+    public JsonNode? Graph { get; init; }
+
+    /// <summary>
     /// Whether a stored conversation of this attempt can be handed to a client - which is where the answer
     /// <c>more</c> is offered, for more of the same conversation could not help elsewhere.
     /// </summary>

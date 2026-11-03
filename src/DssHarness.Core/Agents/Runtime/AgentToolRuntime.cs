@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Codebase;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
@@ -184,11 +185,11 @@ public sealed partial class AgentToolRuntime : IDisposable
         _ownsRecords = records is null;
         var tools = AgentTools.Offered(ground, run.Commands, run.WebSearch).Where(tool => only?.Contains(tool.Name) != false).ToList();
 
-        // The run's graph tool, where it is given one: offered among the harness's own, every operation - edit among
-        // them, for a side-task's is unlimited - and no narrowing of its reads.
+        // The run's graph tool, where it is given one: offered among the harness's own, with the operations the run's
+        // step is given - a side-task's are every one, edit among them, with no narrowing of its reads.
         if (run.Graph is { } graph)
         {
-            var operations = CodebaseGraphTool.Operations(write: true, narrow: false);
+            var operations = graph.Operations ?? CodebaseGraphTool.Operations(write: true, narrow: false);
             tools.Add(new AgentToolDefinition(
                 AgentGraphSupport.ToolName,
                 AgentCapability.Read,
@@ -474,16 +475,52 @@ public sealed partial class AgentToolRuntime : IDisposable
 
     /// <summary>
     /// One call of the run's graph tool, answered by the tool it was given and recorded as each of its calls is: a usage
-    /// the agent can correct is answered as a failed call with the tool's own words, a refusal with the policy's.
+    /// the agent can correct is answered as a failed call with the tool's own words, a refusal with the policy's. An edit
+    /// the tool made counts among the files written, and a body it served and an edit it made count as views of their
+    /// files for the edit check, as a <c>view_file</c> is a view; a <c>wholeFile</c> that lifted the narrowing of reads
+    /// is an escape <c>stated</c>, recorded with the reason the agent gave.
     /// </summary>
     /// <param name="input">The call's input, its <c>op</c> among it.</param>
     /// <param name="cancellationToken">The hard stop.</param>
     private async Task<Answer> GraphAsync(JsonObject input, CancellationToken cancellationToken)
     {
-        var operations = CodebaseGraphTool.Operations(write: true, narrow: false);
-        var answer = await _run.Graph!.Tool.RunAsync(input, operations, cancellationToken).ConfigureAwait(false);
+        var support = _run.Graph!;
 
-        _run.Graph.Recorded?.Invoke(GraphCallLine.Of(input["op"]?.GetValue<string>(), answer));
+        if (support.Tool is not { } tool)
+        {
+            return Answer.Failed(support.Gone ?? "no codebase graph was built for this run, and the graph tool answers nothing");
+        }
+
+        var operations = support.Operations ?? CodebaseGraphTool.Operations(write: true, narrow: false);
+        var answer = await tool.RunAsync(input, operations, cancellationToken).ConfigureAwait(false);
+
+        support.Recorded?.Invoke(GraphCallLine.Of(input["op"]?.GetValue<string>(), answer));
+
+        var tree = _run.Workspace.Worktree ?? _run.Workspace.MainCheckout;
+
+        if (answer.Outcome == GraphToolOutcome.Wrote && answer.Path is { } wrote)
+        {
+            var written = Path.Combine(tree, wrote.Replace('/', Path.DirectorySeparatorChar));
+            Tally.Wrote(written);
+
+            // The graph is synced after each of the run's writes, an edit of its own among them.
+            if (support.AfterWriteAsync is { } sync)
+            {
+                await sync(written, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+
+        foreach (var viewed in answer.Viewed)
+        {
+            ViewedAgain(Path.Combine(tree, viewed.Replace('/', Path.DirectorySeparatorChar)));
+        }
+
+        if (string.Equals(input["op"]?.GetValue<string>(), "wholeFile", StringComparison.Ordinal)
+            && answer.Outcome == GraphToolOutcome.Answered
+            && input["path"]?.GetValue<string>() is { } lifted)
+        {
+            support.Recorded?.Invoke(EscapeOf(lifted, GraphEscapeLine.Stated, input["reason"]?.GetValue<string>() ?? string.Empty));
+        }
 
         return answer.Outcome switch
         {
@@ -491,6 +528,63 @@ public sealed partial class AgentToolRuntime : IDisposable
             GraphToolOutcome.Refused => Answer.Failed(answer.Text),
             _ => Answer.Done(answer.Text),
         };
+    }
+
+    /// <summary>
+    /// The lines of the file at <paramref name="full"/> as they stand now, recorded as a view of it for the edit check -
+    /// what a body the graph served and an edit it made leave, as a <c>view_file</c> leaves them.
+    /// </summary>
+    /// <param name="full">The file, absolute.</param>
+    private void ViewedAgain(string full)
+    {
+        try
+        {
+            if (_host.FileSystem.StandingOf(full) is { Length: <= AgentTools.MostViewedBytes } && _host.FileSystem.OpenRead(full) is { } read)
+            {
+                using (read)
+                {
+                    _viewed[full] = Hash(ReadAll(read));
+                }
+            }
+        }
+        catch (IOException)
+        {
+            // A file that cannot be read now leaves no view of it: an edit of it asks for one first, as any edit does.
+        }
+    }
+
+    /// <summary>An escape of the narrowing of reads, as a line of the run's graph lines: the file, its lines and tokens, and why the read was let by.</summary>
+    /// <param name="path">The file, relative to the tree.</param>
+    /// <param name="escape">The escape: <see cref="GraphEscapeLine.Stated"/> or <see cref="GraphEscapeLine.LowConfidence"/>.</param>
+    /// <param name="why">Why the read was let by.</param>
+    private GraphEscapeLine EscapeOf(string path, string escape, string why)
+    {
+        var full = Path.Combine(_run.Workspace.Worktree ?? _run.Workspace.MainCheckout, path.Replace('/', Path.DirectorySeparatorChar));
+
+        try
+        {
+            var read = _host.FileSystem.OpenRead(full);
+
+            using (read)
+            {
+                var text = EncodedText.Read(ReadAll(read));
+                var lines = text.IsRead ? CodeFileText.Lines(text.Text!.Text) : null;
+                return new GraphEscapeLine(path, lines?.Count ?? 0, lines is null ? 0 : EstimatedTokens.Of(text.Text!.Text), escape, why);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new GraphEscapeLine(path, 0, 0, escape, why);
+        }
+    }
+
+    /// <summary>Everything a stream holds.</summary>
+    /// <param name="stream">The stream.</param>
+    private static byte[] ReadAll(Stream stream)
+    {
+        using var copied = new MemoryStream();
+        stream.CopyTo(copied);
+        return copied.ToArray();
     }
 
     /// <summary>

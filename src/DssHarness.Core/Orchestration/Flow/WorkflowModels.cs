@@ -591,6 +591,9 @@ public sealed record WorkflowStep
     /// <summary>Every <c>graphReads</c> a reason step may say, in the order a refusal lists them.</summary>
     public static readonly IReadOnlyList<string> GraphReadsModes = ["narrow", "guide"];
 
+    /// <summary>The narrowing of a step's whole-file reads to the graph: the default of <c>graphReads</c>.</summary>
+    public const string GraphReadsNarrow = "narrow";
+
     /// <summary>
     /// The step's use of the run's graph, its default resolved: its own <c>graph</c>; else <c>tools</c> where one is made
     /// upstream and its agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is - an agent

@@ -1407,6 +1407,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         {
             Ground = step.Ground,
             Graph = step.Graph,
+            Codebase = step.Codebase,
             Isolation = step.Isolation?.Processes,
             Credential = step.Credential,
             Program = step.Program,
@@ -1474,6 +1475,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             SessionId = session,
             Withheld = step.Withheld,
             Graph = step.Graph,
+            Codebase = step.Codebase,
             Commands = step.Commands,
             WebSearch = step.WebSearch,
             SessionsDirectory = step.SessionsDirectory ?? Layout(step).AgentSessionsDirectory(step.Agent),

@@ -109,7 +109,7 @@ public sealed class ReasonStepRunnerTests
         return (kit, runner);
     }
 
-    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null)
+    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null, DssHarness.Core.Codebase.ICodebaseGraphService? graphService = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -124,7 +124,8 @@ public sealed class ReasonStepRunnerTests
             isolation ?? new TestIsolation(),
             kit.Harness.GitClient,
             kit.Harness.ConfigStore,
-            updates);
+            updates,
+            graphService);
 
     /// <summary>The kit's slot, as the runner reads it.</summary>
     private static AgentKeyStore Keys(OrchestrationKit kit)
@@ -1413,5 +1414,116 @@ public sealed class ReasonStepRunnerTests
         public void Used(long tokens, double? usd, string? uncounted = null) { }
 
         public void HandoffTaken() => Taken++;
+    }
+
+    /// <summary>
+    /// A reason step that has a graph - a graphify-codebase step upstream of it, the run's graph made - is given its
+    /// context pack as the <c>&lt;codebase&gt;</c> part of its first message and the one tool <c>graph</c> under
+    /// <c>read</c>, with the operations its agent's capabilities give and the narrowing of its reads; its prompt is the
+    /// first line of its <c>graph.jsonl</c>, its working set is written beside its output when it ends, and its figures
+    /// are held in its result for its record.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepThatHasAGraph_IsGivenItsPackAndItsTool_WithTheOperationsItsAgentGives()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Planner.cs"), "namespace Demo;\n\npublic sealed class Planner\n{\n    public int Plan()\n    {\n        return 1;\n    }\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "code", Token);
+
+        var definition = WorkflowFileParser.Parse(
+            "workflows/flow/flow.yml",
+            "name: flow\nsteps:\n"
+                + "  - name: codebase\n    type: graphify-codebase\n"
+                + "  - name: think\n    type: reason\n    dependsOn: [codebase]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var layout = OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main), "o1");
+        var graph = new DssHarness.Core.Codebase.CodebaseGraphService(
+            kit.Harness.GitClient,
+            kit.Harness.FileSystem,
+            kit.Harness.OrchestrationStore,
+            DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild,
+            kit.Harness.Platform,
+            new RunningToolDouble("9.9.9"),
+            kit.Harness.Output,
+            TimeProvider.System);
+        _ = await graph.SyncAsync(new DssHarness.Core.Codebase.CodebaseGraphSync(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main), layout, DssHarness.Core.Codebase.CodebaseGraphShape.Default, Path.Combine(kit.Main, OrchestrationKit.Settings.Root), Rebuild: false, "test"), Token);
+        var runner = Runner(kit, agents, graphService: graph);
+        var made = Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9" };
+        var run = made with { Step = definition.Steps.Single(step => step.Name == "think"), Place = made.Place! with { Definition = definition } };
+
+        var result = await runner.RunAsync(run, Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.StartsWith("<codebase>\n", asked.Codebase, StringComparison.Ordinal);
+        Assert.EndsWith("</codebase>", asked.Codebase, StringComparison.Ordinal);
+
+        var support = asked.Graph;
+        Assert.NotNull(support);
+        Assert.NotNull(support.Tool);
+        Assert.True(support.Narrow);
+        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Edit, GraphOp.WholeFile], support.Operations!.Order());
+
+        var directory = layout.InstanceDirectory("think", "a9");
+        var promptLine = Assert.IsType<GraphPromptLine>(kit.Harness.OrchestrationStore.ReadGraphStepLines(directory).Single());
+        Assert.Null(promptLine.Why);
+        Assert.True(promptLine.Nodes > 0, $"the pack held nothing: {asked.Codebase}");
+        Assert.True(promptLine.Tokens > 0);
+
+        Assert.True(File.Exists(Path.Combine(directory, "working-set.json")), "the working set was not written");
+        Assert.True(result.Graph!["pack"]!["nodes"]!.GetValue<int>() > 0);
+        Assert.Equal("tools", result.Graph["mode"]!.GetValue<string>());
+        Assert.Equal("base", result.Graph["view"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A reason step whose run's graph was never built - its graphify step left no output - is given the sentence for a
+    /// step that left no output in the place of its pack, and its <c>graph</c> tool, still offered, answers the same:
+    /// the run goes on from a missing graph as from any missing output.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepWhoseGraphifyStepLeftNoOutput_IsGivenTheSentenceForAStepThatLeftNoOutput()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+
+        var definition = WorkflowFileParser.Parse(
+            "workflows/flow/flow.yml",
+            "name: flow\nsteps:\n"
+                + "  - name: codebase\n    type: graphify-codebase\n"
+                + "  - name: think\n    type: reason\n    dependsOn: [codebase]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var graph = new DssHarness.Core.Codebase.CodebaseGraphService(
+            kit.Harness.GitClient,
+            kit.Harness.FileSystem,
+            kit.Harness.OrchestrationStore,
+            DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild,
+            kit.Harness.Platform,
+            new RunningToolDouble("9.9.9"),
+            kit.Harness.Output,
+            TimeProvider.System);
+        var runner = Runner(kit, agents, graphService: graph);
+        var made = Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9" };
+        var run = made with { Step = definition.Steps.Single(step => step.Name == "think"), Place = made.Place! with { Definition = definition } };
+
+        var result = await runner.RunAsync(run, Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.Equal("(step 'codebase' left no output: it has not run)", asked.Codebase);
+        Assert.NotNull(asked.Graph);
+        Assert.Null(asked.Graph.Tool);
+        Assert.Equal("(step 'codebase' left no output: it has not run)", asked.Graph.Gone);
+
+        var layout = OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main), "o1");
+        var promptLine = Assert.IsType<GraphPromptLine>(kit.Harness.OrchestrationStore.ReadGraphStepLines(layout.InstanceDirectory("think", "a9")).Single());
+        Assert.Equal("(step 'codebase' left no output: it has not run)", promptLine.Why);
+        Assert.Equal(0, promptLine.Nodes);
+        Assert.True(File.Exists(Path.Combine(layout.InstanceDirectory("think", "a9"), "working-set.json")));
+        Assert.Equal("tools", result.Graph!["mode"]!.GetValue<string>());
+        Assert.Equal(0, result.Graph["calls"]!.GetValue<int>());
     }
 }

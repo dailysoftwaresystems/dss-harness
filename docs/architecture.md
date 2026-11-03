@@ -3881,8 +3881,12 @@ tree where query-codebase-graph runs it), which resolves each link, so a link ou
 through - and read through `AgentFiles`, where the open file stands decided again by it, and written relative to its
 directory held from the root it was decided in (`AgentFiles.Write`). The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
-it needs, is a usage line (`CodebaseGraphTool.Misused`). No step is given the tool: the tool
-runtime's table does not hold it. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
+it needs, is a usage line (`CodebaseGraphTool.Misused`). A reason step whose `graph` is `tools` is given the tool by the
+runtime among the harness's own, under `read`, with the operations its capabilities and its `graphReads` give
+(`FlowStepGraph`), a conversation that goes on keeping the tool and the operations it began with; an `edit` runs alone
+between the reads, held to the write rules as `replace_in_file` is and counted among the files written, and a body served
+and an edit made count as views of their files for the edit check. Where the run's graph was never built the tool stays
+offered and every call answers the sentence for a step that left no output. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
 
 The context pack (`CodebaseContextPack`) is the part of the graph a step's work touches, made at its start
 from the view and what the step says alone (`ContextPackRequest`: its filled prompt, `writes`, the working sets it is
@@ -3923,7 +3927,15 @@ its first line counts the lines the changes lead with, and with no base, its cha
 in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the run's start commit for the main
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
-No step's first message is given its pack, and no tool its `Near`.
+A reason step that has a graph (`FlowStepGraph`, its `graph` `map` or `tools` with its default resolved) is given its
+pack as the `<codebase>` part at the head of its first user message (`AgentPromptParts.CodebaseTag`, before
+`<run-context>`) - or, where the run's graph was never built, the sentence for a step that left no output in its place -
+and the tool its `Near`. Its reads narrowed (`graphReads: narrow`, the default) deny, on the two API clients, a whole
+`view_file` of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
+the refusal; a range, a search and a write pass; a file the graph is not sure of
+(`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its references `candidates`
+or unresolved) passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file for the
+rest of the step, an escape `stated` with the agent's reason.
 The working set (`CodebaseWorkingSet`) is what a reason step that has a graph worked with, kept in its
 directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
 (`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end, at most
@@ -3945,7 +3957,14 @@ depends on directly - its own `dependsOn` and `on` and each enclosing group's, a
 then its own earlier visits of the same work item (`FlowInstanceId.SameStep`: the same id but for the visits and
 iterations after its innermost item), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
 into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
-gone). No step writes either file as it ends, and no pack is given the seeds.
+gone). A reason step that has a graph writes both files as it ends (`FlowStepGraph.Ended`: the working set made from
+the view at the step's end, its `graph.jsonl` and its stored stream) and its pack is given the seeds; its `graph.jsonl`
+holds its prompt's line first (`GraphPromptLine`: the pack's seeds, nodes, tokens and what was left out, or why none was
+given), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
+one for each escape of its narrowing and each whole read the narrowing refused (`GraphEscapeLine`, `GraphDeniedLine`),
+and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used, calls, served tokens,
+bodies, text hits, edits made and refused, whole-file reads counted from the stored stream, denied reads and escapes -
+are held in its `step.json` under `graph` and summed for the run's report (`FlowReports`).
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in
