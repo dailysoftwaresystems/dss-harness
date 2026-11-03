@@ -523,6 +523,13 @@ public sealed record AgentStepRequest(
     public Policy.AgentPolicyGround? Ground { get; init; }
 
     /// <summary>
+    /// The codebase graph the run is given - today a side-task's, its own under its records: the <c>graph</c> tool the
+    /// runtime offers among the harness's own with every operation and no narrowing, what records each of its calls, and
+    /// what syncs the graph after each of the run's writes. Null where none is given, and every step of every run today.
+    /// </summary>
+    public AgentGraphSupport? Graph { get; init; }
+
+    /// <summary>
     /// The operating system's isolation the launch's agent runs under - the mechanism and what it denies each command, or
     /// why there is none - as the engine decided it from the ground; null where none was decided, and every command then
     /// runs on the words policy alone.
@@ -739,6 +746,13 @@ public sealed record AgentRun(
     /// <summary>The names a child the run starts never inherits: every name the configuration appoints a value of the slot for.</summary>
     public IReadOnlyList<string> Withheld { get; init; } = [];
 
+    /// <summary>
+    /// The codebase graph the run is given - today a side-task's, its own under its records: the <c>graph</c> tool the
+    /// runtime offers among the harness's own with every operation and no narrowing, what records each of its calls, and
+    /// what syncs the graph after each of the run's writes. Null where none is given, and every step of every run today.
+    /// </summary>
+    public AgentGraphSupport? Graph { get; init; }
+
     /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
     public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
 
@@ -844,3 +858,21 @@ public delegate Task<Web.Search.WebSearchPart> AgentNativeAsk(string query, Canc
 /// <param name="Model">The model's entry, one of the provider's.</param>
 /// <param name="Client">The client's entry under <c>agentClients</c>; null where the configuration declares none, and every key is its default.</param>
 public sealed record AgentEntries(Configuration.AgentProviderConfig Provider, Configuration.AgentModelConfig Model, Configuration.AgentClientConfig? Client);
+
+/// <summary>
+/// The codebase graph a run is given with: its <see cref="Runtime.CodebaseGraphTool">graph tool</see>, offered by the
+/// tool runtime among the harness's own tools on every client, each of its calls recorded where the run's graph lines
+/// are kept, and its graph synced after each of the run's writes - today a side-task's, unlimited: every operation,
+/// <c>edit</c> among them, and no narrowing of reads.
+/// </summary>
+/// <param name="Tool">The tool, answering from the run's own view of its graph.</param>
+/// <param name="Recorded">Told of each call's line, where the run keeps them; null where it keeps none.</param>
+/// <param name="AfterWriteAsync">Syncs the graph by the path a write of the run's changed; null where nothing syncs.</param>
+public sealed record AgentGraphSupport(
+    Runtime.CodebaseGraphTool Tool,
+    Action<Runtime.GraphStepLine>? Recorded = null,
+    Func<string, CancellationToken, Task>? AfterWriteAsync = null)
+{
+    /// <summary>The tool's name, as the runtime offers it and an agent calls it.</summary>
+    public const string ToolName = "graph";
+}

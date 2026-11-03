@@ -1397,6 +1397,13 @@ the reconciliation, and delete-agent's proof that nothing is left to fold holds 
 settled. rebase-agent's `--settled` is another option: there the person reconciled the agent's copy, which stays as its
 change on the new base.
 
+A side-task may use the codebase graph beside all this, unlimited: a graph of its own under its records
+(`SideTaskGraph`), held in the one shape every graph's records take, seeded from the newest the repository holds - a
+run's or another side-task's - at its opening, then incremental and synced after each of its writes; the `graph`
+tool offered among its agent's own with every operation and no narrowing, the repository map
+(`CodebaseRepositoryMap`) given with its first message and the context pack made from each; `--no-graph` turns it
+off, and a graph that cannot be made takes nothing from the conversation.
+
 A path both trees changed - each holds a file there, neither is what the two last agreed on, and they differ - is
 resolved in one place, whichever command meets it (`TwoChanges`, made for each command with that command's
 `TwoChangePolicy`: the arm registry's path, the anchor registries' and the paths named with `--merge`). Every such

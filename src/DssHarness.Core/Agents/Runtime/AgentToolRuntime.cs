@@ -182,8 +182,23 @@ public sealed partial class AgentToolRuntime : IDisposable
         _paths = new ConfinedPaths(host.FileSystem, host.Platform, ground);
         _records = records ?? new AgentCallRecords(host.FileSystem, run, host.Clock, events);
         _ownsRecords = records is null;
-        Tools = [.. AgentTools.Offered(ground, run.Commands, run.WebSearch).Where(tool => only?.Contains(tool.Name) != false)];
-        _tools = Tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
+        var tools = AgentTools.Offered(ground, run.Commands, run.WebSearch).Where(tool => only?.Contains(tool.Name) != false).ToList();
+
+        // The run's graph tool, where it is given one: offered among the harness's own, every operation - edit among
+        // them, for a side-task's is unlimited - and no narrowing of its reads.
+        if (run.Graph is { } graph)
+        {
+            var operations = CodebaseGraphTool.Operations(write: true, narrow: false);
+            tools.Add(new AgentToolDefinition(
+                AgentGraphSupport.ToolName,
+                AgentCapability.Read,
+                Barrier: true,
+                CodebaseGraphTool.Description(operations),
+                CodebaseGraphTool.Schema(operations)));
+        }
+
+        Tools = tools;
+        _tools = tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
         _schemas = Tools.ToDictionary(tool => tool.Name, tool => JsonNode.Parse(tool.Schema)!, StringComparer.Ordinal);
         _viewed = new ConcurrentDictionary<string, string>(StringComparer.FromComparison(host.Platform.PathComparison));
 
@@ -452,7 +467,29 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.RunCommand => await RunCommandAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebFetch => await FetchAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebSearch => await WebSearchAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentGraphSupport.ToolName => await GraphAsync(input, cancellationToken).ConfigureAwait(false),
             _ => throw new InvalidOperationException($"the runtime offers '{tool.Name}' and runs no such tool"),
+        };
+    }
+
+    /// <summary>
+    /// One call of the run's graph tool, answered by the tool it was given and recorded as each of its calls is: a usage
+    /// the agent can correct is answered as a failed call with the tool's own words, a refusal with the policy's.
+    /// </summary>
+    /// <param name="input">The call's input, its <c>op</c> among it.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    private async Task<Answer> GraphAsync(JsonObject input, CancellationToken cancellationToken)
+    {
+        var operations = CodebaseGraphTool.Operations(write: true, narrow: false);
+        var answer = await _run.Graph!.Tool.RunAsync(input, operations, cancellationToken).ConfigureAwait(false);
+
+        _run.Graph.Recorded?.Invoke(GraphCallLine.Of(input["op"]?.GetValue<string>(), answer));
+
+        return answer.Outcome switch
+        {
+            GraphToolOutcome.Usage => Answer.Failed(answer.Text),
+            GraphToolOutcome.Refused => Answer.Failed(answer.Text),
+            _ => Answer.Done(answer.Text),
         };
     }
 
@@ -460,8 +497,7 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// Reads every string <paramref name="node"/> holds, so a text no string holds - half of a surrogate pair, which the
     /// parser lets by - refuses the input here rather than meeting a tool.
     /// </summary>
-    private static void ReadWhole(JsonNode? node)
-    {
+    private static void ReadWhole(JsonNode? node)    {
         switch (node)
         {
             case JsonObject members:

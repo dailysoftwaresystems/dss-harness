@@ -1644,7 +1644,11 @@ public sealed class CodebaseGraphService(
                 return (own, null, _request.Rebuild ? Rebuilding : null, null);
             }
 
+            // The newest graph of the repository's runs or side-tasks: whichever was synced last seeds the first sync,
+            // its extracts reused as they are reached. A side-task's graph is held in the one shape every graph's
+            // records take, so the same read answers for it.
             var seed = _service._store.Orchestrators(_request.Repository)
+                .Concat(SideTaskGraphs())
                 .Where(other => !string.Equals(other.Name, _run.Name, StringComparison.Ordinal))
                 .Select(other => (Run: other, Manifest: ReadOrNull(other)))
                 .Where(other => other.Manifest is not null)
@@ -1653,6 +1657,22 @@ public sealed class CodebaseGraphService(
                 .FirstOrDefault();
 
             return seed.Manifest is { } seeded ? (seeded, seed.Run, null, seed.Run.Name) : (null, null, null, null);
+        }
+
+        /// <summary>Every side-task of the repository that holds a graph, in the one layout shape the graph reads.</summary>
+        private IEnumerable<Orchestration.OrchestratorLayout> SideTaskGraphs()
+        {
+            var root = _request.Repository.SideTasksDirectory;
+
+            if (!_service._fileSystem.DirectoryExists(root))
+            {
+                return [];
+            }
+
+            return _service._fileSystem.EnumerateDirectories(root)
+                .Select(directory => new Orchestration.OrchestratorLayout(
+                    System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(directory)),
+                    directory));
         }
 
         /// <summary>Why a graph a step said to rebuild was built again whole.</summary>

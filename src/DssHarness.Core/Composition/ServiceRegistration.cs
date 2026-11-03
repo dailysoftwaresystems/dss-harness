@@ -271,6 +271,7 @@ public static class ServiceRegistration
                 provider.GetRequiredService<IHostPlatform>(),
                 provider.GetRequiredService<IFileSystem>()),
             provider.GetRequiredService<Agents.Isolation.IAgentIsolation>(),
+            provider.GetRequiredService<Codebase.ICodebaseGraphService>(),
             provider.GetRequiredService<TimeProvider>()));
 
         // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the

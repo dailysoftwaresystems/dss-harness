@@ -135,6 +135,42 @@ public sealed class CodebaseGraphQueries
     /// <summary>How many files the view holds.</summary>
     public int FileCount => _read.Files.Count;
 
+    /// <summary>How many declarations the view holds: its nodes that are code declarations, files and projects left out.</summary>
+    public int DeclarationCount => _symbols.Values.Count(symbol => CodeNodeKinds.Extracted.Contains(symbol.Kind, StringComparer.Ordinal));
+
+    /// <summary>
+    /// The view's most central declarations, most first: each by how many other files' references bind to it - over calls,
+    /// references, instantiations, inheritance, implementations and dispatches, tests never - raised one step of ten where
+    /// its name holds a word of <paramref name="terms"/>, ties broken by id; no file the view holds as generated.
+    /// </summary>
+    /// <param name="terms">The words of the task the centrality is raised for, split as a name is.</param>
+    public IReadOnlyList<GraphCard> Central(IReadOnlyCollection<string> terms)
+    {
+        ArgumentNullException.ThrowIfNull(terms);
+
+        IReadOnlyList<(GraphSide Side, string Kind)> binding =
+        [
+            (GraphSide.In, CodeEdgeKinds.Calls),
+            (GraphSide.In, CodeEdgeKinds.References),
+            (GraphSide.In, CodeEdgeKinds.Instantiates),
+            (GraphSide.In, CodeEdgeKinds.Inherits),
+            (GraphSide.In, CodeEdgeKinds.Implements),
+            (GraphSide.In, CodeEdgeKinds.Dispatches),
+        ];
+
+        return [.. _symbols.Keys
+            .Select(Card)
+            .Where(card => CodeNodeKinds.Extracted.Contains(card.Kind, StringComparer.Ordinal))
+            .Where(card => !Generated(card.Path))
+            .Select(card => (
+                Card: card,
+                Files: Steps(card.Id, binding).Select(step => Card(step.To).Path).Distinct(StringComparer.Ordinal).Count(),
+                Named: terms.Count(word => card.Qualified.Contains(word, StringComparison.OrdinalIgnoreCase))))
+            .OrderByDescending(scored => scored.Files + scored.Named * 10)
+            .ThenBy(scored => scored.Card.Id, StringComparer.Ordinal)
+            .Select(scored => scored.Card)];
+    }
+
     /// <summary>The files, by path, whose extract the view no longer holds - one that does not read, or no longer declares what the link names - their declarations in no answer.</summary>
     public IReadOnlyList<string> Unheld { get; }
 

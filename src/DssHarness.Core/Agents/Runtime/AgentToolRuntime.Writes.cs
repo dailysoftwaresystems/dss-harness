@@ -194,6 +194,13 @@ public sealed partial class AgentToolRuntime
     {
         Tally.Wrote(file, count);
 
+        // The run's graph, where it is given one, is synced after each of its writes - the side-task's own graph, kept
+        // under its records and read by its tool, its map standing as the cache it was made to be.
+        if (_run.Graph is { AfterWriteAsync: { } sync })
+        {
+            await sync(file, CancellationToken.None).ConfigureAwait(false);
+        }
+
         if (_run.Ground is { SideTask: true, LiveRun: { } liveRun }
             && liveRun() is { } run
             && string.Equals(file, new Repository.HarnessLayout(_run.Workspace.MainCheckout, _run.Workspace.MainCheckout).ConfigFile, _host.Platform.PathComparison))

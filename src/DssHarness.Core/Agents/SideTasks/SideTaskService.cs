@@ -65,6 +65,12 @@ public sealed record SideTaskCall(
     /// own. The first cuts the agent's turn, a second ends a chat.
     /// </summary>
     public SideTaskInterrupts Interrupts { get; init; } = new();
+
+    /// <summary>
+    /// Whether the side-task is given no codebase graph - no tool, no repository map, no context pack, nothing synced -
+    /// for one side-task, where the person turned it off with <c>--no-graph</c>.
+    /// </summary>
+    public bool NoGraph { get; init; }
 }
 
 /// <summary>
@@ -109,6 +115,7 @@ internal sealed record SideTaskSetUp(
 /// <param name="git">Asks git whether the side-tasks' directory is ignored before anything is written there.</param>
 /// <param name="ancestry">Tells, by the process tree, whether a process of this tool's started this one - the engine an agent's child runs under.</param>
 /// <param name="isolation">Decides the operating system's isolation the side-task's agent runs under.</param>
+/// <param name="graph">The one graph service every codebase graph is read and written by, the side-task's own among them.</param>
 /// <param name="clock">Tells when each turn began and what the balancing of keys reads.</param>
 /// <param name="environment">Reads this process's environment, where the mark of an agent's child is looked for.</param>
 public sealed class SideTaskService(
@@ -126,6 +133,7 @@ public sealed class SideTaskService(
     IGitClient git,
     AgentAncestry ancestry,
     Isolation.IAgentIsolation isolation,
+    Codebase.ICodebaseGraphService graph,
     TimeProvider? clock = null,
     Func<string, string?>? environment = null) : ISideTaskService
 {
@@ -482,6 +490,37 @@ public sealed class SideTaskService(
         try
         {
             var spend = new AgentKeySpend(_fileSystem, _store, _clock);
+
+            // The side-task's own graph, opened unless the person turned it off: synced whole - seeded from the newest
+            // graph of the repository - before the first message is sent, its map made once from the base as it stands.
+            // A graph that cannot be made takes nothing away from the conversation: the side-task goes on without one.
+            var own = new SideTaskGraph(
+                graph,
+                _fileSystem,
+                platform,
+                git,
+                _store,
+                _clock,
+                common.Context.Layout,
+                layout,
+                common.Context.Config.Worktrees?.Root ?? WorktreeSettings.DefaultRoot);
+
+            if (!call.NoGraph)
+            {
+                try
+                {
+                    await own.OpenAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is HarnessException or OperationCanceledException && cancellationToken.IsCancellationRequested is false)
+                {
+                    own = null;
+                }
+            }
+            else
+            {
+                own = null;
+            }
+
             var working = new Working(
                 _runner,
                 _clients,
@@ -495,7 +534,8 @@ public sealed class SideTaskService(
                 record,
                 setUp,
                 (runsOn, form, token) => SetUpAsync(common, runsOn, layout.Name, form, token),
-                spend.RecordingIn(common.Context.Layout));
+                spend.RecordingIn(common.Context.Layout),
+                own);
 
             return prompt is null
                 ? await working.ChatAsync(cancellationToken, command).ConfigureAwait(false)

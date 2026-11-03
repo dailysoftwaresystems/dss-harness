@@ -2575,6 +2575,15 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
+            "It may use the codebase graph, unlimited: a graph of its own under its records (graph/), seeded from the "
+            + "newest the repository holds - a run's or another side-task's - when it opens, then incremental, synced after "
+            + "each of its writes. The graph tool is offered among its agent's own with every operation - edit among them - "
+            + "and no narrowing of its reads; the repository map is given with its first message, made once from the base as "
+            + "it stands when it opens, and a context pack is made from each message the person types. --no-graph turns all "
+            + "of it off for one side-task; a graph that cannot be made takes nothing away from the conversation.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             "Its records live in .side-tasks/<task>/ at the repository's root, written by the tool alone and kept until a "
             + "person removes the directory: task.json (its turns, each written as it ends, with its client, provider, model "
             + "and effort, what it used and cost, and what the agent ran under), the stored stream (stream.jsonl) and the transcript as a "
@@ -5552,8 +5561,9 @@ public static class HelpTopics
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the side-tasks' records, in the main checkout, "
             + $"and never sent to a host by sync ('{ToolPackage.Command} help side-tasks')"),
         ($"{HarnessLayout.SideTasksDirectoryName}/<task>/",
-            "ignored; one side-task: its task.json, stored stream, transcript, denials and web, and its conversation where "
-            + "its client stores one; <task>.owner.json beside it while a side-task holds it open"),
+            "ignored; one side-task: its task.json, stored stream, transcript, denials and web, its conversation where "
+            + "its client stores one, and its own codebase graph (graph/, its map and each call of the graph tool) where it "
+            + "was given one; <task>.owner.json beside it while a side-task holds it open"),
         ($"{HarnessLayout.MutationsDirectoryName}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the tree's mutation workers, in every tree, never "
             + $"sent to a host by sync ('{ToolPackage.Command} help mutations')"),
