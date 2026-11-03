@@ -1388,7 +1388,11 @@ tree, through the one loop every hand-over takes - deletions, then files, each a
 deletion's, a refresh's and a rebase's apply, a commit step's staging and commit - takes the main tree's lock
 (`MainTreeWriteLock`, a `MachineWideMutex` named for the tree's path), which a side-task's writes and commands take
 for their duration too: each side waits the other out, for a long command holds the folds back for as long as it runs,
-and the step's output says how long it waited and for what. Both trees and the seed then agree, so the agent's next fold starts from
+and the step's output says how long it waited and for what. While a run's owner is live
+(`.orchestrators/<run>.owner.json`, asked at each call through `AgentPolicyGround.LiveRun`), a side-task's agent is
+refused the git verbs that move HEAD, the index or the stash (`AgentPolicy.HeadMovingGitVerbs`) with the run's name -
+a run that starts while the chat is open is held to from its first step, and one that ends releases it - and the run's
+own verbs and the agent verbs are refused it always, as every verb that writes the tool's state is. Both trees and the seed then agree, so the agent's next fold starts from
 the reconciliation, and delete-agent's proof that nothing is left to fold holds without being told which paths were
 settled. rebase-agent's `--settled` is another option: there the person reconciled the agent's copy, which stays as its
 change on the new base.

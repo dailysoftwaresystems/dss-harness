@@ -591,7 +591,12 @@ public sealed class SideTaskService(
             return (null, new CommandOutcome(program.ExitCode, program.Message, program.Details));
         }
 
-        var ground = SideTaskPolicy.Ground(layout, common.Context.Config, _launch.ClaudeDirectories(common.Context.Config, layout), _launch.CredentialPlaces(common.Context.Config));
+        var ground = SideTaskPolicy.Ground(
+            layout,
+            common.Context.Config,
+            _launch.ClaudeDirectories(common.Context.Config, layout),
+            _launch.CredentialPlaces(common.Context.Config),
+            liveRun: () => LiveRunOf(layout));
 
         // The operating system's isolation the agent's commands run under: where agentPolicy.isolation is required and this
         // machine has none, the side-task is refused (14), saying why and what would give it one.
@@ -604,6 +609,17 @@ public sealed class SideTaskService(
 
         return (new SideTaskSetUp(resolution, order, program?.Program, program?.Version, ground, runsOn, isolated), null);
     }
+
+    /// <summary>
+    /// The name of the run whose owner is live over <paramref name="layout"/>'s main tree, or null where none is: what a
+    /// side-task's agent is held off HEAD by, asked at each call that would move it. An owner on another machine stands
+    /// until somebody takes it over, as every owner does.
+    /// </summary>
+    /// <param name="layout">The repository's layout.</param>
+    private string? LiveRunOf(Repository.HarnessLayout layout)
+        => _store.Orchestrators(layout)
+            .FirstOrDefault(other => new FlowRunOwner(_store, _identity, _clock).Live(other) is not null)
+            ?.Name;
 
     /// <summary>Says what a claim said of a dead owner's record reclaimed, where it said anything.</summary>
     private void Said(string? reclaimed)
