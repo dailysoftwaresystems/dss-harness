@@ -801,8 +801,11 @@ public sealed class FoldStepTests
 
         var folding = Task.Run(() => Runner(kit).RunAsync(Run(kit, Fold()), Token));
 
-        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(3); DateTime.UtcNow < till; )
+        // The whole suite's load can hold the fold's own measure back for a while before it reaches the tree's lock:
+        // the window outlasts that, and the fold must not complete while the side-task's hold stands.
+        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(20); DateTime.UtcNow < till; )
         {
+            Assert.False(folding.IsCompleted, "the fold completed while a side-task held the main tree's lock");
             Assert.NotEqual("two\nagent edit\n", File.Exists(Path.Combine(kit.Main, "b.txt")) ? File.ReadAllText(Path.Combine(kit.Main, "b.txt")) : null);
             await Task.Delay(50, Token);
         }
