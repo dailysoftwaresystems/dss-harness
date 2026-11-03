@@ -26,6 +26,7 @@ namespace DssHarness.Core.Agents;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(SessionStarted), "sessionStarted")]
 [JsonDerivedType(typeof(MessageSent), "messageSent")]
+[JsonDerivedType(typeof(MessagesDropped), "messagesDropped")]
 [JsonDerivedType(typeof(TurnStarted), "turnStarted")]
 [JsonDerivedType(typeof(TurnFinished), "turnFinished")]
 [JsonDerivedType(typeof(TextDelta), "textDelta")]
@@ -95,8 +96,14 @@ public enum AgentMessageKind
     /// <summary>A nudge to go on with an answer the provider cut off at its length.</summary>
     Continue,
 
-    /// <summary>The step's envelope said in words, once the provider refused it as a schema.</summary>
+    /// <summary>The step's envelope said in words: after the first message where the provider holds no schema, or once it refused it as one.</summary>
     EnvelopeInWords,
+
+    /// <summary>An effort change told in the conversation: the step goes on at another level.</summary>
+    Effort,
+
+    /// <summary>A person's later message in a chat whose launch is held open for it: a side-task's next line.</summary>
+    ChatMessage,
 }
 
 /// <summary>Who ran a tool call, as the call's events name it.</summary>
@@ -139,6 +146,13 @@ public sealed record AgentUsage(long InputTokens, long OutputTokens, long CacheR
 {
     /// <summary>Nothing used.</summary>
     public static AgentUsage None { get; } = new(0, 0, 0, 0, 0, 0);
+
+    /// <summary>
+    /// Every token the usage holds - input, the cache's writes of both lifetimes and its reads, and output - as a run's
+    /// budget and an asking's spend count them: each kind is billed, so none is left out.
+    /// </summary>
+    [JsonIgnore]
+    public long AllTokens => InputTokens + CacheWriteTokens + CacheWrite1hTokens + CacheReadTokens + OutputTokens;
 
     /// <summary><paramref name="other"/> added to this, member by member.</summary>
     /// <param name="other">Another usage.</param>
@@ -292,7 +306,7 @@ public sealed record AgentAssumption(string About, string Assumed, string Why)
 /// <param name="Credential">Where the launch's credential came from; a value is never named.</param>
 /// <param name="SystemPromptHash">The digest of the system prompt as sent.</param>
 /// <param name="Tools">The tools the launch was given, as it names them.</param>
-/// <param name="Skills">The skills its prompt holds.</param>
+/// <param name="Skills">The skills its prompt holds, each with the place and file it was read from and the SHA-256 of its <c>SKILL.md</c> and of its folder.</param>
 /// <param name="ApiKeySource">Claude Code: the credential source its <c>system/init</c> named.</param>
 /// <param name="SettingsFile">Claude Code: the user's settings file the launch read.</param>
 /// <param name="SettingsDigest">Claude Code: the digest of that file.</param>
@@ -302,7 +316,7 @@ public sealed record SessionStarted(
     string Model,
     string SystemPromptHash,
     IReadOnlyList<string> Tools,
-    IReadOnlyList<string> Skills,
+    IReadOnlyList<AgentSkill> Skills,
     bool HandedConversation,
     string? Provider = null,
     string? Tier = null,
@@ -318,6 +332,11 @@ public sealed record SessionStarted(
 /// <param name="Text">The message.</param>
 /// <param name="Which">Which of the messages the engine gives an agent while it works.</param>
 public sealed record MessageSent(string Text, AgentMessageKind Which) : AgentEvent;
+
+/// <summary>An interrupt dropped messages written to the agent that it had not taken: no turn takes them.</summary>
+/// <param name="Count">How many it dropped.</param>
+/// <param name="Waiting">How many of the messages written to the agent it has still not taken, by the client's own count.</param>
+public sealed record MessagesDropped(int Count, int Waiting) : AgentEvent;
 
 /// <summary>A turn of the agent's work began.</summary>
 /// <param name="Turn">The turn's number, from one.</param>
@@ -410,7 +429,9 @@ public sealed record TurnRestarted(string Why) : AgentEvent;
 /// <param name="ThrewAway">Whether a part of an answer was thrown away.</param>
 /// <param name="CreditAsked">Whether a credit was asked for.</param>
 /// <param name="FromKey">The name of the key the serving entry signed in with, where it signed in with one; never its value.</param>
-/// <param name="ToKey">The name of the key the entry that takes over signs in with, where it signs in with one.</param>
+/// <param name="ToKey">The name of the key the entry that takes over signs in with, where it signs in with one; never its value.</param>
+/// <param name="FromEffort">The level the step was at, where it was at one; null otherwise.</param>
+/// <param name="ToEffort">The level the entry that takes over goes on at, where the step gives it one; null where it goes on at the model's own default.</param>
 public sealed record FallbackStarted(
     string FromModel,
     string FromProvider,
@@ -424,7 +445,9 @@ public sealed record FallbackStarted(
     bool ThrewAway,
     bool CreditAsked,
     string? FromKey = null,
-    string? ToKey = null) : AgentEvent
+    string? ToKey = null,
+    string? FromEffort = null,
+    string? ToEffort = null) : AgentEvent
 {
     /// <summary>
     /// The fallback a refused key makes, on every client: the same model of the same provider and client, on the next of
@@ -501,8 +524,9 @@ public sealed record Notice(string Text) : AgentEvent;
 /// </summary>
 /// <remarks>
 /// Every attempt of a step appends to the step's one stored stream, and its numbering begins again at one, so this is
-/// where an attempt's own events begin: the newest attempt's stream, which a continuation and a handoff are written
-/// from, is what follows the last of these, whether the attempt before it ended or was killed.
+/// where a run's own events begin: an attempt's events, which a continuation, a compaction and a handoff are written
+/// from, are those of every run that names it (<see cref="AgentAttempt.Of"/>) - more than one where the attempt went on
+/// with an answer - whether the attempt before it ended or was killed.
 /// </remarks>
 /// <param name="Attempt">Which attempt of the step the run is, from one.</param>
 public sealed record RunStarted(int Attempt) : AgentEvent;
@@ -513,4 +537,13 @@ public sealed record RunStarted(int Attempt) : AgentEvent;
 /// </summary>
 /// <param name="Status">How it ended, as its result says.</param>
 /// <param name="Error">Why it failed, where it did; null where it did not.</param>
-public sealed record RunFinished(AgentRunStatus Status, string? Error = null) : AgentEvent;
+public sealed record RunFinished(AgentRunStatus Status, string? Error = null) : AgentEvent
+{
+    /// <summary>
+    /// How many of a chat's messages the run settled, as its result says (<see cref="AgentRunResult.MessagesAnswered"/>):
+    /// the rest of the messages the stream says it was given, in order, no turn answered, and the chat gives them again to
+    /// the launch after it - so whoever reads the stream as one conversation reads each once. Null for every run but a
+    /// chat's.
+    /// </summary>
+    public int? MessagesAnswered { get; init; }
+}

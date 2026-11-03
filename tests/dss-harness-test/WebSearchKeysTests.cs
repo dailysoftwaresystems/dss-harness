@@ -73,6 +73,30 @@ public sealed class WebSearchKeysTests
         Assert.Equal(new WebSearchKey(null, "gh auth token --hostname github.com failed, so the source is asked without the machine's gh login: not logged into any GitHub hosts"), failed["repos"]);
     }
 
+    /// <summary>
+    /// The mask a run given the sources' keys runs under holds every form each key is sent in, each a secret of its own:
+    /// two keys that differ only by case are two secrets, both masked, and a source without a key adds none.
+    /// </summary>
+    [Fact]
+    public void TheMask_HoldsEveryFormOfEachKey_TwoThatDifferOnlyByCaseAmongThem()
+    {
+        var read = new Dictionary<string, WebSearchKey>(StringComparer.Ordinal)
+        {
+            ["alpha"] = new("Key/One", null),
+            ["beta"] = new("key/one", null),
+            ["plain"] = new(null, "no key is configured"),
+        };
+
+        var mask = WebSearchKeys.Mask(Sources, read);
+
+        Assert.NotNull(mask);
+        Assert.Equal(
+            ["Key/One", "Key%2FOne", "Key\\/One", "key/one", "key\\/one"],
+            mask.RevealSecrets().Values);
+        Assert.Equal("*** *** *** *** ***", mask.Redact("Key/One Key%2FOne Key\\/One key/one key\\/one"));
+        Assert.Null(WebSearchKeys.Mask(Sources, new Dictionary<string, WebSearchKey>(StringComparer.Ordinal)));
+    }
+
     /// <summary>The keys over the slot of the store's tests and a gh that answers <paramref name="answer"/>, its requests kept in <paramref name="requests"/>.</summary>
     private static WebSearchKeys Keys(List<ProcessRequest> requests, ProcessResult answer)
     {

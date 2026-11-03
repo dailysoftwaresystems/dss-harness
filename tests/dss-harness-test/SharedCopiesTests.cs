@@ -711,12 +711,22 @@ public sealed class SharedCopiesTests
     {
         public override void CopyFile(string from, string destination, bool overwrite = false)
         {
+            Refuse(from);
+            base.CopyFile(from, destination, overwrite);
+        }
+
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            Refuse(asked ?? directory);
+            return base.Hold(anchor, directory, make, asked);
+        }
+
+        private void Refuse(string from)
+        {
             if (string.Equals(Path.GetFullPath(from), Path.GetFullPath(source), StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException($"The process cannot access the file '{from}' because it is being used by another process.");
             }
-
-            base.CopyFile(from, destination, overwrite);
         }
     }
 
@@ -725,12 +735,22 @@ public sealed class SharedCopiesTests
     {
         public override void ReplaceFile(string source, string destination)
         {
+            Refuse(destination);
+            base.ReplaceFile(source, destination);
+        }
+
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            Refuse(asked ?? directory);
+            return base.Hold(anchor, directory, make, asked);
+        }
+
+        private void Refuse(string destination)
+        {
             if (string.Equals(Path.GetFullPath(destination), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException("The process cannot access the file because it is being used by another process.");
             }
-
-            base.ReplaceFile(source, destination);
         }
     }
 

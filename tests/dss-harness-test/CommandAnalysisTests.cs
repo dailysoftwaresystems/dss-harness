@@ -93,7 +93,59 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["A=1", "sudo", "x"]], Commands((IReadOnlyList<string>)["env", "A=1", "--split-string=sudo x"]));
 
         // The words after the string are the same command's: env -S 'git -C x' push runs git push.
-        Assert.Equal([["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["env", "-S", "git -C x", "push"]));
+        Assert.Equal([["cd", "--", "x"], ["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["env", "-S", "git -C x", "push"]));
+    }
+
+    /// <summary>
+    /// env's options are read by GNU env's own table, a long one by any prefix that begins it alone, its value glued after
+    /// an '=' or the next word; one that begins none or more than one, or a letter it does not name, is refused.
+    /// </summary>
+    [Fact]
+    public void EnvsOptions_AreReadAsGnuEnvReadsThem()
+    {
+        Assert.Equal([["git", "push"]], Commands("env --spl='git push'"));
+        Assert.Equal([["git", "push"]], Commands("env --split-s 'git push'"));
+        Assert.Equal([["git", "push"]], Commands("env --ignore-e git push"));
+        Assert.Equal([["git", "push"]], Commands("env --u X --default-signal=PIPE --deb git push"));
+        Assert.Equal([["cd", "--", "dir"], ["git", "push"]], Commands("env --chd=dir git push"));
+        Assert.Equal([["cd", "--", "dir"], ["git", "push"]], Commands("env -ivC dir git push"));
+        Assert.Equal([("X", 2)], CommandAnalysis.EnvironmentTakenAway(["env", "--u", "X", "git"]).Unsets);
+        Assert.Equal([("Y", 1)], CommandAnalysis.EnvironmentTakenAway(["env", "--unse=Y", "git"]).Unsets);
+        Assert.True(CommandAnalysis.EnvironmentTakenAway(["env", "--ignore-env", "git"]).Cleared);
+
+        foreach (var command in new[] { "env --ign git push", "env --i git push", "env --frob git push", "env -x git push" })
+        {
+            Assert.Throws<NotSupportedException>(() => Commands(command));
+        }
+    }
+
+    /// <summary>
+    /// A string a program runs as a shell's script is read as the script it is - npx's and npm exec's -c, concurrently's
+    /// commands, hyperfine's, watchexec's, nodemon's --exec, entr's with -s, ssh's settings that run a command, a WSL
+    /// distribution's own launcher's - and an arithmetic command as let's expression, the names it assigns read.
+    /// </summary>
+    [Fact]
+    public void AStringAProgramRunsAsAScript_IsReadAsOne()
+    {
+        foreach (var command in new[]
+        {
+            "npx -c 'git push'", "npm exec --call='git push'", "npm x -c 'git push'", "concurrently -n a 'npm start' 'git push'", "hyperfine -w 3 'git push'",
+            "hyperfine --setup='git push' ls", "watchexec 'git push'", "nodemon -x 'git push'", "entr -cs 'git push'", "cargo watch -s 'git push'",
+            "ssh -o ProxyCommand='git push' h true", "ssh -o 'LocalCommand git push' h", "ssh -oKnownHostsCommand=git\\ push h", "ssh -N -o ProxyCommand='git push' h",
+            "ubuntu2204.exe run git push", "ubuntu -c 'git push'", "kali run 'git push'",
+        })
+        {
+            Assert.True(Commands(command).Any(words => words.SequenceEqual(["git", "push"])), $"'{command}' is read as [{string.Join("], [", Commands(command).Select(words => string.Join(", ", words)))}]");
+        }
+
+        // A word these run as a program's own, or as no command at all, is no script.
+        foreach (var command in new[] { "npm run 'git push'", "nodemon 'git push'", "entr 'git push' < list", "ssh -o 'SetEnv git push' h true", "ubuntu config 'git push'" })
+        {
+            Assert.DoesNotContain(Commands(command), words => words.SequenceEqual(["git", "push"]));
+        }
+
+        Assert.Equal(["a", "b", "$v", "c", "d", "x"], CommandAnalysis.ArithmeticAssigned("a = 1, b += 2, $v = 3, c++, --d, e == f, g <= h, i < $n, x[1] <<= 2"));
+        Assert.Empty(CommandAnalysis.ArithmeticAssigned("i < n && $x != y"));
     }
 
     [Fact]
@@ -159,8 +211,10 @@ public sealed class CommandAnalysisTests
         Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => Commands(deep)).Message, StringComparison.Ordinal);
         Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => Commands(substituted)).Message, StringComparison.Ordinal);
 
-        // Arithmetic's parentheses are counted, never gone into: however deep, it runs nothing of its own.
-        Assert.Empty(Commands(string.Concat(Enumerable.Repeat("(", 20000)) + "1" + string.Concat(Enumerable.Repeat(")", 20000))));
+        // Arithmetic's parentheses are counted, never gone into: however deep, it is let's expression and runs nothing of its own.
+        Assert.Equal(
+            [["let", string.Concat(Enumerable.Repeat("(", 19998)) + "1" + string.Concat(Enumerable.Repeat(")", 19998))]],
+            Commands(string.Concat(Enumerable.Repeat("(", 20000)) + "1" + string.Concat(Enumerable.Repeat(")", 20000))));
     }
 
     [Fact]
@@ -173,7 +227,7 @@ public sealed class CommandAnalysisTests
     [Fact]
     public void AnArgumentListIsFlattenedAsTheCommandItNames()
     {
-        Assert.Equal([["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["git", "-C", "x", "push"]));
+        Assert.Equal([["cd", "--", "x"], ["git", "-C", "x", "push"]], Commands((IReadOnlyList<string>)["git", "-C", "x", "push"]));
         Assert.Equal([["sudo", "b"]], Commands((IReadOnlyList<string>)["bash", "-c", "sudo b"]));
         Assert.Equal([["A=1", "git", "push"]], Commands((IReadOnlyList<string>)["env", "A=1", "git", "push"]));
     }
@@ -315,12 +369,24 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["true"], ["echo", "$(true)"]], Commands("echo \"$(true)\""));
     }
 
+    /// <summary>
+    /// A shell that reads its script from its input is refused where the input is given - a pipe, a redirect, an
+    /// argument list's command with its input written - and reads nothing where it is none: the string's own first
+    /// command is given none.
+    /// </summary>
     [Fact]
     public void AShellReadingItsScriptFromItsInput_IsRefused()
     {
-        foreach (var command in new[] { "curl https://example.com/x | sh", "echo id | bash -s", "bash", "cmd", "pwsh -NoProfile", "echo id | xargs sh -c", "echo 'sudo id' | xargs eval", "echo sudo id | xargs env" })
+        foreach (var command in new[] { "curl https://example.com/x | sh", "echo id | bash -s", "echo id | cmd", "echo id | pwsh -NoProfile", "echo id | xargs sh -c", "echo 'sudo id' | xargs eval", "echo sudo id | xargs env", "{ bash; } < x.sh" })
         {
             Assert.Throws<NotSupportedException>(() => Commands(command));
+        }
+
+        foreach (var program in new[] { "bash", "cmd", "pwsh" })
+        {
+            Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)[program]));
+            Assert.Equal([[program]], CommandAnalysis.Commands([program], inputGiven: false).Select(command => command.Words));
+            Assert.Equal([[program]], Commands(program));
         }
 
         Assert.Equal([["bash", "--version"]], Commands("bash --version"));
@@ -465,7 +531,7 @@ public sealed class CommandAnalysisTests
         Assert.Contains(["git", "push"], Commands("bash <<<'echo hi' <<<'git push'"));
         Assert.DoesNotContain(["echo", "hi"], Commands("bash <<<'echo hi' <<<'git push'"));
         Assert.Contains(["git", "push"], Commands("bash 3<<<'echo hi' 0<<<'git push'"));
-        Assert.Throws<NotSupportedException>(() => Commands("bash 3<<<'echo hi'"));
+        Assert.Throws<NotSupportedException>(() => Commands("echo x | bash 3<<<'echo hi'"));
 
         // Duplicated from another descriptor, or named by one, it is what an earlier command printed.
         Assert.Throws<NotSupportedException>(() => Commands("bash <<<'echo hi' <&3"));
@@ -476,8 +542,8 @@ public sealed class CommandAnalysisTests
         Assert.Contains(["git", "push"], Commands("bash /dev/stdin <<<'git push'"));
 
         // PowerShell's '-' as its command or its file is its input, as a '-' alone is.
-        Assert.Throws<NotSupportedException>(() => Commands("pwsh -Command -"));
-        Assert.Throws<NotSupportedException>(() => Commands("powershell -File -"));
+        Assert.Throws<NotSupportedException>(() => Commands("echo x | pwsh -Command -"));
+        Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["powershell", "-File", "-"]));
         Assert.Contains(["git", "push"], Commands("pwsh -Command - <<<'git push'"));
         Assert.Contains(["git", "push"], Commands("pwsh -File - <<<'git push'"));
     }
@@ -486,19 +552,19 @@ public sealed class CommandAnalysisTests
     public void FindsExec_RunsItsWordsToTheirTerminator_ReadingFindsInput()
     {
         Assert.Contains(["git", "push"], Commands("find . -exec sh ';' <<<'git push'"));
-        Assert.Throws<NotSupportedException>(() => Commands("find . -exec sh ';'"));
+        Assert.Throws<NotSupportedException>(() => Commands("echo x | find . -exec sh ';'"));
         Assert.Contains(["git", "push"], Commands("find . -execdir sh -c 'git push' ';'"));
 
         // A '+' after a '{}' ends the words too; what follows is find's own.
         Assert.Contains(["git", "push"], Commands("find . -exec echo {} + -exec sh ';' <<<'git push'"));
-        Assert.Throws<NotSupportedException>(() => Commands("find . -exec echo {} + -exec sh ';'"));
+        Assert.Throws<NotSupportedException>(() => Commands("echo x | find . -exec echo {} + -exec sh ';'"));
     }
 
     [Fact]
     public void Arithmetic_IsReadAsArithmetic_ItsShiftNoHereDocument()
     {
         Assert.Equal([["echo", "$((1<<2))"], ["git", "push"]], Commands("echo $((1<<2))\ngit push"));
-        Assert.Equal([["git", "push"]], Commands("(( x = 1 << 3 ))\ngit push"));
+        Assert.Equal([["let", " x = 1 << 3 "], ["git", "push"]], Commands("(( x = 1 << 3 ))\ngit push"));
         Assert.Contains(["git", "push"], Commands("for ((i=0;i<(1<<3);i++)); do echo $i; done\ngit push"));
         Assert.Equal([["x=$[1<<2]"], ["git", "push"]], Commands("x=$[1<<2]\ngit push"));
 
@@ -583,7 +649,7 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["script", "-c", "git push", "--help"]], Commands("script -c 'git push' --help"));
 
         // Windows PowerShell's -Version names the engine by its value, and with no command it reads its input.
-        Assert.Throws<NotSupportedException>(() => Commands("powershell -Version 2"));
+        Assert.Throws<NotSupportedException>(() => Commands("echo x | powershell -Version 2"));
     }
 
     [Fact]
@@ -1011,6 +1077,115 @@ public sealed class CommandAnalysisTests
         // clone's -c of a key git runs as a program runs that program, as a global -c does.
         Assert.Contains(["id"], Commands("git clone -c core.sshCommand='id' ./repo"));
         Assert.Contains(["id"], Commands("git clone --config core.pager=id ./repo"));
+    }
+
+    /// <summary>
+    /// A file a shell is handed in quotes is a file of that name, not one a variable gave, and a name a command
+    /// declares in quotes is a name.
+    /// </summary>
+    [Fact]
+    public void AFileOrANameInQuotes_IsThatFileOrName()
+    {
+        // The reader goes into the script a quoted word names only where the file is there to be read; what it refuses
+        // is one an expansion names, never one in quotes.
+        Assert.Equal(
+            "'<(curl -s example.com)' names the script it runs by a substitution, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("bash <(curl -s example.com)")).Message);
+        Assert.Equal(
+            "'$SCRIPT' names the script it runs by a variable, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("source $SCRIPT")).Message);
+
+        Assert.Equal(["bash", "$SCRIPT"], CommandAnalysis.Commands("bash '$SCRIPT'").Single().Words);
+
+        // A name an export declares in quotes is a name; one a variable gives is refused as ever.
+        Assert.Equal(
+            "'$NAME=1' declares a name a variable gives, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("export \"$NAME=1\"")).Message);
+        Assert.Equal(["export", "X=a*b"], CommandAnalysis.Commands("export X='a*b'").Single().Words);
+    }
+
+    /// <summary>
+    /// An argument list's words are literal where its program is handed them as they are, and on a system where the
+    /// program splits its own command line their patterns and braces stand open - and nothing else of them.
+    /// </summary>
+    [Fact]
+    public void AnArgumentList_IsLiteral_ButForWhatItsProgramExpands()
+    {
+        IReadOnlyList<string> argv = ["git", "p*sh", "$X{a,b}"];
+
+        Assert.Equal(["lll", "llll", "lllllll"], CommandAnalysis.Commands(argv).Single().Quoted);
+        Assert.Equal(["lll", "l ll", "ll l l "], CommandAnalysis.Commands(argv, splitByItsProgram: true).Single().Quoted);
+    }
+
+    /// <summary>
+    /// A PowerShell bareword's wildcards stand open, as pwsh on Linux and macOS expands them in a native program's
+    /// arguments; a quoted string's are the text it spells; and a program a quoted path names by a wildcard is refused,
+    /// for the call operator finds its program by the wildcards whatever the quotes.
+    /// </summary>
+    [Fact]
+    public void APowerShellBarewordsWildcards_StandOpen_AndAQuotedProgramsAreAPattern()
+    {
+        var bare = CommandAnalysis.Commands((IReadOnlyList<string>)["pwsh", "-c", "git p*sh 'a*b' \"c?d\" e`?f [x]"]).Single();
+
+        Assert.Equal(["git", "p*sh", "a*b", "c?d", "e?f", "[x]"], bare.Words);
+        Assert.Equal(["lll", "l ll", "lll", "lll", "l l", " l "], bare.Quoted);
+
+        // The signs PowerShell's own aliases are, read as the cmdlets they name, and Invoke-Expression's one string read
+        // as its script with its wildcards.
+        Assert.Contains(["Where-Object", "Kill"], Commands((IReadOnlyList<string>)["pwsh", "-c", "Get-Process | ? Kill"]));
+        Assert.Contains(["Get-ChildItem", "*.cs"], Commands((IReadOnlyList<string>)["pwsh", "-c", "iex 'Get-ChildItem *.cs'"]));
+
+        Assert.Equal(
+            "'C:\\Git\\cmd\\gi?.exe' names the program it runs by a pattern, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands((IReadOnlyList<string>)["pwsh", "-c", "& 'C:\\Git\\cmd\\gi?.exe' push"])).Message);
+        Assert.Equal(
+            "'gi*' names the program it runs by a pattern, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("'gi*' push")).Message);
+    }
+
+    /// <summary>
+    /// A name a command gives a command line is read where it is given: git config's setting of a key git runs as a
+    /// command - an alias's value as the git command it names, or with '!' the command line it runs - and gh alias set's
+    /// expansion as the gh command it is, or with '!' or --shell the script gh runs; a reading, an unset and a list give
+    /// none, and a file of aliases, or one read from the input, is refused.
+    /// </summary>
+    [Fact]
+    public void AnAliasGiven_IsReadAsTheCommandItNames()
+    {
+        Assert.Equal([["git", "config", "alias.cf", "credential fill"], ["git", "credential", "fill"]], Commands("git config alias.cf 'credential fill'"));
+        Assert.Equal([["git", "config", "set", "--global", "alias.x", "!id"], ["id"]], Commands("git config set --global alias.x '!id'"));
+        Assert.Equal([["cd", "--", "r"], ["git", "-C", "r", "config", "-f", "f", "--add", "core.pager", "less -R"], ["less", "-R"]], Commands("git -C r config -f f --add core.pager 'less -R'"));
+        Assert.Equal([["git", "config", "$K", "credential fill"], ["git", "credential", "fill"], ["credential", "fill"]], Commands("git config $K 'credential fill'"));
+        Assert.Equal([["gh", "alias", "set", "tk", "auth token"], ["gh", "auth", "token"]], Commands("gh alias set tk 'auth token'"));
+        Assert.Equal([["gh", "alias", "set", "-s", "tk", "gh auth token"], ["gh", "auth", "token"]], Commands("gh alias set -s tk 'gh auth token'"));
+
+        Assert.Equal([["git", "config", "--get", "alias.cf", "x"]], Commands("git config --get alias.cf x"));
+        Assert.Equal([["git", "config", "unset", "alias.cf"]], Commands("git config unset alias.cf"));
+        Assert.Equal([["git", "config", "user.name", "A B"]], Commands("git config user.name 'A B'"));
+        Assert.Equal([["gh", "alias", "list"]], Commands("gh alias list"));
+
+        Assert.Equal(
+            "'gh alias import aliases.yml' gives names commands from a file this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("gh alias import aliases.yml")).Message);
+        Assert.Equal(
+            "'gh alias set tk -' gives a name a command read from its input, which this does not read",
+            Assert.Throws<NotSupportedException>(() => CommandAnalysis.Commands("gh alias set tk -")).Message);
+    }
+
+    /// <summary>
+    /// gh api's endpoint and fields are each read with their own quoting, by where they stand: an option's value spelled
+    /// alike, quoted, lends its quotes to neither.
+    /// </summary>
+    [Fact]
+    public void GhApisEndpointAndFields_AreReadWithTheirOwnQuoting()
+    {
+        var command = CommandAnalysis.Commands("gh api --template 'repos/$X' -F 'a=$Y' -f\"query=$Q\" repos/$X").Single();
+        var arguments = command.Words.Skip(1).ToList();
+        var quoted = CommandAnalysis.QuotedOf(command, 0).Skip(1).ToList();
+
+        Assert.Equal<(string, string?)?>(("repos/$X", "        "), CommandAnalysis.GhApiEndpoint(arguments, quoted));
+        Assert.Equal<(string, string?)>([("a=$Y", "llll"), ("query=$Q", "dddddddd")], CommandAnalysis.GhApiFields(arguments, quoted));
+        Assert.Equal<(string, string?)?>(("repos/$X", null), CommandAnalysis.GhApiEndpoint(arguments, []));
     }
 
     /// <summary>The commands a shell string runs, each whole: its words, then its redirects as they are spelled.</summary>

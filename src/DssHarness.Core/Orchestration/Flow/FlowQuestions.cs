@@ -69,6 +69,30 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
     internal readonly List<FlowAnswerEntry> _given = [];
 
     /// <summary>
+    /// Changes this question's standing answer: both are kept, each with when it was given and by whom - the standing
+    /// one marked replaced from the moment the new one was given - and the new one names the update that changed it.
+    /// The question stays answered; what the first answer set going is the update's to weigh, not this record's.
+    /// </summary>
+    /// <param name="standing">The answer as it stands, of this question's <see cref="Given"/>.</param>
+    /// <param name="answer">The new answer, spelled as the question's options spell it.</param>
+    /// <param name="text">The text given with it, where the answer takes one.</param>
+    /// <param name="through">How the person gave it: <c>answer-orchestrator</c> or <c>front-end</c>.</param>
+    /// <param name="moment">When the new answer was given to the tool.</param>
+    /// <param name="update">The id of the plan update that changed it.</param>
+    /// <param name="inbox">The id of the inbox entry the change was handed over under, where one was.</param>
+    internal void Change(FlowAnswerEntry standing, string answer, string? text, string? through, DateTimeOffset moment, string update, string? inbox)
+    {
+        var at = _given.IndexOf(standing);
+
+        if (at >= 0)
+        {
+            _given[at] = standing with { ReplacedAt = moment };
+        }
+
+        _given.Add(new FlowAnswerEntry(answer, text, "person", Where: null, Through: through, At: moment, Did: $"changed by update {update}", ReplacedAt: null, Inbox: inbox, Update: update));
+    }
+
+    /// <summary>
     /// The question as <c>questions.json</c> holds it: one half of the one pair of conversions between the question the
     /// engine holds and its record, which together lose nothing - <see cref="FromEntry"/> of what this writes is this
     /// question again, and its every answer with it.
@@ -87,7 +111,8 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
                 entry.Text,
                 new FlowAnswerBy(entry.By, entry.Through, entry.Where, entry.Input, entry.Inbox),
                 entry.Did,
-                entry.ReplacedAt))],
+                entry.ReplacedAt,
+                entry.Update))],
             RaisedBy,
             new FlowQuestionProblem(Problem, Tried, Means),
             Recommendation,
@@ -132,7 +157,8 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
             answer.Did,
             answer.By?.Input,
             answer.ReplacedAt,
-            answer.By?.Inbox)));
+            answer.By?.Inbox,
+            answer.Update)));
 
         return question;
     }
@@ -163,6 +189,7 @@ public sealed record FlowFoldQuestion(string Kind, IReadOnlyList<string> Named);
 /// <param name="Input">The entry of a pre-answer that held, where the run's input gave it; null for every other answer.</param>
 /// <param name="ReplacedAt">When a later answer replaced it, where one did; null while it stands.</param>
 /// <param name="Inbox">The id of the <c>inbox.json</c> entry a person's answer was handed over under; null for every answer no inbox handed over.</param>
+/// <param name="Update">The id of the plan update that changed this answer, where one did; null for every answer a person gave as its first.</param>
 public sealed record FlowAnswerEntry(
     string Answer,
     string? Text,
@@ -173,7 +200,8 @@ public sealed record FlowAnswerEntry(
     string? Did = null,
     string? Input = null,
     DateTimeOffset? ReplacedAt = null,
-    string? Inbox = null);
+    string? Inbox = null,
+    string? Update = null);
 
 /// <summary>
 /// The question kinds' own rules, beside the coordinator that raises and answers them: which answers a kind offers a
@@ -203,7 +231,8 @@ public static class FlowQuestions
     /// <summary>Whether <paramref name="option"/> of a question of <paramref name="kind"/> on <paramref name="step"/> is answered with a text.</summary>
     private static bool TakesText(string kind, WorkflowStep? step, string option)
         => (kind == "pause" && (step?.Text.Contains(option, StringComparer.Ordinal) ?? false))
-            || (kind == "recoveryBound" && option == "direct");
+            || (kind == "recoveryBound" && option == "direct")
+            || (kind == "ask" && option == "answer");
 
     /// <summary>
     /// The answers <paramref name="kind"/> offers <paramref name="step"/>: the kind's own from
@@ -222,8 +251,8 @@ public static class FlowQuestions
                 case "pause":
                     return [.. (step?.Options ?? [])];
                 case "ask":
-                    // An agent's questions are answered with a text or left to the agent; the answer's own spelling
-                    // is 31's to wire, and the list stands so the kind is not a crash in its owner's table.
+                    // An agent's questions are answered with a text or left to the agent, which goes on with what it
+                    // recommended; abort is every question's.
                     return ["answer", "decide", "abort"];
                 case "foldLostRows" or "foldOverCells":
                     // A person's alone: no configuration answers it, so the kind's answers live here and not among the

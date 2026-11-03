@@ -6,7 +6,7 @@ namespace DssHarness.Cli.Commands;
 /// <summary>Wires <c>DssHarness init</c>. Orchestration only; the work is in the service.</summary>
 internal static class InitCommand
 {
-    internal const string Name = "init";
+    internal const string Name = InitService.CommandName;
 
     private static readonly Option<bool> InstallToolsOption = new("--install-tools")
     {

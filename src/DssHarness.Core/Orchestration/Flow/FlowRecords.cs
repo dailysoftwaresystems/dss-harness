@@ -115,6 +115,11 @@ public sealed record FlowEvent(
 /// <param name="Visit">Which visit of the step this is.</param>
 /// <param name="Answers">The answers the questions of this visit were given, in the order they were given.</param>
 /// <param name="WaitsOn">What the instance waits on, where it waits: a dependency, a claim, a counter, a question, the resume.</param>
+/// <param name="Assumptions">
+/// What the step's agents assumed where a person could have told it, of every attempt of the visit - the envelope's own
+/// shape of each - read as <c>&lt;step&gt;.assumptions</c> and written into the run's own <c>run.assumptions</c>; null
+/// where nothing was.
+/// </param>
 /// <param name="Type">The step's type; null for a group's own record.</param>
 /// <param name="StartedAt">When this attempt began; written null until it has.</param>
 /// <param name="FinishedAt">When the instance ended; written null until it has.</param>
@@ -176,6 +181,30 @@ public sealed record FlowEvent(
 /// attempts its turn ran and how it ended - what a resume goes on from, at the first whose turn has not ended; null for
 /// every other step, and before it starts.
 /// </param>
+/// <param name="RaisedByUpdate">
+/// The plan update this instance was raised to plan, by its id - the visit of the step the <c>amend</c> block names; null
+/// for every step an update did not raise.
+/// </param>
+/// <param name="Told">Each telling of the step by a plan update: the update, when, and the way it reached it; null where none did.</param>
+/// <param name="EndedFor">
+/// The plan update a piece of which ended this visit in order, by its id: a step in flight in an instance of the work-item
+/// group the piece brought to rest, from when it was stopped, and that instance's own group record from the moment the
+/// piece marked it - running while it is brought to rest, stopped once it has come to rest. Its visit is over: no session
+/// runs it again, its group counts it ended, and its work is done again or taken back in the instance visited in its
+/// place. Null for every other instance.
+/// </param>
+/// <param name="PieceOf">
+/// An instance of the work-item group's own record: the plan update whose piece it carries or withdrew, by its id - one
+/// made for the piece, given its item in the place of its own, joined at the check that opens a round, brought to rest
+/// for it, or visited again for it; the piece is that update's entry's piece of the instance's work item. Null for every
+/// other record.
+/// </param>
+/// <param name="AgainOf">An instance of the work-item group's own record: the instance it visits again in its place and with its agent, by its id; null where it visits none.</param>
+/// <param name="Skills">
+/// Every skill the step's agent was given, each once, of every attempt of the visit: its name, the place it was found, its
+/// <c>SKILL.md</c>, the SHA-256 of the file and of the folder as handed over, and where the folder was put; null where it
+/// was given none.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -202,6 +231,7 @@ public sealed record FlowStepRecord(
     JsonNode? Item = null,
     int? Index = null,
     int? Iteration = null,
+    IReadOnlyList<Agents.AgentAssumption>? Assumptions = null,
     IReadOnlyList<FlowHandlerState>? Handlers = null,
     string? HandledBy = null,
     JsonNode? Leftover = null,
@@ -214,7 +244,13 @@ public sealed record FlowStepRecord(
     string? Cause = null,
     string? Model = null,
     bool? Copied = null,
-    IReadOnlyList<FlowTargetRecord>? Targets = null)
+    IReadOnlyList<FlowTargetRecord>? Targets = null,
+    string? RaisedByUpdate = null,
+    IReadOnlyList<FlowStepTold>? Told = null,
+    string? EndedFor = null,
+    string? PieceOf = null,
+    string? AgainOf = null,
+    IReadOnlyList<Agents.AgentSkill>? Skills = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -249,14 +285,47 @@ public sealed record FlowStepRecord(
             : Question is not null && !FlowQuestionIds.IsWellFormed(Question) ? $"'{Question}' is not a question's id"
             : Item is not null && Index is null ? "it holds an item without its index"
             : Answers.Any(answer => string.IsNullOrWhiteSpace(answer.Question) || string.IsNullOrWhiteSpace(answer.Answer)) ? "an answer names neither its question nor its answer"
+            : Assumptions?.Contains(null) == true ? "it names an assumption as null"
             : Handlers is { Count: > 0 } && Handlers.Any(handler => handler.Problem() is not null) ? $"its handlers hold one that is not a state: {Handlers.First(handler => handler.Problem() is not null).Problem()}"
             : HandledBy is not null && !FlowInstanceId.IsWellFormed(HandledBy) && !FlowQuestionIds.IsWellFormed(HandledBy) ? $"'{HandledBy}' names neither an instance nor a question"
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
+            : RaisedByUpdate is not null && !FlowUpdateIds.IsId(RaisedByUpdate) ? $"'{RaisedByUpdate}' is not an update's id"
             : LeftBy is not null && !FlowInstanceId.IsWellFormed(LeftBy) ? $"'{LeftBy}' is not an instance id"
+            : Told?.Any(told => !FlowUpdateIds.IsId(told.Update) || string.IsNullOrWhiteSpace(told.How)) == true ? "one it was told holds no update or no way it reached it"
+            : EndedFor is not null && !FlowUpdateIds.IsId(EndedFor) ? $"it was ended for '{EndedFor}', which is not an update's id"
+            : PieceOf is not null && !FlowUpdateIds.IsId(PieceOf) ? $"it carries a piece of '{PieceOf}', which is not an update's id"
+            : (PieceOf is not null || AgainOf is not null) && !Group ? "it carries a piece of a plan update, and only an instance of the work-item group does"
+            : AgainOf is not null && !FlowInstanceId.IsWellFormed(AgainOf) ? $"it visits '{AgainOf}' again, which is not an instance id"
+            : AgainOf is not null && PieceOf is null ? "it visits an instance again for no piece of a plan update"
             : Handoff?.Problem() is { } handoff ? $"its handoff: {handoff}"
             : Targets?.FirstOrDefault(target => target.Problem() is not null) is { } target ? $"its target '{target.Agent}': {target.Problem()}"
             : Targets?.GroupBy(target => target.Agent, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"it names target '{twice.Key}' twice"
+            : Skills?.Any(skill => skill is null || new[] { skill.Name, skill.Place, skill.File, skill.Digest, skill.FolderDigest, skill.Folder }.Any(string.IsNullOrWhiteSpace)) == true
+                ? "a skill it was given names no name, place, file, digest or folder"
             : null;
+}
+
+/// <summary>
+/// One telling of a step by a plan update, as its own record holds it: the update, when it was told, and the way it
+/// reached it - <c>a message</c> into the conversation it was in, <c>the answer</c> it was given with, or <c>a
+/// prompt</c> of an attempt that began after.
+/// </summary>
+/// <param name="Update">The update's id.</param>
+/// <param name="At">When the step was told.</param>
+/// <param name="How">The way it reached it.</param>
+public sealed record FlowStepTold(
+    string Update,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
+    string How)
+{
+    /// <summary>How a message into the conversation the step was in is said.</summary>
+    public const string ByMessage = "a message";
+
+    /// <summary>How a telling given with the answer the step waited on is said.</summary>
+    public const string WithTheAnswer = "the answer";
+
+    /// <summary>How a telling read in the prompt of an attempt that began after is said.</summary>
+    public const string InAPrompt = "a prompt";
 }
 
 /// <summary>The handoff a step's record names: who wrote it and why, for the file is its own record beside the step's.</summary>
@@ -344,7 +413,7 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// <param name="DefinitionDigest">The SHA-256 of the definition as it ran, frozen in <c>definition.json</c>.</param>
 /// <param name="Inputs">The values the run was started with, by input name.</param>
 /// <param name="Status">How the run stands: one of <see cref="FlowRunStatus"/>'s names, exactly.</param>
-/// <param name="Spent">What the run's reasoning has spent against its budget: usd, tokens and minutes.</param>
+/// <param name="Spent">What the run's reasoning has spent against its budget: usd, tokens and minutes, and why the dollars are not known past usd where a part's cost could not be counted.</param>
 /// <param name="BudgetGranted">How many times the budget was answered <c>more</c>.</param>
 /// <param name="Steps">Every step instance, in the order the run made them.</param>
 /// <param name="Next">The steps that would start now, in the order they would start.</param>
@@ -355,6 +424,10 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// <param name="Redirects">
 /// Every redirect the run owes and has not made yet, in the order they were decided - each made in its turn - each
 /// written before its first reset; null where none is owed.
+/// </param>
+/// <param name="Hold">
+/// The plan update the run is held for, and when it was taken; null where none is under way. While it holds, nothing
+/// is started outside the scope the update is planned in.
 /// </param>
 public sealed record FlowFile(
     int Schema,
@@ -371,7 +444,8 @@ public sealed record FlowFile(
     string? StartCommit = null,
     string? Branch = null,
     FlowPauseRecord? Pause = null,
-    IReadOnlyList<FlowRedirectRecord>? Redirects = null)
+    IReadOnlyList<FlowRedirectRecord>? Redirects = null,
+    FlowHoldRecord? Hold = null)
 {
     /// <summary>
     /// The steps the file holds running that are no group's own record, by instance: once a pause is complete, the
@@ -389,19 +463,51 @@ public sealed record FlowFile(
             : string.IsNullOrWhiteSpace(DefinitionDigest) ? "it names no digest of its definition"
             : !FlowRecordNames.Is<FlowRunStatus>(Status) ? $"'{Status}' is not a run status"
             : BudgetGranted < 0 ? "the budget was granted more a negative number of times"
+            : Spent.ReserveMetAt is < 0 ? "its budget's reserve was met at a negative grant"
+            : Spent.ReserveMetAt is { } met && met > BudgetGranted ? $"its budget's reserve was met at grant {met.ToString(CultureInfo.InvariantCulture)}, past the {BudgetGranted.ToString(CultureInfo.InvariantCulture)} it was granted"
             : Steps.Any(step => step.Problem() is { } problem) ? $"its steps hold one that is not a record: {Steps.First(step => step.Problem() is not null).Problem()}"
             : Steps.GroupBy(step => step.Instance, StringComparer.Ordinal).Any(group => group.Count() > 1) ? "it holds an instance twice"
             : Next.Any(id => Steps.All(step => !string.Equals(step.Instance, id, StringComparison.Ordinal))) ? "next names an instance the file does not hold"
             : Pause?.Problem() is { } pause ? $"its pause: {pause}"
             : Redirects?.Select(redirect => redirect.Problem()).FirstOrDefault(problem => problem is not null) is { } redirect ? $"its redirects: {redirect}"
+            : Hold?.Problem() is { } hold ? $"its hold: {hold}"
+            : null;
+}
+
+/// <summary>
+/// The plan update a run is held for, as <c>flow.json</c> holds it: from the moment the update was taken until its plan
+/// stands or its planning was given up, nothing is started outside the scope the update is planned in.
+/// </summary>
+/// <param name="Update">The update's id, as <c>updates.json</c> holds it.</param>
+/// <param name="At">When the update was taken, and the hold began.</param>
+public sealed record FlowHoldRecord(string Update, [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At)
+{
+    /// <summary>What is wrong with this record; null when nothing is.</summary>
+    public string? Problem()
+        => !FlowUpdateIds.IsId(Update) ? $"'{Update}' is not an update's id"
             : null;
 }
 
 /// <summary>What a run's reasoning spent, as <c>flow.json</c> holds it.</summary>
-/// <param name="Usd">What the reason steps cost, in United States dollars.</param>
+/// <param name="Usd">What the reason steps cost, in United States dollars, as far as each part's cost could be counted.</param>
 /// <param name="Tokens">Every token the clients reported.</param>
 /// <param name="Minutes">The time reason steps ran, in minutes: two that reason at once count twice.</param>
-public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes);
+/// <param name="Uncounted">
+/// Why a part's cost could not be counted - the first such part's - so the dollars are not known past <paramref name="Usd"/>;
+/// left out where every part's was, as a record written before a part could go uncounted is read.
+/// </param>
+/// <param name="ReserveMetAt">
+/// The grant of the budget under which the run's dollars reached its reserve whatever their count says - a launch the
+/// run's share ended, or a part whose cost could not be counted in a run budgeted in dollars - written with the change
+/// that met it, so a resume after a crash asks as the session would have, and a grant of more recorded since goes on;
+/// left out where none did, as a record written before the mark was kept is read.
+/// </param>
+public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null)
+{
+    /// <summary>The dollars as the one fold holds them: what was counted, and why the rest is not known where it is not.</summary>
+    [JsonIgnore]
+    public FlowDollars Dollars => new(Usd, Uncounted);
+}
 
 /// <summary>The safe pause a run is under or was ended by, as <c>flow.json</c> holds it.</summary>
 /// <param name="Cause">Who asked for the pause.</param>
@@ -684,22 +790,31 @@ public enum FlowChangeKind
 
     /// <summary>An answer was given from outside the session - taken from the inbox, or refused where its question was no longer open.</summary>
     Answer,
+
+    /// <summary>The run's advisor answered an open question with a recommendation, or left it without one.</summary>
+    Advised,
+
+    /// <summary>An iteration was added to a loop at its bound, for a plan update that owes it work.</summary>
+    IterationAdded,
 }
 
 /// <summary>
 /// The run whole, as the coordinator holds it, handed to the records at every change: everything <c>flow.json</c> and
 /// <c>workflow.json</c> say, and each step's own record. The records own nothing of the graph; this is the whole of
-/// what they are told, and they are written from it, in the one order the run's law names.
+/// what they are told, and they are written from it, in the one order the run's law names. It holds the run by value -
+/// nothing the engine changes after - so a write held while a session's start is, and made later, says the run exactly
+/// as it stood when the change was taken.
 /// </summary>
 /// <param name="Status">How the run stands.</param>
 /// <param name="EndedAt">When the run ended, where a session ended it; null while it runs.</param>
-/// <param name="Spent">What the run's reasoning has spent against its budget.</param>
+/// <param name="Spent">What the run's reasoning had spent against its budget when the change was taken.</param>
 /// <param name="BudgetGranted">How many times the budget was answered more.</param>
-/// <param name="Pause">The safe pause the run is under or was ended by; null where none.</param>
+/// <param name="Pause">The safe pause the run was under or was ended by when the change was taken; null where none.</param>
 /// <param name="Steps">Every step instance, in the order the run made them.</param>
 /// <param name="Next">The steps that would start now, in the order they would start.</param>
 /// <param name="WaitingOn">The questions the run holds open, in the order they were raised.</param>
 /// <param name="Redirects">Every redirect the run owes and has not made yet, in the order decided; null where none is owed.</param>
+/// <param name="Hold">The plan update the run is held for, and when it was taken; null where none is under way.</param>
 /// <param name="PreExisting">The run's pre-existing issues by what became of them; null until it has one.</param>
 /// <param name="Issues">
 /// Every pre-existing issue the run has listed, whole, where the change holds them: the records write the run's file of
@@ -709,13 +824,14 @@ public enum FlowChangeKind
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
-    FlowBudgetSpent Spent,
+    FlowBudgetRecord Spent,
     int BudgetGranted,
-    FlowPauseState? Pause,
+    FlowPauseRecord? Pause,
     IReadOnlyList<FlowSnapshotStep> Steps,
     IReadOnlyList<string> Next,
     IReadOnlyList<string> WaitingOn,
     IReadOnlyList<FlowRedirectRecord>? Redirects = null,
+    FlowHoldRecord? Hold = null,
     WorkflowPreExisting? PreExisting = null,
     IReadOnlyList<PreExistingIssue>? Issues = null);
 
@@ -745,6 +861,7 @@ public sealed record FlowSnapshot(
 /// <param name="Iteration">The iteration of the repeat this instance is one of; null outside every one.</param>
 /// <param name="Answers">The answers the questions of this visit were given, in the order they were given.</param>
 /// <param name="WaitsOn">What the instance waits on, where it waits.</param>
+/// <param name="Assumptions">What the step's agents assumed where a person could have told it, of every attempt of the visit; null where nothing was.</param>
 /// <param name="Handlers">What the ending of this step owes and owes no longer: each handler declared beside it, and where it stands.</param>
 /// <param name="HandledBy">The handler that took this step's failure, where one did; null where none did.</param>
 /// <param name="Leftover">What a repeat that ended with its until still false says it left; null where the loop names none.</param>
@@ -758,6 +875,12 @@ public sealed record FlowSnapshot(
 /// <param name="Model">The model the agent a create-agent step makes is made for; null where <paramref name="Made"/> is.</param>
 /// <param name="Copied">Whether the leg step's attempt let its tree go while its legs work on, every copy made (<see cref="FlowStepRecord.Copied"/>).</param>
 /// <param name="Targets">A step of others' targets, each with where it stands (<see cref="FlowStepRecord.Targets"/>); null for every other step.</param>
+/// <param name="RaisedByUpdate">The plan update this instance was raised to plan, by its id; null for every step an update did not raise.</param>
+/// <param name="Told">Each telling of the step by a plan update, as its own record holds it (<see cref="FlowStepRecord.Told"/>); null where none did.</param>
+/// <param name="EndedFor">The plan update a piece of which ended this visit in order (<see cref="FlowStepRecord.EndedFor"/>); null for every other instance.</param>
+/// <param name="PieceOf">An instance of the work-item group's: the plan update whose piece it carries or withdrew (<see cref="FlowStepRecord.PieceOf"/>); null otherwise.</param>
+/// <param name="AgainOf">An instance of the work-item group's: the instance it visits again (<see cref="FlowStepRecord.AgainOf"/>); null where it visits none.</param>
+/// <param name="Skills">Every skill the step's agent was given (<see cref="FlowStepRecord.Skills"/>); null where it was given none.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -784,6 +907,7 @@ public sealed record FlowSnapshotStep(
     int? Iteration,
     IReadOnlyList<FlowAnswerGiven> Answers,
     IReadOnlyList<string> WaitsOn,
+    IReadOnlyList<Agents.AgentAssumption>? Assumptions = null,
     IReadOnlyList<FlowHandlerState>? Handlers = null,
     string? HandledBy = null,
     JsonNode? Leftover = null,
@@ -796,4 +920,10 @@ public sealed record FlowSnapshotStep(
     OutcomeCause Cause = OutcomeCause.None,
     string? Model = null,
     bool Copied = false,
-    IReadOnlyList<FlowTargetRecord>? Targets = null);
+    IReadOnlyList<FlowTargetRecord>? Targets = null,
+    string? RaisedByUpdate = null,
+    IReadOnlyList<FlowStepTold>? Told = null,
+    string? EndedFor = null,
+    string? PieceOf = null,
+    string? AgainOf = null,
+    IReadOnlyList<Agents.AgentSkill>? Skills = null);

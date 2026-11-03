@@ -1,5 +1,6 @@
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
+using DssHarness.Core.Testing;
 
 namespace DssHarness.Core.Execution;
 
@@ -197,6 +198,12 @@ public sealed record LegEntry
     /// takes to bring it back from the host that kept it.
     /// </summary>
     public IReadOnlyList<string> KeptOutputs { get; init; } = [];
+
+    /// <summary>
+    /// What the leg's test invocation kept of the files it named when it did not pass, as evidence beside its verdict -
+    /// never an output, which a later step reads. <see langword="null"/> where it named nothing, or passed.
+    /// </summary>
+    public KeptOnFailure? KeptOnFailure { get; init; }
 
     /// <summary>
     /// Each mutation arm the leg was asked about, in the registry's order, with the verdict it reached there: empty for

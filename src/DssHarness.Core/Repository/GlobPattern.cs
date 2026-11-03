@@ -29,7 +29,9 @@ namespace DssHarness.Core.Repository;
 /// that. A pattern that would mean one thing as each of the two is a pattern nobody can read. What the two share is the spelling rule
 /// (<see cref="PathPatterns.Misspelling"/>) and the rule that a path climbing out of the tree names
 /// nothing in it (<see cref="PlatformPaths.ClimbsOut"/>), which a pattern here and a path matched
-/// against it are both held to.
+/// against it are both held to. The one list of <c>config.json</c> this does read is a test
+/// invocation's <c>keepOnFailure</c>, whose entries name files a failing run kept by pattern - a
+/// whole tree of them, at any depth, which the poorer grammar cannot say.
 /// </para>
 /// <para>
 /// A trailing <c>/**</c> matches everything <em>beneath</em> what precedes it and not that path
@@ -95,6 +97,15 @@ public sealed class GlobPattern
     /// </summary>
     private static string[] Folded(string[] segments)
         => [.. segments.Where((segment, at) => !(segment == "**" && at + 1 < segments.Length && segments[at + 1] == "**"))];
+
+    /// <summary>
+    /// Whether <paramref name="entry"/> holds a wildcard, the two this grammar reads - <c>*</c> and <c>?</c> - and so
+    /// is a pattern to match rather than a path to take as written: the one answer, for every reader that has to tell
+    /// an entry naming a file from one naming whatever matches.
+    /// </summary>
+    /// <param name="entry">The entry, as written.</param>
+    public static bool IsPattern(string entry)
+        => entry.Contains('*', StringComparison.Ordinal) || entry.Contains('?', StringComparison.Ordinal);
 
     /// <summary>
     /// Why <paramref name="pattern"/> cannot be read, or <see langword="null"/> when it can.

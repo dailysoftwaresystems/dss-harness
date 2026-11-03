@@ -3,6 +3,7 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 
@@ -164,6 +165,28 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     public bool BuildsTheLegsTree { get; init; } = true;
 
     /// <summary>
+    /// The actions whose steps a leg's work runs, each by its own directory relative to the actions directory: its
+    /// runner's, and each one a runner its run checks name runs. None where the command runs no action.
+    /// </summary>
+    public IReadOnlyList<string> Actions { get; init; } = [];
+
+    /// <summary>
+    /// What a leg's work writes inside its tree's configuration directory, which is otherwise written by nobody where the
+    /// work is isolated: each action's build directory for this run and leg (<c>{actionBuild}</c>), which holds each of its
+    /// steps' own (<c>{stepBuild}</c>) and every output a step declares - never the action's own files, what a run keeps
+    /// of it (its artifacts, which the tool copies there itself), the configuration or the tool's state.
+    /// </summary>
+    /// <param name="tree">The tree the leg works in.</param>
+    /// <param name="runId">The run.</param>
+    /// <param name="leg">The leg.</param>
+    public IReadOnlyList<string> WritesIn(string tree, string runId, string leg)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        return [.. Actions.Select(action => Path.Combine(tree, HarnessLayout.ActionBuildRelative(action, runId, leg)))];
+    }
+
+    /// <summary>
     /// Whether a leg of this workload is heavy: it builds or tests, or its runner says it is - and the command does not
     /// admit each unit of its work instead (<see cref="AdmitsEachUnit"/>). A heavy leg takes one of its machine's
     /// heavy-leg slots before its work starts, where that machine declares admission; a repository guard that only reads
@@ -242,6 +265,7 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
             OnlyOn = [.. starts.Where(start => start.RunOn.Count > 0)],
             BuiltBy = causes,
             SetUps = [.. (runner.SetUp ?? []).Concat(checking.SelectMany(check => check.Runner.SetUp ?? [])).Distinct()],
+            Actions = [.. new[] { action }.Concat(checking.Select(check => check.Action)).OfType<ActionFile>().Select(file => file.DirectoryName).Distinct(StringComparer.Ordinal)],
             DeclaredHeavy = own.Everywhere || checked_.Any(check => check.Unread || check.Steps.Everywhere),
             HeavyOnlyOn = [.. own.OnlyOn.Concat(checked_.SelectMany(check => check.Steps.OnlyOn)).Distinct(StringComparer.OrdinalIgnoreCase)],
         };

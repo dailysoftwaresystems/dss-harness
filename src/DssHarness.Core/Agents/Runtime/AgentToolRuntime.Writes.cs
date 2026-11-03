@@ -9,12 +9,17 @@ namespace DssHarness.Core.Agents.Runtime;
 /// The tools that write: a file created, a string replaced, lines inserted, a directory made, a file or a directory
 /// deleted, a path moved. Each is a write to every path it touches - each entry it deletes or moves, at both ends of a
 /// move - held to the writable roots and asked of the policy; the directories made on a path's way are part of the write
-/// to that path, decided with it and never asked apart (<see cref="MakeTheWay"/>).
+/// to that path, decided with it and never asked apart. Each then acts relative to the directories it touches, held from
+/// the writable root it was decided in with no link on the way (<see cref="UnfollowedFiles"/>, <see cref="AgentFiles.Write"/>):
+/// a link a command still running puts on the way after the decision reaches nothing, and the call is refused naming it.
 /// </summary>
 public sealed partial class AgentToolRuntime
 {
-    /// <summary><c>create_file</c>: a new file holding the content as given, in UTF-8 with no mark, the directories on its way made.</summary>
-    private async Task<Answer> CreateAsync(JsonObject input, CancellationToken cancellationToken)
+    /// <summary>
+    /// <c>create_file</c>: a new file holding the content as given, in UTF-8 with no mark, the directories on its way made,
+    /// where it lands decided again before a byte is written (<see cref="AgentFiles.Write"/>).
+    /// </summary>
+    private Answer Create(JsonObject input)
     {
         var path = Text(input, "path")!;
         var place = WritePlace(path);
@@ -37,7 +42,11 @@ public sealed partial class AgentToolRuntime
 
         // The directories on its way are made by the write itself.
         var bytes = Utf8Text.Encode(Text(input, "content")!);
-        await files.WriteAllBytesAtomicAsync(full, bytes, cancellationToken).ConfigureAwait(false);
+
+        if (_host.Files.Write(_paths.WritableRootOf(full), full, bytes, landing => OpenedPlace(landing, write: true).Denied) is { } moved)
+        {
+            return Answer.Refused(path, moved);
+        }
 
         // The agent wrote what it holds, and knows it as well as one it viewed.
         _viewed[full] = Hash(bytes);
@@ -102,7 +111,8 @@ public sealed partial class AgentToolRuntime
     /// <summary>
     /// An edit of the file <c>path</c> names: decided as a write, refused where the file was not viewed or changed since,
     /// read in its encoding, changed by <paramref name="edit"/> - which says why it would not, where it would not - and
-    /// written back whole, in one write.
+    /// written back whole, in one write; read and written through the file as each was opened, where it stands decided
+    /// again as a write before a byte passes (<see cref="AgentFiles.ReadAsync"/>, <see cref="AgentFiles.Write"/>).
     /// </summary>
     private async Task<Answer> EditAsync(JsonObject input, Func<EditedText, string?> edit, CancellationToken cancellationToken)
     {
@@ -127,7 +137,14 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed(large);
         }
 
-        var bytes = await files.ReadAllBytesAsync(full, cancellationToken).ConfigureAwait(false);
+        var read = await _host.Files.ReadAsync(full, AgentTools.MostViewedBytes, opened => OpenedPlace(opened, write: true).Denied, cancellationToken).ConfigureAwait(false);
+
+        if (read.Denied is { } moved)
+        {
+            return Answer.Refused(path, moved);
+        }
+
+        var bytes = read.Bytes!;
 
         if (!_viewed.TryGetValue(full, out var seen))
         {
@@ -154,7 +171,11 @@ public sealed partial class AgentToolRuntime
         }
 
         var written = edited.Bytes();
-        await files.WriteAllBytesAtomicAsync(full, written, cancellationToken).ConfigureAwait(false);
+
+        if (_host.Files.Write(_paths.WritableRootOf(full), full, written, landing => OpenedPlace(landing, write: true).Denied) is { } landed)
+        {
+            return Answer.Refused(path, landed);
+        }
 
         _viewed[full] = Hash(written);
         Tally.Wrote(full);
@@ -183,9 +204,7 @@ public sealed partial class AgentToolRuntime
                 return Answer.Failed($"'{Said(full)}' is a file");
         }
 
-        _host.FileSystem.CreateDirectory(full);
-
-        return Answer.Done($"made '{Said(full)}'");
+        return Anchored(path, () => UnfollowedFiles.CreateDirectory(_host.FileSystem, _paths.WritableRootOf(full), full)) ?? Answer.Done($"made '{Said(full)}'");
     }
 
     /// <summary><c>delete_file</c>: one file deleted; one that is not there is an error.</summary>
@@ -209,7 +228,11 @@ public sealed partial class AgentToolRuntime
                 return Answer.Failed($"'{Said(full)}' is a directory: delete_directory deletes one");
         }
 
-        _host.FileSystem.DeleteFile(full);
+        if (Anchored(path, () => UnfollowedFiles.Delete(_host.FileSystem, _paths.WritableRootOf(full), full)) is { } refused)
+        {
+            return refused;
+        }
+
         _viewed.TryRemove(full, out _);
         Tally.Wrote(full);
 
@@ -262,7 +285,11 @@ public sealed partial class AgentToolRuntime
 
         try
         {
-            _host.FileSystem.DeleteDirectory(full);
+            UnfollowedFiles.DeleteDirectory(_host.FileSystem, _paths.WritableRootOf(full), full);
+        }
+        catch (LinkOnTheWayException link)
+        {
+            return Answer.Refused(path, AgentFiles.Linked(link));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -381,15 +408,12 @@ public sealed partial class AgentToolRuntime
             moved = held.Files;
         }
 
-        MakeTheWay(destination);
-
-        if (kind == PathKind.Directory)
+        // Relative to both directories, each held from the writable root it was decided in, the destination's made: the
+        // directories made on its way are part of the write that was decided. A directory is never moved over anything
+        // but itself: a name changed in its case alone, where the two spell the one entry, replaces only that entry.
+        if (Anchored(toPath, () => Moved(source, destination, replace: renamed || (kind == PathKind.File && Flag(input, "overwrite")))) is { } refused)
         {
-            files.MoveDirectory(source, destination);
-        }
-        else
-        {
-            files.ReplaceFile(source, destination);
+            return refused;
         }
 
         // A file moved is the file the agent viewed, at its new place: what it knew of it goes with it, and its old place,
@@ -415,15 +439,44 @@ public sealed partial class AgentToolRuntime
     }
 
     /// <summary>
-    /// Makes the directories missing on <paramref name="full"/>'s way, as part of the write to it that was decided: each
-    /// lies inside the writable root the path does, through no link, and a rule that refuses a directory refuses what is
-    /// written in it - while a step's <c>writes</c>, which names files, would refuse every directory its own files need.
+    /// Moves <paramref name="source"/> to <paramref name="destination"/> relative to their directories, each held from the
+    /// writable root it was decided in: in one root, by one rename; from one root into another, the destination's
+    /// directory held from its own root and the entry renamed into it. The directories missing on the destination's way are
+    /// made as part of the write to it that was decided: each lies inside the writable root the path does, through no link,
+    /// and a rule that refuses a directory refuses what is written in it - while a step's <c>writes</c>, which names files,
+    /// would refuse every directory its own files need.
     /// </summary>
-    private void MakeTheWay(string full)
+    private void Moved(string source, string destination, bool replace)
     {
-        if (Path.GetDirectoryName(full) is { } directory && _host.FileSystem.KindOf(directory) == PathKind.None)
+        var from = _paths.WritableRootOf(source);
+        var to = _paths.WritableRootOf(destination);
+
+        if (string.Equals(from, to, StringComparison.Ordinal))
         {
-            _host.FileSystem.CreateDirectory(directory);
+            UnfollowedFiles.Move(_host.FileSystem, from, source, destination, replace);
+            return;
+        }
+
+        using var fromHeld = _host.FileSystem.Hold(from, Path.GetDirectoryName(source)!, make: false, source);
+        using var toHeld = _host.FileSystem.Hold(to, Path.GetDirectoryName(destination)!, make: true, destination);
+
+        fromHeld.Move(Path.GetFileName(source), toHeld, Path.GetFileName(destination), replace);
+    }
+
+    /// <summary>
+    /// Does what <paramref name="act"/> does relative to the directories it touches, and answers null; or, where a link put
+    /// on its way since it was decided stopped it, the call refused of <paramref name="path"/> naming the link, nothing done.
+    /// </summary>
+    private static Answer? Anchored(string path, Action act)
+    {
+        try
+        {
+            act();
+            return null;
+        }
+        catch (LinkOnTheWayException link)
+        {
+            return Answer.Refused(path, AgentFiles.Linked(link));
         }
     }
 

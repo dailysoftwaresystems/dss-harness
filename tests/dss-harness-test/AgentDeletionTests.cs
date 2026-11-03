@@ -201,7 +201,7 @@ public sealed class AgentDeletionTests
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
         Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
-        File.Delete(Path.Combine(worktree, ".git"));
+        Directory.Delete(Path.Combine(worktree, ".git"), recursive: true);
         var kept = Directory.GetDirectories(kit.Layout.EvidenceDirectory("ag")).Length;
 
         var dry = await kit.DeleteAsync("ag", apply: false);
@@ -273,7 +273,7 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
-    /// A live agent whose worktree's identity cannot be read - git names no commondir in its git directory - fails its
+    /// A live agent whose worktree's identity cannot be read - its repository's alternates file cannot be read - fails its
     /// deletion before anything is written, and its dry run fails the same, in the apply's words: which git worktree it is
     /// is what an --apply reads first, and a worktree whose identity cannot be read is never closed.
     /// </summary>
@@ -284,8 +284,8 @@ public sealed class AgentDeletionTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
-        var commondir = Path.Combine(Directory.GetDirectories(Path.Combine(kit.Main, ".git", "worktrees")).Single(), "commondir");
-        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, commondir), kit.Harness.AnchorRegistryService);
+        var stamp = Path.Combine(worktree, ".git", WorktreeStamp.RepositoryFileName);
+        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, stamp), kit.Harness.AnchorRegistryService);
 
         var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
         var failed = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
@@ -310,8 +310,8 @@ public sealed class AgentDeletionTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
-        var commondir = Path.Combine(Directory.GetDirectories(Path.Combine(kit.Main, ".git", "worktrees")).Single(), "commondir");
-        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, commondir), kit.Harness.AnchorRegistryService);
+        var stamp = Path.Combine(worktree, ".git", WorktreeStamp.RepositoryFileName);
+        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, stamp), kit.Harness.AnchorRegistryService);
 
         await using var held = await HoldTheWorktreeAsync(kit, worktree);
 
@@ -1198,15 +1198,19 @@ public sealed class AgentDeletionTests
     {
         private bool _written;
 
-        public override void DeleteFile(string path)
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
         {
-            base.DeleteFile(path);
+            var held = base.Hold(anchor, directory, make, asked);
 
-            if (!_written && string.Equals(Path.GetDirectoryName(path), Path.GetDirectoryName(lateFile), StringComparison.OrdinalIgnoreCase))
+            if (!_written && asked is not null && string.Equals(Path.GetDirectoryName(asked), Path.GetDirectoryName(lateFile), StringComparison.OrdinalIgnoreCase))
             {
+                // The evidence was kept and its first kept file is being reached for deletion: a file of the same root
+                // appears now, after the keeping measured it.
                 _written = true;
                 File.WriteAllText(lateFile, "written late\n");
             }
+
+            return held;
         }
     }
 
@@ -1324,7 +1328,7 @@ public sealed class AgentDeletionTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         await kit.Harness.InitializeGitRepositoryAsync(Directory.CreateDirectory(Path.Combine(worktree, "nested")).FullName, Token);
-        File.Delete(Path.Combine(worktree, ".git"));
+        Directory.Delete(Path.Combine(worktree, ".git"), recursive: true);
 
         var removed = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token);
 
@@ -1337,8 +1341,18 @@ public sealed class AgentDeletionTests
     {
         public override void ReplaceFile(string source, string destination)
         {
+            Wrote(destination);
             base.ReplaceFile(source, destination);
+        }
 
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            Wrote(asked ?? directory);
+            return base.Hold(anchor, directory, make, asked);
+        }
+
+        private void Wrote(string destination)
+        {
             if (string.Equals(Path.GetFullPath(destination), Path.GetFullPath(trigger), StringComparison.OrdinalIgnoreCase) && !File.Exists(meanwhile))
             {
                 File.WriteAllText(meanwhile, "written meanwhile\n");
@@ -1362,17 +1376,39 @@ public sealed class AgentDeletionTests
         }
     }
 
-    /// <summary>The real file system, except that one file cannot be deleted, as while another program holds it open.</summary>
+    /// <summary>
+    /// The real file system, except that one file cannot be deleted, as while another program holds it open: the second
+    /// time it is reached relative to a directory held - the first is the reading of it that keeps its evidence, the
+    /// second the removal of what was kept.
+    /// </summary>
     private sealed class UndeletableFileSystem(IFileSystem inner, string held) : PassThroughFileSystem(inner)
     {
+        private int _reached;
+
         public override void DeleteFile(string path)
+        {
+            Refuse(path);
+            base.DeleteFile(path);
+        }
+
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            var path = asked ?? directory;
+
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase) && Interlocked.Increment(ref _reached) >= 2)
+            {
+                Refuse(path);
+            }
+
+            return base.Hold(anchor, directory, make, asked);
+        }
+
+        private void Refuse(string path)
         {
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.");
             }
-
-            base.DeleteFile(path);
         }
     }
 

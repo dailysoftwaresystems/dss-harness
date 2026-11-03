@@ -69,6 +69,9 @@ public static class HelpTopics
         new("codebase-graph", ["graph", "graphify-codebase"], "A run's map of the repository: what it reads, and what it does not see", RenderCodebaseGraph),
         new("web-search", ["search", "web_search", "agentwebsearch"], "The harness's own web search: its sources, their kinds and keys", RenderWebSearch),
         new("agent-clients", ["clients", "models"], "Providers, models, tiers and keys in config.json", RenderAgentClients),
+        new("side-tasks", ["side-task"], "An agent outside every workflow: run-side-task, its chat and its records", RenderSideTasks),
+        new("agent-definitions", ["agent-definition", "definition", "definitions"], "The agent files of a workflow's directory: what each may name", RenderAgentDefinitions),
+        new("skills", ["skill"], "A step's prompt names one: {skill.<name>}", RenderSkills),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
         new("layout", [], "What init creates, and what git tracks", RenderLayout),
         new("secrets", ["hosts-secrets"], "Where each host's connection data lives", RenderSecrets),
@@ -618,8 +621,10 @@ public static class HelpTopics
             + $"{SyncServe.MostFilesPulledFromADirectory.ToString(CultureInfo.InvariantCulture)} files or more than "
             + $"{(SyncServe.LargestDirectoryPulled / (1024 * 1024)).ToString(CultureInfo.InvariantCulture)} MiB together fails the pull before "
             + "any file crosses: each file comes in a request of its own, so a directory named is a step's kept outputs, never "
-            + "a build tree - keep that as one archive. A link below it is never followed: it is named, and nothing is brought "
-            + "back for it. With --dry-run the host is asked what the directory holds, and nothing is brought. A pull that "
+            + "a build tree - keep that as one archive. A link along the path named, file or directory, is followed as it is "
+            + "spelt - a build directory pointed at another volume is ordinary - but never into a place the isolation hides "
+            + "from every command: one that leads there fails the pull, nothing read. A link below a directory named is never "
+            + "followed: it is named, and nothing is brought back for it. With --dry-run the host is asked what the directory holds, and nothing is brought. A pull that "
             + "stops part way - a file gone, a host that stopped answering - fails naming each file it had brought back, which "
             + "stays where it was written, and each it had not.");
         builder.AppendLine();
@@ -870,6 +875,13 @@ public static class HelpTopics
         builder.AppendLine("its system - no line for its platform, a program not allowed, a value its inputs");
         builder.AppendLine("cannot be given, one set-up named twice with other values - every one named before");
         builder.AppendLine("anything runs.");
+        builder.AppendLine();
+        builder.AppendLine("Where a run's step holds a leg's work inside the operating system's isolation under");
+        builder.AppendLine("agentPolicy.isolation required ('help agent-clients'), the leg's set-ups' lines run");
+        builder.AppendLine("outside it from an empty directory outside every tree, so a relative argument is");
+        builder.AppendLine("read there and finds nothing of the tree, and a line whose program or any word names");
+        builder.AppendLine("a place in a tree the agents wrote - a script of the repository's among them - skips");
+        builder.AppendLine("the leg, nothing brought up.");
 
         return builder.ToString();
     }
@@ -2279,7 +2291,19 @@ public static class HelpTopics
             builder,
             "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, "
             + "made by create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, "
-            + "and delete-worktree takes that address. The directory named for an orchestrator is never deleted as one while "
+            + "and delete-worktree takes that address. An agent's worktree is a repository of its own, not one of git's linked "
+            + "worktrees: it borrows this checkout's objects through its alternates and writes only its own, holds no ref but its "
+            + "detached HEAD, and includes this checkout's configuration before its own keys, so git worktree list here does not "
+            + "show it and nothing done in it reaches this checkout's refs or objects. Its own .git/config carries the mark naming "
+            + "this main checkout and its address: a command run inside it finds this main checkout, one whose mark names a "
+            + $"checkout that does not lend it its objects is refused ({HarnessExit.Refused}), and list-worktree --json says "
+            + "\"kind\": \"repository\" of it and \"kind\": \"worktree\" of a linked one. The commit it stands on is kept alive here "
+            + "under refs/harness/worktree-base/<address>, written before it is made, and the commit a move of its base goes to under "
+            + "refs/harness/worktree-moving/<address> until the move ends; one removed by hand refuses every verb on the agent, "
+            + "naming the git update-ref that writes it again. An agent an earlier version made keeps its linked worktree, its "
+            + "record naming no tree, and is still read, folded, rebased and deleted as before, its isolated work writing its "
+            + "own git directory alone - so git add and fetch fail inside it there, said at each launch over it - until "
+            + "delete-agent and a new agent give it a repository of its own. The directory named for an orchestrator is never deleted as one while "
             + "worktrees are below it, or a directory holding a .git of its own that git records no worktree at - what a "
             + "removal left, a person's to look in and delete, or a worker an earlier version of this tool kept beside an "
             + $"agent's worktree, which clean --former-workers removes - --force or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git "
@@ -2301,7 +2325,21 @@ public static class HelpTopics
         builder.AppendLine("record of it names another directory or none, as after moving it by hand; and");
         builder.AppendLine("when git does not see it as a worktree of this repository. The refusal names");
         builder.AppendLine("everything it found, on one line. A tag made inside a submodule counts as kept,");
-        builder.AppendLine("and is lost with the submodule's repository.");
+        builder.AppendLine("and is lost with the submodule's repository. A checked-out submodule's own");
+        builder.AppendLine("changes are asked of it only where its repository is among its superproject's");
+        builder.AppendLine("modules: its own git runs its own configuration, which no other place is kept");
+        builder.AppendLine("from an agent, so one whose repository is anywhere else - a .git of its own in");
+        builder.AppendLine("the work tree - is named a change never looked into.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "An agent's repository of its own is weighed the same way, but for its commits: those made in it that no ref of "
+            + "the main checkout's reaches refuse its deletion, since its own store, deleted with it, is the only place they "
+            + "are, and the refusal names fold-agent for its changes and a fetch into the main checkout for its commits - a "
+            + "branch or a stash made in it would go with it. It has no lock and no record of git's: its directory is deleted "
+            + "whole, its read-only object files with it, and then the records of the commit it stood on, "
+            + "refs/harness/worktree-base/<address> and refs/harness/worktree-moving/<address>, which are forgotten too "
+            + "whenever its directory is already gone.");
         builder.AppendLine();
         builder.AppendLine("Without --force, when the check cannot be finished, because git cannot answer, a");
         builder.AppendLine("record cannot be read or its directory found, or, on Windows, a directory in it");
@@ -2392,9 +2430,325 @@ public static class HelpTopics
     }
 
     /// <summary>
+    /// The side-tasks topic: what a side-task is - an agent outside every workflow, a conversation between a person and
+    /// one agent over the repository's main tree - the two commands, what the side-task's agent may do and may not, its
+    /// model and effort, and where its records live.
+    /// </summary>
+    private static string RenderSideTasks()
+    {
+        var builder = new StringBuilder();
+        var command = ToolPackage.Command;
+
+        builder.AppendLine("SIDE-TASKS");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A side-task is an agent outside every workflow: a conversation between a person and one agent over the "
+            + "repository's main tree, asked directly, with no step, no run and no limit of a run's. Every action the agent "
+            + "asks for is still decided by the engine before it runs and recorded, as a step's is, and the user's hooks "
+            + "stay off in its launches. No host serves either verb: a chat is the person's, on the machine the person "
+            + "typed on.");
+        builder.AppendLine();
+        builder.AppendLine("Commands");
+        builder.AppendLine($"  {command} {Agents.SideTasks.SideTaskService.RunCommand} [--prompt <text> | --prompt-file <path>] [--resume <task>] [--name <task>]");
+        builder.AppendLine($"             [--model <code> | --tier <tier>] [--client <client>] [--effort <level> | --effort <code>=<level>...] [--json]");
+        builder.AppendLine($"  {command} {Agents.SideTasks.SideTaskService.ListCommand} [--json]");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"In the terminal, by default, {Agents.SideTasks.SideTaskService.RunCommand} holds a chat: the person types a message "
+            + "(a line ending in \\ goes on to the next); the agent's text streams as it comes and each action it takes is one "
+            + "line as it is decided, a denial with its rule. Ctrl+C interrupts the agent's turn where it stands and leaves "
+            + "the chat open, what was said kept - on a client that stores its conversations up to its last whole turn, what the "
+            + "cut request used kept as the turn's; a second, /exit or the end of input ends it: a turn under way is cut and its result "
+            + $"read - within {Agents.ClaudeCode.ClaudeCodeClient.InterruptBound.TotalSeconds:0} s - and the lines the agent had not taken are "
+            + "dropped, so what the turn used, cost and spent is kept; a launch still waiting its turn at the gate - a limit "
+            + "not lifted, its wait said in the chat - is never begun. Each interrupt says whether a turn of the agent's was "
+            + "under way to cut, or none was and nothing is cut - the first while a launch waits at the gate among them, the "
+            + "launch begun once the wait passes. /model <model> and /effort <level> - or "
+            + "<code>=<level> for each model, or default for the model's own - change what the next message is sent with, "
+            + "each checked as the command line's are, a new model keeping only the levels that name it and the one for "
+            + "the rest; a launch at work gives way as the person leaving does, and the lines it never took go on to the "
+            + "new one; /records prints where this side-task's records are; /help lists "
+            + "these. With --prompt or --prompt-file it answers one message once, prints the agent's final text and exits; "
+            + "Ctrl+C there cuts its turn - a Claude Code launch's at that turn's result, an API client's request left where it "
+            + "stands, what the provider had said it used counted and a cost it had said nothing of unknown - what it used "
+            + "kept, and it ends "
+            + $"interrupted ({HarnessExit.Cancelled}), a launch still waiting its turn at the gate or to be tried again never "
+            + "begun; "
+            + "--json answers with one document instead - and --json without a prompt is a usage error "
+            + $"({HarnessExit.UsageError}), for a chat is no document. Where no turn runs - the side-task being set up, its "
+            + "Claude Code made ready, another model made ready by /model - an interrupt stops what is under way: in one "
+            + "shot the first, in a chat the second, and SIGTERM is one like any other. A side-task the person does not "
+            + "name is named by the date and time it began - with the first words of its message in one shot; a chat is "
+            + "named before its first message is typed, by the date and time alone. --name gives it one, refused "
+            + $"({HarnessExit.Refused}) where another side-task holds that name, whose records are named as that one's. --resume opens a side-task again, going on "
+            + "with its stored conversation - or, where the model it now runs on is reached by a client that is handed none, "
+            + "from the conversation so far - on what the person last set it to run on: its tier with the tier's later "
+            + "models, or the model named outright, unless --model or --tier names another; an --effort or a --client given "
+            + $"stands over what it last ran with. --resume is refused ({HarnessExit.Refused}) where the name names no "
+            + "side-task and where another process holds it open, and --name beside it is a usage error, for a side-task "
+            + "opened again keeps its name. list-side-tasks lists them, newest first: each by its name, when it began and "
+            + "last spoke, its model, its turns and cost, whether it is open now. The records' directory is named on every "
+            + "exit, in text and in --json - or said to be none where the command stopped before any were written. Exit "
+            + "codes: 0 ended as asked, and a chat 0 however the person leaves it once it has begun; "
+            + $"{HarnessExit.Cancelled} where interrupts stop it before it began - while it is set up or opened again; "
+            + $"{HarnessExit.UsageError} usage, among them an effort a model does not take; {HarnessExit.ConfigInvalid} "
+            + "the configuration - a model no provider serves, no model to run on, a web search that does not resolve, a "
+            + "program the slot names that does not read, and in one shot an agent the configuration keeps from starting; "
+            + $"{HarnessExit.Refused} refused - a name taken or no "
+            + "name a directory takes, a --resume naming no side-task or one open in another process, a .side-tasks "
+            + "git does not ignore, a side-task started under an agent or whose starting processes could not be read, an "
+            + "update of Claude Code refused - a session of "
+            + "it running, or the machine's processes unread - and in one shot a key missing or the tool running "
+            + $"elevated; {HarnessExit.ToolMissing} a client that cannot start - no claude, no npm - or, under "
+            + $"agentPolicy.isolation \"{Agents.Isolation.AgentIsolationMode.Required}\", a machine that cannot isolate the agent's commands; "
+            + $"{HarnessExit.Incomplete} the install of Claude Code timed out or could not reach the registry; and in one "
+            + $"shot besides, {HarnessExit.CommandFailed} the model failed past its retries and fallback, "
+            + $"{HarnessExit.Incomplete} cut short by the account's limit, a stall or the clock, {HarnessExit.Cancelled} "
+            + $"interrupted. {StoppedDocument}");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Its model is resolved as a step's: --model names one outright by its code, --tier a tier of tierConfig, "
+            + "neither the configuration's defaults.agentTier; the provider, the keys and the client follow from the model, "
+            + "and --client picks among the clients that reach it. On a tier the later models of its order are followed, and "
+            + "said in the chat: a one shot's turn, and each message of a chat whose client stores its conversations, is "
+            + $"tried again on its model {Agents.SideTasks.SideTaskService.DefaultRetries} times before it moves on, as a "
+            + "step's; a chat's launch held open is never tried again - it moves on at its first failure, a decline, a "
+            + "limit, a refused key or a model that cannot be started - and goes on from the conversation so far, never "
+            + "from its first message, with the messages no turn answered sent on there. --effort is a step's effort on the "
+            + "command line: one level for every "
+            + "model, or code=level given again for each model that is to have its own, with all=<level> for the rest - "
+            + "each checked against what the model takes. Its key is chosen as a step's is - the order of the list, or "
+            + "least spent where balanceKeyUsage is on - and what it spends is counted against that key.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "What the side-task's agent may do is the person's own session's, over the main tree: every limit of a run's is "
+            + "dropped - no restriction list (Web(...), Run(...), Write(...), Read(...)), no allow list of pages, the web "
+            + "search over every configured source turned on with no maxPerStep, no cap on money, turns or time, all four "
+            + "capabilities, the main tree its writable root, the worktree rules and the protected paths off - so it can "
+            + "edit .harness-config/config.json to add a search source, commit, branch, and run this tool's own verbs that "
+            + "read no credential slot and write none of its state as the person could. Its web_search asks one more source beside the configured ones: native, the provider's "
+            + "own search - on the Claude API a request of the harness's own whose only tool is the provider's search, asked "
+            + "with the model and key serving the side-task when the agent asks and through that key's gate as every request "
+            + "is, what it costs counted then to that model and key, a failure of it - a gate held past the longest wait "
+            + "among them - one failed part of the search saying why; on Claude "
+            + "Code its own WebSearch kept in the side-task's tools; on Z.AI none - and web_fetch takes any address. What "
+            + "stays, and why: the built-in refusals - no root action, no agent while the tool runs elevated, no file "
+            + "tool's read or write of a credential slot, a Claude Code directory or a place the user keeps credentials in, no command whose words name one or a "
+            + $"directory that holds one to a program that may read it, other than its working directory and those above it ('{ToolPackage.Command} help agent-clients' says how a word is read), no "
+            + "command that prints a credential, no git or gh command called by a name none of their own commands is, no "
+            + "verb of this tool's that reads a credential slot or writes its state ('help agent-clients' names them) - "
+            + "each refused to the agent and said in the chat for the person to do by hand; git's own files "
+            + "(Write(.git/**)), written by git's verbs and this tool's, never by an agent's file tool or a command's "
+            + "write; the tool's own state, written only by its verbs; each search source's own pace and rate limits; and "
+            + "run-side-task itself, refused to every agent where a word of a command or of a script the policy reads "
+            + "names it or a verb the shell expands may, and refusing itself where it is started under one, whose mark "
+            + "(DSSHARNESS_UNDER_AGENT) a command that sets it, takes it away, may take it away or names it but as data is refused, or where "
+            + "a process of this tool's is among the ones that started it - the process tree, walked parent by parent, a "
+            + "process that took a freed id never read as a parent, the tool's own runtime told by the file it runs where the "
+            + "table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by its "
+            + "name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is "
+            + "none; one detached from the agent's tree (at, a tmux server, "
+            + "a double fork) is told by the mark alone, and a tree that could not be read is refused saying why - a "
+            + "side-task is a person's own conversation, and no agent starts another. The main tree is the side-task's "
+            + "working directory and holds the credential slots: a command over it whole - named . or given no path, an "
+            + "archive of it or a search - is not told from one over its sources, and reaches their files; and code an "
+            + "interpreter runs (python -c, perl -e, awk's system) or a process apart from the agent's tree does what no "
+            + "word the policy reads says. This is a policy of what a command names, not a sandbox; beneath it, where this "
+            + "machine has one, the operating system's isolation ('help agent-clients') hides every credential slot, and "
+            + "every place the user keeps credentials in, from "
+            + "each command - one over the main tree whole finds each slot empty, or is refused it - and keeps it from git's code-running "
+            + "files and the tool's state.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Its records live in .side-tasks/<task>/ at the repository's root, written by the tool alone and kept until a "
+            + "person removes the directory: task.json (its turns, each written as it ends, with its client, provider, model "
+            + "and effort, what it used and cost, and what the agent ran under), the stored stream (stream.jsonl) and the transcript as a "
+            + "person reads it (transcript.md), each action decided (tools.json holds the offered table), each denial "
+            + "(denials.jsonl) and each search and fetch (web.jsonl), and the stored conversation under sessions/ where "
+            + "its client stores one. Beside the directory, <task>.owner.json names the process that holds the side-task "
+            + "open, claimed before anything is written and task.json written inside the claim, so two commands never "
+            + "take one name; a dead one is reclaimed and said. A side-task whose turn outgrew the model's context - a "
+            + "chat's, or a one shot's - keeps no stored conversation to go on with, for handed again it would meet the "
+            + "same wall: its next message, in the chat or in a --resume, begins a new conversation from the engine's "
+            + "compaction of it, made as a step's conversation is - the whole conversation since the last compaction, the "
+            + "person's messages as they were said - and said once, as the turn given it begins. The directory is on the "
+            + "tree's floor: sync never carries it to a host's copy "
+            + "and no agent's worktree is seeded with it.");
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// The agent-definitions topic: what a workflow's <c>agents/&lt;name&gt;.md</c> file is, the keys it takes, and how
+    /// what it names stands below a step's own - the one reading of a definition, beside the clients topic that owns
+    /// the configuration's half.
+    /// </summary>
+    private static string RenderAgentDefinitions()
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine("Agent definitions");
+        builder.AppendLine();
+        builder.AppendLine($"A workflow's agents are defined by markdown files in its own directory,");
+        builder.AppendLine(".harness-config/workflows/<name>/agents/<name>.md, tracked: frontmatter that declares");
+        builder.AppendLine("the agent, and a body that is the system prompt, verbatim. A run reads its agent files");
+        builder.AppendLine("from the main checkout wherever the command was typed, never from an agent's worktree:");
+        builder.AppendLine("what a later step is told must not be something an earlier agent wrote on its way.");
+        builder.AppendLine();
+        builder.AppendLine("A definition is the level below a step's: where a step names a tier, a model, an effort");
+        builder.AppendLine("or a client, its own wins; where it names none, the definition's stands, each on its own.");
+        builder.AppendLine("The keys a definition takes:");
+        builder.AppendLine();
+        builder.AppendLine("  name          the agent's name, which is the file's: lowercase letters, digits and");
+        builder.AppendLine("                single hyphens, said again so a copied file cannot pass as the agent it was");
+        builder.AppendLine("  description   what the agent is for, shown wherever agents are listed");
+        builder.AppendLine("  tier          a tier tierConfig defines, for a step that names neither a tier nor a");
+        builder.AppendLine("                model; never beside model");
+        builder.AppendLine("  model         a model's code, as its provider lists it, for a step that names neither;");
+        builder.AppendLine("                never beside tier. A model named outright runs on that model, and the rest");
+        builder.AppendLine("                of the tier's models are no step's fallback after it");
+        builder.AppendLine("  effort        one level, or a level for each model by its code with all for the rest;");
+        builder.AppendLine("                read after the step's own, and a model neither names runs at its own default");
+        builder.AppendLine("  client        for a step that names none: another client to reach the model through, one");
+        builder.AppendLine("                that reaches its provider's type");
+        builder.AppendLine("  maxTurns, maxBudgetUsd, maxMinutes, stallSeconds");
+        builder.AppendLine("                limits, each a positive number");
+        builder.AppendLine("  capabilities  of read, write, run and web; all four where the definition names none");
+        builder.AppendLine("  writes        false makes its worktree read-only; true where nothing is said");
+        builder.AppendLine("  restrictions  rules added to the configured ones; never removing one");
+        builder.AppendLine();
+        builder.AppendLine("A fallback is no key of a definition or of a step: it is the order of the tier's models");
+        builder.AppendLine("in tierConfig, each model's keys before the next model. A key of another tool's agent");
+        builder.AppendLine("files is refused naming what to use instead - tools for capabilities, disallowedTools for");
+        builder.AppendLine("restrictions, skills for a step's prompt {skill.<name>} - and every problem the file has");
+        builder.AppendLine("is said at once, each with the line it stands on, when the workflow is checked.");
+        builder.AppendLine();
+        builder.AppendLine("The sample agent files name no model, tier or effort, and no shipped one does: they are");
+        builder.AppendLine("a step's configuration, and the shipped workflow names them on its steps, where a person");
+        builder.AppendLine("reads and changes them.");
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// The skills topic: the placeholder, the three places and their order beside Claude Code's, what is put into a
+    /// prompt, the folder handed to the step, every key of the frontmatter and what is done with it, the body's reads
+    /// and bounds, and what is not looked for.
+    /// </summary>
+    private static string RenderSkills()
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine("Skills in a prompt");
+        builder.AppendLine();
+        builder.AppendLine("A reason step's prompt says {skill.<name>} where a skill's text goes, and the engine puts");
+        builder.AppendLine("the text there before the prompt is sent, on every client alike: the two API clients have no");
+        builder.AppendLine("skill mechanism, and the claude child is started with --setting-sources user, under which it");
+        builder.AppendLine("loads none of the worktree's. The file is Claude Code's own SKILL.md, unchanged - a skill");
+        builder.AppendLine("written for Claude Code is used here as it is, and one written here is a skill there. This");
+        builder.AppendLine("tool adds no key and no syntax of its own.");
+        builder.AppendLine();
+        builder.AppendLine("<name> is the folder's name alone - letters, digits, '_' and '-', a '.' between two words -");
+        builder.AppendLine("so no name reaches past the place it is looked for in; any other is refused, by the check and");
+        builder.AppendLine("by the step alike. The first place that has the folder decides:");
+        builder.AppendLine();
+        builder.AppendLine($"  1  {AgentSkills.HarnessPlace}/<name>/SKILL.md   in the main checkout - the tool's own place; tracked");
+        builder.AppendLine($"  2  {AgentSkills.ClaudePlace}/<name>/SKILL.md           in the main checkout - the repository's Claude Code skills");
+        builder.AppendLine($"  3  skills/<name>/SKILL.md                   in the user's Claude directory ({ClaudeTranscripts.ConfigDirectoryVariable} where");
+        builder.AppendLine("                                             it is set, else ~/.claude)");
+        builder.AppendLine();
+        builder.AppendLine("The repository's come before the user's, so a run reads the same skill on every machine");
+        builder.AppendLine("that has the repository; Claude Code's own order is the other way round. A SKILL.md that is");
+        builder.AppendLine("there and cannot be used is refused: the next place is not tried in its stead, for a broken");
+        builder.AppendLine("skill of the repository must not turn into the user's without a word. Not looked for, each");
+        builder.AppendLine("named here: a plugin's skill (<plugin>:<skill>), a managed one, a .claude/skills below the");
+        builder.AppendLine("main checkout's root, an added directory's, and a .claude/commands/<name>.md file - any of");
+        builder.AppendLine($"them is used by copying its folder to {AgentSkills.HarnessPlace}/<name>/.");
+        builder.AppendLine();
+        builder.AppendLine("The places are read in the main checkout, never in an agent's worktree - what a later step");
+        builder.AppendLine("is told must not be something an earlier agent wrote on its way - and each step reads them");
+        builder.AppendLine("as it starts: a run does not freeze its skills. What is put into the prompt is the body, not");
+        builder.AppendLine("the frontmatter, after its substitutions:");
+        builder.AppendLine();
+        builder.AppendLine("  <skill name=\"<name>\" from=\"<place>\" directory=\"<the folder handed to this step>\">");
+        builder.AppendLine("  Files this skill refers to are in that directory. Read them from there.");
+        builder.AppendLine();
+        builder.AppendLine("  ...the body...");
+        builder.AppendLine("  </skill>");
+        builder.AppendLine();
+        builder.AppendLine($"The folder is copied whole into what the step's agent is handed, the step's own {OrchestratorLayout.HandedDirectoryName}/skills/<name>/,");
+        builder.AppendLine("in place of any earlier copy; that path is the directory the text states and what");
+        builder.AppendLine("${CLAUDE_SKILL_DIR} becomes. It is a root the agent reads, on every client, which the tool alone");
+        builder.AppendLine("writes, through no link - never the agent's work directory, where its commands write.");
+        builder.AppendLine($"A folder that holds a link, more than {AgentSkills.FileLimit} files or more than 16 MB is");
+        builder.AppendLine("refused. The step's record names every skill it was given, each once over its attempts - its");
+        builder.AppendLine("step.json skills[], and its stream's sessionStarted event - with each one's place, its");
+        builder.AppendLine("SKILL.md, the folder handed to the step, and the SHA-256 of SKILL.md and of the folder.");
+        builder.AppendLine();
+        builder.AppendLine("The frontmatter's keys, each honoured, recorded or refused:");
+        builder.AppendLine();
+        builder.AppendLine("  name            where given, it must be the folder's name: a folder 'a' holding a skill");
+        builder.AppendLine("                  named 'b' is refused, for Claude Code would call it 'b' and the placeholder");
+        builder.AppendLine("                  could not say which is meant");
+        builder.AppendLine("  description, when_to_use, argument-hint, arguments, user-invocable,");
+        builder.AppendLine("  disable-model-invocation, paths, metadata, license, compatibility");
+        builder.AppendLine("                  read and recorded, with nothing to do: they say how and when Claude Code");
+        builder.AppendLine("                  offers a skill, and a placeholder names it outright");
+        builder.AppendLine("  allowed-tools   honoured as what the skill needs: each tool it names must be one the");
+        builder.AppendLine("                  step's agent has, by the one table of Claude Code's tools for each");
+        builder.AppendLine("                  capability (Read: read, Edit: write, Bash: run; an MCP tool, the sub-agent");
+        builder.AppendLine("                  tool and the skill tool are named by none). It grants nothing: what an");
+        builder.AppendLine("                  agent may do is its definition's and the policy's");
+        builder.AppendLine("  shell           nothing to do: it chooses the shell of a command run when a skill is");
+        builder.AppendLine("                  loaded, which is refused in itself");
+        builder.AppendLine("  model, effort, context, agent, background, hooks, disallowed-tools");
+        builder.AppendLine("                  refused: each changes what runs the skill in Claude Code, and text put");
+        builder.AppendLine("                  into a prompt runs in the step's own agent, on its model, under its policy.");
+        builder.AppendLine("                  Any other key is refused too, naming the keys this tool knows.");
+        builder.AppendLine();
+        builder.AppendLine("In the body, replaced: ${CLAUDE_SKILL_DIR} (the folder handed to the step),");
+        builder.AppendLine("${CLAUDE_PROJECT_DIR} (the agent's worktree; for an agent with none, the main checkout),");
+        builder.AppendLine("${CLAUDE_SESSION_ID} (the id the step's run begins its first session as, which the stream's");
+        builder.AppendLine("first sessionStarted names; a later key or model an API client reaches inside its own walk");
+        builder.AppendLine("keeps that session, and only a new conversation - a retry, a move the runner makes, a");
+        builder.AppendLine("claude-code launch begun again on its next key - begins one of its own with the same prompt),");
+        builder.AppendLine("${CLAUDE_EFFORT} (the effort the step resolved to), and \\$ (a dollar).");
+        builder.AppendLine("Refused, each naming its line: a read of an argument ($ARGUMENTS,");
+        builder.AppendLine("$ARGUMENTS[N], $1, a $name the arguments key declares) - a placeholder gives a skill no");
+        builder.AppendLine("arguments; a command run when the skill is loaded (both exclamation-mark forms) - this");
+        builder.AppendLine("tool runs nothing to build a prompt; and ${CLAUDE_PLUGIN_ROOT} and ${CLAUDE_PLUGIN_DATA}");
+        builder.AppendLine("(only a plugin has them) and any other ${CLAUDE_...} this tool does not know. A body is at");
+        builder.AppendLine($"most 64,000 characters after its substitutions; a longer one is refused. What a body asks");
+        builder.AppendLine("for in words - \"use the sub-agent tool\", \"run /another-skill\" - the tool does not read:");
+        builder.AppendLine("a skill that leans on Claude Code's own tools reads the same on every client and works as");
+        builder.AppendLine("far as the agent's tools go. A skill's text is not scanned for placeholders again: {skill.b}");
+        builder.AppendLine("inside skill a is plain text, and a prompt that needs both names both.");
+        builder.AppendLine();
+        builder.AppendLine("The placeholder stands in a reason step's prompt and resumePrompt alone, a file or");
+        builder.AppendLine("inline: it is refused in an agent definition's body (the system prompt is sent as written),");
+        builder.AppendLine("in any other template key - a commit's message, a pause's question, a pull request's title");
+        builder.AppendLine("or body - and in an expression. Each skill once in a prompt; twice is refused. Nothing is");
+        builder.AppendLine("carried from one step's prompt to another's: a step that goes on names the skills it needs");
+        builder.AppendLine("itself.");
+        builder.AppendLine();
+        builder.AppendLine("A skill that is missing or unusable fails loud, twice: when the definition is checked -");
+        builder.AppendLine("validate-workflow, and the start of run-orchestrator and resume-orchestrator (exit 12,");
+        builder.AppendLine("nothing started, every problem of every prompt together) - and when the step starts, for a");
+        builder.AppendLine("file can go or change between: the step is not started, it ends Failed with the same");
+        builder.AppendLine("sentence and exit 12, and its onFailure decides what follows.");
+
+        return builder.ToString();
+    }
+
+    /// <summary>
     /// The agent sections of config.json: the companies whose models the tool reaches, their keys in the git-ignored
     /// slot, the tiers a step runs on and the effort forms, the agents' policy and the claude-code client - said where a
-    /// person reads them, before the step runners are built (nothing here runs a step).
+    /// person reads them.
     /// </summary>
     private static string RenderAgentClients()
     {
@@ -2424,13 +2778,18 @@ public static class HelpTopics
             + "the same way and never a key; a launch is to sign in from that directory where the slot holds it, else from the "
             + $"tool's own {Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, else from Claude Code's own. A launch is "
             + "given that credential and no other, whatever the tool's own environment holds; claude-api and glm sign each "
-            + "request with their provider's keys. Choosing a key is the engine's, when "
-            + "it runs a run's steps, and no command of this build runs a step: a step is to start on the first key the slot "
-            + "holds, unless balanceKeyUsage is on (off unless turned on), where it is to start on the one that has spent "
-            + "least in the last seven days, counted back from the moment it starts, its conversation staying with one "
-            + "account. What a key spent is to be what the engine counts for each request served with it, at the "
-            + "configuration's prices, recorded by the key's name in the repository's records; what the same key spends "
-            + "elsewhere - another repository, another machine, another tool - is not seen.");
+            + "request with their provider's keys. Choosing a key is the engine's, where it runs a run's steps: a step "
+            + "starts on the first key of its model's provider the slot holds and no remembered limit covers, or - where "
+            + "balanceKeyUsage is on (off unless turned on) - on the one that has spent least in the last seven days, "
+            + "counted back from the moment it starts, keys that spent alike in the list's order, whatever tier, model, "
+            + "step, run or side-task spent it; the key is kept for the step, its conversation staying with one account, "
+            + "and a limit or a rejected key moves it to the next in the same order. What a key spent is what the engine "
+            + $"counts for each request served with it, at the configuration's prices - or, for a Claude Code launch, what the launch reports - recorded by the key's name (never its value) in {HarnessLayout.OrchestratorsDirectoryName}/{DssHarness.Core.Agents.AgentKeySpend.FileName}, "
+            + "one line for each key and model of each entry of a step's order that ran, so a run that moved keys while it "
+            + "worked books what each key spent to that key, read for a key's week and its lines older than seven "
+            + "days dropped when it is next written; what the same key spends elsewhere - another repository, another "
+            + "machine, another tool - is not seen. Each request an API client sends, and each Claude Code launch, goes "
+            + "through the gate of its provider and key (below), beside the orchestrator's maxReasoningAgents.");
         builder.AppendLine();
         builder.AppendLine("The slot itself is a directory of dotenv files, " + HarnessLayout.WorkflowsEnvSlotRelative + "/:");
         builder.AppendLine("every file in it is read and merged, a name declared in two of them is refused, a line whose");
@@ -2456,14 +2815,92 @@ public static class HelpTopics
         builder.AppendLine("model's code, what is sent to the API, is one word, and its name is the one a person reads.");
         builder.AppendLine();
         builder.AppendLine("The tiers a step runs on are tierConfig's: each tier its models in the order they are");
-        builder.AppendLine("tried, the first serving a step on the tier and the rest its fallback. A step's effort is");
-        builder.AppendLine("its own - one level for every model of its tier, or a map giving each its own: all for the");
-        builder.AppendLine("rest, a model's code for one. Each model's level is checked against what that model takes");
-        builder.AppendLine("when the definition is checked, a level it does not take refused naming the level to give");
-        builder.AppendLine("it instead; validate-workflow says, under the line that says a definition holds, every");
-        builder.AppendLine("step's models and levels, each provider's prices for the models its steps may run on and");
-        builder.AppendLine("the date they were read, and each key a step's model would read that the slot lacks, with");
-        builder.AppendLine("the steps that would read it.");
+        builder.AppendLine("tried, the first serving a step on the tier and the rest its fallback - a step's order as");
+        builder.AppendLine("entries of a model and one of its provider's keys, each model's keys before the next");
+        builder.AppendLine("model, and a model named outright, on the step or in its agent definition, running on that");
+        builder.AppendLine("model with none after it ('help agent-definitions'). The engine's fallback walks that order:");
+        builder.AppendLine("an entry that cannot be used on this machine is said and passed over when its turn comes");
+        builder.AppendLine("and never refuses a run, a declined request, an account at its limit and a key the provider");
+        builder.AppendLine("refused move the step to its next entry by the cause's rule - inside the one conversation");
+        builder.AppendLine("where the provider and client are the same (the loop's own walk, below), a new conversation");
+        builder.AppendLine("with the step's prompt everywhere else - a limit the run met is remembered until its end, an");
+        builder.AppendLine("entry a move reaches that cannot be started is said and passed over as one the machine cannot");
+        builder.AppendLine("use is, and where the slot holds none of the keys of the step's first model the step's agent");
+        builder.AppendLine($"is never started and the step fails refused (exit {HarnessExit.Refused}); a later model's missing key is");
+        builder.AppendLine("only said and passed over. A step's effort is its own - one");
+        builder.AppendLine("level for every model of its tier, or a map giving each its own: all for the rest, a");
+        builder.AppendLine("model's code for one - and where the step gives a model none, its agent definition's map");
+        builder.AppendLine("or level is read the same way, and a model neither names runs at its own default. Each");
+        builder.AppendLine("model's level is checked against what that model takes when the definition is checked,");
+        builder.AppendLine("a level it does not take refused naming the level to give it instead; validate-workflow");
+        builder.AppendLine("says, under the line that says a definition holds, every step's models and levels, each");
+        builder.AppendLine("provider's prices for the models its steps may run on and the date they were read, and");
+        builder.AppendLine("each key a step's model would read that the slot lacks, with the steps that would read");
+        builder.AppendLine("it.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A step that goes on with earlier work is given the engine's record of it: the continuation record, text put "
+            + "together from the step directories of the agent - what it is, the steps so far with each one's notes and "
+            + "output, the files changed, the last red build or test, the handoff, and the last iterations of the newest "
+            + "attempt word for word from its stored stream, every run of the attempt numbered as one, each message the "
+            + "engine sent the agent in its place - nothing in it written or shortened by a model, and whatever is cut "
+            + $"named with a copy in the step's own {Orchestration.OrchestratorLayout.HandedDirectoryName}/{Agents.AgentContinuation.CopiesFolder}/, "
+            + "which the tool alone writes and the agent reads, never where its commands write. Its bounds are "
+            + $"agentContext.continuation's - recordChars ({Agents.AgentContinuationBounds.DefaultRecordChars}), "
+            + $"stepChars ({Agents.AgentContinuationBounds.DefaultStepChars}), paths ({Agents.AgentContinuationBounds.DefaultPaths}), "
+            + $"lastIterations ({Agents.AgentContinuationBounds.DefaultLastIterations}) and iterationChars "
+            + $"({Agents.AgentContinuationBounds.DefaultIterationChars}), each at its default where the key says none, each a "
+            + "positive number, the earlier iterations kept back from the last until the first that does not fit - and the "
+            + "first user message holds the parts in their order: the run context, the plan updates, the continuation record "
+            + "and the step's prompt as the task. The record is sent only where the conversation is a new one - every launch "
+            + "on claude-code, and on the API clients a conversation that cannot be gone on with - for a handed conversation "
+            + $"goes on with one more user message alone; the message as sent is kept in the step's {OrchestratorLayout.StepUserFileName}, masked.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A step whose conversation has filled its model's context ends ContextExhausted, and where its limit's question "
+            + "is answered compact the engine compacts the conversation - a side-task compacts its own by itself - "
+            + "and no model does: a reduction worked out from the stored stream of the attempt, every run of it, the same "
+            + "input always the same record - the run context and the task whole as they were first sent, the last "
+            + "iterations word for word by the continuation record's rule, every earlier message of the agent its text whole "
+            + "with its thinking left out, every earlier call one line (the tool, its input cut at callInputChars, how it "
+            + "ended, the path where its input names one), every earlier result left out, and every message the engine sent "
+            + "since the first whole. The reduced part is at most agentContext.compaction.reducedChars "
+            + $"({Agents.AgentCompactionBounds.DefaultReducedChars}); a call's input is cut at callInputChars "
+            + $"({Agents.AgentCompactionBounds.DefaultCallInputChars}); where the reduced part is more, the oldest messages of "
+            + $"the agent are cut to their first {Agents.AgentCompactionBounds.OldestMessageChars} characters each, oldest "
+            + "first, until it fits, and the record says how many were. It begins a new conversation, on every client - the "
+            + "record is the first message of one and the old is kept whole, never edited or sent again - said in the step's "
+            + "stream as Compacted and counted in its result once, as the first launch given it begins the conversation - an "
+            + "API client's first answer begun, a claude-code call run or turn ended, or the launch ending any way but "
+            + "NotStarted - so a run never started (its client missing, its model unpriced, the client refusing it, a model the "
+            + "plan does not serve) or held at the gate compacted nothing, and a retry or a move is "
+            + "given the same record and counts no other; a side-task's compaction is said and counted the same way, its "
+            + "record carried before the person's next message; an attempt compacted again is reduced whole again, its earlier "
+            + "records never copied into the next, and a later launch's first message is read as its task alone, never the "
+            + "record it carried; a claude-code child is started "
+            + "with DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step ContextExhausted.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The requests of one provider and one key go through one lane of the gate: at most "
+            + $"agentClients.<client>.maxParallel of them under way at once ({string.Join(", ", Agents.ClientGateSettings.BuiltIn.Select(bound => $"{bound.Key} {bound.Value}"))} "
+            + "where the entry says none; a client that signs in with a login is one lane by its client, and two keys of one "
+            + "provider two lanes, keyed by a hash of the key). The API clients enter the lane for each request they send, "
+            + $"its input counted as it enters (estimated, its bytes over {Codebase.EstimatedTokens.BytesPerToken}); claude-code, "
+            + "whose requests the engine cannot see one by one, is held in the lane for each launch. Beside it the API "
+            + "clients' optional buckets pace a lane's minute - requestsPerMinute, inputTokensPerMinute (a request more "
+            + "than the bucket holds goes in alone once the bucket is empty) and outputTokensPerMinute (an answer's counted "
+            + "once it is had), each waited out until the oldest of the minute is a minute old - and a 429's cool-down, set "
+            + "by every rate limit and account limit a request or a launch meets from when the provider says it lifts, "
+            + "holding what its failure covers: a model's rate limit holds that model's requests on the lane, an account's "
+            + "limit every request of it, a later or longer one holding past a sooner one. The claude-api client's own web "
+            + "search enters the lane too. A wait at the gate is said as it is waited, and the run's pause ends it; a "
+            + "cool-down past the client's maxRetryWaitSeconds is waited by no client - an API client meets it as the limit "
+            + "it is, which moves the step as a 429 naming that wait does, and a claude-code launch it holds is not begun, "
+            + "the step moved to an entry the cool-down does not hold. Left out, the provider's answers pace the "
+            + "client; the orchestrator's maxReasoningAgents bounds agents beside the gate, and both apply.");
         builder.AppendLine();
         builder.AppendLine("This build checks configurations and definitions against these sections and writes them with");
         builder.AppendLine($"init (and '{ToolPackage.Command} init' writes the prices it holds, as read on their date).");
@@ -2489,9 +2926,12 @@ public static class HelpTopics
         builder.AppendLine("After a change, whether it ran or failed, what npm holds since is said. A client's update");
         builder.AppendLine("key (agentClients.<client>.update, true where nothing is said) and DISABLE_UPDATES in the");
         builder.AppendLine("tool's own environment (a setting of the person's, never a key) turn installing and");
-        builder.AppendLine("updating off, and a run that then needs one that is missing or too old will be refused with");
-        builder.AppendLine("the command to run by hand. The step runner that readies Claude Code before a run's first");
-        builder.AppendLine("step is what it builds next, and nothing here runs a step.");
+        builder.AppendLine("updating off, and a run that then needs one that is missing or too old is refused with the");
+        builder.AppendLine("command to run by hand. A run readies Claude Code so before a reasoning step that reaches it");
+        builder.AppendLine("starts its agent, and run-side-task before its chat. The run's advisor and its reporter only");
+        builder.AppendLine("read, so they only find Claude Code and never install or update it: where it is missing or");
+        builder.AppendLine("too old, no advice is obtained - the question says why - and no model words the reporter's");
+        builder.AppendLine("answer, the status answering with the facts alone and ask-orchestrator refused.");
         builder.AppendLine();
         builder.AppendLine("What an agent may do is one policy, the same on every client: everything is allowed except");
         builder.AppendLine("the root actions, the places no agent reaches, and the restrictions - which only ever");
@@ -2519,23 +2959,80 @@ public static class HelpTopics
         builder.AppendLine("not configurable: the root actions (sudo, su, doas, pkexec, run0, gsudo, sudoedit, runas,");
         builder.AppendLine("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever a");
         builder.AppendLine("command names one), writes outside an agent's writable roots, every read and write of a");
-        builder.AppendLine("credential slot or a Claude Code directory of the run's and every search over one, any");
-        builder.AppendLine("command naming one - by ~ or $HOME, as a redirect's file or an option's value too - and");
-        builder.AppendLine("this tool's own verbs and run-side-task, run by any program or from a response file,");
+        builder.AppendLine("credential slot or a Claude Code directory of the run's, or of a place the user keeps");
+        builder.AppendLine("credentials in (the isolation's list, below), and every search over one, any");
+        builder.AppendLine("command naming one - by ~ or $HOME, as a redirect's file, an option's value after an =");
+        builder.AppendLine("or a PowerShell parameter's :, a value glued to a short option (ssh -i./key), the file an");
+        builder.AppendLine("@ or a < makes curl, httpie or gh read (-d @x, -F f=@x;type=y), a word of a script, a");
+        builder.AppendLine("variable the command string sets read with each value it gives it (p=../..; cat $p/x), a");
+        builder.AppendLine("pattern's segment that may match .. (.?, .[.], .*) read as .. too - and any word that");
+        builder.AppendLine("names a directory holding one whole (.harness-config, .., ~, /, or a pattern that may");
+        builder.AppendLine("match one) to a program that may read what it holds, for a program handed a directory may");
+        builder.AppendLine("walk it: but the words of a program that only names, tests or lists the paths it is given (echo,");
+        builder.AppendLine("printf, test, ls, du, df, stat, realpath, mkdir, which, a find that runs, deletes and");
+        builder.AppendLine("writes nothing, and their kind), a word that moves a command (a cd's, git -C's, tar -C's,");
+        builder.AppendLine("make -C's), which reads nothing where it goes, a word that names where a program writes,");
+        builder.AppendLine("which the write rules decide, and the agent's working directory and those above it, which");
+        builder.AppendLine("reach the slots only through it - every command over the tree names it (.) and every");
+        builder.AppendLine("program given no path works over it. A recursive removal or a move of a directory that");
+        builder.AppendLine("holds a tree's .git, the tool's state, a slot, a Claude Code directory or a place the user");
+        builder.AppendLine("keeps credentials in (rm -rf .,");
+        builder.AppendLine("Remove-Item -Recurse, mv, rsync --delete, git clean -dx), the working directory among");
+        builder.AppendLine("them, is refused, and so is a find or fd walk that may remove or move one or what one");
+        builder.AppendLine("holds - its -delete, a remover its -exec, -execdir or -ok runs, fd's -x and -X - read as");
+        builder.AppendLine("the walk reaches it: its depth, prunes, excludes and name, path, regex, kind and");
+        builder.AppendLine("emptiness filters read, what a guarded directory holds read as it stands, so");
+        builder.AppendLine("find . -name '*.pyc' -delete runs. This tool's own verbs and run-side-task, run by any program the policy reads or");
+        builder.AppendLine("from a response file, or by a verb the shell expands (run-side-$T, dssharness $V) - its");
+        builder.AppendLine("verb the first word after its name, for it takes no option before one - are refused, and so is a");
+        builder.AppendLine("command that sets or takes away DSSHARNESS_UNDER_AGENT, the mark of every program an agent");
+        builder.AppendLine("starts - its assignment, empty or not, unset, env -u, export -n and declare and their");
+        builder.AppendLine("kind, a name reference to it, cmd's set, csh's setenv, setx, the name read, mapfile,");
+        builder.AppendLine("printf -v, getopts, wait -p, vared, a for or a select sets, one an arithmetic assigns");
+        builder.AppendLine("(let, ((...))), a PowerShell item cmdlet's env: item, its Environment:: path among them,");
+        builder.AppendLine("or a start with no environment (env -i, env -, exec -c) - and one that may: any of those");
+        builder.AppendLine("places given a name the shell expands (unset ${v}AGENT, env -u \"$v\", unset");
+        builder.AppendLine("$(env | grep ...), zsh's unset -m pattern), a PowerShell item cmdlet given a path it");
+        builder.AppendLine("computes, a wildcard that may match it (Env:DSSHARNESS_*, a relative one where the string");
+        builder.AppendLine("names env:) or none where the string names env:; and any other word that names it, but a");
+        builder.AppendLine("word of data - a program that runs none of its words (grep -rn DSSHARNESS_UNDER_AGENT");
+        builder.AppendLine("src, echo \"$DSSHARNESS_UNDER_AGENT\"), a git command that reads only what git tracks");
+        builder.AppendLine("(git log -S), a word holding a blank - which takes nothing away -");
         builder.AppendLine("whatever any switch says: an agent does not move its own run, nor leave its step's limits -");
         builder.AppendLine("nor do the gh commands that hand its work to another agent or install what the next launch");
-        builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too.");
+        builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too -");
+        builder.AppendLine("nor does any command print a credential, whatever the worktree rules say");
+        builder.AppendLine($"({string.Join(", ", Agents.Policy.AgentPolicy.CredentialPrintingCommands)}; a * any helper's name, and");
+        builder.AppendLine("the words after a command met anywhere after it, options before or between them):");
+        builder.AppendLine("a credential leaves its slot only by the key store that holds it, never through an");
+        builder.AppendLine("agent's words. Nor is git or gh called by a name none of its own commands is - an alias,");
+        builder.AppendLine("an extension - on any ground, as the reading of a command below says.");
         builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
         builder.AppendLine("saying so, before any client is taken. A path is decided as asked and as resolved, and a");
-        builder.AppendLine("refusal's places compare in any case on every system, a Windows short name read as its long");
-        builder.AppendLine("one. On Windows a device prefix (\\\\?\\, \\\\.\\, \\??\\) is dropped from a path and from what");
+        builder.AppendLine("refusal's places compare in any case on every system. On Windows each segment of a path is");
+        builder.AppendLine("read as the name Windows reaches by it before any refusal compares it - in a command's words,");
+        builder.AppendLine("its moves, its writes and its removals and in a file tool's path alike: its trailing dots and");
+        builder.AppendLine("spaces dropped (.git., k. .), an NTFS stream's or attribute's suffix dropped");
+        builder.AppendLine("(.git::$INDEX_ALLOCATION, k::$DATA), and a short name (GIT~1, harnes~1, in any case) read as");
+        builder.AppendLine("its long name where the path is there - the system's own answer, whatever short names the");
+        builder.AppendLine("volume gives - and, where it is not, as each guarded name it could shorten as well, for a");
+        builder.AppendLine("command may make the place before the word is read (git init sub and then sub/GIT~1/hooks);");
+        builder.AppendLine("HEAD~1 and their kind, which shorten no guarded name, are the words they are.");
+        builder.AppendLine("On Windows a device prefix (\\\\?\\, \\\\.\\, \\??\\) is dropped from a path and from what");
         builder.AppendLine("the runtime makes of it - one naming no drive and no share, a volume by its id or a pipe, is");
         builder.AppendLine("a place it cannot tell, and denied - and a shell's spelling of a drive (/c/x, /cygdrive/c/x,");
         builder.AppendLine("/mnt/c/x) is read both as the drive (C:\\x) and as the directory it names on the current");
         builder.AppendLine("drive, an action allowed only where both are; a cd is followed the same way - pushd,");
-        builder.AppendLine("PowerShell's Set-Location and Push-Location, and the directory env -C or pwsh");
-        builder.AppendLine("-WorkingDirectory starts its command in, each word it may go to - from every place the");
-        builder.AppendLine($"command reached before it, up to {Agents.Policy.AgentPolicy.MaxPlaces} places, past which the command is denied.");
+        builder.AppendLine("PowerShell's Set-Location and Push-Location, the directory env -C or pwsh");
+        builder.AppendLine("-WorkingDirectory starts its command in, and the one git -C, tar -C or --directory, make -C,");
+        builder.AppendLine("ninja -C and patch -d work in, in every spelling, glued or apart, each word it may go to; a");
+        builder.AppendLine("cd to a name under a CDPATH - the one the agent's commands start with or the one the");
+        builder.AppendLine("string sets - read in each of its directories too, a cd given no directory going to the");
+        builder.AppendLine("HOME the command or the string sets, cd - back to the OLDPWD the string sets or a place a");
+        builder.AppendLine("move of the string's left, and one whose place this does not know - cd - with neither, a");
+        builder.AppendLine("CDPATH, OLDPWD or HOME the string computes - denied - from every place the command");
+        builder.AppendLine("reached before it, a command after && standing only where the one before it held and one");
+        builder.AppendLine($"after || only where it failed, up to {Agents.Policy.AgentPolicy.MaxPlaces} distinct places, past which the command is denied.");
         AppendWrapped(builder, ShellReadingProse());
         builder.AppendLine("The protected paths (agentPolicy.protectedPaths, true where nothing is said) are the");
         builder.AppendLine("writes Claude Code guards, refused on every client so a role is not stopped on one where");
@@ -2561,16 +3058,29 @@ public static class HelpTopics
         builder.AppendLine("and Claude Code directory beside them -");
         builder.AppendLine("a second layer, for the engine is asked about every other call");
         builder.AppendLine("and answers from this policy in its own process, and a call those rules refuse first is");
-        builder.AppendLine("counted and recorded as Claude Code's own denial. This is policy, not a sandbox - a");
-        builder.AppendLine("program an agent runs opens files as the user it runs as, a file of the credential slot");
-        builder.AppendLine("among them; what it is never given is a key in its environment, and what no file tool");
-        builder.AppendLine("of an agent touches is the slot itself, in any root. Where this tool cannot decide a");
+        builder.AppendLine("counted and recorded as Claude Code's own denial. This is policy, not a sandbox: it");
+        builder.AppendLine("decides what a call names, never what a program reads by itself - a program an agent");
+        builder.AppendLine("runs opens files as the user it runs as, and one that walks its working directory unnamed");
+        builder.AppendLine("(an archive of ., a search given no path) reaches a credential slot's files where that");
+        builder.AppendLine("directory holds one, as a side-task's main tree does; what it is never given is a key in");
+        builder.AppendLine("its environment, and what no file tool and no command's word the policy reads names is the");
+        builder.AppendLine("slot itself, in any root, or a directory that holds one to a program that may read it,");
+        builder.AppendLine("but that working directory and those above it. The words it does not read - a path a");
+        builder.AppendLine("command computes, the code an interpreter is given, a script file's inside, what a process");
+        builder.AppendLine("apart from the agent's tree does - are where a policy of words ends.");
+        builder.AppendLine("Where this tool cannot decide a");
         builder.AppendLine("call it denies it, never allows: nothing runs while the host that would answer is");
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
         builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call it");
-        builder.AppendLine("runs - the web's of the claude-code client, served through the engine's tool server, and");
-        builder.AppendLine("every call of the API clients, the claude-api and glm clients below -");
-        builder.AppendLine("and no command of this build runs an agent yet.");
+        builder.AppendLine("runs - the web's of the claude-code client, and its file tools' where Claude Code's own");
+        builder.AppendLine("process runs apart from the isolation, served through the engine's tool server, and");
+        builder.AppendLine("every call of the API clients, the claude-api and glm clients below - for every agent a");
+        builder.AppendLine("command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a");
+        builder.AppendLine("side-task.");
+        builder.AppendLine();
+        AppendWrapped(builder, IsolationProse());
+        builder.AppendLine();
+        AppendWrapped(builder, ExecutionIsolationProse());
         builder.AppendLine();
         AppendWrapped(builder, ClaudeCodeClientProse());
         builder.AppendLine();
@@ -2587,6 +3097,362 @@ public static class HelpTopics
         return builder.ToString();
     }
 
+    /// <summary>How long a shell call's receipt is waited for, in seconds (<see cref="Agents.ClaudeCode.ClaudeCodeClient.ReceiptBound"/>).</summary>
+    private static string ReceiptSeconds => Agents.ClaudeCode.ClaudeCodeClient.ReceiptBound.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// The operating system's isolation of an agent's commands beneath the policy: the mechanism, what a launch's profile
+    /// denies, the mode and its refusal, the records, and the verbs refused for it - named from
+    /// <see cref="Agents.Policy.AgentPolicy.SlotOrStateVerbs"/>, so the list said is the list refused.
+    /// </summary>
+    private static string IsolationProse()
+        => "Beneath the policy, the operating system isolates every command an agent runs, so a command spelt past a "
+            + "reader of words still reads no credential slot, and writes none of git's code-running files, none of its "
+            + "pointers to another repository and none of the tool's state; what it leaves that git outside would go on "
+            + "with as it lies - an operation's state, a replacement - fails what ran once it has, and the rest it writes "
+            + "is the work itself, whose limits are said below. "
+            + $"On Linux, WSL 2's included, the mechanism is the system's bubblewrap {Bubblewrap.Oldest} or newer - "
+            + $"the first {IsolationPlatform.BubblewrapProgram} in an absolute directory of the PATH outside the tree, none "
+            + "where the user could write it or a directory above it, for the tool runs it outside - on "
+            + $"macOS the system's own sandbox, {SandboxExec.ProgramPath}, and on Windows Microsoft's MXC process container, "
+            + "made through MXC's own library; each is what the contained step becomes in the child's place - on Windows "
+            + $"this tool again ({MxcProcessContainer.CommandName}), inside the step's job, which starts the program inside "
+            + "a container of its own and hands back its streams and its exit code - so no child runs outside it for an "
+            + "instant. Inside it the machine is read-only. Written are the agent's writable roots - its worktree, its "
+            + "work directory - and what git writes of a tree it writes: its own git directory alone. A main checkout's .git "
+            + "is written whole, and an agent's worktree a repository of its own, for git makes its lock files directly in "
+            + "it, but a main checkout's commondir - made naming the directory itself, which git takes as no pointer, where "
+            + "a file made would lead every git to another repository's own files, and never made in a repository that "
+            + "keeps its refs in a reftable, where any file there breaks every commit git makes on a branch - and its "
+            + "worktrees/; a linked worktree's "
+            + "own git directory is its directory under the common directory's worktrees/, and the common directory itself - "
+            + "its objects/, its refs/ and reftable/ wherever the repository keeps them, its logs/ and Git LFS's lfs/ where "
+            + "there is one - is read-only to the work: git add, "
+            + "commit, fetch, rm and status write the objects, the index and the refs in a main checkout and in an agent's "
+            + "repository, while in a linked worktree - an agent an earlier version made, a leg pinned to a plain worktree - "
+            + "git add and git fetch fail there, said at each launch over one and on each leg's line over one; and in a main checkout what writes another "
+            + "worktree's git directory: git worktree add, move, remove and "
+            + "prune, git gc where there are linked worktrees. The refs written are those of a repository whose git "
+            + "directory the work writes whole - the main checkout's over a side-task, a leg in place and a run's commit and "
+            + "push hooks, an agent's own in its repository - every branch, "
+            + "tag, stash and remote-tracking ref, and their reflogs - which a command spelt past the words policy can move; "
+            + "a run's push sends the commit its commit step recorded, never what the branch names later. Written too are a "
+            + "temporary directory of the launch's own, "
+            + "named by TMPDIR - on Linux the system's /tmp inside, so nothing another process keeps there is reached, on "
+            + "Windows MXC's own; and the declared tool caches, each pointed by its variable into the cache directory of the "
+            + "child's write scope - the places it writes and the Unix sockets outside it reaches - under the isolation's own "
+            + "(dssharness-isolation/caches under XDG_CACHE_HOME, else ~/.cache - ~/Library/Caches on macOS - and under "
+            + "LOCALAPPDATA on Windows, each scope's directory beside a .scope file naming its places), so a package one child "
+            + "plants is run only by a child that writes everything it writes - the next launch of the agent, the next run of "
+            + "the leg - never by one that writes another tree or the main checkout, a commit's or a push's hooks among them, "
+            + "or reaches the user's SSH agent, and a scope's caches are taken away once none of its places is left: "
+            + $"{string.Join(", ", Agents.Isolation.IsolationCaches.Declared.Select(cache => $"{cache.Variable} ({cache.Tool})"))}. "
+            + "The user's own caches stay read-only, for a cache is code a later build runs as it lies; Cargo, Gradle and "
+            + "pub keep theirs in a home the variable moves whole, so what the user keeps there - a registry, a property, a "
+            + "tool pub activated - is not read inside, "
+            + "and Maven's local repository has none, so a Maven build names another with -Dmaven.repo.local. Moving "
+            + "XDG_CACHE_HOME moves what the user installed under it too: on Linux Playwright's browsers are read where they "
+            + $"are ({Agents.Isolation.IsolationCaches.PlaywrightBrowsersVariable} at the user's ms-playwright, where it is "
+            + "there and the variable names none already), so a browser installed inside fails; everything else there - "
+            + "Hugging Face's models, pre-commit's environments - is fetched again into the scope's own. Hidden - an "
+            + "empty place under bubblewrap, refused by macOS's sandbox, denied by MXC's container - are every credential "
+            + "slot of the main checkout and every Claude Code directory - ~/.claude, the tool's own and the one the slot "
+            + "names for the claude-code client's logins, one list for a launch and for the tool's executions alike - with "
+            + "~/.claude.json beside each, the shell snapshots Claude Code sources read again, and on Windows a claude-code "
+            + "launch's own read, below. "
+            + UserCredentialsProse()
+            + " Written by nobody, inside what is written, are git's code-running files and its "
+            + "pointers to its own directories and to other content: the hooks git runs and the common directory's hooks/ "
+            + "beside them, which git runs again once core.hooksPath is gone; the common directory's config, "
+            + "config.worktree and info/; its refs/replace/ and objects/info/, whose replacements and alternates would put "
+            + "other content in place of what every checkout reads; its own commondir - made, where a main checkout's .git "
+            + $"holds none, naming that directory itself ({Agents.Isolation.AgentIsolation.ItsOwnDirectory}), which git takes "
+            + "as no pointer, and in a repository that keeps its refs in a reftable, where any commondir file in a git "
+            + "directory the work writes breaks every commit git makes on a branch, never made and held absent instead - "
+            + "macOS's sandbox and MXC's container denying its creation with nothing at the path, and bubblewrap, whose "
+            + "every rule is a mount that holds no path that is not there, leaving the ground with no isolation - and its "
+            + "worktrees/; each linked worktree's config.worktree, commondir and gitdir; every linked "
+            + "worktree's .git file, the agent's own and every other git lists; and every git directory's modules/ whole - "
+            + "the common one's and each linked worktree's - which holds the submodules' own git directories, so a "
+            + "submodule's git fails inside. Written by "
+            + "nobody too are every configuration file git says it reads there (git config --show-origin), every file one "
+            + "includes whether its condition holds now or not - an onbranch: a later checkout makes true among them - each "
+            + "tree's .harness-config, the tool's state and the launch's own directory. Each place not there inside a written place "
+            + "and under no guarded one is made, empty, before the launch, so no command makes it and has it read or run "
+            + "outside later - but a state file, which the tool reads as meaning something, is never made, and the words "
+            + "policy alone guards it. No directory above a guarded place whose own directory is written, and no writable "
+            + "root itself, is renamed or removed - a place moved away would take its rule with it and leave its name free "
+            + "to be made again, and a root put back as a link would lead the next launch's rules elsewhere. A launch has no "
+            + "isolation - which the mode below turns into a refusal or a notice - where its places cannot be held: git "
+            + "cannot say where a tree keeps its files (git 2.31 or newer answers) or list its repository's replacements, "
+            + $"a main checkout's .git holds a {Agents.Isolation.AgentIsolation.CommonDirectoryFile} leading anywhere but "
+            + "to itself - to another repository's own files - or holds one at all, or none and the mechanism holds no path "
+            + "that is not there, in a repository that keeps its refs in a reftable, where any commondir file in a git "
+            + "directory the work writes breaks every commit git makes on a branch, a file git's configuration includes is "
+            + "not there inside a "
+            + "place the agent writes, where a command could make it (an empty file includes nothing), a link stands where "
+            + "the agent writes on the way to a guarded place, or, under bubblewrap, a guarded place stands on a file system "
+            + "that finds a name in any case - a Windows drive under /mnt - where a mount holds one spelling alone. Once a "
+            + "launch or one of the tool's executions has run under a mechanism, however it ended, the tool looks at what "
+            + "no rule could hold before anything of its own goes on over the trees: the state of an operation under way - "
+            + $"{string.Join(", ", Agents.Isolation.AgentIsolation.OperationState.Select(name => name + "/"))} - made or "
+            + "changed in a tree's own git directory it wrote, which git's next continue outside, the user's or an "
+            + "editor's, goes on with as it lies, running each exec line its todo holds; or a replacement made or moved in "
+            + "a repository whose refs it wrote, as git lists them whatever keeps them - loose, packed-refs or a reftable - "
+            + "which every git started outside would read in an object's place. Either fails the step, the leg, the commit "
+            + "or the push, naming it and the remedy - remove the state, never continue or abort it, for an abort puts the "
+            + "branch where the state says - as does a git that cannot list the replacements within "
+            + $"{Output.ReportText.Limit(Agents.Isolation.AgentIsolation.AfterwardLimit)}. Every git "
+            + "of this tool's own runs with no file-system monitor, no object replaced "
+            + $"({GitOwnSettings.NoReplaceVariable}=1) and, in a tree an isolated agent or execution works over - a worktree "
+            + "or the main checkout - with the git directories git named before it ran (GIT_DIR, GIT_COMMON_DIR), whatever "
+            + "the tree's own files say later; otherwise it reads the repository's configuration as git does, its filters "
+            + "among it, which is why every configuration file is written by nobody. The user's own git, an editor and a "
+            + "prompt read the repository as it stands: the refs and objects the work wrote, an operation's state it left "
+            + "until a person removes it, and a repository it made inside its tree, whose own configuration - an fsmonitor, "
+            + "a filter - git started in that directory reads and runs, as it does any repository's. "
+            + "Under bubblewrap the child has a user namespace of its own that allows no further one - but a claude-code "
+            + "launch's outer layer, below, which is left one to make each command's own layer in - and a process "
+            + "namespace with its own /proc, so no command reaches another process's environment; each place is a mount, "
+            + "each directory above one a mount point no command moves; WSL's interoperation sockets and shared directory "
+            + $"(/run/WSL, /mnt/wsl, and {Bubblewrap.WslInteropVariable} taken from its environment), screen's sessions, the "
+            + "user's runtime directory whole - their service manager, message bus and agents' sockets - and the container "
+            + "engines' sockets are hidden; where the kernel has Landlock's scope (Linux 6.12 or newer) the contained step "
+            + "enters it first, so no abstract Unix socket outside is reached and no process outside signalled, and where "
+            + "it has not, the record says so, and every launch, in its stream, and every leg, on its line, says as it "
+            + "starts what is left reached. macOS's sandbox denies every operation "
+            + "it does not allow - never allowing all but a list, which would leave LaunchServices free to start a program "
+            + "outside it - and allows what a build, a test and a shell do as the user: its own processes, the system's "
+            + "settings by the names a build asks - never another process's arguments or environment - a terminal, the "
+            + "network, the services that resolve names and trust certificates, every file read and no Unix socket but the "
+            + "name resolver's and those under the launch's temporary directory, each place ruled at its real spelling "
+            + "(/var is /private/var there); it is no mechanism where this tool "
+            + "already runs inside a sandbox, for macOS starts none inside another. MXC's container grants nothing it is not "
+            + "told to: every fixed drive is read, each writable root written, each place written by nobody read, each "
+            + "hidden place denied outright. It meets a place by its path alone and refuses no rename alone, so each "
+            + "directory above a guarded place whose own holder is written is read alone, every entry it holds written "
+            + "again as the profile has it - nothing is made or removed directly inside it, so git makes no lock file in a "
+            + @".git, or a linked worktree's directory under it, that holds a sealed place: git add, commit, fetch and push "
+            + "fail there - in a worktree, over a side-task's main tree, and in a run's commit and push steps - which "
+            + "each record says as the anchors' cost. The child has the environment the step was given and the "
+            + "container's own user interface - no clipboard, no input sent to another window - which a program "
+            + "that loads Windows' user interface library needs to start at all. On each, the network is the user's, the "
+            + "loopback both ways. On Linux and macOS a claude-code launch's own process runs apart from its commands, "
+            + "reading its login and the key it is handed there, and every shell command it starts is handed into a layer "
+            + "of its own through its shell prefix (CLAUDE_CODE_SHELL_PREFIX: this tool and --isolated-shell, which becomes "
+            + $"the mechanism with /bin/bash inside, the launch's isolation read from the file {IsolatedShell.FileVariable} names) "
+            + "- so no command it runs reaches its directories, its login or its environment. On Linux Claude Code's own "
+            + "process runs inside an outer layer of bubblewrap: the machine read-only, every credential slot hidden, git's "
+            + "code-running files and the tool's state sealed as for its commands, and written but its writable roots, its "
+            + "temporary directory, the declared caches, Claude Code's own directories and "
+            + $"~/{Orchestration.ClaudeTranscripts.StateFileName} - without which it fails every shell command - and the step's "
+            + $"{Agents.ClaudeCode.ClaudeShell.ReceiptsDirectoryName} and {Agents.ClaudeCode.ClaudeShell.TempDirectoryName}; the "
+            + "outer layer alone is left a user namespace to make each command's layer in, and the mounts it laid are locked "
+            + "into every namespace made inside it, so none is undone there. A command Claude Code ran without its prefix "
+            + "therefore still runs inside the outer layer, never with the user's rights - though there it reads Claude "
+            + "Code's login and environment and could write its directories. Where Claude Code never ran, its directory and "
+            + $"{Orchestration.ClaudeTranscripts.StateFileName} (holding {{}}) are made first, for inside it can make neither. "
+            + "Where this machine's bubblewrap cannot start again inside a layer of its own - an AppArmor profile that denies "
+            + "its children every capability, as Ubuntu's bwrap-userns-restrict does - the probe says so, and Claude Code's "
+            + "own process runs outside every layer, as on macOS, whose sandbox starts none inside another; there a command "
+            + "Claude Code ran without its prefix runs outside with the user's rights, and each launch says so as it starts. "
+            + "In or out of a layer, Claude Code opens no file "
+            + "of the agent's in its own process: its file tools are not given, --tools names its shell alone, and the engine's "
+            + $"tool server serves the tool runtime's ({string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.FileTools)}) in their "
+            + "place, each file read through the file the engine opened, decided again by where the system names it, and "
+            + "each written, made, moved or deleted relative to its directory held from the writable root it was decided in "
+            + "with no link on the way, so a link a command - one left running in the background among them - puts on a "
+            + "path between the decision and the act reaches nothing. Each shell command the engine allows is given back with a receipt at its head (: "
+            + $"{IsolatedShell.ReceiptWord} <32 hexadecimal digits>;, the shell's no-op), which --isolated-shell writes in the "
+            + $"step's {Agents.ClaudeCode.ClaudeShell.ReceiptsDirectoryName} directory, where no command handed over writes, "
+            + "before it runs the command - the command itself run without that mark, and without the variables that hand it "
+            + "over, so nothing it is started with names its receipt or where receipts are written. A call that comes back "
+            + "with none - a Claude Code that skipped its prefix - ends the launch failed at once, and one run in the "
+            + $"background is waited for within {ReceiptSeconds} s; however a launch ends - at a turn's result, Claude Code "
+            + $"gone or its output cut - each allowed call whose receipt is not there yet is waited for within {ReceiptSeconds} s "
+            + "before anything of it is ended, one with none by then ending it failed, and where the launch was stopped or "
+            + "ended at once, each is said. A receipt proves only that Claude Code handed the command over, and only once it "
+            + "has run: it stops nothing, and a command run without the prefix runs where Claude Code's own process runs, "
+            + "where it could write a receipt of its own - so what holds such a command is the outer layer on Linux, and "
+            + "nothing on macOS or where bubblewrap starts none inside itself. "
+            + $"Claude Code's own temporary directory is the step's {Agents.ClaudeCode.ClaudeShell.TempDirectoryName}, where no "
+            + "command writes but the one file each ends by writing its working directory to - made empty, given that command "
+            + "alone, written in place, never removed or replaced - so nothing Claude Code writes or reads there in its own process is a "
+            + "command's to replace with a link; it goes with the launch. Claude Code's own sandbox "
+            + "is turned off in its settings, for none nests in a command's layer; where this tool runs as a runtime handed its "
+            + "assembly, or from a path holding \" -\", neither of which the prefix can name, the launch is not started, "
+            + "saying why. On Windows, where nothing "
+            + "becomes another program and every command Claude Code runs is Git Bash's, the launch runs whole inside "
+            + "MXC's container with its directories read alone: its commands read its login there, and a login whose token "
+            + "has run out is not renewed inside until a claude run outside renews it - written, they would let a command "
+            + "plant what Claude Code runs outside later. There its own file tools are given, for they open each file inside "
+            + "the container, which holds every place they reach as it holds the commands, and its temporary directory is "
+            + "MXC's own inside it; nothing is handed over, so no receipt is asked. Where there is no isolation at all - "
+            + "preferred, on a machine with none - Claude Code's own file tools open each file by the path the engine "
+            + "decided, the words policy alone between them. The API clients' run_command starts "
+            + "each command inside it. The mechanism is proved once per process, before the first launch whose agent may "
+            + "run a command, on the tree's own file system under its runs directory: a canary in a hidden place unread, by "
+            + "its name and by another case of it, a place written by nobody unwritten by either, a place outside every "
+            + "open one unwritten, an open place written - on Windows after MXC's library says this Windows has the container "
+            + $"({WindowsContainerHost.Builds}), and followed by each of node, git and Git Bash's sh found on this machine "
+            + "started inside it and asked to answer, one that does not making none, said with how it ended; on Linux "
+            + "bubblewrap, once proved, is started again inside an outer layer of its own around a shell that must end 0, and "
+            + "where it does not, it is the mechanism all the same, a claude-code launch's own process outside every layer, "
+            + "said with how the trial ended. MXC 1.0.1 ends "
+            + "every program of Git Bash's with 0xC0000142, a library that would not start, so where Git Bash is "
+            + "installed Windows has none yet; from WSL 2, bubblewrap isolates. agentPolicy.isolation says what happens where "
+            + "this machine has none: "
+            + $"{Agents.Isolation.AgentIsolationMode.Required}, where nothing is said, starts no agent that may run a "
+            + $"command - its step ends failed ({HarnessExit.ToolMissing}), the advisor gives no advice, run-side-task "
+            + $"exits {HarnessExit.ToolMissing}, each saying why and the remedy (on Ubuntu, where "
+            + $"{IsolationPlatform.RestrictedUserNamespaces} is 1, the bwrap-userns-restrict AppArmor profile; on Windows "
+            + "the builds MXC needs, or WSL 2); "
+            + $"{Agents.Isolation.AgentIsolationMode.Preferred} runs it on the words policy alone, said at every launch. "
+            + "An agent that may run no command - the reporter - needs none, and none is probed. Each launch's records say "
+            + "what it ran under - isolation in result.json and in each turn of a side-task's task.json: the mode, with "
+            + "the mechanism and its version - macOS's own for its sandbox, MXC's library's for its container - what it "
+            + "leaves reached and what its anchors cost, or why there was none. Where it ends: the machine stays readable "
+            + "as the user reads it but the hidden places - a credential kept anywhere else among it - and the system's own "
+            + "credential stores are services, not places: on macOS the login keychain is reached through the system's "
+            + "security service, which the sandbox lets through for the trust of certificates; on Windows MXC's container "
+            + "shows the Credential Manager empty; on Linux the keyring sits behind the user's message bus, hidden with the "
+            + "runtime directory. The network is theirs, and what no rule at a path "
+            + "reaches - a hard link made before the launch, another path bound to the same files - is reached; inside, no "
+            + "hard link can be made from the machine's files into a written place: under bubblewrap each place is a mount "
+            + "of its own and a link fails across them, macOS's sandbox denies every operation it does not allow and no "
+            + "rule of the profile's allows one, and MXC's container grants the machine read alone, which a hard link needs "
+            + "written - each held by a canary in its real suite, whose failure would name the link allowed. git's "
+            + "refs and object store, and Git LFS's, are written as git needs them in each ground's own repository - the "
+            + "main checkout's over a side-task, a leg in place and a run's commit and push hooks, an agent's repository "
+            + "its own, a linked worktree's none, its common directory read-only to the work: so a command over the main "
+            + "checkout can move "
+            + "any branch, tag, stash or remote-tracking ref, which a person's checkout outside then takes, and, as git's "
+            + "checkout reads an object as it lies without hashing it again, put other content under a name the store "
+            + "already holds, which a checkout outside then writes. A command Claude Code runs without its shell prefix "
+            + "runs where Claude Code's own process runs - in the outer layer on Linux, with the user's rights on macOS "
+            + "and where bubblewrap starts none inside itself - its missing receipt telling it only once it has run. This "
+            + "tool's verbs that read a credential slot or write its state or install would fail inside it, so each is "
+            + "refused to every agent by name, a side-task's as well as a step's: "
+            + $"{string.Join(", ", Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those that "
+            + "write only the tree's own files, stay open.";
+
+    /// <summary>
+    /// The places the user keeps credentials in that the isolation hides, said from their one list
+    /// (<see cref="Agents.Isolation.UserCredentials.Declared"/>) with the places it leaves out and why, the key that adds
+    /// more, what the words policy refuses of them, and what fails inside.
+    /// </summary>
+    private static string UserCredentialsProse()
+    {
+        static string Said(Agents.Isolation.UserCredential place)
+            => place.Spelled
+                + (place.Readable.Count > 0 ? $" but its {string.Join(" and ", place.Readable)}" : string.Empty)
+                + (place.Only is { } only ? $" on {only}" : string.Empty)
+                + (place.Listed ? ", each it lists" : string.Empty);
+
+        var declared = Agents.Isolation.UserCredentials.Declared.GroupBy(place => place.Holds, StringComparer.Ordinal).Select(group => $"{group.Key} ({string.Join(", ", group.Select(Said))})");
+        var leftOut = Agents.Isolation.UserCredentials.LeftOut.GroupBy(place => place.Why, StringComparer.Ordinal).Select(group => $"{string.Join(" and ", group.Select(place => place.Spelled))}, for {group.Key}");
+
+        return "Hidden too, from every isolated command and every execution of the agents' work alike, are the places the user "
+            + $"keeps credentials in: {string.Join(", ", declared)} - $NAME where this tool's own environment names one, "
+            + $"$XDG_CONFIG_HOME ~/.config where it names none, %APPDATA% AppData\\Roaming in the home where it names none. ssh's "
+            + "known_hosts and config are read again, for ssh reads them itself to reach a host - but under MXC's container, "
+            + "which grants nothing beneath a denial, where ssh's directory is hidden whole. agentPolicy.hiddenPlaces adds "
+            + "more and takes none away: each a whole path or one under ~/, a directory where it ends with a separator, else a "
+            + "file. The words policy refuses a file tool's read and write in one, a search over one, and a command that names "
+            + "one - ssh's own files among them, which inside only the program that needs them reads - or a directory that "
+            + $"holds one and may read it, as it refuses a slot. Left out, for builds read them: {string.Join("; ", leftOut)} - "
+            + "a password either holds is better given as a value. A build that reads a hidden place fails inside - a private "
+            + "registry's token in ~/.npmrc, a cloud's key in ~/.aws, a git dependency fetched over ssh with the user's own "
+            + "key - so hand it the secret as a value instead: the runner's environment carries it, read by this tool. A place "
+            + "that is not there is made, empty, only where a command could make it, inside a place written: the home is read "
+            + "alone by every isolated child, so nothing is made there and the user's home is left as it is. One that holds a "
+            + "tree, or a place written, leaves the launch or the execution with no isolation, saying which.";
+    }
+
+    /// <summary>
+    /// The operating system's isolation of the tool's own executions of the agents' work: a run's machine steps' legs on
+    /// this machine, and a run's commit and push with the repository's hooks; the tool's other git, which runs no hook;
+    /// a push's credential handed in as values; and the legs another machine runs.
+    /// </summary>
+    private static string ExecutionIsolationProse()
+        => "What the agents wrote runs inside the same isolation when this tool runs it. The work of each leg of a run's "
+            + "build, test, run and check-mutations step that this machine runs - every phase it starts: configure, build and "
+            + "test commands, a runner's steps, a sweep's arms - is held inside it, its own profile from the leg's ground, "
+            + "built as a launch's is: the machine read-only; every credential slot of the main checkout, every Claude "
+            + "Code directory and every place the user keeps credentials in hidden; the tree the leg works in - the step's tree or its copy under .legs - a sweep's "
+            + "workers under .mutations, the build directory of the leg's run of each runner action it runs, its own and a "
+            + "run check's ({actionBuild}, each step's {stepBuild} in it), a temporary directory of its own and the declared "
+            + "tool caches written, and inside them git's code-running files, the configuration directory - but those build "
+            + "directories, under it - and the tool's state written by nobody. The run's "
+            + "records are no place the work writes: every log, the ledger, the run's claim and its stop are the tool's own, "
+            + "written from what each phase prints. What the tool itself reads out of, or writes into, a place such work "
+            + "writes - a runner's step's own directory and its kept outputs, a test's evidence kept on failure, a sweep's sites mutated and put back in "
+            + "its workers, a sync's every read, write, removal and listing in a copy - goes through no link below that "
+            + "place's root: each acts relative to a directory held open from that root, every entry on the way opened as "
+            + "itself and never looked up by its path again, so a link on the way - or one the work swaps in while the tool "
+            + "acts - is refused, naming it, and a link at the entry's own place is replaced or removed as itself. A pull "
+            + "(sync --pull) alone follows a link along the path it names, as it is spelt, but never into a place the "
+            + "isolation hides from every command, decided by where what it opened stands; a link below a directory it "
+            + "names is passed over and named. A runner's "
+            + "values and secrets reach its steps as values "
+            + "in their environment, read by this tool, never as the slot's files, which they cannot read. A set-up's lines "
+            + "are the configuration's and bring up what outlives the leg, which no isolation outlives, so they run outside "
+            + "it: where the leg's work is held inside it under required, each runs from an empty directory outside every "
+            + "tree (outside/ under the isolation's own), so a program that looks for its project where it runs or above it "
+            + "- a compose file, a package's scripts, a makefile, a repository - finds none of the agents', and each is read "
+            + "first as the policy reads an agent's command - its words, every command it runs, every path a word names, a "
+            + "source:target's and a search path's parts among them, and every value the leg's environment gives it. One "
+            + "that names a place in the tree the leg works in, the run's or the main checkout, or a directory holding one, "
+            + "that names a place by what its shell would expand, that moves to a directory that is no whole path, or that "
+            + "cannot be read whole skips the leg (skipped-unavailable) before any set-up comes up; one that fails says "
+            + "where it ran, where nothing of the tree is found - keep what a line reads outside the trees and name it by "
+            + "its whole path, or bring what it serves up by hand. Under "
+            + "preferred they run in the tree as the configuration gives them. A leg another machine runs - an ssh host, a WSL "
+            + "distribution - runs there as that machine's tool runs any leg, outside this machine's isolation: an ssh host "
+            + "holds none of this machine's slots, state or git's files, which a sync never carries, for an ssh host is "
+            + "taken to be another machine that reaches none of this one's files - one that is this machine, or a WSL "
+            + "distribution, a virtual machine or a container reached over ssh that shares its drives, cannot be told from "
+            + "another by its name or its address, which ssh's own configuration may point anywhere and a loopback port may "
+            + "forward anywhere, and runs the agents' work outside the isolation, this machine's files written: name no such "
+            + "host for a run's legs where the agents' work must be held; a WSL distribution runs "
+            + "on this machine and reaches its drives under /mnt, written, its slots and every tree's git files among them, so "
+            + "a run's step whose legs' work is held inside the isolation skips such a leg under required "
+            + "(skipped-unavailable) and runs it there under preferred, its line saying so. A run's commit and push run git and the repository's "
+            + "hooks - those git's directory holds, and those core.hooksPath points into the tree for, a husky directory, a "
+            + "pre-commit or lefthook configuration they read - inside it too, over the main checkout, which they write: its "
+            + "work tree and its .git, but git's code-running files, its pointers, replacements, alternates and submodules' "
+            + "git directories and the tool's state, as a launch's - under MXC, which makes "
+            + @"nothing directly inside .git, git's commit cannot make .git\index.lock and fails there. A push to a remote over "
+            + "http or https is handed the credential git's own helpers give for its address, asked outside (git credential "
+            + "fill), as values in its environment read by a helper its command line names in place of every helper the "
+            + "configuration names - so it needs no keyring behind the user's message bus, which the isolation hides - and "
+            + "whatever runs inside the push, its pre-push hook among it, can read them, as in any push; one over ssh signs "
+            + "through the user's SSH agent alone, for their keys under ~/.ssh are hidden, its known_hosts and config read. "
+            + "Under bubblewrap and macOS's sandbox a push to a remote "
+            + "over ssh (ssh://, git+ssh:// or host:path, as git reads its push address), and a commit the repository signs "
+            + "with an ssh key (commit.gpgsign with gpg.format ssh), reach the one Unix socket outside that is the user's "
+            + $"SSH agent's ({Agents.Isolation.AgentIsolation.SshAgentSocketVariable}), wherever it stands - inside ssh's "
+            + "hidden directory among it, named to them at its real spelling, so a link there leads nowhere hidden - their hooks with "
+            + "them - and no other; every other commit and push, and every leg, reaches none, so a hook reaches the user's "
+            + "SSH agent only where git's own work does; MXC's container is handed none, and as it hides ~/.ssh whole a push "
+            + "over ssh inside it finds neither key nor known_hosts and fails - a push over https, whose credential this tool "
+            + "hands in as values, works there. A commit the repository signs with "
+            + "gpg or x509 reaches no agent of the user's where its socket is hidden - in the user's runtime directory under "
+            + "bubblewrap, and every one under macOS's sandbox and MXC's container - and fails there, as does one signed "
+            + "with an ssh key under MXC. One signed with an ssh key whose user.signingKey names a file under ~/.ssh fails "
+            + "as well, for the file is hidden: name the public key itself (key:: and its line) and keep the private key in "
+            + "the agent. Every other "
+            + "git command of this tool's runs none of the repository's hooks - core.hooksPath pointed at the null device, "
+            + "set as every git of the tool's sets its own settings, through GIT_CONFIG_PARAMETERS - so a fold, a refresh, "
+            + "a rebase, a sync or a question of the tool's never runs the agents' work as a side effect of a checkout, an index written or a ref "
+            + "moved; those that only read (rev-parse, config and the like) are left as they are, and answer where the hooks "
+            + "are as git runs them. agentPolicy.isolation decides each as it decides a launch: where this machine has none, "
+            + $"{Agents.Isolation.AgentIsolationMode.Required} fails the step ({HarnessExit.ToolMissing}) with nothing run - a "
+            + $"leg whose own cannot be had, its tree one git does not answer for, is skipped-unavailable - and "
+            + $"{Agents.Isolation.AgentIsolationMode.Preferred} runs it outside, each leg's line saying so. The step answers "
+            + "isolation: the mode, with the mechanism and its version, what it leaves reached and what its anchors cost, or "
+            + "why there was none.";
+
     /// <summary>
     /// How the agents' policy reads a shell command, what it refuses as undecided, and the worktree rules - git's
     /// verbs named from <see cref="Agents.Policy.AgentPolicy.GitStateVerbs"/>, so the list said is the list refused.
@@ -2600,14 +3466,26 @@ public static class HelpTopics
             + "the file it names and never among the words a rule meets - a quoted word spelled as one is a word; the "
             + "NAME=value (and NAME+=value) words before a program kept as its environment, and a variable - so set, or "
             + "declared by export and its kind, cmd's set, fish's set, csh's setenv, setx or PowerShell's env: items - whose value is a program git or "
-            + "another tool runs (GIT_SSH_COMMAND, GIT_PAGER, GIT_EDITOR, EDITOR, PAGER and their kind) read as that "
-            + "program's command line, as is the value of git's own setting of a key git runs as one (core.pager, "
+            + "another tool runs (GIT_SSH_COMMAND, GIT_PAGER, GIT_EDITOR, EDITOR, PAGER, PROMPT_COMMAND and their kind) read "
+            + "as that program's command line, a prompt (PS0, PS1, PS2, PS4) as the text an interactive shell expands, as is "
+            + "the value of git's own setting of a key git runs as one (core.pager, "
             + "core.sshCommand, a diff or merge driver, a filter, an alias and their kind) - a -c, a --config-env's "
             + "variable, GIT_CONFIG_VALUE_n, GIT_CONFIG_PARAMETERS - an alias's '!' taken off; wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, "
-            + "busybox) stripped, what xargs reads an expansion among the words it runs; and it goes "
+            + "busybox) stripped, what xargs reads an expansion among the words it runs, env's options read by GNU env's "
+            + "own table, a long one by any prefix that names it alone (--spl, --u, --chd), one that names none or more "
+            + "than one denied; and it goes "
             + "into sh -c and every other shell's (fish's -C scripts too, its options read as fish reads them), the here-string, here-document or file a shell reads as the last input "
             + "its descriptor 0 is given (/dev/stdin and PowerShell's '-' among its names), cmd /c, "
             + "powershell -Command and a decoded -EncodedCommand, and the command lines trap, watch, script and flock run, "
+            + "the command sed's e command and flag run, ssh's and wsl's command and a WSL distribution's own launcher's "
+            + "(ubuntu run, ubuntu2204.exe -c) - with none, the script its input gives where a pipe, a redirect, a "
+            + "group's input or an argument list's written input gives one, read as a shell's is, and nothing where none "
+            + "is given (the string's first command), ssh -n and -W among them - the commands ssh's -o settings run "
+            + "(ProxyCommand, LocalCommand, KnownHostsCommand, RemoteCommand), a string a program runs as a shell's script "
+            + "(npx's and npm exec's -c and --call, each of concurrently's, hyperfine's and watchexec's commands, nodemon's "
+            + "--exec, entr's with -s, cargo watch's -s), read as sh -c's and as cmd /c's, and the job at and batch take "
+            + "from a here-document or a here-string, a script the string "
+            + "writes to a file before it runs it read as the here-document that wrote it, "
             + "by each shell's own quoting - PowerShell by a reader of its own grammar: its commands, pipelines, strings, "
             + "here-strings, variables, $(...), @(...), (...), script blocks, hashtables, assignments and keywords' "
             + "conditions and blocks, each statement a block holds read as one that may run, Invoke-Expression's one string - "
@@ -2617,22 +3495,63 @@ public static class HelpTopics
             + "or an option of a git subcommand runs - a pack program a transport runs (--upload-pack, --receive-pack, --exec, clone's -u), "
             + "difftool's --extcmd, rebase's --exec, grep's --open-files-in-pager, bisect run, submodule foreach, filter-branch's filters and "
             + "send-email's commands - read as its own, each word it fills in an expansion, env -S's string split by env's own rules, and "
-            + "$((...)), ((...)) and $[...] read as arithmetic, their substitutions as commands - so "
+            + "$((...)), ((...)) and $[...] read as arithmetic, their substitutions as commands, ((...)) the command let "
+            + "given its expression - so "
             + "'git -C x push' is git push, and 'env A=1 git push' and 'A=1 /usr/bin/git push' are too. Every word of a command is tried as the program of the words after it - but a word of a program "
             + "that runs none of its words, its data (grep, rg, echo, cat, which and their kind) - a program read by its "
             + "name in any case, its directories and a Windows end (.exe, .cmd, .dll) folded away, a cmd line's '@' dropped, git-push read as git push. A word the shell expands where a "
             + "rule reads a literal one makes the command one the rule may be, refused as such ('git $VERB' under "
-            + "Run(git push *)); a pattern or a brace that may name a credential slot or a Claude Code directory is "
-            + "refused as naming it, and a file:// address is read as the path it names. What it cannot read whole it "
+            + "Run(git push *)) - and the expansion is read only where the shell would make it: the reader keeps, for "
+            + "each word, which of its parts were quoted, so git 'p*sh' is a word no rule meets and "
+            + "gh api 'repos/o/r/pulls?state=open' an endpoint that names no merge, while a double-quoted $x is a "
+            + "variable still and an unquoted * a glob - each word's quoting taken by where it stands, never lent it by "
+            + "another word spelled alike, and a PowerShell bareword's wildcards open, as pwsh on Linux and macOS "
+            + "expands them, a cmdlet's quoted ones too, which the cmdlet expands itself; a variable the string sets "
+            + "(p=../..) read in each later word with each value it gives it, up to "
+            + $"{Agents.Policy.CommandAnalysis.MaxReadings} readings, $PWD as each place the command stands in, and a ~ as each "
+            + "HOME the string, the command or a command that runs it sets, while a "
+            + "variable it does not set and a substitution are read as the text they spell, for their value is the "
+            + "agent's environment's or a program's, which no word of the string gives; an argument list crosses no shell, so a variable in one is the text it spells - but on "
+            + "Windows, where a program splits its own command line and a Cygwin or MSYS program - told by the runtime "
+            + "beside it, cygwin1.dll or msys-2.0.dll, the program the list starts and one a wrapper among its words "
+            + "starts both asked - expands a pattern or a brace in it, those are read as the expansions they may be for "
+            + "such a program and for one this cannot find, while gh, git, dotnet and every other program take them as "
+            + "the text they are - and what cmd reads again - a batch "
+            + "argument's percent among it - it expands wherever it stands; a program is never named by a pattern, "
+            + "however its characters are quoted, for PowerShell's call operator finds & 'C:\\Git\\cmd\\gi?.exe' by its "
+            + "wildcards; an alias given a command line - git config's setting of a key git runs, -c's, gh alias set's "
+            + "expansion - is read as that command where it is given, gh alias import's file refused; the rule a refusal "
+            + "names is the one that decided, a rule the command is before one it may be, and of those the person's "
+            + "own first; a pattern or a brace that may name a credential slot, a Claude Code directory or a place the user keeps credentials in, or a "
+            + "directory holding one, is refused as naming it, and a file:// address is read as the path it names; a "
+            + "pathspec git expands itself is read as git reads it, quoted or not - its wildcards matching a dot-name, :/ "
+            + "and :(top) the repository's root, its icase and glob magic - where git reaches what it does not track (add -f, "
+            + "grep --no-index or --untracked, clean, stash -u or -a, diff --no-index), while a directory a git command "
+            + "that reads only what git tracks (status, diff, log, ls-files, grep and their kind) is given is no read of a "
+            + "slot it holds, a quoted pattern of one the text it spells, and a directory an --exclude or --exclude-dir "
+            + "gives is what a program leaves out, never a read of what it holds. What "
+            + "it cannot read whole it "
             + "denies, said here, not guessed at: a script nested past four levels, a shell that reads its script from "
-            + "its input (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
+            + "an input it is given (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
             + "an env -S string holding a backslash, whose escapes are env's own, an alias it gives, a script another program fills in "
             + "(find -exec sh -c 'echo {}'), PowerShell's code no word spells (a static method, an instance method "
             + "but a string's, a collection's or a date's, a function's or an alias's text, a class, using, its stop-parsing --%, "
             + "a script Invoke-Expression is handed by no one string, and a command line Start-Process, WMI, the task scheduler or Add-Type is handed), and a program named by a variable, a "
-            + "substitution, a pattern or a brace, a brace that spells more than 64 words, and an option of git's, "
-            + "gh's, fish's or Windows PowerShell's own before its command that this does not know; what it does not see is the inside of a script file "
-            + "a command runs, and a program another runs from words that do not name it. The worktree rules "
+            + "substitution, a pattern or a brace, a brace that spells more than 64 words, an option of git's, "
+            + "gh's, fish's or Windows PowerShell's own before its command that this does not know, sed running what it "
+            + "reads or a script the shell fills in, at given its job by a file or its input, a configuration file ssh -F "
+            + "names (but none, /dev/null), whose settings may run commands, an env long option that names none of env's "
+            + "or more than one, a script file the string "
+            + "writes and runs whose text no here-document gave - a file the string writes known by the path it reaches "
+            + "from each place its command stands, a run word that file only where it reaches that path or where a target "
+            + "the shell expands may be it, its literal end the word's (make > \"$LOG\"; bash scripts/report.sh runs) - a "
+            + "terminal session's program given what to run or type "
+            + "(tmux, screen, zellij, byobu), and crontab, launchctl or systemctl installing or starting a job, each "
+            + "running what it is given apart from the agent; what it does not see, a policy of words and not a sandbox, "
+            + "is the inside of a script file a command runs, the code an interpreter is given (python -c, perl -e, "
+            + "node -e, awk's system), a build file make, ninja or cmake runs, what an archive or a patch holds, a path a "
+            + "command computes ($(printf ...)), a program another runs from words that do not name it, and what a "
+            + "process apart from the agent's tree does. The worktree rules "
             + "(agentPolicy.worktreeRules, true where nothing is said) keep an agent's worktree a thing the engine can "
             + $"measure: git's state-writing verbs ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs)}) are "
             + $"refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", Agents.Policy.AgentPolicy.GhStateCommands)}; "
@@ -2646,21 +3565,51 @@ public static class HelpTopics
             + "one from) is the git "
             + "config it is - and so are the gh commands that merge or start CI "
             + $"({string.Join(", ", Agents.Policy.AgentPolicy.NeverCiCommands)}), the gh api endpoints and GraphQL "
-            + "mutations that reach the same, gh alias set, gh extension exec, and a gh command named by none of gh's own "
-            + $"({string.Join(", ", Agents.Policy.AgentPolicy.GhCommands)}) - an alias, gh's own co among them, or an extension, "
-            + "a name for any command, where gh runs - its command's own program, or past one that runs the words after it "
-            + $"({string.Join(", ", Agents.Policy.CommandAnalysis.CommandRunners)}), never among another program's words, its data - "
+            + "mutations that reach the same, gh alias set, "
             + "and, where the request writes, the gh api endpoints that push, open a pull request or make a release - "
             + "for never merges, never starts CI binds the agents too; git's own files - a "
             + ".git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
-            + $"submodule's too ({Agents.Policy.AgentPolicy.GitsOwnRule}) - are not written by a tool, whatever "
+            + $"submodule's too ({Agents.Policy.AgentPolicy.GitsOwnRule}), beneath each tree the agent touches, the main "
+            + "checkout a worktree was made from among them - are not written by a tool or a command, whatever "
             + "protectedPaths says; and an agent does not edit its own policy or what the next launch loads: "
             + ".harness-config/config.json, "
             + ".harness-config/orchestrators/**, .harness-config/skills/** (but for a step whose writes names one "
             + "skill's own directory by name, .harness-config/skills/<name>/..., which opens that skill alone), "
             + ".harness-config/runner/**, .claude/settings*.json and .mcp.json are not written. Whatever any switch says, "
-            + "the tool's own state, in any root, is written by its verbs alone - a place of the agent's own within it, "
-            + "as its work directory is, the one exception.";
+            + "the tool's own state, in any root and under each tree the agent touches - a worktree's main checkout, its "
+            + "run records and its other worktrees among it - is written by its verbs alone - a place of the agent's own "
+            + "within it, as its worktree and its work directory are, the one exception. What a command writes is each "
+            + "file its output redirects name and each a writing program's words name - a copy's destination however an "
+            + "option names it (cp, install and ln's -t and --target-directory, alone, glued or in a cluster, else the last "
+            + "word; Copy-Item's -Destination by any prefix or glued after its :, else its second word), each writer's "
+            + "options that take a value known to it, so cp x dst --suffix y writes dst, and an option it does not know "
+            + "making every word but its first a destination; and the output a program's option or word names: curl -o, "
+            + "wget -O, tar's archive and the directory it extracts into (-C, --one-top-level), unzip -d, sort -o, patch -o "
+            + "and the directory patch -d writes in, xxd's output file, sed's w, robocopy's "
+            + "and xcopy's destination, dotnet -o, a compiler's -o, ssh-keygen -f, Invoke-WebRequest -OutFile, "
+            + "Expand-Archive -DestinationPath, Tee-Object and their kind - and a pattern among them is refused where it "
+            + "may reach git's own files or the state; a command that removes or moves a directory whole - rm -r, "
+            + "Remove-Item -Recurse, rd /s, mv, Move-Item, rsync --delete, git clean -dx - is refused where "
+            + "the directory holds a tree's .git, the state, a credential slot, a Claude Code directory or a place the user keeps credentials in, the working "
+            + "directory among them, and a find or fd walk where it may remove or move one or what one holds. A "
+            + "star, a question mark or a bracket matches a name that begins with a dot only where its shell would: a "
+            + "segment that begins with a dot itself; anywhere in a string any of whose words names dotglob or globdots "
+            + "as bash and zsh read an option's name, in any case, with or without its underscores and its no "
+            + "(shopt -s dotglob, BASHOPTS=dotglob, setopt GLOB_DOTS, unsetopt NO_GLOB_DOTS), or names GLOBIGNORE or "
+            + "BASHOPTS at all; in a command PowerShell or cmd reads, whose wildcards list every name, or one given "
+            + "PowerShell's -Force - so rm -rf * and build/* run, .g* is git's own, and a segment that may match .. "
+            + "(.?, .[.], .*) is read as .. as well, as a shell whose globskipdots is off expands it; a parenthesis "
+            + "after a command's word, which bash refuses and zsh reads as a pattern's group or a glob qualifier "
+            + "(rm -rf (.git|x), *(D)), is denied. On every ground, worktree rules or none, git and gh are called by their own commands: a git "
+            + $"command whose first word, a name a setting of git's may have, is none of git's own ({string.Join(", ", Agents.Policy.AgentPolicy.GitCommands)}) "
+            + "and no program git-<name> git finds - on the PATH the agent's commands start with, or where git keeps its "
+            + "own beside it, as git lfs is found - calls an alias, and a gh command named by none of gh's own "
+            + $"({string.Join(", ", Agents.Policy.AgentPolicy.GhCommands)}) an alias, gh's own co among them, or an "
+            + "extension, as gh extension exec runs one, where gh runs - its command's own program, or past one that runs "
+            + $"the words after it ({string.Join(", ", Agents.Policy.CommandAnalysis.CommandRunners)}), never among another "
+            + "program's words, its data: each runs a command line from a configuration file or an extension no rule "
+            + "reads, one an agent may have written, and is refused; an alias the command gives itself (git -c alias.x=... "
+            + "x) is read as the command it is.";
 
     /// <summary>
     /// What the claude-code client does with a launch, its tools from the one table that gives them, the names it sets
@@ -2682,7 +3631,11 @@ public static class HelpTopics
             + "directory, with every other root it reaches added. It is given its model and no fallback, the step's effort, "
             + "turns and budget, and the tools of the agent's capabilities and no other - "
             + tools
-            + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. The run's reporter is given "
+            + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}; where its own process runs "
+            + "apart from the isolation it hands its commands to (above), the engine's tool server serves read's "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.ServedOf(Agents.AgentCapability.Read, ownFiles: false))} and write's "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.ServedOf(Agents.AgentCapability.Write, ownFiles: false))} in place of "
+            + "Claude Code's own, each call asked of the engine and run by the tool runtime below as on the API clients. The run's reporter is given "
             + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. A step with the web takes the harness's own "
             + $"{Agents.Runtime.AgentTools.WebFetch} - and {Agents.Runtime.AgentTools.WebSearch}, where it has a source to search - from the engine's tool server: the one MCP "
             + $"server, of type sdk, named {Agents.ClaudeCode.ClaudeCodeTools.Server}, that the launch's --mcp-config names beside --strict-mcp-config (the step's "
@@ -2727,10 +3680,12 @@ public static class HelpTopics
             + "as Claude Code fails a call whose input did not read cannot be told from one, and is not caught); and each is "
             + "ended at once. A message the engine writes that no turn takes within the step's stall bound - counted from "
             + "when the launch answered its initialize request, and from the turn's end for one written while a turn ran - ends "
-            + $"it {nameof(Agents.AgentRunStatus.Stalled)}. A request the model declines ends the step "
-            + $"{nameof(Agents.AgentRunStatus.Refused)}, with what it was of where the provider names it, and an account at its limit - a rate limit event "
-            + "that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - ends it "
-            + $"{nameof(Agents.AgentRunStatus.RateLimited)}, with when the limit lifts where it says; an overloaded service is no limit of the account's.";
+            + $"it {nameof(Agents.AgentRunStatus.Stalled)}. A request the model declines and an account at its limit - a rate limit event "
+            + "that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - each move "
+            + "the step to its next entry, a new launch - an account at its limit to the same model's next key first, a "
+            + $"declined request past the model's other keys to the next model - ending it {nameof(Agents.AgentRunStatus.Refused)} and "
+            + $"{nameof(Agents.AgentRunStatus.RateLimited)} where none is left, with what the declined request was of where the "
+            + "provider names it and when the limit lifts where it says; an overloaded service is no limit of the account's.";
     }
 
     /// <summary>
@@ -2746,7 +3701,8 @@ public static class HelpTopics
 
         return "The tool runtime is the harness's own tools, built for the API clients to give their agents in place of a "
             + "client's own - the claude-api and glm clients below - and serving the claude-code client the web's through "
-            + "the engine's tool server, each under the "
+            + "the engine's tool server, and its file tools there too where Claude Code's own process runs apart from the "
+            + "isolation, each under the "
             + $"capability that gives it: {tools}. The run's reporter is given "
             + $"{string.Join(", ", Agents.Runtime.AgentTools.All(defaults).Where(tool => Agents.Policy.AgentPolicyGround.ReporterCapabilities.Contains(tool.Needs)).Select(tool => tool.Name))}, "
             + "those that read, and no other. Each call is decided before it runs and recorded: a tool the step was not given, or "
@@ -2755,7 +3711,12 @@ public static class HelpTopics
             + $"prefix, a device's name ({string.Join(", ", Agents.Runtime.ConfinedPaths.DeviceNames.Take(4))} and the rest), "
             + "a drive's own directory (C:x) or an alternate data stream - its links followed (one whose links cannot be followed refused as undecided) and held to the agent's roots, each compared as its own file "
             + "system names it: a read inside one of them, a write inside a writable one and through no link below it (a "
-            + "link put in place between the check and the act is the known limit); then the policy above is asked of it, and "
+            + "file is read through the file as it was opened, where the open file stands decided again before a byte "
+            + "passes - opened never to wait, so a pipe put there is refused - and a file written, a directory made, and a "
+            + "file or a directory moved or deleted is acted on relative to its directory held from the writable root it was "
+            + "decided in, every entry on the way opened as itself, so a link put in place between the check and the act, or "
+            + "swapped in while it acts, reaches nothing and the call is refused naming it; a directory listed goes by its "
+            + "path, so a link put in place of one lists names, never a byte of a file); then the policy above is asked of it, and "
             + "a deleting or moving tool is a write to every path it touches, at both ends of a move. A directory deleted or "
             + $"moved is refused where it is a root, holds a link, holds a path that may not be written or holds more than "
             + $"{Agents.Runtime.AgentTools.MostDeletedEntries:N0} entries. A file past {DiskSpace.Size(Agents.Runtime.AgentTools.MostViewedBytes)} is "
@@ -2798,10 +3759,19 @@ public static class HelpTopics
             + "thrown away and asked again, goes on as the same turn - counted against the step's maxTurns but a handoff "
             + "turn; every request's usage - one that ended without its turn, failed, silent or left, by what it said it used "
             + "so far - is counted at the model's "
-            + "prices, no request but the handoff turn's is sent "
-            + "once the step's maxBudgetUsd is spent, and a step held to a budget on a model missing a price of what its "
-            + "provider's requests are billed by - input, cache reads and output, and the cache writes of a provider whose "
-            + "requests write one, in the model's large-prompt set too where it has one - is never started, naming the key to fill. Each turn's calls run as the tool runtime above decides them; a turn whose request spent "
+            + "prices, and no request but the handoff turn's is sent "
+            + "once the step's maxBudgetUsd is spent. A step held to a budget in dollars - its own maxBudgetUsd, or the run's "
+            + "budget.usd it is charged to - is never started, on any client, on a model missing a price of what its client's "
+            + "requests are billed by: input, cache reads and output on every client, the cache write of its cache lifetime on "
+            + "claude-api and both cache writes on claude-code, in the model's large-prompt set too where it has one, nor on a "
+            + "provider that prices in another currency than the budget's dollars. The step's first such entry ends it not "
+            + "started, naming the key to fill; a later one is passed over, said so, and never asked. The workflow's check - "
+            + "validate-workflow, and every run before it starts - says the same first, for each model a step charged to a "
+            + "dollar budget may run on, of the prices the client it is reached through is billed by, given that client's "
+            + "agentClients entry, naming the model, the client and the missing price (the reporter's is never charged to "
+            + "the run's). "
+            + "A turn whose cost cannot be counted is never charged as nothing: what was spent is said as at least what was "
+            + "counted, and why the rest is not known. Each turn's calls run as the tool runtime above decides them; a turn whose request spent "
             + "the budget runs none of them. The conversation is kept in the provider's own form under the agent's "
             + $"{OrchestratorLayout.SessionsDirectoryName}/<id>/, each message as it was sent and received and sent back so with "
             + "every later request, one line for each point where the history is whole - a turn that called tools stored with "
@@ -2817,17 +3787,25 @@ public static class HelpTopics
             + "or paused, is every piece of it. A failed request is asked again "
             + $"up to {Agents.Loop.ToolLoopTerms.DefaultMaxRetries} times after a wait that doubles from "
             + $"{Agents.Loop.ToolLoop.FirstWait.TotalSeconds:0} s to {Agents.Loop.ToolLoop.LongestDoubledWait.TotalSeconds:0} s, "
-            + "or the one the provider names; a rate limit past them, or naming a wait past "
-            + $"{Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} s, is the account at its limit "
-            + $"({nameof(Agents.AgentRunStatus.RateLimited)}) - the model's on the key it was sent with, or the key's whole where its "
-            + "balance is spent, each named - a service failing past them, or naming such a wait, fails the "
+            + "or the one the provider names; a service failing past them, or naming such a wait, fails the "
             + "step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
             + "a model the provider does not serve the key never starts the "
-            + "step before its first answer and fails it after; a key the provider refuses is passed over for the run's "
-            + "next, the same request sent again with it. A handoff asked abandons the request under way and cuts the calls "
+            + "step before the provider begins an answer with the model asked and fails it once one began. The engine's fallback works inside the one conversation: a key "
+            + $"the provider refuses - said, and passed over for the rest of the run - an account at its limit (a rate limit past those tries, or naming a wait past {Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} s: "
+            + "the model's on the key it was sent with, or the key's whole where its balance is spent, each named) and a "
+            + "request the model declined each move the run to its next entry of the same provider and client, the same "
+            + "request sent again with the model or the key changed and nothing else, the declined turn thrown away with any "
+            + "part of an answer it had written; at a limit the same model's next key is tried first and every entry the "
+            + "limit covers is passed over until it lifts, a declined request passes over the model's other keys, and one the "
+            + "provider marks about what the prompt asks (reasoning_extraction) moves no step. A handoff asked abandons the request under way and cuts the calls "
             + $"running, each answered '{Agents.Runtime.AgentToolRuntime.Interrupted(Agents.Loop.ToolLoop.Pausing)}', then asks "
             + "the agent in one more message of the conversation, held to the handoff's bound instead of the step's time, no tool run in that turn; "
-            + "a message the engine gives an agent at work is given after "
+            + "a side-task's interrupt does the same, each call answered "
+            + $"'{Agents.Runtime.AgentToolRuntime.Interrupted(Agents.AgentTurnInterrupt.Cut)}', and ends the run Cancelled, the "
+            + "conversation stored to its last whole turn; a request left so - by a handoff, an interrupt, the step's time or "
+            + "the handoff's bound - "
+            + "counts what the provider had said it used, and where it had said nothing yet the run's cost is unknown, "
+            + "never naught; a message the engine gives an agent at work is given after "
             + "the results of the calls it is running, and an answer written while it was is not the step's.";
 
     /// <summary>
@@ -2854,8 +3832,10 @@ public static class HelpTopics
             + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} "
             + "where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or "
             + "priceCacheWrite1h for an hour. A step with a fallback that can go on here sends the "
-            + $"{Agents.ClaudeApi.ClaudeApiRequest.FallbackCreditBeta} beta, and a request the model declines ends the step "
-            + $"{nameof(Agents.AgentRunStatus.Refused)}, with its category and the credit the API gave for it on the result; "
+            + $"{Agents.ClaudeApi.ClaudeApiRequest.FallbackCreditBeta} beta, and a request the model declines moves the step "
+            + $"to its next model of the same provider and client - the same request sent again with the model changed and "
+            + $"the credit the API gave sent back as its fallback_credit_token, a failure naming it answered by the same "
+            + $"request without it - {nameof(Agents.AgentRunStatus.Refused)} with its category only where none is left; "
             + $"no request carries fallbacks or a {Agents.ClaudeApi.ClaudeApiRequest.ServerSideFallbackPrefix}* beta, for the "
             + $"engine's fallback is the only one a step has. Two keys are {Client}'s alone: betas, sent beside the tool's own, "
             + "each one word and never the API's fallback's, and cacheTtl; three are both API clients': requestExtras, an "
@@ -2866,11 +3846,11 @@ public static class HelpTopics
             + $"maxRetryWaitSeconds, the loop's tries and longest wait ({Agents.Loop.ToolLoopTerms.DefaultMaxRetries} and "
             + $"{Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} where nothing is said). A spend limit reached "
             + $"- the organization's monthly cap, a 429 whose error names {Agents.ClaudeApi.ClaudeApiFailures.SpendCapCode}, or one "
-            + "the organization or a workspace set, a 400 that says so - is the key's limit, the step "
-            + $"{nameof(Agents.AgentRunStatus.RateLimited)} at once until the date the API names; a 401 is a key "
-            + "refused, passed over for the next; a 402 the key's balance spent, the step "
-            + $"{nameof(Agents.AgentRunStatus.RateLimited)} at once; a 429 the model's limit on that key, waited out within "
-            + "those tries and the step RateLimited past them; a 413, a prompt too long or an answer the model's context could hold no more "
+            + "the organization or a workspace set, a 400 that says so - is the key's limit, every entry on that key passed "
+            + "over until the date the API names; a 401 is a key "
+            + "refused, said and passed over for the rest of the run; a 402 the key's balance spent, every entry on that "
+            + "key passed over; a 429 the model's limit on that key, waited out within "
+            + "those tries and the same model's next key tried past them; a 413, a prompt too long or an answer the model's context could hold no more "
             + $"of is the context exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)}); a 403, a 404, or a 400 "
             + "answering a conversation's first request - a model the key's organization is not given, such as one that "
             + "needs a data retention the organization does not keep - is a model the provider does not serve the key, "
@@ -2953,8 +3933,9 @@ public static class HelpTopics
             + "into the array's description in words, for structured outputs take no other - and where the API refuses it as "
             + "more than it compiles, the run's later requests carry no format, and a message of the conversation says it in "
             + "words, the system prompt untouched; the "
-            + $"{Agents.ZaiApi.ZaiApiClient.ClientName} client, whose wire holds no answer to a schema, says it in words in the "
-            + "step's first message, and asks an answer that read as no JSON again in JSON alone - no tool offered, "
+            + $"{Agents.ZaiApi.ZaiApiClient.ClientName} client, whose wire holds no answer to a schema, says it in words in a "
+            + "message of its own after the step's first, in every conversation the step begins, and asks an answer that read "
+            + "as no JSON again in JSON alone - no tool offered, "
             + "response_format a JSON object. An answer that does not read is sent back in the same conversation, "
             + $"{output.MaxRepairs} times at most, and the step is then {nameof(Agents.AgentRunStatus.InvalidOutput)}.";
     }
@@ -2962,12 +3943,12 @@ public static class HelpTopics
     /// <summary>What a failure of <paramref name="kind"/> is to a step, as the loop acts on it.</summary>
     private static string FailureSaid(Agents.Loop.ChatFailureKind kind, bool balanceSpent) => kind switch
     {
-        Agents.Loop.ChatFailureKind.KeyRefused => "is a key refused, passed over for the next",
-        Agents.Loop.ChatFailureKind.AccountLimit => $"is the key's limit{(balanceSpent ? ", its balance spent" : string.Empty)}, the step {nameof(Agents.AgentRunStatus.RateLimited)} at once",
-        Agents.Loop.ChatFailureKind.RateLimited => $"is the model's limit on that key, waited out within the tries and the step {nameof(Agents.AgentRunStatus.RateLimited)} past them",
+        Agents.Loop.ChatFailureKind.KeyRefused => "is a key refused, said and passed over for the rest of the run",
+        Agents.Loop.ChatFailureKind.AccountLimit => $"is the key's limit{(balanceSpent ? ", its balance spent" : string.Empty)}, every entry on that key passed over",
+        Agents.Loop.ChatFailureKind.RateLimited => "is the model's limit on that key, waited out within the tries and the same model's next key tried past them",
         Agents.Loop.ChatFailureKind.Transient => "is asked again",
         Agents.Loop.ChatFailureKind.ContextFull => $"is the context exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)})",
-        Agents.Loop.ChatFailureKind.Declined => $"ends the step {nameof(Agents.AgentRunStatus.Refused)}",
+        Agents.Loop.ChatFailureKind.Declined => $"moves the step to its next model, {nameof(Agents.AgentRunStatus.Refused)} where none is left",
         Agents.Loop.ChatFailureKind.Unserved => "is a model the provider does not serve the key",
         _ => "fails the step",
     };
@@ -3212,7 +4193,8 @@ public static class HelpTopics
             builder,
             $"A row's cells are {string.Join(", ", AgentRows.RequiredCells.Select(cell => cell + AgentRows.CellExtension))}, and "
             + $"{AnchorCellNames.Priority}{AgentRows.CellExtension} where it declares one, each read as write-anchor reads a cell file. "
-            + "An agent's worktree is <worktrees.root>/<orchestrator>/<agent>, which list-worktree and delete-worktree name "
+            + "An agent's worktree is <worktrees.root>/<orchestrator>/<agent>, a git repository of its own that borrows the main "
+            + "checkout's objects ('help worktrees'), which list-worktree and delete-worktree name "
             + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. An agent can also be made with no "
             + $"worktree ({AgentService.CreateCommand} --no-worktree), reading the main tree and writing only its scratch: the engine "
             + "makes one for a read-only reason step, and a person has no use for one by hand. It records no session - --session "
@@ -3261,7 +4243,7 @@ public static class HelpTopics
             $"A run is an orchestrator a workflow's engine drives. {FlowService.RunCommand} validates the workflow and makes the run - "
             + "r<N>, one more than the highest there, or the name --run gives, held to worktrees.maxNameLength and refused where it is "
             + "taken - with its record, its state (flow.json), its status (workflow.json), its questions (questions.json), its "
-            + "pre-existing issues and its events, and claims it for its process (<run>.owner.json beside the run's directory). "
+            + "plan updates (updates.json), its pre-existing issues and its events, and claims it for its process (<run>.owner.json beside the run's directory). "
             + "A run starts from the main checkout's HEAD on a branch of its own, and records that commit and branch: it is refused "
             + $"({HarnessExit.Refused}), having made nothing, where HEAD is detached, where the checkout is on the branch the run's pull "
             + "request is opened against - the pull-request step's base, filled from the run's inputs and its name, else the "
@@ -3277,26 +4259,130 @@ public static class HelpTopics
             + "with - refused where the repository's entry for it changed since, which is read in the main checkout whichever tree "
             + "the command was typed in, as a start reads it - reclaiming the owner of an engine that has gone "
             + "and saying so: what a stop or a crash cut off, and a failure that ended the run, run again as new attempts, save a "
-            + "failure an answer fail ended; what that failure kept from running is drawn again; what the run owed - a failure or "
+            + "failure an answer fail ended and a step a plan update ended in order, which stays ended; what that failure kept "
+            + "from running is drawn again; what the run owed - a failure or "
             + "an ending a pause recorded, the triage of an issue, a redirect - is made first; and every question and answer the run "
             + "has is kept. It goes on beside a question still open, and is refused, having written nothing, only where nothing "
             + "can run until one is answered - a session an answer began, or one whose budget question is open, pauses on it "
             + "instead. A record the run is made with that is missing is refused by name. "
             + $"{FlowService.AnswerCommand} answers a question: handed to the engine running the "
             + $"run through inbox.json, which it reads every {FlowTimings.Default.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, "
-            + "or else a session of its own. "
+            + "or else a session of its own; with --again it changes the last answer a person gave - the one set the command shows - "
+            + "within the minutes the workflow's amend.changedAnswerMinutes names and once, a change handed to a running engine "
+            + "taken at the poll that first reads it: both answers are kept, each with when it "
+            + $"was given, in questions.json, and a pause step whose answer changed is visited again done at once with the new one. "
+            + $"{FlowService.AmendCommand} amends the request a run was started with: handed to the engine running it through "
+            + "inbox.json and taken at the poll that first reads it - weighed against the run as it stands then, never only when "
+            + "the drive ends - or else recorded in updates.json as a plan update queued, taken first when the run is next gone on with - "
+            + "the command starts nothing; the request as it was given is never rewritten, and from the taking on the input "
+            + "amend.input names reads as the value as given then each amendment under a line that says when it was made, in "
+            + "{input.<name>} and every "
+            + "expression alike, while a preAnswer's quote is looked for in the value as given and never in an amendment. Where the "
+            + "run has begun the scope its plan updates are planned in, the change is taken by raising the step its amend.step "
+            + "names - a new visit of it in the newest instance of that scope, ahead of everything else - and the run is held "
+            + "while it plans: nothing starts outside that scope and what is in flight is untouched, the step's prompts read what "
+            + "raised the change ({update.cause}, {update.since} and {update.work}), and its amend.then runs the check it names "
+            + "again by the redirect's machinery, until that scope has come to rest and the plan stands - or the step fails and "
+            + "its onFailure gives the update up, no plan holding the change. Once the plan stands, the pieces its amend.scope "
+            + "expression reads are placed: an added piece makes one more work item of the work-item group, and a changed or a "
+            + "removed piece finds the instance that carries its work item - given the piece's item in the place of its own "
+            + "where it waits, or withdrawn before it began; brought to rest, nothing more started in it, and visited again in "
+            + "its place with its agent where it has begun - the instance it ends stays ended, its record saying so, no step "
+            + "of it, at any depth of a group nested in it, is given a new attempt - one that fails, asks, passes its time "
+            + "limit, or a pause or a stop stopped, ends stopped for the update, as each nested group does once the instance "
+            + "comes to rest - and no session after runs it again; one more work item of the group, with new agents, where it has "
+            + "ended - and where the round it joins has not opened, the piece is owed to it and joins at the check that opens "
+            + "the round, over that round's own items and the owed ones as one list. Each item's instance is of one kind - "
+            + "added, changed or removed - and the step its kind names runs in the place of the one amend.whenAddScope names, "
+            + "under its name, the other two skipped saying why; the steps of the group read {piece.kind}, {piece.changed}, "
+            + "{piece.keep}, {piece.undo}, {piece.instead} and {piece.before}, the engine's account of the work a piece that "
+            + "runs again or takes back starts from. A validate-plan step checks the pieces with the items where its scope "
+            + "names them, so a piece that cannot be placed comes back to the planner as a problem of the plan. A told piece "
+            + "tells: a reason step in flight that one names - its own instance, or a scope around it - is sent one message "
+            + "into the conversation it is in, which lands when its calls have finished and never cuts its turn; one that "
+            + "waits on a question of its own is told with the answer; one that starts or goes on later in work a piece "
+            + "names reads the same in a part of its own prompt; a reason step in flight that no piece names is sent nothing "
+            + "and listed as not concerned, and a piece that names nothing under way is not delivered and recorded with why - "
+            + "as who was told what is, in updates.json and the report alike. A reason step ended in order is told its piece "
+            + "first, as the lead of its handoff question. Where the round a piece joins has ended, the work is owed to the "
+            + "loop's next iteration, which runs whatever its until says - a loop that ended done runs again for it; only where "
+            + "that loop is at its own bound is one iteration added for the update. With no loop around the work-item group, "
+            + "a round of the group is added for the work: the group runs once more, through the check that opens a round and "
+            + "every step between it and the group - the check handed the owed work with its own items as one list - and the "
+            + "round carries the owed work alone; a change given while a round added waits to open, before the check that "
+            + "opens it has started, joins that round, and one given after it is refused until the round has opened, which "
+            + "it then joins. What an update done owes is carried at the next session's start where a crash came first; work "
+            + "owed to a loop at its bound where the run has none left to add is left to the question its bound asks, which "
+            + "the loop reaches whatever its until says, the update's entry saying so once that question is asked, and no "
+            + "later session runs again a loop its answer ended. An iteration "
+            + "or a round is added once per update and at most amend.maxAddedIterations over the run, published and said in "
+            + "the report and list-orchestrator - as is a loop's bound asked for the work - with every piece, where it was "
+            + "carried out and how that ended - done, failed, "
+            + "skipped or never run, or that no instance carried it; where the run has none left to add, or a group around the "
+            + "work-item group ended otherwise than done and draws nothing more, an update whose work only an added round would "
+            + "carry is given up with why, its pieces never carried out. Updates are "
+            + "taken one at a time: one that arrives "
+            + "while another is under way is queued behind it, in the order given, and one the run can no longer take at its "
+            + "turn is recorded refused with why. Both are "
+            + "refused, nothing changed, where the run is done, past the step its amend.before names, or past its work items - "
+            + "the last round it can run ended, of a loop at its bound with every iteration amend.maxAddedIterations allows, or "
+            + "of a group with no loop around it that runs no round more, none waiting to open, or a round added waiting to "
+            + "open whose check has run - and "
+            + "where the definition the run began with takes no such change. "
             + $"{FlowService.PauseCommand} asks that engine for the safe pause through stop.json - its agents hand off, the machine "
             + "steps finish unless --all, then the run is paused - and waits until it is complete; "
             + $"{FlowService.StopCommand} asks it to stop where it stands and waits {FlowTimings.Default.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, "
             + "and --now ends its process: only on this machine, and only the process its owner names by its start. "
             + $"{OrchestratorService.DeleteCommand} refuses a run a live engine owns, and removes a gone engine's owner with the run. In the terminal "
             + "a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
-            + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands - a "
+            + "clock of its own: each agent is asked for its handoff in its own conversation and answers within the workflow's "
+            + "handoffSeconds, and a build may take as long as it takes. The second stops the run where it stands - a "
             + $"step whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s is recorded stopped all the same - and "
             + $"the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left; "
             + $"what is left then is what a crash leaves, and {FlowService.ResumeCommand} goes on from the records. The steps served so "
             + $"far are {string.Join(", ", FlowStepRunners.Served)} ('{ToolPackage.Command} help workflows'): a step of any other type "
             + "fails, saying no runner serves its type.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"Asking a run about itself. {FlowService.AskStatusCommand} asks the tool's own question of a run - what is happening now, "
+            + "what is done, what is left, what it waits for, and when it may finish - and "
+            + $"{FlowService.AskCommand} a person's, both answered with the engine's facts, computed from the run's records and never "
+            + "guessed: how the run stands and for how long, its engine and its pause; each step instance in progress with its type, "
+            + "its agent, a reason step's model, its attempt and how long it has run; what it waits for - each open question with "
+            + "since when and the command that answers it, a plan update under way or queued, an instance waiting on another, on "
+            + "the resume or on room - a claim, the run to be quiet, a counter of its limits - a ci-wait reading the checks of the "
+            + "commit the run last pushed; what is done, the failures a handler took and what was spent of the budget; what is left "
+            + "at least and at most - a stopped instance among it, for it runs again at the resume - with the bound that gave the "
+            + "most, by the engine's own bounds, so the most is a bound: each member of a scope still open not drawn yet, a loop's "
+            + "iterations to its bound past the ones it made, a handler's visits to its maxVisits in each scope its source can "
+            + "still end in with the steps its then sends the run back over at each visit, and the recovery's visits to its "
+            + "maxVisits for each step whose failure it can take with the steps it sends the run back over, each widened by every "
+            + "more its bound was answered and every iteration a plan update added, and each piece of a plan update not carried "
+            + "out; what no numeric bound holds - a forEach not yet expanded, a repeat with no numeric bound, a step whose "
+            + "pre-existing issues each raise a triage, a handler that sends the run back outside its own group, a plan update "
+            + "still to be planned - and a question open at a bound, whose more can grant past it, named - "
+            + "and when it may finish, as a range that rests on this run alone: of each step of the definition that works, the "
+            + "shortest and the longest time an instance of it took to end Done - a group's own span is its members' time, never "
+            + "counted beside it - the lower end laying what is left along what depends on what, as the engine orders it, so work "
+            + "that runs side by side is counted once, the upper end summing every instance that is left and everything the run "
+            + "may still make, one after another; a step no instance of which has ended Done in this run is counted and named "
+            + "and in neither end, the time a person takes to answer and a wait for room are left out and said to be, and where "
+            + "nothing has ended or the run has ended - done or failed; a stopped run goes on at its resume - there is no "
+            + "estimate, and the facts say which. Where "
+            + "the workflow's reporter names an agent, its words follow the facts - it is the run's own reporter, offered the tools "
+            + "that read and no other, reading the run's directory and nowhere else, its answer masked and what it costs the "
+            + "person's, never the run's; each call keeps its own record under the run's asks/, the facts as given, the files of its "
+            + "reporter's attempt, the conversations its client stores (sessions/) and ask.json, a directory the engine never reads. Both commands only read: no state file, no "
+            + "step, no agent, no budget, no lock an engine needs - they take no lock at all - and they work while a run goes on, is "
+            + "paused, waits, or has ended. Where no model words them the status still prints the facts, says no model worded this "
+            + "and why, and exits 0: the facts are the answer, and the words were a service; the person's question is refused - 12 "
+            + "where the workflow names no reporter or the reporter's own files do not read, 13 where the key is not there, 14 "
+            + "where npm or Claude Code is missing or too "
+            + "old, 20 where the model failed, 21 where it could not be reached or its account is at its limit - and neither "
+            + "command installs Claude Code or brings one up to date: that is a run's to do, and these only read. An orchestrator "
+            + "made by hand, which no flow runs, has no reporter and fewer facts: its status prints what list-orchestrator has of it "
+            + "and says so, and the person's question is refused (12).");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3327,7 +4413,7 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "Seeding. create-agent hands the agent the main tree's uncommitted state - every path git status lists, off the "
-            + "worktrees root, .git, .orchestrators, .mutations and .legs: each changed file copied into its worktree, each deletion made there - and "
+            + "worktrees root, .git, .orchestrators, .mutations, .legs and .side-tasks: each changed file copied into its worktree, each deletion made there - and "
             + "records what it was handed, each file with its digest. An untracked directory git will not look into, a repository "
             + "of its own, is named and not handed; --empty hands it nothing. A symbolic link among it is refused before the "
             + "worktree is made, so nothing is left behind. seed-agent does it again, refused over changes of the agent's own - a "
@@ -3974,7 +5060,9 @@ public static class HelpTopics
         builder.AppendLine("the schedule never starts it. A step gives a failure nothing handles to the workflow's");
         builder.AppendLine("recover by saying onFailure: recover, itself or through a group around it - never a");
         builder.AppendLine("reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long");
-        builder.AppendLine("each time) and on its fallback, and which asks where it still fails. The recovery's steps,");
+        builder.AppendLine("each time) and on each model of its fallback, and which asks where it still fails; where");
+        builder.AppendLine("every account it could use is at its limit, or its provider's service fails past the");
+        builder.AppendLine("client's own tries, the run pauses safely instead and resumes that very step. The recovery's steps,");
         builder.AppendLine("written once, read the step that failed as source and see every step of the flow, find");
         builder.AppendLine("what went wrong and put it right; then the run goes where its onSuccess says - failed-step,");
         builder.AppendLine("the step that gave it its failure, which runs again from where it stopped - and a failure");
@@ -4101,21 +5189,88 @@ public static class HelpTopics
             + "the wrong shape; no path owned by two items, and none an item owns that it must not touch; the path budget of the "
             + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
-            + "each thing it creates. A step given the pieces of a plan update (a scope that yields a list not empty) fails, saying "
-            + "this build does not check them yet; one whose items yield no list, or whose scope yields neither a list nor nothing, "
+            + "each thing it creates. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
+            + "with the items, each problem among the rest: each piece of one of the four kinds (added, changed, removed, told) "
+            + "and its texts; an added or a changed piece's item an item of the list, a removed piece's of a work item's shape; "
+            + "no two pieces naming one work item; a changed or a removed piece naming a work item the plan had before the "
+            + "update; and the items the update places checked with those of the round it joins, as one list - among themselves "
+            + "where the run has no round. One whose items yield no list, or whose scope yields neither a list nor nothing, "
             + "fails, as a definition that does not hold does. create-agent makes the agent the engine named for it - a<N>, one past the "
             + "highest the run's agent directories and step records hold, never given twice - for the model of the first reason "
             + "step that works in it, or the default tier's first model where none does, both written to the step's record before "
             + "the agent is made. Run again, it reads the agent first: none, it is made; whole, it is done; made part way with its "
             + "worktree's commit recorded, its seeding is finished; made part way without it, it is deleted, and closed - its "
             + "removal begun - its removal is finished; that, or deleted, the name is spent and the step fails, its next attempt "
-            + "named anew. build, test, run and check-mutations run their legs as the commands of those names do, in the worktree "
+            + "named anew. reason works the step's agent: the one its in names or the work it goes on with (resume), or - where it "
+            + "names neither - the engine's own read-only agent, with no worktree, made before the step runs and deleted once no "
+            + "step can go on with its work; the step's model resolved with its agent definition below its own and its order built "
+            + "as entries of a model and one of its provider's keys, each entry's credential read from the slot "
+            + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an "
+            + "expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
+            + "and each skill it names looked up again and "
+            + "the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
+            + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new "
+            + "launch rendered where it does not; and its answer, held to the schema its outputs names - one the engine reads, "
+            + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. A failed "
+            + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, "
+            + "absent the workflow's, twice as long before each later try - and then on each model of its order; a run that ended "
+            + "on a key the provider refused moves to the next key at once, with no wait, and the run's pause ends the wait "
+            + "before a try and begins no launch after one ended, the step handed off with no handoff, saying so; what its agents "
+            + "assumed without asking is kept, read as the step's own assumptions fact and named in the run's. Where the step may "
+            + "ask (ask) its agent's questions pause it - askRounds times in one attempt, the answer or decide going on in the same "
+            + "attempt as the agent's next message; a limit of its own (turns, budget, a truncated answer, a full context) asks, "
+            + "more offered only where a stored conversation of the attempt can be handed, and compact for a full context goes on "
+            + "from the engine's reduction of it, the attempt's bounds counting still; every account at a limit, and a provider's "
+            + "service failing past the client's own tries, pause the run safely, and the resume runs that very step. What a "
+            + "step spends is charged to the run's budget turn by turn as its agent works - every token of every kind, and its "
+            + "cost at the configuration's prices for the model serving it - and each launch is held to what is left of the "
+            + "run's dollars before its reserve where that is less than its agent's own maxBudgetUsd, or where it names none: a "
+            + "launch that bound ended has reached the run's reserve, not the step's own budget, so the workflow's answers may "
+            + "allow more and the step runs again given its handoff, or else the run pauses for its budget - and a launch whose "
+            + "share was reckoned before more was granted runs again given its handoff, its share reckoned anew. A turn whose cost "
+            + "could not be counted leaves the run's dollars known only as at least what was counted: status, the report, "
+            + "flow.json and every --json say so, uncounted beside usd naming why; in a run budgeted in dollars such a turn "
+            + "reaches the run's reserve for the grant that stands, so the run asks, and a grant of more lets it go on, each "
+            + "launch held to what is left as far as the dollars were counted. A safe pause asks each reason step in "
+            + "flight for its handoff in its own conversation, all at once, and waits for the agent's answer within the "
+            + "workflow's handoffSeconds; an agent that has not answered by then is ended. Where an "
+            + "agent gave no handoff of its own - a limit ended its run, a crash cut the attempt off, its handoff turn passed its "
+            + "bound or failed - the engine writes one from the stored stream of the step, its first line saying why: the files the "
+            + "attempt wrote, the last commands it ran and how each ended, its last messages word for word, and the steps before it "
+            + "that left notes, named by step. A pause "
+            + "step asks and asks only: the engine fills its question as a template is filled, the questions an upstream step "
+            + "wrote (questions) shown under it - each in the shape of a question, one that recommends outside its own choices "
+            + "shown as it is with a line under it saying so - and the step's answer answers them together. What the person "
+            + "gave the run answers first, where they gave it: the first preAnswer whose when holds answers at once, as a "
+            + "configured answer would, and an entry that quotes words holds only where they are not empty and stand in the "
+            + "input they are said to be of, every run of white space compared as one space - reported words the input does "
+            + "not hold answer nothing, the record says so, and the person is asked. Before a person is left with a question "
+            + "the engine raises itself, the orchestrator's advisor recommends on it: one reason step that only reads, run in "
+            + "the place the asking step works in with its records and its own conversations under advice/<n>/ of the asking "
+            + "step's own directory, numbered after those already there, its answer held to the engine's own schema - one of "
+            + "the question's answers, with a text where that answer takes one - bounded by its definition and by what is left "
+            + "of the run's dollars, and retried as every agent; the question is open while the advice runs - an answer ends "
+            + "the asking, the question saying so, and the step that asked starts again only once the advice's runner has "
+            + "ended; a pause or a stop ends it too, the question saying the recommendation is sought at the resume - the "
+            + "recommendation written to the question with who gave it and where its records are, and none obtained said "
+            + "so, a bar that could not be read among the reasons; what every advice spent, an ended one's among them, is "
+            + "counted against the run's budget; and where the orchestrator names no advisor the question says so plainly. "
+            + "The advisor takes no question of a step that may ask (its agent recommends within its own), nor a pause step's "
+            + "that shows an upstream step's questions (they carry their recommendations), nor one the run's input answers, "
+            + "nor the budget's own, nor a kind its kinds leave out, and while the run is pausing the question says the "
+            + "recommendation is sought at the resume. "
+            + "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree "
             + "of the agent their in names, else the main checkout: test with its filter, exclude and labels and run with its "
             + "inputs - a filter, an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, "
             + "every arm the registry declares where it names none, and pending. Each answers passed, true where every leg passed; "
             + "exitCode, the command's; verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that "
             + "did not pass, the ledger's line and the last lines it printed, and of a sweep each arm that violated, survived or "
-            + "was unattributed, with its arm and its line; and runDirectory, null where the run made none. A leg that works in a "
+            + "was unattributed, with its arm and its line; runDirectory, null where the run made none; and isolation, what the "
+            + "work of its legs ran under. What its legs build, test and run is what the run's agents wrote, so the work of each "
+            + "leg this machine runs - every phase it starts, a set-up's lines apart - runs inside the operating system's "
+            + "isolation of the agents' work ('help agent-clients'); where this machine has none, agentPolicy.isolation "
+            + $"required fails the step ({HarnessExit.ToolMissing}) with nothing run, and preferred runs its legs outside, each "
+            + "leg's line saying so. A leg that works in a "
             + "copy - its own under .legs, or a host's - lets the step's hold on its tree go once its copy is made, or once it ends "
             + "without one, and a leg in the tree itself once it ends: the step's record then says copied. A run whose runner, or "
             + "a runner its run checks name, writes the tree holds write on it, and its legs work in the tree itself. A leg run "
@@ -4213,13 +5368,17 @@ public static class HelpTopics
             + "as one staged set before the first git add, staged by explicit path, never with -A, committed once - the message "
             + $"written to the step's directory ({OrchestratorLayout.StepCommitMessageFileName}), with -s where commit.signOff - "
             + "and marked committed with each fold path it took; git refusing, a hook among the reasons, unstages it and fails "
-            + $"the step ({HarnessExit.CommandFailed}). The commit is held to the set, by what it changes against its parent: one "
-            + "that took more - a hook staged another file - or left a path of the set out fails the step "
-            + $"({HarnessExit.CommandFailed}) naming each, and is left as it is for a person to keep or undo, the set staged in the "
-            + "ledger beside it. A set an attempt before left staged is settled first: committed where HEAD moved and holds each "
+            + $"the step ({HarnessExit.CommandFailed}). The commit is held to the set over the commit the branch named before "
+            + "it: one that stands on anything but that commit alone - a hook moved the branch to a commit of its own, its "
+            + "parent carrying anything - took more against it - a hook staged another file - or left a path of the set out "
+            + $"fails the step ({HarnessExit.CommandFailed}) naming each, and is left as it is for a person to keep or undo, the "
+            + "set staged in the ledger beside it. A set an attempt before left staged is settled first: committed where HEAD moved and holds each "
             + "of its paths as the set staged it, else unstaged and staged again whole. It answers committed, sha, paths and "
             + "ignored - each path its folds changed that git ignores, folded and never committed, which what the run's end "
-            + "leaves for a person names too - run again once it has committed, the commit it made. What a run checked "
+            + "leaves for a person names too - run again once it has committed, the commit it made - and, where it ran git's "
+            + "commit, isolation: git's commit and the repository's commit hooks run inside the operating system's isolation "
+            + "of the agents' work ('help agent-clients'), and where this machine has none agentPolicy.isolation required fails "
+            + $"it ({HarnessExit.ToolMissing}) before anything is staged, preferred runs them outside. What a run checked "
             + "is text any template reads: {run.ran}, every check that ended so far, a line each with where it ran and its "
             + "verdict, each leg's for a step that runs legs; {run.notRun}, each check not run yet, by its step's name, and each "
             + "skipped or never reached, with why; and {run.red}, each red result not seen green since by a later visit of the "
@@ -4229,18 +5388,23 @@ public static class HelpTopics
             + "marked independent, whatever each is named. A commit's message and variables read {carried.ran}, "
             + "{carried.notRun} and {carried.red} besides: the same three of the checks upstream of it that ended since the "
             + "newest commit upstream of it was done, a check whose failure was passed over among those that did not check. "
-            + "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (no "
-            + "step records an assumption yet) and the issues it found there before - say 'none' alike where they name nothing.");
+            + "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (each "
+            + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing.");
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "push pushes the commit the main checkout's HEAD names to the branch of its name on a remote - the step's remote, "
+            "push pushes the commit the run's commit steps recorded last, else the one the run started on - never what the "
+            + "branch names by then, which a hook or a build working in the main checkout could have moved - to the branch of "
+            + "the name the main checkout is on, on a remote - the step's remote, "
             + "else the one the run's branch goes to (the push step's, else the one the branch tracks, else origin, else the only "
             + "one) - as a fast-forward and never forced, and answers pushed - false where the remote's branch named that commit "
-            + "already, so a push run again is done - remote, branch and sha, the commit a ci-wait that names none waits for. Every "
+            + "already, so a push run again is done - remote, branch and sha, the commit a ci-wait that names none waits for - "
+            + "and isolation: git's push and the repository's push hooks run inside the operating system's isolation of the "
+            + "agents' work ('help agent-clients'), and where this machine has none agentPolicy.isolation required fails it "
+            + $"({HarnessExit.ToolMissing}) with nothing pushed, preferred runs them outside. Every "
             + "push step that names a remote names the same one, the remote the run's branch goes to: a definition whose push "
-            + "steps name two is refused. HEAD detached, the main checkout on another branch than the run started on, a branch "
-            + "with no commit yet, no remote it can name and one the repository does not have each refuse it "
+            + "steps name two is refused. HEAD detached, the main checkout on another branch than the run started on, a run "
+            + "that made no commit and started on none, no remote it can name and one the repository does not have each refuse it "
             + $"({HarnessExit.Refused}), nothing pushed; the remote refusing the push - its branch moved on since - fails it "
             + $"({HarnessExit.CommandFailed}) in git's words. A checkpoint push runs only where the workflow says pushCheckpoints, "
             + "and is skipped otherwise. pull-request opens the pull request of the branch the main checkout is on, on the "
@@ -4279,7 +5443,9 @@ public static class HelpTopics
             + "Every template key of a step is filled where the step starts, and one that reads nothing fails it (12) before its runner "
             + "is asked. "
             + "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the "
-            + "advisor's, {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its "
+            + "advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own "
+            + "recommendations.md, read live each time it is given so a change holds from the next question on, and a "
+            + "sentence saying none was written where the folder has no one - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its "
             + "askPrompt alone - {update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and "
             + "{piece.<name>} in a step of the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull "
             + "request's body, which the engine fills and no agent reads, reads what a template key reads and no skill. "
@@ -4288,7 +5454,8 @@ public static class HelpTopics
             + $"and a piece ({Under("piece", WorkflowExpressions.PieceTexts)}); the bar is one text, and so is each run fact "
             + $"({string.Join(", ", WorkflowExpressions.RunFacts)}), which a template reads and an expression does not. "
             + $"'{ToolPackage.Command} validate-workflow' checks the definition - the shape of every key, every name an expression, a "
-            + "template key or a prompt reads, every file the definition names - and "
+            + "template key or a prompt reads, every file the definition names, each step's schema one the engine reads (each "
+            + "problem naming the file, the step and the place in the schema; a step's start holds it there again) - and "
             + $"refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
             + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it is "
             + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");
@@ -4298,75 +5465,125 @@ public static class HelpTopics
         static string Under(string root, IReadOnlyList<string> texts) => string.Join(", ", texts.Select(text => $"{root}.{text}"));
     }
 
+    /// <summary>The column the layout topic writes what each place holds at.</summary>
+    private const int LayoutColumn = 37;
+
+    /// <summary>
+    /// Every place init creates or the tool keeps in a tree, each with what it holds, in the order the layout topic lists
+    /// them: the one list of them, which the README's Layout block is held to word for word.
+    /// </summary>
+    internal static IReadOnlyList<(string Path, string Text)> LayoutEntries { get; } =
+    [
+        (HarnessLayout.ConfigFileRelative, "tracked; the whole contract"),
+        ($"{HarnessLayout.WorkflowsDirectoryRelative}/<name>/<name>{HarnessLayout.WorkflowFileExtension}",
+            "tracked; one directory per workflow, holding its definition and every file that definition names - its agents, "
+            + $"prompts and schemas ('{ToolPackage.Command} help workflows'); each missing file written by init where "
+            + "config.json declares the implementation one"),
+        ($"{HarnessLayout.WorkflowsEnvSlotRelative}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the agent clients' keys, NAME=value files, every "
+            + $"file merged, no key read from anywhere else; no workflow may be named {HarnessLayout.WorkflowsEnvSlotName}"),
+        ($"{AgentSkills.HarnessPlace}/<name>/",
+            "tracked; the tool's own place a step's prompt names a skill from; init creates nothing there "
+            + $"('{ToolPackage.Command} help skills')"),
+        ($"{HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml",
+            "tracked; one directory per action, holding its steps and whatever those steps run"),
+        ($"{HarnessLayout.RunnerDirectoryRelative}/{HarnessLayout.RunnerEnvDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; values actions read"),
+        ($"{HarnessLayout.RunnerDirectoryRelative}/{HarnessLayout.RunnerSecretsDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; secret values actions read"),
+        ($"{HarnessLayout.DirectoryName}/{HarnessLayout.SshItemsDirectoryName}/<name>/",
+            $"ignored, and written by you, not init: {HarnessLayout.ItemEnvFileName} (address, user, port), "
+            + $"{HarnessLayout.ItemKeyFileName}, {HarnessLayout.ItemKnownHostsFileName}"),
+        ($"{HarnessLayout.DirectoryName}/{HarnessLayout.WslDistrosDirectoryName}/<name>/",
+            $"ignored; {HarnessLayout.ItemEnvFileName} (distribution, credential)"),
+        ($"{WorktreeSettings.SeededRoot}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the worktrees, at worktrees.root, which init writes as this"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; what each orchestrator and its agents keep, in the "
+            + $"main checkout, and never sent to a host by sync ('{ToolPackage.Command} help orchestrators')"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.RecordFileName}", "ignored; the orchestrator's record"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.LogsDirectoryName}/<name>{OrchestratorLayout.LogExtension}",
+            "ignored; a line for each run that reached it or one of its agents, refusals included; a dry run writes none"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.PlansDirectoryName}/<name>/",
+            "ignored; its plans, and each agent's"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.WorkDirectoryName}/<agent>/",
+            "ignored; an agent's scratch and task files"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/",
+            "ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
+            "ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its "
+            + $"{OrchestratorLayout.HandoffFileName} where one stopped it"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
+            "ignored; API clients only: one conversation with the provider, in the provider's own form"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
+            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/.../<instance>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}",
+            "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
+            + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what "
+            + "carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and "
+            + "by stop-orchestrator --now - once its starter has gone"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AsksDirectoryName}/",
+            "ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, "
+            + $"the files of its reporter's attempt, the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/) and ask.json; "
+            + "the engine never reads it"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}",
+            "ignored; a run's web search: what each source found once for the run, and each query it answered, which the "
+            + "same query again is answered from; written by every client whose step searches"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/{OrchestratorLayout.WebIndexesDirectoryName}/<source>/",
+            "ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it "
+            + "could not read, and its fill's record of each address it asked"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/{DssHarness.Core.Agents.AgentKeySpend.FileName}",
+            "ignored; what each key spent, by its name and never its value: a line for each key and model of each entry of a step's order or of "
+            + "a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where "
+            + $"balanceKeyUsage chooses a key ('{ToolPackage.Command} help agent-clients')"),
+        ($"{HarnessLayout.SideTasksDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the side-tasks' records, in the main checkout, "
+            + $"and never sent to a host by sync ('{ToolPackage.Command} help side-tasks')"),
+        ($"{HarnessLayout.SideTasksDirectoryName}/<task>/",
+            "ignored; one side-task: its task.json, stored stream, transcript, denials and web, and its conversation where "
+            + "its client stores one; <task>.owner.json beside it while a side-task holds it open"),
+        ($"{HarnessLayout.MutationsDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the tree's mutation workers, in every tree, never "
+            + $"sent to a host by sync ('{ToolPackage.Command} help mutations')"),
+        ($"{HarnessLayout.MutationsDirectoryName}/<key><mark>-<n>/",
+            "ignored; a worker, a repository of its own, and its claim beside it"),
+        ($"{HarnessLayout.LegsDirectoryName}/",
+            $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the copies of the tree its legs work in, in every "
+            + "tree, never sent to a host by sync"),
+        ($"{HarnessLayout.RunsDirectoryRelative}/", "ignored; one directory of records per run, in the tree that ran it"),
+        ($"{HarnessLayout.DirectoryName}/{HarnessLayout.LockFileName}", "ignored; records in-progress runs"),
+        ($"{HarnessLayout.DependencySourcesDirectoryRelative}/<name>/",
+            "a mutation worker's alone, never sent by a sync nor deleted by one: its own copy of each dependency source its "
+            + $"leg's build fetched ('{ToolPackage.Command} help mutations')"),
+        ($"{HarnessLayout.DirectoryName}/{HarnessLayout.SyncedCopyMarkerName}",
+            "a host's copy's alone: the mark the sync that made it leaves, which tells a synced copy from a tree of its own"),
+        ($"{HarnessLayout.HostCopiesDirectoryRelative}/",
+            "ignores itself; which hosts hold a copy of which worktree, in the main checkout"),
+        ($"{HarnessLayout.MutationRecordDirectoryRelative}/",
+            "ignores itself; each leg's verdicts of its mutation arms, with what each was judged on, in the main checkout "
+            + "('help mutations')"),
+        (AnchorSettings.DefaultPendingAnchorsPath, "tracked; live anchors (anchors.pendingAnchorsPath)"),
+        (AnchorSettings.DefaultDoneAnchorsPath, "tracked; closed anchors (anchors.doneAnchorsPath)"),
+    ];
+
     private static string RenderLayout()
     {
         var builder = new StringBuilder();
 
         builder.AppendLine("Layout created by init");
         builder.AppendLine();
-        builder.AppendLine("  .harness-config/config.json        tracked by git; the whole contract");
-        builder.AppendLine($"  {HarnessLayout.WorkflowsDirectoryRelative}/<name>/<name>{HarnessLayout.WorkflowFileExtension}");
-        builder.AppendLine("                                     tracked; one directory per workflow, holding its");
-        builder.AppendLine("                                     definition and every file that definition names -");
-        builder.AppendLine($"                                     its agents, prompts and schemas ('{ToolPackage.Command} help workflows');");
-        builder.AppendLine("                                     each missing file written by init where");
-        builder.AppendLine("                                     config.json declares the implementation one");
-        builder.AppendLine($"  {HarnessLayout.WorkflowsEnvSlotRelative}/    contents ignored; the agent clients' keys, NAME=value");
-        builder.AppendLine("                                     files, every file merged, no key read from");
-        builder.AppendLine("                                     anywhere else; no workflow may be named .env");
-        builder.AppendLine($"  {HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml");
-        builder.AppendLine("                                     tracked; one directory per action, holding its");
-        builder.AppendLine("                                     steps and whatever those steps run");
-        builder.AppendLine("  .harness-config/runner/.env/       contents ignored; values actions read");
-        builder.AppendLine("  .harness-config/runner/.secrets/   contents ignored; secret values actions read");
-        builder.AppendLine("  .harness-config/sshItems/<name>/   ignored, and written by you, not init:");
-        builder.AppendLine("                                     .env (address, user, port), .key, known_hosts");
-        builder.AppendLine("  .harness-config/wslDistros/<name>/ ignored; .env (distribution, credential)");
-        builder.AppendLine($"  {WorktreeSettings.SeededRoot}/                        contents ignored, .gitkeep tracked; the worktrees,");
-        builder.AppendLine("                                     at worktrees.root, which init writes as this");
-        builder.AppendLine($"  {HarnessLayout.OrchestratorsDirectoryName}/                    contents ignored, .gitkeep tracked; what each");
-        builder.AppendLine("                                     orchestrator and its agents keep, in the main");
-        builder.AppendLine("                                     checkout, and never sent to a host by sync");
-        builder.AppendLine($"                                     ('{ToolPackage.Command} help orchestrators')");
-        var agentDirectory = $"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>";
-        builder.AppendLine($"  {HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/");
-        builder.AppendLine("                                     ignored; one step of a run that no agent owns,");
-        builder.AppendLine("                                     the create-agent that makes an agent included");
-        builder.AppendLine($"  {agentDirectory}/{OrchestratorLayout.StepsDirectoryName}/<instance>/");
-        builder.AppendLine("                                     ignored; one step the agent runs, or that");
-        builder.AppendLine("                                     runs in or for its worktree: everything of the");
-        builder.AppendLine($"                                     step, its {OrchestratorLayout.HandoffFileName} where one stopped it");
-        builder.AppendLine($"  {agentDirectory}/{OrchestratorLayout.SessionsDirectoryName}/<id>/");
-        builder.AppendLine("                                     ignored; API clients only: one conversation with");
-        builder.AppendLine("                                     the provider, in the provider's own form");
-        builder.AppendLine($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}");
-        builder.AppendLine("                                     ignored; in either kind of step, on Linux and");
-        builder.AppendLine("                                     macOS: a session a contained child of the step");
-        builder.AppendLine("                                     leads while it runs, or the process group a phase");
-        builder.AppendLine("                                     of its legs - a set-up's up line apart - its");
-        builder.AppendLine("                                     keepAwake command or what carries a leg to a host");
-        builder.AppendLine("                                     leads while anything is in it, ended by the next");
-        builder.AppendLine("                                     command over the orchestrator - and by");
-        builder.AppendLine("                                     stop-orchestrator --now - once its starter has");
-        builder.AppendLine("                                     gone");
-        builder.AppendLine($"  {HarnessLayout.MutationsDirectoryName}/                        contents ignored, .gitkeep tracked; the tree's");
-        builder.AppendLine("                                     mutation workers, in every tree, never sent to");
-        builder.AppendLine($"                                     a host by sync ('{ToolPackage.Command} help mutations')");
-        builder.AppendLine($"  {HarnessLayout.LegsDirectoryName}/                             contents ignored, .gitkeep tracked; the copies");
-        builder.AppendLine("                                     of the tree its legs work in, in every tree,");
-        builder.AppendLine("                                     never sent to a host by sync");
-        builder.AppendLine($"  {HarnessLayout.RunsDirectoryRelative}/              ignored; one directory of records per run, in");
-        builder.AppendLine("                                     the tree that ran it");
-        builder.AppendLine("  .harness-config/lock.json          ignored; records in-progress runs");
-        builder.AppendLine($"  {HarnessLayout.HostCopiesDirectoryRelative}/       ignores itself; which hosts hold a copy of");
-        builder.AppendLine("                                     which worktree, in the main checkout");
-        builder.AppendLine($"  {HarnessLayout.MutationRecordDirectoryRelative}/   ignores itself; each leg's verdicts of its");
-        builder.AppendLine("                                     mutation arms, with what each was judged on,");
-        builder.AppendLine("                                     in the main checkout ('help mutations')");
-        builder.AppendLine($"  {AnchorSettings.DefaultPendingAnchorsPath}");
-        builder.AppendLine("                                     tracked; live anchors (anchors.pendingAnchorsPath)");
-        builder.AppendLine($"  {AnchorSettings.DefaultDoneAnchorsPath}");
-        builder.AppendLine("                                     tracked; closed anchors (anchors.doneAnchorsPath)");
+        foreach (var (path, text) in LayoutEntries)
+        {
+            if (path.Length < LayoutColumn - 2)
+            {
+                AppendWrapped(builder, text, $"  {path}".PadRight(LayoutColumn));
+            }
+            else
+            {
+                builder.AppendLine($"  {path}");
+                AppendWrapped(builder, text, new string(' ', LayoutColumn));
+            }
+        }
         builder.AppendLine();
         builder.AppendLine("init creates each anchor registry that is missing, from a skeleton holding an");
         builder.AppendLine("introduction and an empty table, and never touches one that exists. A registry");
@@ -4391,8 +5608,8 @@ public static class HelpTopics
         builder.AppendLine("below it. A path git will not answer about - one beyond a symbolic link - is named");
         builder.AppendLine("with git's reason, and the rest are still asked. runs is ignored by name, with no");
         builder.AppendLine("trailing slash, so one kept on another disk through a link is ignored as the link");
-        builder.AppendLine($"it is. The worktrees root, the orchestrators directory, {HarnessLayout.MutationsDirectoryName} and {HarnessLayout.LegsDirectoryName} are");
-        builder.AppendLine("kept in git by their placeholders, so each reads as not ignored itself while");
+        builder.AppendLine($"it is. The worktrees root, the orchestrators directory, {HarnessLayout.MutationsDirectoryName}, {HarnessLayout.LegsDirectoryName}");
+        builder.AppendLine($"and {HarnessLayout.SideTasksDirectoryName} are kept in git by their placeholders, so each reads as not ignored itself while");
         builder.AppendLine("everything made in it is, and none can be a link: init names one it finds, and");
         builder.AppendLine("writes nothing through it. Sync withholds each by name. Each copy in them is a");
         builder.AppendLine("whole copy of the tree, so a program of the repository's own that walks the tree");
@@ -4501,10 +5718,16 @@ public static class HelpTopics
         builder.AppendLine($"                 it starts ({Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, {Agents.ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable} where none is named);");
         builder.AppendLine("                 maxRetries, maxRetryWaitSeconds and requestExtras, the API");
         builder.AppendLine($"                 clients' ({string.Join(", ", Agents.AgentProviders.ApiClients)}), their tries, longest wait and the");
-        builder.AppendLine("                 fields merged into each request; cacheTtl and betas, claude-api's");
+        builder.AppendLine("                 fields merged into each request; requestsPerMinute,");
+        builder.AppendLine("                 inputTokensPerMinute and outputTokensPerMinute, the API clients'");
+        builder.AppendLine("                 too, the buckets that pace a lane's minute; cacheTtl and betas,");
+        builder.AppendLine("                 claude-api's");
         builder.AppendLine("                 alone, how long its requests are cached and the betas sent beside");
         builder.AppendLine("                 the tool's own; preserveThinking, glm's alone, whether Z.AI keeps");
-        builder.AppendLine("                 the model's reasoning across turns;");
+        builder.AppendLine("                 the model's reasoning across turns; maxParallel, every client's,");
+        builder.AppendLine("                 the requests of one provider and key under way at once - a");
+        builder.AppendLine($"                 claude-code launch counting as one ({string.Join(", ", Agents.ClientGateSettings.BuiltIn.Select(bound => $"{bound.Key} {bound.Value}"))}");
+        builder.AppendLine("                 where nothing is said) - the gate of 'help agent-clients';");
         builder.AppendLine("                 a client holds no model, size or price - contextTokens and");
         builder.AppendLine("                 maxOutputTokens are a model's ('help agent-clients')");
         builder.AppendLine("  agentPolicy    what an agent may do beyond the rules built into the tool:");
@@ -4520,8 +5743,13 @@ public static class HelpTopics
         builder.AppendLine("                 agent-clients' names; keepEnvironment, the secret-shaped names a");
         builder.AppendLine($"                 command an agent runs keeps; commandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultTimeoutSeconds}) and");
         builder.AppendLine($"                 maxCommandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultMaxTimeoutSeconds}), how long one runs where its call");
-        builder.AppendLine($"                 names no time, and the most it may name, {Agents.AgentCommandSettings.MostTimeoutSeconds} at most");
-        builder.AppendLine("                 ('help agent-clients')");
+        builder.AppendLine($"                 names no time, and the most it may name, {Agents.AgentCommandSettings.MostTimeoutSeconds} at most;");
+        builder.AppendLine($"                 isolation, {string.Join(" or ", Agents.Isolation.AgentIsolationMode.Modes)} ({Agents.Isolation.AgentIsolationMode.Required} where nothing is");
+        builder.AppendLine("                 said), whether an agent that may run a command starts where this");
+        builder.AppendLine("                 machine cannot isolate its commands; hiddenPlaces, more places the");
+        builder.AppendLine("                 user keeps credentials in, each a whole path or one under ~/,");
+        builder.AppendLine("                 hidden beside the declared ones, which it never takes away ('help");
+        builder.AppendLine("                 agent-clients')");
         AppendWrapped(
             builder,
             $"the harness's own web search: sources, each by its name - its {string.Join(", ", Web.Search.WebSearchSource.OwnKeys.Select(key => key.Name))} "
@@ -4529,6 +5757,15 @@ public static class HelpTopics
             + "tags a step that names none searches, those turned on; "
             + $"maxPerStep ({Web.Search.WebSearchSources.DefaultMaxPerStep}) and resultsPerSource ({Web.Search.WebSearchSources.DefaultResultsPerSource}) ('help web-search')",
             "  agentWebSearch ");
+        AppendWrapped(
+            builder,
+            "what an agent is given of the work it goes on with, each bound a positive number at its default where it is "
+            + $"left out: continuation, the continuation record's - recordChars ({Agents.AgentContinuationBounds.DefaultRecordChars}), "
+            + $"stepChars ({Agents.AgentContinuationBounds.DefaultStepChars}), paths ({Agents.AgentContinuationBounds.DefaultPaths}), "
+            + $"lastIterations ({Agents.AgentContinuationBounds.DefaultLastIterations}) and iterationChars ({Agents.AgentContinuationBounds.DefaultIterationChars}); "
+            + $"compaction, the engine's compaction's - reducedChars ({Agents.AgentCompactionBounds.DefaultReducedChars}) and "
+            + $"callInputChars ({Agents.AgentCompactionBounds.DefaultCallInputChars}) ('help agent-clients')",
+            "  agentContext   ");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");
@@ -4538,7 +5775,9 @@ public static class HelpTopics
         builder.AppendLine("Leave the key out instead. A list whose empty form means none - such as");
         builder.AppendLine("sync.neverTransfer, sync.exclude or");
         builder.AppendLine("contention.buildTools - takes [] as that. workflows, which declares no workflow left");
-        builder.AppendLine("out, and agentPolicy.keepEnvironment, which gives no name back left out, are refused");
+        builder.AppendLine("out, agentPolicy.keepEnvironment, which gives no name back left out,");
+        builder.AppendLine("agentPolicy.hiddenPlaces, which adds no place left out, and a test");
+        builder.AppendLine("invocation's keepOnFailure, which keeps no evidence left out, are refused");
         builder.AppendLine("given empty too, so none is spelt one way: leave the key out for none. A runner's list");
         builder.AppendLine("under mutations.runReads, which would say nothing given empty, is refused so: leave the");
         builder.AppendLine("runner out instead.");
@@ -4663,6 +5902,30 @@ public static class HelpTopics
         builder.AppendLine("give its excludeArg themselves, the exclusions are added to those values instead,");
         builder.AppendLine("where they stand: to each -LE's, and to the last -E's. An empty excludeJoin gives each");
         builder.AppendLine("its own excludeArg over a join the shared section declares.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A test invocation may name what a failed run keeps as evidence: keepOnFailure, paths relative to the "
+            + "leg's build directory - files, directories, or patterns, {buildDir} among the names they may use. When "
+            + "the invocation does not pass, whatever the verdict, what they name is copied into kept-on-failure/ beside "
+            + "the leg's log, each file's tree as it stood under the build directory, within keepOnFailureCapBytes kept "
+            + $"in all ({DiskSpace.Size(Testing.KeptOnFailure.DefaultCapBytes)} where it is left out). A pass keeps "
+            + "nothing, and a later step reads nothing from it: it is evidence beside the verdict, never an output, and "
+            + "a failed step still keeps nothing of what one reads. Only a file of its own is copied: a link is never "
+            + "kept through, wherever on the way from the build directory it stands - an entry that is one, a file "
+            + "beneath a linked directory, and no walk of a directory or a pattern follows one; what it leads to is kept "
+            + "where an entry names that - and a pipe or a device is no file to read. Each is measured by what it holds "
+            + "as it is read, and no more of it is copied than the cap has left, so a file that grows past the cap as it "
+            + "is read is refused over it. A directory that cannot be read is passed by and named where an entry could "
+            + "have named what it holds - beneath a directory an entry names, or one a pattern could reach - the files "
+            + "beside it kept, and a stop while the evidence crosses keeps what is already kept and names what it left. "
+            + "The leg's line names the directory, how many files were kept and their size, and how many were refused "
+            + "over the cap, could not be read, were left as links, named nothing or were left uncopied by a stop, and "
+            + "how many directories could not be read - a path naming nothing is said, not refused, for "
+            + "the failure may have been before it was written. A keepOnFailureCapBytes given where no keepOnFailure it "
+            + "applies to names a path caps nothing, and is refused. On a "
+            + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "
+            + "transport: 'sync --pull' takes the kept-on-failure directory within that host's run.");
         builder.AppendLine();
         builder.AppendLine("A leg on a host reached through WSL or ssh runs in that host's copy of its tree:");
         builder.AppendLine("the files the sync writes there from this tree, in a git repository of the host's own -");

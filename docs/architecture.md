@@ -16,7 +16,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
@@ -71,9 +71,12 @@ never held as one text: a codebase graph's link result runs to tens of megabytes
 size again, in buffers the runtime's shared pool keeps. A file is renamed into place as POSIX renames, on Windows too
 (`Win32Files.TryReplace`): one who holds the old file open - every read here shares its deletion - goes on reading it
 while the new one takes its name, where Windows' own rename is refused while the old file is open at all, so a writer
-could not replace a record another sync was streaming. A volume that cannot rename so - FAT, some shares - is renamed
-Windows' own way. Off Windows, a read refuses a pipe, a socket or a device before it opens one (`UnixFiles`, the
-runtime's own stat, where .NET's attributes call each a plain file): a pipe's open waits for a writer, past any stop.
+could not replace a record another sync was streaming. A holder that shares nothing - a virus scanner reading a file
+just written, on a machine busy enough to outlast a short wait - is waited out instead: the rename is retried for
+about five and a half seconds (`PhysicalFileSystem.ReplaceAttempts`) before its refusal is reported. A volume that
+cannot rename so - FAT, some shares - is renamed Windows' own way. Off Windows, a read refuses a pipe, a socket or a
+device before it opens one (`UnixFiles`, the runtime's own stat, where .NET's attributes call each a plain file): a
+pipe's open waits for a writer, past any stop.
 A walk that must not stop at what it cannot read (`EnumerateReachableFiles`) goes a directory at a time, passing by
 and naming one beneath it that cannot be read.
 
@@ -159,7 +162,12 @@ the child ends or is stopped - every process still in it, and at a stop every on
 child's tree, read before anything is signalled, asked to end with SIGTERM, and whatever still
 stands five seconds later killed - and the output is read for five seconds more at most: a process
 that made a session of its own away from the child's tree is not reached, and nothing waits for
-what it holds. A process table that cannot be read - macOS's is read through `ps`, which a session
+what it holds. On macOS, where the isolation keeps no process namespace, such a process of an
+isolated command's outlives its launch and goes on writing the places it was given; every file
+operation of the tool's over those places - a fold, a hand-over, evidence kept, a removal, a sync -
+acts relative to directories it holds (`UnfollowedFiles`, `HeldDirectory`), so a link it swaps in
+meanwhile reaches nothing of the tool's. git's own removal of a worktree (`git worktree remove`)
+walks the tree by path, and is where such a process still meets the tool's work. A process table that cannot be read - macOS's is read through `ps`, which a session
 that has used up every process it may start leaves unable to start - takes nothing from the stop:
 the group is still asked and then killed by its id, which needs no table, the tree is still ended,
 and what went unreached is said in the result (`ProcessResult.Uncontained`), or, where the caller
@@ -196,6 +204,113 @@ system hangs up a group that loses its last parent in the session while one of i
 stopped, so a leftover may die of that hangup with the engine, and is then not said. A
 record that does not read as one is said and left, and a starter on another machine is never taken
 to have gone. Windows records nothing: its job already ends a killed starter's children.
+
+A request can also carry an **isolation** (`ProcessRequest.Isolation`, a `ProcessIsolation`: a
+mechanism and a profile), and an isolated child always starts through `contain-exec`, contained or
+not - one that is not is placed as any other, in a group of its own on Linux and macOS - for
+`contain-exec` is what places it: the runner hands `contain-exec`, after its separator, the mechanism's own command
+line (`IIsolationMechanism.Command`) in the program's place - the program resolved by its whole
+path first, its words after the mechanism's - so `contain-exec` becomes the mechanism, and the
+mechanism the program, and no child runs outside it for an instant. Every mechanism is told the
+same profile (`IsolationProfile`): the places hidden; the write rules in their order, parent first -
+each writable root written, each place inside it written by nobody; the places read again inside a
+hidden one (`Reopened`); a temporary directory of the child's own (`Temp`); the variables set inside
+(`Environment`: `TMPDIR` and each declared tool cache's); the Unix sockets outside it reaches
+(`Sockets`); and, of the places it names, the anchors (`IsolationProfile.Anchors`: every directory
+above a guarded place and each writable root itself, `AnchorsOf`, each whose own holder is written).
+The machine is read-only under each. What a mechanism holds of its own it says on its type
+(`IIsolationMechanism`): whether a rule holds a place under every spelling a file system that
+ignores letter case reaches it by (`HoldsEveryCase`), whether abstract sockets and signals are
+scoped (`Scoped`) and what is left reached where not (`Leaves`), what its anchors cost
+(`AnchorCost`), whether it gives the child a temporary directory of its own (`OwnTemp`), and whether
+it takes a command handed to it from a process apart from it (`TakesHandedCommands`), and why a process inside it
+cannot start it again for each command it hands over (`Unnested`). On Linux the
+mechanism is the system's bubblewrap (`Bubblewrap`): the machine bound read-only (`--ro-bind / /`,
+`--dev /dev`), a user namespace of its own allowing no further one (`--unshare-user
+--disable-userns`) - but a program's outer layer (`IsolationProfile.Outer`), left one to make each command's own layer
+in - a process namespace with its own `/proc` (`--unshare-pid --proc /proc`, so
+`/proc/<id>/root` and `/proc/<id>/environ` reach no process outside), never `--die-with-parent`,
+whose parent would be the thread that started the step; the launch's temporary directory bound at
+`/tmp` and any read root under `/tmp` bound again read-only; then the profile's writes in its order,
+the last mount at a place winning (`--bind-try` where written, `--ro-bind-try` where written by
+nobody), each anchor among them by its depth bound onto itself as the nearest rule above it leaves
+it, so it is a mount point inside, which the kernel keeps from being renamed or removed; then each
+hidden place (an empty `tmpfs` over a directory, made read-only after any socket it holds is bound
+into it; `/dev/null` read-only over a file), then the machine's own escapes the same way
+(`IsolationPlatform.EscapeDirectories`: WSL's `/run/WSL` and `/mnt/wsl`, screen's `/run/screen`; the
+user's runtime directory whole, `XDG_RUNTIME_DIR` or `/run/user/<uid>`; each container engine's
+socket, `IsolationPlatform.ContainerSockets`), every other socket of the profile's bound last at its
+own path, and `WSL_INTEROP` unset. Where the kernel has Landlock's scope of abstract sockets and
+signals (`Landlock`, its sixth version, Linux 6.12), `contain-exec --scope` enters it before it
+becomes bubblewrap, so no process inside reaches an abstract socket outside or signals a process
+outside; where it has not, the record's `leaves` says so (`Bubblewrap.Unscoped`). No
+`--new-session`: `contain-exec`'s `setsid` made the child's session already, and a second would
+take it out of the session a stop ends; the process tree the stop reads from outside sees every
+process inside by its outside id. On macOS the mechanism is the system's own sandbox
+(`SandboxExec`): `/usr/bin/sandbox-exec -p <profile> -D<NAME>=<path>... -- /usr/bin/env
+<variables>... <program>`, its profile written for the child (`SandboxExec.Policy`) -
+`(deny default)`, never `(allow default)`, which would leave LaunchServices free to start a program
+outside every sandbox; then what a build, a test and a shell do as the user (its own processes
+forked, run and signalled, the system's settings read by the names a build asks, never another
+process's arguments or environment, a terminal, the network by address, the name resolver's socket,
+the services that resolve names and trust certificates, every file read, and written only the
+devices a shell writes); then the profile's own rules last, for the last rule an operation meets
+holds - the temporary directory written, its Unix sockets bound and reached, each write rule in its
+order (`allow file-write*` at a writable root, `deny file-write*` inside it), each hidden place
+(`deny file-read* file-write*`), each reopened place read, each anchor (`deny file-write-unlink` of a
+directory), each socket of the profile's reached (`network-outbound` to its `unix-socket`), and the
+two file controls that write through a descriptor opened only to read (`F_MAKECOMPRESSED`,
+`F_TRANSFEREXTENTS`). The sandbox meets a path as the file system names it, so each place is ruled
+at its real spelling (`/var` is `/private/var`) and, where it is itself a link, at its own entry
+too, and the anchors are those of the spellings; each spelling is handed over as a parameter, never
+written into the profile's text. On Windows the mechanism is Microsoft's MXC process container
+(`MxcProcessContainer`), made through MXC's own library (`Microsoft.Mxc.Sdk`, MIT, named in
+`THIRD-PARTY-NOTICES` with every other package the tool carries): its command line is this tool
+again - `isolate-exec --hidden <p>... --sealed|--writable <p>... --variable <NAME=value>... --
+<program> <words>`, a step nobody types (`IsolateExec`) - so `contain-exec` starts it in the step's
+job, and it starts the program inside a container of its own, handing on its input and handing back
+its output, its error and its exit code; a container that cannot be made ends it with
+`contain-exec`'s own failure code. The container grants nothing it is not told to
+(`MxcProcessContainer.Files`): every fixed drive read, each writable root written, each place
+written by nobody read, each hidden place denied outright (MXC's denied paths, which the machine's
+container must support). It meets a place by its path alone, and refuses no rename alone, so each
+anchor whose own holder the profile writes is read alone, and each entry it holds that no rule of
+its own names written again as the profile has it: nothing is made or removed directly inside such
+an anchor, so git makes no lock file in a `.git` that holds a sealed place, nor in a linked
+worktree's directory under it - git add, commit, fetch and push fail there, in a worktree, over a
+side-task's main tree and in a run's commit and push steps, which the record's `anchorCost` says
+(`MxcProcessContainer.AnchorReadAlone`). The child has the environment the step was given and the
+profile's variables, never the machine's, in which MXC sets a temporary directory of its own,
+removed with the container (`OwnTemp`); the container's own user interface, with no clipboard and no
+input sent to another window - with the interface turned off, every program that loads Windows'
+user interface library ends `0xC0000142` before its first line; and the user's network, in and out,
+the host's loopback among it. MXC is handed no socket: Windows' SSH agent is a named pipe. Which
+mechanism the machine has is the platform's (`IIsolationPlatform`, `IsolationPlatform`): on Linux
+the first `bwrap` in an absolute directory of the PATH outside the tree, 0.8 or newer, and none
+where the user may write it or a directory above it, for the tool runs it outside before anything
+is isolated; on macOS `/usr/bin/sandbox-exec` alone, never one the PATH names, where this process
+runs inside no sandbox already (`sandbox_check`), for macOS starts none inside another - its
+questions of the machine one seam a test answers anywhere (`MacSandboxHost`: the file there, the
+sandbox already, the version of macOS a record names, each path's real spelling from `realpath`);
+on Windows the container, where MXC's library says the machine has it and can deny a place
+outright - its question one seam a test answers anywhere too (`WindowsContainerHost`: the library's
+backends, and its version, which a record names). Each is proved once per process, on the tree's
+own file system under its runs directory (`isolation-probe-<id>`, removed after), by a probe started
+exactly as every isolated child is - a canary in a hidden place unread, by its name and by another
+case of its directory's; a place written by nobody unwritten, by either spelling; a place outside
+every open one unwritten; an open place written - each checked from outside, through `sh` on Linux
+and macOS and through `cmd.exe` on Windows, a run for each, and why not with the remedy where it
+fails (Ubuntu's `apparmor_restrict_unprivileged_userns` named with the `bwrap-userns-restrict`
+profile; on Windows the builds MXC needs, or WSL 2). On Linux bubblewrap, once proved, is started again
+inside an outer layer of its own around a shell that must end 0, as a `claude-code` launch's outer layer starts it for
+each command; where it does not - an AppArmor profile that denies bubblewrap's children every capability, as
+`bwrap-userns-restrict` does - it is the mechanism all the same, its `Unnested` saying how the trial ended, and a
+`claude-code` launch's own process runs outside. On Windows each of node, git and Git Bash's
+`sh` - on the PATH outside the tree, `sh` else beside the git found - is then started inside the
+container and must end 0 having said something; one that does not is no mechanism, named with its
+path and how it ended, a status the system ended it with written in hexadecimal, and one not on the
+machine is not asked. MXC 1.0.1 ends every program of Git Bash's with `0xC0000142`, so a Windows
+with Git for Windows has none yet. What a launch's profile holds is the agents' isolation's, below.
 
 A request can ask instead for a child **bound** to the harness's life (`ProcessRequest.Bound`):
 on Windows it is placed through `contain-exec` too, in the one job object the process holds for its
@@ -455,8 +570,9 @@ worktrees where nothing withholds or ignores them, and an entry would protect no
 
 **The root is kept in git by a placeholder, and everything made in it is ignored.** `init` writes
 `/<root>/*` and `!/<root>/.gitkeep` for it and creates the placeholder, as it does for the
-orchestrators directory, `.orchestrators`, for the slots every tree keeps its own copies in,
-`.mutations` for a sweep's workers and `.legs` for the copies its legs work in, and for the harness
+orchestrators directory, `.orchestrators`, for the side-tasks' records, `.side-tasks`, for the slots
+every tree keeps its own copies in, `.mutations` for a sweep's workers and `.legs` for the copies its
+legs work in - the layout's one list of them, `HarnessLayout.RootSlots` - and for the harness
 directories a person fills by hand
 — the credential slots `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` and
 `workflows/.env`, the agent clients' keys, read by the runner's one rule for a directory of dotenv
@@ -470,12 +586,13 @@ accepted now: a directory holding a tracked file never reads as ignored itself, 
 check-ignore <root>` answers *not ignored* while every worktree inside it is ignored, and the root
 can no longer be kept on another disk through a link, which git would list as an untracked entry
 and keep nothing behind; `init` names such a link and writes nothing through it. Sync does not
-depend on either answer: it withholds the configured root, `.orchestrators`, `.mutations` and
-`.legs` by name, whatever git says, and never deletes them in a copy, and its guard against a
+depend on either answer: it withholds the configured root, `.orchestrators`, `.mutations`, `.legs`
+and `.side-tasks` by name, whatever git says, and never deletes them in a copy, and its guard against a
 withheld path that stopped being ignored takes each placeholder, untracked until it is committed,
 as the harness's own - any other untracked file there still refuses, named as the worktrees root,
 or the slot whose ignore rule init writes, it is. The root may not be `.git`, `.orchestrators`,
-`.mutations` or `.legs`, or inside any of them. Each copy kept in `.mutations` or `.legs` is a whole
+`.mutations`, `.legs` or `.side-tasks`, or inside any of them - the never-transfer floor, built from
+the layout's root slots (`HarnessLayout.NamedRootSlots`), so a slot the layout gains joins it. Each copy kept in `.mutations` or `.legs` is a whole
 copy of the tree, so a repository's own program that walks the tree from its root must leave out
 what the managed block ignores, as git does - `help layout` says so - or it reads every file again
 for each copy kept there.
@@ -561,14 +678,22 @@ does; one made with `--separate-git-dir` records none, and is then the tree aske
 lists that as no linked worktree. From a linked worktree of such a checkout, nothing says which
 checkout is the main one, and the command is refused, saying how to record it.
 
-`create-worktree` records the commit a worktree was made from, under
-`refs/harness/worktree-base/<name>`, and `list-worktree` reports it. A worktree's own HEAD moves
-with every commit made in it, so after the first one nothing else says what tree the worktree
-started from, and it can only be reproduced from the moment it happened to be made. The record is
-kept under `refs/harness/` rather than among heads, tags or remotes precisely so it can never be
-mistaken for somewhere work is kept: the deletion checks below read branches, tags,
-remote-tracking refs, the newest stash and other worktrees' HEADs, and this record is none of them.
-It is removed when the worktree is, so it can never answer for a later worktree of the same name.
+`create-worktree` and `create-agent` record the commit a worktree was made from, under
+`refs/harness/worktree-base/<name>`, and `list-worktree` reports it (`WorktreeKeepalive`, the one
+owner of these refs). A worktree's own HEAD moves with every commit made in it, so after the first
+one nothing else says what tree the worktree started from, and it can only be reproduced from the
+moment it happened to be made. The record is kept under `refs/harness/` rather than among heads,
+tags or remotes precisely so it can never be mistaken for somewhere work is kept: the deletion
+checks below read branches, tags, remote-tracking refs, the newest stash and other worktrees'
+HEADs, and this record is none of them. For an agent's repository it is also what keeps the commit
+alive: the repository borrows it from the main checkout's store and holds no ref the main
+checkout's gc reads, so it is written before anything of the repository is made, and nothing is
+made where it cannot be; while rebase-agent moves the agent's base, `refs/harness/worktree-moving/<name>`
+keeps the commit it moves to, written before the move records or writes anything and gone once the
+base's ref names it. A keepalive removed by hand, or by a rewrite of the main checkout's history,
+refuses every verb that works on the agent, naming the `git update-ref` that writes it again while
+the commit is there. The records are removed when the worktree is, so they can never answer for a
+later worktree of the same name.
 
 Every git command the harness runs, and the forge's command line, which runs git itself, starts
 without any variable git reads a repository from: every name `git rev-parse --local-env-vars`
@@ -587,7 +712,10 @@ taken, and the command fails without running git.
 
 An orchestrator's agents' worktrees sit below the directory named for it,
 `<root>/<orchestrator>/<agent>`, and are made by `create-agent` with the agent's records, never by
-`create-worktree`, which makes plain worktrees only. Each is named by its address,
+`create-worktree`, which makes plain worktrees only. Each is a git repository of its own, never one
+of git's linked worktrees: a linked worktree shares the main checkout's refs and object store, so
+whatever runs in it can move the main checkout's branches, write its tags and stash, and store
+other content under an object's id, which git verifies only when it receives objects. Each is named by its address,
 `orchestrator/agent`, wherever a person reads or types it: `list-worktree` lists it so,
 `delete-worktree` takes it, and the commit it was made from is recorded at
 `refs/harness/worktree-base/<orchestrator>/<agent>`. Plain worktrees and orchestrators share the
@@ -597,14 +725,65 @@ of its own that holds worktrees below it - an orchestrator's, holding its agents
 as one, `--force` or not: deleting it would delete each of them. A worktree's submodules and nested
 repositories are its own contents, and do not make it such a directory.
 
+An agent's worktree is a repository of its own (`AgentRepositories`): one that git records
+nowhere, so the main checkout's `git worktree list` holds the main checkout alone, whose own `.git/config` carries the mark naming this main checkout and the agent's address
+(`harness.mainCheckout`, `harness.agent`, read by `AgentRepositoryMark` from that file alone, never
+through the main checkout's configuration it includes), and which borrows the main checkout's
+objects. It is taken for the agent's worktree only where all three hold at the address it sits at.
+A command run inside one finds the main checkout its mark names, as from inside a linked worktree;
+one whose mark names a checkout that is not there, is bare, is no main checkout of its own, carries
+a mark itself or does not lend it its objects is refused, never taken for a main checkout.
+`list-worktree` lists it by its address, its `--json` saying `"kind": "repository"` of it and
+`"kind": "worktree"` of a linked one; delete-orchestrator and `delete-worktree <orchestrator>`
+count it among the worktrees below, never as a directory git records nothing at.
+
+It is made by `git init` - no template, the files ref format and the main checkout's object format
+- never by a clone, which would copy the main checkout's refs in as remote-tracking refs that
+dangle once its branches move on and its gc prunes, add a remote, and pick the ref format itself.
+Its `objects/info/alternates` names the main checkout's object directory as git spells it, so it
+reads every object the main checkout holds and writes only into its own store; its configuration
+includes the main checkout's first - filters, line endings, merge drivers, remotes, identity and
+`core.hooksPath` are the main checkout's, live - and then holds its own keys: what `git init`
+probed of the file system, `core.worktree` where the main checkout names one, no gc, maintenance
+or commit-graph of its own, the main checkout's large-file store (`lfs.storage`, so a file git-lfs
+keeps is checked out from there, and one changed inside the isolation cannot be added), a partial
+clone's extension, and the mark. The main checkout's `shallow` and `info/sparse-checkout` are
+copied, and its HEAD is checked out detached: no ref but its HEAD, no branch left in the main
+checkout. What git itself keeps of the main checkout does not apply in it: its `.git/hooks`
+(`core.hooksPath` still does), its branches (`git branch -a` lists none), an `includeIf` of its
+configuration is weighed against the repository. A partial clone's missing objects are fetched into
+the agent's own store. Its own objects go with it, and moving the main checkout breaks it, as it
+breaks a linked worktree. A repository whose making fails part way is taken back whole, its
+directory and its keepalive, and what could not be is said.
+
+Work comes back from it as files, never as objects: agents never commit (a HEAD moved off its
+base is refused by every verb), and fold-agent lists what changed from the repository's status
+and reads each file's bytes, while the base it compares them with is read from the main checkout's
+store, and every two-change question is asked with the main checkout as the tree. So an object the
+agent stores in its own repository under another object's id - content that does not hash to its
+name, which git there reads before the borrowed one - can only make the tool misjudge the agent's
+own changes, never write into the main checkout. rebase-agent writes only the repository: the
+commit it moves to is read through the alternates, by its id.
+
+An agent's record says `"tree": "repository"` (`AgentRecord.Tree`). A record that says nothing is
+an agent an earlier version made, whose worktree is one of git's linked worktrees: it is still read,
+folded, rebased and deleted as before, and nothing converts it - deleting it and making another
+agent gives a repository of its own. A tree of the other kind than its record names is refused as
+no worktree of the agent's, nothing read; list-orchestrator's `--json` says each agent's `kind`.
+
 ### What deleting one refuses
 
 Without `--force`, every check runs before anything is touched. A refusal deletes nothing of the
 worktree, names everything it found on one line, each with its remedy, and exits 13:
 
 - **Uncommitted changes.** A modified, staged or untracked file git does not ignore, or a
-  changed submodule. Status runs with `--untracked-files=normal` and
-  `--ignore-submodules=none`, so configuration can hide neither. Status never compares a file
+  changed submodule. Status runs with `--untracked-files=normal` and tells a submodule by its
+  commit (`--ignore-submodules=dirty`, `GitOwnSettings`), so configuration can hide neither, and
+  never asks a submodule's own git about its work tree - which would run its configuration - from
+  there: each checked-out submodule whose repository is among its superproject's modules, which
+  git's own submodule commands write, is asked for its own changes; one whose repository is
+  anywhere else - a `.git` of its own in the work tree, which whatever writes the tree writes - is
+  a change never looked into. Status never compares a file
   marked assume-unchanged or skip-worktree, so those present on disk are compared on a copy of
   the index with the marks cleared, which applies git's own line-ending rules and never touches
   the real index. A skip-worktree file absent from disk, as a sparse checkout leaves it, is not
@@ -723,6 +902,20 @@ history of a repository nested inside one included.
   git could not name that directory, by git's list. A record whose directory is already gone,
   as an interrupted delete or a directory removed by hand leaves it, is cleared once its lock,
   unreferenced commits and submodule repositories are checked, so the name can be used again.
+- An agent's repository of its own (see *Worktrees*) is weighed as a linked worktree is - its
+  changes, the edits status cannot see, its submodules' repositories - but for its commits: those
+  `git rev-list HEAD --all --not --alternate-refs` counts there, made in it and reached by no ref of
+  the main checkout's, refuse it, since its own store goes with it. The refusal names fold-agent
+  for its changes and a fetch into the main checkout for its commits, never a branch or a stash,
+  which would be made in the store being deleted. It has no lock and no record of git's, and git
+  no removal of its own for it: its directory is deleted whole (`WorktreeService.RemoveRepository`),
+  its read-only object files with it and a link in it as a link, and then looked for; a deletion
+  that cannot finish says part of it may be gone and names `--force` to finish it, safe where every
+  check passed. Forced, it is deleted the same way, unchecked.
+- The records of the commit a worktree stood on, `refs/harness/worktree-base/<address>` and
+  `refs/harness/worktree-moving/<address>` (`WorktreeKeepalive`), are forgotten once its directory
+  is gone, by this deletion or before it: left behind, they would keep that commit in the main
+  checkout's store for nothing and answer for a later worktree of the same address.
 
 An interruption stops the command cleanly only before its first destructive step. After that
 the deletion goes on, the command says at once that it is under way, and it waits up to two
@@ -879,7 +1072,7 @@ delete-orchestrator refuses that orchestrator and changes nothing. As across the
 ### Seeding and folding
 
 The seed is the main tree's uncommitted state handed to the agent when it is made - every path git status lists,
-less `TreeFloor`: `.git`, `.orchestrators`, `.mutations`, `.legs` and the worktrees root, asserted where the copying
+less `TreeFloor`: `.git`, `.orchestrators`, `.mutations`, `.legs`, `.side-tasks` and the worktrees root, asserted where the copying
 happens rather than left
 to ignore rules a repository can edit away - each changed file copied into its worktree, with the copy's SHA-256 and,
 where the platform has one, its execute bit, and each deletion made there too and recorded as absent. `seed.json` is
@@ -1084,12 +1277,13 @@ the main tree - unless the move being finished removed it, the new name written 
 (`MovingRemoved`: the old names the agent's index no longer holds once the git checking out what the move writes first
 ends, having written it all or stopped part way). git leaves the index and the disk alike after that checkout and after
 a `git rm` of the agent's session; a removal of the move's its record missed - a move killed between git and its
-record - is refused so, costing a refusal, never a file. The record names where the move goes (`Moving`) before
-anything is written; then each
+record - is refused so, costing a refusal, never a file. The main checkout keeps the commit the move goes to alive
+(`refs/harness/worktree-moving/<orchestrator>/<agent>`, exit 20 and nothing changed where it cannot) and the record
+names where the move goes (`Moving`) before anything is written; then each
 path the move takes is asked to hold what was measured there (`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a
 file the agent's session wrote since stops the move, exit 21, before git writes anything, never written over; then the new
 base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
-name the new base: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
+name the new base, and the move's keepalive goes: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
 again - the command its last words name, with every `--merge` and `--settled` the move was given, a merge it wrote
 merged again to the same bytes - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
 base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, naming
@@ -1398,8 +1592,9 @@ recovery, the step it was in the way of running again after), `list` (added, pro
 `pre-existing-issues.json`, shown in the pull request's body and the handoff, a quote or an output
 cut to 4,000 characters, the cut said), `duplicate` (naming in `duplicates` the listed issue it
 repeats) or `unproven`; an answer whose course is none of the four, or whose issue to list does not
-read back, fails the triage step (12) before it ends. The engine raises it and keeps the list -
-though until the reasoning step runner lands no step reports an issue; `issue` is read only by the
+read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
+step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
+one) and keeps the list; `issue` is read only by the
 triage and the recovery, and `source` by them and by a handler.
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
@@ -1421,9 +1616,22 @@ rest) is read by an `always` step alone; a placeholder stands in a key that is a
 refused in any other where the file is read; a pull request's `base` reads nothing but the run's
 inputs and `run.name`, one base for every pull request; and a prompt's own placeholders - a reason
 step's `prompt` and `resumePrompt`, a pull request's `body` - are read as the step reads, each said at
-its line, the iteration before only in a `resumePrompt`. It checks every question
+its line, the iteration before only in a `resumePrompt`. A skill a prompt names is looked for by
+the skills' own lookup (`AgentSkills`): the first of the three
+places that has the folder decides, a `SKILL.md` that is there and cannot be used is refused
+without falling to the next, its `allowed-tools` held to the one table of Claude Code's tools and
+the step's agent's capabilities - the capabilities of the definition the step works by, its own or
+the one the work it goes on with began with - a name that is not a folder's name alone is refused by
+the one rule the step's start holds it to too (`AgentSkills.NameIn`), a skill named twice in one
+prompt is refused, and the body of an
+agent definition - the system prompt, sent as written - names none. The lookup is given to the
+check by whoever reads the repository's files, so the shipped definition is checked without one and
+a skill it does not name is never looked for. It checks every question
 kind an answer names, and every file the
-definition points at, beside the definition that names it - a runner or a leg no configuration
+definition points at, beside the definition that names it - each schema a step names held to the subset the engine
+reads by the one check of a schema's text (`JsonSchemaSubset.TextProblems`, through `WorkflowFiles.SchemaProblems`),
+each problem on its own line naming the file, the step and the place in the schema, so no run starts over a schema no
+answer could be held to; the shipped definition's schemas are held to it where this build reads them - a runner or a leg no configuration
 declares is said the same way, as is a definition that cannot be read, and a workflow whose
 directory leads out of the workflows directory, or whose definition out of its own directory, once
 their links are followed. Every problem is collected and reported together (12), without running
@@ -1439,7 +1647,16 @@ Against a configuration's providers it also checks every reason step, the adviso
 reaches the provider, and each model the step may run on is given a level it takes - one level for
 every model, or a map of `all` and models' codes, each model's resolved on its own, a code the step
 does not run on refused as dead, and a step that goes on with another's work checked against the tier
-it inherits. Where the definition holds, the check says each agent's models and the level each runs
+it inherits. A step's agent definition is read by the same check (`AgentDefinitionParser`, the
+frontmatter of the workflow's `agents/<name>.md`, its retired keys refused as a step's are) and
+stands below the step's own names: the tier or the model the step does not name, the effort read
+after the step's own through `AgentResolution.LevelFor`'s four sources (the step's entry, its `all`
+or one level, the definition's entry, its `all` or one level, else the model's own default), and the
+client where the step names none - a step's order resolved by `AgentResolution.Of` as entries of a
+model and one of its provider's keys, each model's keys before the next model, the first serving and
+the rest what it goes on by, a model named outright on either level running on that model with none
+after its own keys; null where no entry can be made, which the check refuses with its cause. Where
+the definition holds, the check says each agent's models and the level each runs
 at, one line apiece under the line that says it holds, and every key a step's model would read that
 no file of the agent clients' slot declares, one beside a key the slot holds among them, with the
 steps that would read it - as a step's first model, or as a later model of its tier. What a model
@@ -1451,16 +1668,17 @@ provider's keys under `apiKey`; under `oauthToken` or `authToken` the one token 
 entry's `token` (`AgentProviders.TokenOf`), appointed by the client beside every provider's keys
 and refused where a provider's key is appointed under the same name. Each line is the one sentence a missing key is said in (`AgentKeyStore.Missing`), ending
 with the names the slot holds that nothing appoints. It is a report and not a problem: a machine
-that only checks a configuration needs no key, and no command of this build refuses one - the run
-that will is the engine's, which this build does not yet run. The slot itself
+that only checks a configuration needs no key; a run refuses a step whose first model's keys the slot holds none of,
+never starting its agent (`AgentNotStartedBecause.KeyMissing`), and a later model's missing key is only said and
+passed over. The slot itself
 (`Secrets\AgentKeyStore`, beside the host items' own store) reads the git-ignored
 `.harness-config/workflows/.env/` by the runner's one rule for a directory of dotenv files - every
 file merged, a name declared twice refused in its own words, a file in the directory's place refused
 rather than read as none, and (the slot's own shape) each name held to a variable's name, a line
 whose name is not one said by its number and never by its text, which may be part of a key - and
 from nowhere else, so a stray variable of the tool's own environment neither chooses whose key a run
-bills nor redirects one. Where a value is read (`AgentKeyStore.Value`, which no command of this
-build calls yet), who may reach the file each name came from is asked by the one rule
+bills nor redirects one. Where a value is read (`AgentKeyStore.Value`: a step's keys as its agent starts, a
+search source's, a setting such as the program a client starts), who may reach the file each name came from is asked by the one rule
 the host items' files are held to (`ItemEnvironment.Unprotected`): never a file others can change,
 and never one others can read while it holds a secret - a name the configuration appoints as a key,
 not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one
@@ -1503,8 +1721,65 @@ actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `
 PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
 names one), writes outside an agent's writable roots, every read and write of a credential slot or a
 Claude Code directory of the run's and every search over one (`AgentPolicy.Search`), and any command
-naming one - by `~` or `$HOME`, as a redirect's file or an option's value, against every directory a
-`cd` of it reached; no agent starts while the tool itself runs elevated
+naming one - by `~` or `$HOME`, against every directory a `cd` of it reached, by every path a word
+may name to its program, read by one owner for the places no command reaches and the places a
+command writes alike (`CommandAnalysis.PathsNamed`: the word, the value after its `=` or a
+PowerShell parameter's `:`, a value glued to a short option, each with the `@` or `<` that makes
+curl, httpie or gh read a file taken off and a `-F` field's `;` fields cut, a script's words, its
+braces' words, a `file://` address's path), each read as every value a variable the command string
+sets gives it (`AgentPolicy.Readings` over the string's `StringState`, `CommandAnalysis.Substituted`,
+at most `CommandAnalysis.MaxReadings`; `$PWD` as each place the command stands in; a `~` as each
+`HOME` the string, the command or a command that runs it sets; a variable the
+string does not set and a substitution read as the text they spell, for their value is the agent's
+environment's or a program's, which no word of the string gives), and a pattern's segment that may
+match `..` read as `..` too (`AgentPolicy.DotReadings`, at most `AgentPolicy.MaxDotReadings`) - or
+naming whole a directory that holds one (`.harness-config`, `..`, `~`, `/`, a pattern that may match
+one) to a program that may read what it holds, for a program handed a directory may walk it
+(`AgentPolicy.Named`); never refused for what it holds are the words `AgentPolicy.HoldsExempt` names -
+every word of a program that only names, tests or lists the paths it is given
+(`CommandAnalysis.NamesOnly`: `echo`, `test`, `ls`, `du`, `df`, `stat`, `realpath`, `mkdir`, a `find`
+that runs, deletes and writes nothing, and their kind), a move's own word (a `cd`'s, and the words
+`git -C`, `tar -C`, `make -C`, `ninja -C`, `patch -d` and `env -C` move by, `CommandAnalysis.MoveWords`
+over `CommandAnalysis.OwnDirectories`), which reads nothing where it goes, and a word that names where
+the program writes, which the write refusals decide - and a directory that is the agent's working
+directory or one above it, which reaches the slots only through it, every command over the tree naming
+it and every program given no path working over it (`AgentPolicy.ThroughWorkingDirectory`); a
+pattern is read as one only where the shell that reads it expands it, a PowerShell cmdlet's quoted
+wildcard among them (`CommandAnalysis.HasOpenPattern`); a command that removes or moves a directory
+whole (`CommandAnalysis.RemovalTargets`: `rm -r`, `Remove-Item -Recurse`, `rd /s`, `mv`,
+`Move-Item`, `rsync --delete`, `git clean -dx`) is refused where it holds a tree's `.git`, the state,
+a slot, a Claude Code directory or a place the user keeps credentials in, with no working-directory exception (`AgentPolicy.RemovalRefusal`),
+a `git clean`'s or stash's pathspecs read as git reads them; a `find` or an `fd` walk is read once
+(`CommandAnalysis.WalkOf`, `FileWalk`: its start points, its depths, `-depth`, and its expression as a
+tree of tests and actions - names, paths and regexes in either case, kinds, emptiness, prunes, fd's
+pattern, extensions, excludes and hidden files - each action's removal: `-delete`, a remover `-exec`,
+`-execdir`, `-ok` or fd's `-x` and `-X` run on what it finds, `CommandAnalysis.RemovalBy`) and walked
+the way to each guarded place it may reach, its tests read three-valued, a guarded directory's
+contents read as they stand to `AgentPolicy.MaxWalkEntries` (`AgentPolicy.WalkRefusal`): a walk that
+may remove or move a guarded place, or what one holds, is refused, and one whose filters or prunes
+reach none runs; this tool's verbs and `run-side-task` by a verb the shell expands, the verb the command's first word
+after the tool's name as the CLI takes it, which reads no option before its verb
+(`AgentPolicy.ToolVerbOf`), and a command that sets or takes away
+`AgentChildEnvironment.AgentMarker` - its assignment, an `unset`'s, `env -u`'s, a declaration's (`export -n`, `declare`), a name
+reference's, `set`'s, `setenv`'s or `setx`'s word, the name `read`, `mapfile`, `printf -v`,
+`getopts`, `wait -p`, `vared`, a `for` or a `select` sets (`CommandAnalysis.NamesSet`), one an
+arithmetic assigns (`CommandAnalysis.ArithmeticAssigned`, `let` and `((...))`), a PowerShell item
+cmdlet's `env:` item (an `Environment::` path among them), or a start with no environment (`env -i`,
+`env -`, `exec -c`) - or may (any of those places given a name the shell expands, zsh's `unset -m`
+pattern, an item cmdlet given a path it computes, a wildcard that may match it - a relative one where
+the string names `env:` - or none where the string names `env:`), and then one any other word names
+(`CommandAnalysis.NameSpelled`) but a word of data - a program that runs none of its words, `printf`
+but with its `-v`, a git command that reads only what git tracks, a word holding a blank - read in
+each reading of the command's words and in those of every command that runs it
+(`AnalyzedCommand.Wrappers`, `CommandAnalysis.VariableTouched`, `VariableTouch`,
+`AgentPolicy.MarkerTouched`); a git or gh
+command called by a name none of its own commands is (`AgentPolicy.GitCommands`, git 2.55's
+builtins and main commands, a list of the tool's own because git's listing of them is internal to
+git and the policy starts no program to decide, and `AgentPolicy.GhCommands`) - an alias or an extension, whose command line a
+configuration file or an extension holds, one an agent may have written - on every ground, but a
+program git finds as `git-<name>` on the PATH the agent's commands start with or where git keeps
+its own beside it (`git lfs`, `AgentPolicy.GitProgram`), a word no setting of git's can name, and
+an alias the command gives itself, read as the command it is (`AgentPolicy.CalledByAnotherName`); no agent starts while the tool itself runs elevated
 (`IHostPlatform.IsPrivilegedProcess`, the runtime's own answer): `AgentRunner`, which every client's
 launch passes, records such a step `NotStarted` (`AgentNotStartedBecause.Elevated`, in the words of
 `AgentPolicy.RefusedWhileElevated`) before it takes a client. A path is decided as asked and as
@@ -1515,11 +1790,33 @@ read both as the drive and as the directory it names on the current drive, each 
 action allowed only where both are (`AgentPolicy.Spelled`, `AgentPolicy.Plain`); where a link
 resolves, where a `cd` moves to and the ground's own directories are spelled the same way, a `cd`
 (`AgentPolicy.Movers`: `pushd`, `Set-Location` and `Push-Location` too, each word it may go to; and
-the directory `env -C` or `pwsh -WorkingDirectory` starts its command in, which `CommandAnalysis`
-reads as the `cd` before it, so `AgentPolicy.MovedTo` is the one reader of every move)
-from every place the command reached before it, up to `AgentPolicy.MaxPlaces`, past which the
+the directory `env -C` or `pwsh -WorkingDirectory` starts its command in, and the one `git -C`,
+`tar -C` or `--directory`, `make -C`, `ninja -C` and `patch -d` work in, each in every spelling the
+program's own option table reads (`CommandAnalysis.Getopt`, `CommandAnalysis.OwnDirectories`), which
+`CommandAnalysis` reads as the `cd` before it, so `AgentPolicy.MovedTo` is the one reader of every
+move; a name `cd` looks up in `CDPATH` - the string's own, the command's, or the one the agent
+inherits - read in each of its directories too, a `cd` given no directory going to the `HOME` the
+command or the string sets, `cd -` going back to the string's `OLDPWD` or a place a move of the
+string's left, and one whose place is not known undecided)
+from every place the command reached before it - a command after `&&` from where the one before it
+held, after `||` from where it failed, after any other separator from both, each command's level and
+joining kept by the reader (`AnalyzedCommand.Level`, `AnalyzedCommand.Joined`, followed by
+`AgentPolicy.Standing`), every place reached standing after a move back or to a place the shell
+expands (`popd`, `cd "$D"`) - up to
+`AgentPolicy.MaxPlaces` distinct places, past which the
 command is undecided - and a refusal's places compare in any
-case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
+case on every system; on Windows each segment is read as the name Windows reaches by it, by one owner
+(`WindowsNames`) every guard's spelling of a path passes through (`AgentPolicy.Plain` and
+`AgentPolicy.Spelled`, so a command's words, moves, writes and removals and a file tool's path
+alike): its trailing dots and spaces and an NTFS stream's or attribute's suffix dropped
+(`WindowsNames.Trimmed`: `.git.`, `k. .`, `.git::$INDEX_ALLOCATION`, `k::$DATA`), and a short name
+read as its long one where the path is there, as `Path.GetFullPath` gives it - the system's own
+answer, exact whatever short names the volume gives, hashed ones among them - and where it is not,
+for a command may make the place before the word is read, as each guarded name it could shorten
+as well (`WindowsNames.MayShorten` and `WindowsNames.Lengthened`, at most
+`AgentPolicy.MaxShortNameReadings` readings): each segment of the places no command reaches and of
+git's own directory of each tree, and each literal segment of a path rule - a restriction, a
+protected path, the worktree rules' own; what a
 refusal allows - a writable root, the step's `writes` - compares as the platform does. A command is
 read whole before it is matched, `Agents\Policy\CommandAnalysis`: a shell string read once, front to
 back, by a recursive-descent reader as the shell's own parser reads it (`CommandAnalysis.Shell.cs`,
@@ -1536,7 +1833,9 @@ program's rules meet the words it is handed and a redirect is decided by its fil
 line joined and `$'...'` decoded. The `NAME=value` (and `NAME+=value`, `CommandAnalysis.AssignedName`)
 words before a program are kept as its environment and carried to what it runs, and a value that is a
 program git or another tool runs (`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`,
-`GIT_PROXY_COMMAND`, `EDITOR` and their kind) is read as that program's command line, what a command
+`GIT_PROXY_COMMAND`, `EDITOR`, `PROMPT_COMMAND` and their kind) is read as that program's command
+line, a prompt (`CommandAnalysis.PromptValued`: `PS0`, `PS1`, `PS2`, `PS4`) as a double quote's text
+an interactive shell expands, what a command
 declares too (`CommandAnalysis.Declarations`, the one owner of it: an `export` or a declaration, cmd's
 `set`, fish's `set`, csh's `setenv`, `setx`, PowerShell's `Set-Item` and its kind of an `env:` item), and so is the value of git's own
 setting of a key git runs as a command line (`CommandAnalysis.RunsProgram`: its pager, editors, ssh,
@@ -1551,7 +1850,24 @@ its `-C` scripts among what it runs), the here-string, here-document or file a s
 its descriptor 0 is given (`ShellRedirect.Descriptor`; `/dev/stdin` and PowerShell's `-` among its
 names), `cmd /c` and
 `powershell -Command` and a decoded `-EncodedCommand` - by any prefix PowerShell takes, behind its
-valued options - and the command lines `trap`, `watch`, `script` and `flock` run, each by its own
+valued options - and the command lines `trap`, `watch`, `script` and `flock` run, the commands
+sed's `e` command and flag run (`CommandAnalysis.SedOf`, sed's own script grammar read, its `-i`
+in either dialect), ssh's and wsl's command and a WSL distribution's own launcher's
+(`CommandAnalysis.DistributionLauncher`: `ubuntu run`, `ubuntu2204.exe -c`), their words joined as
+each hands them on - with none, the script its input gives where the command's input is given
+(`AnalyzedCommand.InputGiven`: a pipe, a redirect of descriptor 0, a group's or a loop's redirect, an
+argument list's command its runtime writes an input), nothing where none is, `ssh -n`, `-f` and `-W`
+among them - the commands ssh's `-o` settings run (`ProxyCommand`, `LocalCommand`,
+`KnownHostsCommand`, `RemoteCommand`, `CommandAnalysis.SshCommandSettings`), a string a program runs
+as a shell's script (`CommandAnalysis.StringRunners`, one table: npx's and `npm exec`'s `-c` and
+`--call`, each of concurrently's, hyperfine's and watchexec's commands, nodemon's `--exec`, entr's
+with `-s`, cargo watch's `-s`), read as `sh -c`'s and as `cmd /c`'s, and the job
+`at` and `batch` take from a here-document or a here-string (`CommandAnalysis.ScriptsItRuns`), and a
+script file the string itself writes before it runs it, read as the text a here-document gave it
+(`AgentPolicy.WrittenScripts`: each file the string writes kept by the full path it reaches from each
+place its command stands, `StringState.Written`, a target the shell expands kept by its literal end,
+a run word - a program's or a shell's, `source`'s or sed's script file - that file only where it
+reaches that path or that end), each by its own
 shell's quoting - PowerShell by a reader of its own (`CommandAnalysis.PowerShellReader`), which
 follows pwsh's tokenizer and grammar and writes each statement on a line and each word whole and
 quoted for the shell reader, so the shell reads no syntax of its own into it: a command's words as
@@ -1581,32 +1897,75 @@ filter-branch's filters and send-email's commands, each in every form git takes 
 as the program and arguments they are, `submodule foreach`'s as one script the shell evaluates - each word it fills in
 `CommandAnalysis.InputWord` and fd's, rg's and parallel's added one too; `$((...))`, `((...))` and `$[...]` are read as arithmetic, their close found
 as bash finds it, their text read as a double quote's and their substitutions read as commands, so a
-`<<` there shifts and opens no here-document; a single quote inside a double quote's or a
+`<<` there shifts and opens no here-document, and `((...))` is the command `let` given its expression,
+as bash runs it; a single quote inside a double quote's or a
 here-document's `${...}` is a character; a shell's options are read as it reads them before its
 script - an `o` in a short cluster taking the next word (`-eo pipefail`), a help or a version
 running nothing only where it stands before what would run; a redirect's descriptor is read as bash
 reads it (`{name}>`, `<&3-`, digits past an int a word); env's own words are read once
-(`CommandAnalysis.EnvWords`) for both its command and its `-S`; parallel's command is read as the
+(`CommandAnalysis.EnvWords`, GNU env's table `CommandAnalysis.EnvOptions`, a long option by any
+prefix that names it alone through `CommandAnalysis.LongOption`, as every program's table names
+them) for both its command and its `-S`; a git pathspec is read as git reads it
+(`CommandAnalysis.UntrackedPathspecs`, `GitPathspec`: quoted or not, its magic - `:/`, `:(top)` the
+root of the repository the command stands in, `icase`, `glob`, `literal`, an excluding one none) where
+git reaches what it does not track (`add -f`, `grep --no-index` or `--untracked`, `clean`, `stash -u`
+or `-a`, `diff --no-index`), each refused where git's own reading of its pattern may name a slot or
+the state (`AgentPolicy.GitPatternRefusal`), while a directory a git command that reads only what
+git tracks is given (`CommandAnalysis.ReadsTrackedOnly`) and one an `--exclude` or `--exclude-dir`
+gives (`CommandAnalysis.ExcludeWords`) are no read of what they hold; parallel's command is read as the
 script it runs through the shell; a script another program fills in (`find -exec sh -c 'echo {}'`)
 is undecided; and a here-document's or here-string's text is read for root actions and paths with
 no brace expansion, which the shell never makes in it, a name one Windows reads as its device
 (`NUL`, `COM1.txt`) the file of that name another Windows and its shells make, and a bracket the shell
 would not read as one its characters; arithmetic that does not close is read once at each place.
 What it cannot read whole it refuses, and the policy denies as `undecided`: a script nested
-past four levels, parentheses past 32, a shell that reads its script from its input or from a file
-an expansion or another open descriptor names (`bash <(curl ...)`, `/dev/fd/3`, `<&3`), an `env -S`
+past four levels, parentheses past 32, a shell that reads its script from an input it is given or from a file
+an expansion or another open descriptor names (`bash <(curl ...)`, `/dev/fd/3`, `<&3`), an env long
+option that names none of env's or more than one, a configuration file `ssh -F` names but none, an `env -S`
 string holding a backslash or a comment a line end follows, an alias it gives, an `xargs` handing a shell its script, a program named by a
 variable, a substitution, a pattern or a brace, a brace that spells more than 64 words, a word where
-none can stand, and an option of git's, gh's, fish's or Windows PowerShell's own before its command that this does
+none can stand, a parenthesis after a command's word, which bash refuses and zsh reads as a
+pattern's group or a glob qualifier (`rm -rf (.git|x)`, `*(D)`), an option of git's, gh's, fish's or Windows PowerShell's own before its command that this does
 not know (`CommandAnalysis.WindowsPowerShellValued` and `WindowsPowerShellSwitches` the parameters it knows, its command
-read once, from its first word that is neither).
+read once, from its first word that is neither), sed running what it reads or a script the shell
+fills in, `at` given its job by a file or its input, ssh or wsl given no command and an input
+this does not read, a script file the string writes and runs whose text no here-document gave, a
+terminal session's program given what to run or type (`tmux`, `screen`, `zellij`, `byobu`), and
+`crontab`, `launchctl` or `systemctl` installing or starting a job (`CommandAnalysis.ComposesCommandLine`),
+each running what it is given apart from the agent; a variable's readings past
+`CommandAnalysis.MaxReadings`, a pattern's `..` readings past `AgentPolicy.MaxDotReadings`, and
+`cd -` or a `CDPATH` or `OLDPWD` whose place is not known are undecided too.
 Every word of a command is tried as the program of the words after it - but a word of a program
 that runs none of its words (`CommandAnalysis.DataPrograms`: grep, rg, echo, cat, which and their
 kind), and a git or gh tried so reads an option it does not know as one word - a program matched by
 its name in any case (`CommandAnalysis.Name`, `.exe`, `.cmd` and `.dll` among the ends folded away,
 a cmd line's `@` dropped, `git-push` read as `git push`), so a command another program runs meets the rules on its own program; a rule matches through
 `AgentRule.Match`, whose `Expanded` - a word the rule reads is one the shell expands - the policy
-denies as what the rule may be; git's own options, valued ones with their values, are dropped
+denies as what the rule may be; an expansion is read only where the shell would make it, for the
+reader keeps, per word, which of its parts were quoted (`WordQuoting`: single quotes and escapes
+literal, a double quote's `$`, backtick and cmd percents still live, its globs not), so `git 'p*sh'`
+is a word no rule meets, `gh api 'repos/o/r/pulls?state=open'` an endpoint that names no merge and
+a double-quoted `$x` a variable still (`CommandAnalysis.Expansion`, asked by every reader of one);
+a word's quoting is taken by where the word stands, never looked up by its text - `gh api`'s endpoint
+and fields (`CommandAnalysis.GhApiWords`) and a fetcher's addresses each carry their own word's, so an
+option's value spelled alike in quotes lends its quotes to none; PowerShell's reader keeps a quoted
+string's text literal, as pwsh hands it a native program, and a bareword's wildcards open, as pwsh on
+Linux and macOS expands them; a program is never named by a pattern, however its characters are
+quoted (`CommandAnalysis.ProgramPatterns`), for PowerShell's call operator finds
+`& 'C:\Git\cmd\gi?.exe'` by its wildcards; an argument list
+(`Commands(IReadOnlyList<string>, bool, bool)`) crosses no shell, so a variable in it is the text it spells -
+but on Windows a program splits its own command line, and a Cygwin or MSYS program expands the
+patterns and braces in it: told by the runtime library beside it (`cygwin1.dll`, `msys-2.0.dll`),
+the program the list starts and each one a wrapper among its words starts asked, found on the PATH
+the agent's commands start with (`AgentPolicyGround.ProgramPath`), the policy reads those characters
+as open for such a program and for one it cannot find (`AgentPolicy.ExpandsItsOwnWords`,
+`CommandAnalysis.ExpandedByItsProgram`), and as the text they are for gh, git, dotnet and every
+other program, so `gh api repos/o/r/pulls?state=open` is the endpoint it spells - a program linked
+with its C runtime's own wildcard expansion (`setargv`) is not told apart, and its patterns are
+read as text;
+a word another program fills in as it runs (`CommandAnalysis.InputWord`) stands as an expansion
+whatever quotes a reader put around it, and what cmd reads again - a batch argument's `%` among it -
+it expands wherever it stands; git's own options, valued ones with their values, are dropped
 before its subcommand, gh's flags before its command's path (`gh pr -R o/r merge` is
 `gh pr merge`), and a git configured where it runs - a `-c` or `--config-env` of any key but the
 ones that only shape what git prints, `--exec-path`, clone's own `-c` or `--config` and clone's and init's `--template`
@@ -1615,9 +1974,28 @@ ones that only shape what git prints, `--exec-path`, clone's own `-c` or `--conf
 `GIT_TEMPLATE_DIR` and the homes git reads its global configuration from (`HOME`, `XDG_CONFIG_HOME`,
 `HOMEDRIVE`, `HOMEPATH`, `USERPROFILE`) its assignments set, never a word of data that spells one - is the `git config` it is, and still the command it runs,
 each reading met by the rules. A word that names a path is read
-as each candidate it may be - the word, a redirect's file, an option's value, the words a script in
-it names, each word its braces spell and the path a `file://` address names - and a pattern the
-shell expands is refused where it may reach a credential slot or a Claude Code directory; and a command that runs a program which fetches from the network
+as each candidate it may be (`CommandAnalysis.PathsNamed`) - and a pattern the shell expands is
+refused where it may reach a credential slot, a Claude Code directory or a place the user keeps
+credentials in, or match a directory that holds one, a `*`, a `?` or a bracket matching a name that begins with a dot only where its shell
+would (`AgentPolicy.DotNamed`: a segment that begins with a dot; a string any of whose words names
+`dotglob` or `globdots` as bash and zsh read an option's name - split at blanks, `=`, `:` and `,`,
+in any case, its underscores and dashes and its `no` taken off, so `BASHOPTS=dotglob`,
+`setopt GLOB_DOTS` and `unsetopt NO_GLOB_DOTS` are among them - or names `GLOBIGNORE` or `BASHOPTS`
+at all, `AgentPolicy.PatternsMatchDotNames`; a command PowerShell or cmd reads, or one given
+`-Force`, each command by the shell that expands its words, `AgentPolicy.MatchesDotNames`), so
+`rm -rf *` and `build/*` run and `.g*` is git's own; what a command writes (`CommandAnalysis.WriteTargets`) - its output redirects,
+and each path a writer's words name, a copy's destination however an option names it (GNU's `-t`
+and `--target-directory` in every spelling, else the last word, each writer's options that take a
+value known by its own table, `CommandAnalysis.Getopt` over `CpOptions`, `InstallOptions`,
+`LnOptions`, `RsyncOptions`, and an option it does not know making every operand but the first a
+destination; `Copy-Item`'s `-Destination` by any prefix or glued, else its second word), and the
+output a program's option or operand names (`CommandAnalysis.OutputsOf`, one owner per program:
+`curl -o`, `wget -O`, `tar`'s archive and the directory it extracts into (`-C`, `--one-top-level`),
+`unzip -d`, `zip`, `7z -o`, `sort -o`, `patch -o` and the directory `patch -d` writes in, xxd's
+output file, sed's `w`, robocopy's and xcopy's destination, `dotnet -o`, a compiler's
+`-o`, `cmake -B`, `git format-patch -o`, `ssh-keygen -f`, `openssl -out`, `Invoke-WebRequest -OutFile`,
+`Expand-Archive -DestinationPath`, `Export-Csv`, `Tee-Object`, `Start-Transcript`) - meets the refusals every ground keeps on a write, a
+pattern within a root of the agent's own that stands inside the state its own place; and a command that runs a program which fetches from the network
 (`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr` and `irm`, `http`, `https`,
 `gh api`) is decided as a web request too, by each address it names and each host it reaches (a
 proxy, curl's `--connect-to` and `--resolve` targets, the proxy of its environment), under the
@@ -1625,7 +2003,10 @@ proxy, curl's `--connect-to` and `--resolve` targets, the proxy of its environme
 results a search gives, a search source's own requests held to the `Web(...)` rules alone -
 refused where the step has no web, and refused where
 the web is held to any rule when it reads what it reaches from a file. What it does not see is said
-in help: the inside of a script file a command runs. The worktree rules
+in help and README - the policy reads words and is no sandbox: the inside of a script file a command
+runs, the code an interpreter is given (`python -c`, `perl -e`, `node -e`, awk's `system`), a build
+file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a command computes
+(`$(printf ...)`), and what a process apart from the agent's tree does. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs, the `gh` commands that run them
 or write gh's own configuration (`AgentPolicy.GhStateCommands`; gh's own aliases read as the commands they name,
 `CommandAnalysis.GhAliases`, and a place gh reads its configuration from set for a command read as `gh config set`),
@@ -1633,26 +2014,42 @@ and the merges
 and CI starts of `gh` - each endpoint and GraphQL mutation that merges or starts CI with the `gh`
 commands that reach it, one list (`AgentPolicy.GhCiReaches`) that `AgentPolicy.NeverCiCommands`
 (`gh pr merge`, `gh pr update-branch`, `gh repo sync`, `gh workflow run`, `gh run rerun`, `gh pr create`,
-`gh release create`, `gh release edit`), `AgentPolicy.GhApiEndpoints`, `AgentPolicy.GhApiWriteEndpoints` (a ref, a
+`gh release create`, `gh release edit`), `AgentPolicy.GhApiEndpoints` (each word's path read to its first `?` or `#`,
+for gh's client sends no fragment), `AgentPolicy.GhApiWriteEndpoints` (a ref, a
 file, a pull request or a release written: refused where `CommandAnalysis.GhApiWrites` says the request writes) and
-`AgentPolicy.GhApiMutations` are read from, `gh alias set`, `gh extension exec`, and a `gh` command
-named by none of gh's own (`AgentPolicy.GhCommands`: an alias, `co` among them, or an extension), where `gh` runs -
-its command's own program, or past one that runs the words after it (`CommandAnalysis.CommandRunners`) - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
-a `.git` segment at any depth beneath a root, in any case, so a nested repository's hooks are as
-safe as the root's), and hold the tool's own
+`AgentPolicy.GhApiMutations` are read from, and `gh alias set` (a `gh` command named by none of gh's own,
+`gh extension exec` among them, is refused on every ground, above) - keep git's own files unwritten whatever
+`protectedPaths` says (`AgentPolicy.GitsOwnRule`: a `.git` segment at any depth beneath each tree the agent
+touches, `AgentPolicyGround.Trees` - its roots and the main checkout a worktree was made from - in any case, so a
+nested repository's hooks and the hooks every worktree runs are as safe as the root's), and hold the tool's own
 policy and what the next launch loads unwritten by any agent; its own state
-(`HarnessLayout.StatePaths`, the one owner of where that state is) is held so whatever any switch
-says, a writable root standing inside it - the agent's own work directory - the one exception; the
+(`HarnessLayout.StatePaths`, the one owner of where that state is, under each tree the agent touches) is held so
+whatever any switch says, a writable root standing inside it - the agent's worktree under the worktrees root,
+its work directory under the run's records, and a pattern within either - the one exception; the
 tool's own verbs (`AgentPolicy.ToolVerbs`, each the command's own name as its service declares it)
-and `run-side-task` are refused, run by any program or from a response file, whatever the switch
+and `run-side-task` are refused, run by any program the policy reads or from a response file, whatever the switch
 says, and so are the `gh` commands that hand the work to another agent or install what the next launch loads
-(`AgentPolicy.GhOutOfStepCommands`). The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
+(`AgentPolicy.GhOutOfStepCommands`) and the commands that print a credential
+(`AgentPolicy.CredentialPrintingCommands`, pinned by a test and printed by `help agent-clients`:
+gh's token by itself, by `gh auth status --show-token`, by gh as git's credential helper and by
+gh's configuration, and git's credential helpers' `get` and `fill`, any helper's by `credential-*` -
+each its program and its command, then the words that make it print met anywhere after its command
+(`AgentPolicy.PrintsCredential`), options before or between them, a short option by any cluster
+holding its letter - a credential leaves its slot only by the key store that holds it, never through
+an agent's words). An alias given a command line is read as that command where it is given -
+`git config`'s setting of a key git runs (`CommandAnalysis.ConfigSetting` beside `-c`'s), and
+`gh alias set`'s expansion - for the command that later calls it does so by a name no rule reads,
+and `gh alias import`, whose aliases are in a file, is undecided; an alias another program writes
+into a file is the inside of that program, unseen as help says. The rule a refusal names is the one
+that decided: a rule the command certainly is before one it may be, and of the may-bes the
+person's own restrictions first, then the worktree rules, then the tool's own refusals. The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
 as rules (`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`,
 refused on every client; a step's `writes` is the one source that narrows, and the reporter's reads
 are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,
 no web). For Claude Code the policy is rendered, never re-decided, into the launch's settings
 (`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, a read of each
-credential slot and Claude Code directory as a deny rule - which Claude Code applies to its searches
+credential slot and Claude Code directory, and of each place the user keeps credentials in (all a
+directory holds, a file itself), as a deny rule - which Claude Code applies to its searches
 too - and the restriction rules as deny rules, absolute once for each root, but where a rule's
 pattern there would cover a root the launch writes, each path in the POSIX form Claude Code matches
 (`//c/x` for `C:\x`) and a `Write` rule as an `Edit` rule, for Claude Code holds every file tool to
@@ -1703,18 +2100,32 @@ digest named in the launch's start, the hooks off), the `initialize` answer boun
 before any work and its tools and credential source (`ClaudeLaunch.ApiKeySources`) held to the launch's, and every call
 that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowed; a decline is
 `Refused` and an account at its limit (`ClaudeLine.RateLimit`, or the turn's error) `RateLimited`
-with an `AgentAccountLimit`. Each client's denials, requests of the web and answers too large for
+with an `AgentAccountLimit`, and each moves the step to its next entry - on this client every move
+is a new launch, the engine's walk of the step's order. Each client's denials, requests of the web and answers too large for
 their events are recorded by the one `AgentCallRecords` (`denials.jsonl`, `web.jsonl`,
 `tool-results/`). The harness's own tools, `Agents\Runtime\AgentToolRuntime`, are built for the
 API clients - `claude-api` and `glm` - each run's opened by `AgentToolHost.Open`, and serve
 the `claude-code` client the web's through the engine's tool server (`AgentToolServer`, opened by
 `AgentToolHost.Serve` for one launch: the server's tools alone, written to the launch's own
 `AgentCallRecords`, each call answered by `AgentToolRuntime.ServeAsync`, whose end the launch's
-stream tells): the tools are the one
+stream tells), and the file tools there too where Claude Code's own process runs apart from the isolation
+it hands its commands to (`ClaudeCodeTools.FileTools`, `Of` and `Served` given `ownFiles: false`): the
+tools are the one
 table `AgentTools` holds (what a step is offered, what help prints and what runs); each call is
 held to its tool's schema (`JsonSchemaSubset`), each path to the agent's roots by `ConfinedPaths` -
 its spelling, its links followed, a write through no link below its root - before the policy is
 asked; reads and searches go through `AgentFiles` (git's listing in a work tree, a walk elsewhere),
+which reads every file's bytes through the file as it was opened (`AgentFiles.ReadAsync`), where the
+open file stands - `IFileSystem.FinalPathOf`, over `OpenedFiles`: `GetFinalPathNameByHandleW` on
+Windows, `/proc/self/fd` on Linux, libproc's `proc_pidfdinfo` on macOS - decided again by the same
+rule before a byte passes, the file opened never to wait (`IFileSystem.OpenRead`: on Linux and macOS
+opened non-blocking and refused before a byte unless it is a regular file, so a pipe put there hangs
+nothing) and read to the bound alone; and every write, made directory, move and removal relative to
+its directory held from the writable root it was decided in (`AgentFiles.Write`, `UnfollowedFiles`
+over `IFileSystem.Hold`, `HeldDirectory`), every entry on the way opened as itself, so a link put in
+place after the check, or swapped in while the tool acts, reaches nothing and the call is refused
+naming it (`AgentFiles.Linked`, by `ConfinedPaths.LinksRule`); a directory listed goes by its path,
+so what a link put in place of one leads to is listed by name, never a byte of a file read through it,
 edits through `EditedText` over `EncodedText` (the encoding rule the graph's `CodeFileText` reads
 by too, its lines cut by `CodeFileText.Spans`), a command through `PhaseRunner` as a contained
 phase - its environment `AgentChildEnvironment`'s, every name the configuration appoints and every
@@ -1730,29 +2141,84 @@ write or a run alone between them.
 The loop the API clients share is `Agents\Loop\ToolLoop`, driven in its own tests by a fake provider: one request
 after another over an `IChatProvider` - the provider's own wire, its form of a conversation's messages and tools, what
 each of its failures is (`ChatFailure`), what a request has used so far (`ChatPart.Used`, counted where it ends
-without its turn), what is heard of an answer that is none of its parts (`ChatPart.Heard`, which keeps the stall bound
-from a stream that is alive) and what its requests are billed by (`IChatProvider.Uses`) - each turn's calls run by the run's
+without its turn - and a request the run left once it was sent, by its pause, the person's interrupt, its time or the
+handoff's bound, with nothing of it said yet leaves the run's cost unknown, saying so in `AgentCost.MissingPrice`,
+never naught), what is heard of an answer that is none of its parts (`ChatPart.Heard`, which keeps the stall bound
+from a stream that is alive) - each turn's calls run by the run's
 `AgentToolRuntime` (`AgentToolHost.Open`) through `AgentToolRuntime.RunTurnAsync`, which an `AgentTurnCut` cuts when
-the run pauses or the step runs past its time, every call it cut still answered (`AgentToolRuntime.Interrupted`,
-`AgentToolRuntime.NotRun`); a host that cannot serve the tools a run is offered says why before it starts
+the run pauses, the person interrupts its turn or the step runs past its time, every call it cut still answered
+(`AgentToolRuntime.Interrupted`, `AgentToolRuntime.NotRun`). The person's interrupt (`AgentRun.Interrupt`, an
+`AgentTurnInterrupt`) leaves the request under way as the pause does - its partial answer thrown away, so the
+conversation is stored whole to its last whole turn - and ends the run `Cancelled` (`AgentTurnInterrupt.Cut`) with
+what it used, at the top of the loop or wherever it waits: a gate, a retry's wait, a request, the calls; a host that cannot serve the tools a run is offered says why before it starts
 (`AgentToolHost.Unserved`). The loop owns the bounds - `maxTurns` but the handoff turn's, the budget checked before every
-request against the cost `AgentPrices` counts (`AgentPrices.BudgetRefusal` refusing a start without the prices it needs),
-the duration, the stall - the keys, a refused one passed over for the next, the retries (`ToolLoop.Backoff`,
+request against the cost `AgentPrices` counts (a start without the prices it needs refused by the runner, below),
+the duration, the stall - the run's order of entries of its provider and client (the serving model's
+keys in the credential's order - the runner hands the run its model's keys from the entry it starts on,
+`AgentRunner.CredentialFor` - then each later model of the same provider and client with each of its keys,
+up to the first entry of another, `ToolLoop.JoinLaterEntries`; the serving entry `Now`, the walk planned
+(`PlannedFor`, by `AgentFallback.Next`) and taken (`TakeAsync`, the new entry asked with tries of its own)
+only where a request will follow it), a key refused never asked again of any model, each request through the
+gate's lane of its provider and key (`AgentRun.Gates`, `ClientGates.LaneOf`: its input counted as it enters, a
+429 setting the cool-down its failure covers, `ClientGate.Met`, a cool-down past the longest wait that limit met at
+once), the retries
+(`ToolLoop.Backoff`,
 `ToolLoopTerms`), the handoff turn (`AgentHandoffSignal`, whose question and answer the claude-code client reads the
 same way), a message to an
 agent at work (`AgentMessages.TryTake`), the output check (`StructuredOutputGate`), the model each turn names
-(`AgentModelIds`, which the claude-code client holds its messages to too) and the conversation: `StoredConversation`
+(`AgentModelIds`, which the claude-code client holds its messages to too), a level a move changed
+told in the conversation where the provider takes a message for it and else carried by every request,
+the model's own default named by none (`IChatProvider.EffortMessage`, `ChatRequest.FirstEffort`) and the
+conversation: `StoredConversation`
 under the agent's `sessions/<id>/` (`AgentRun.SessionsDirectory`, `OrchestratorLayout.SessionDirectoryIn`), each line a
 JSON array of the provider's messages written at a point where the history is whole, each message kept and sent back
 byte for byte - and, where the provider begins sending it shortened (`ChatPart.Shortened`), the point kept beside it
 (`StoredConversation.Shorten`, `shortened.json`) and given with every later request (`ChatRequest.ShortenedBefore`), so
-each sends what the last did. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
+each sends what the last did. The engine's fallback has two owners, one rule each: the loop moves
+the run inside the one conversation (`AgentFallback` the rules - what a limit covers, which entry a
+cause moves to, which decline moves nowhere), and the runner (`AgentRunner.OrderedAsync`, over the
+step's `Order` of `AgentRunEntry`s) walks the rest of the order across clients, a new run for each
+entry it takes, watching the events of each client it works for where it got to (`Watching`) and
+merging what every entry did into the step's one result (`WalkTotals`, its usage folded by the one fold of usage and
+cost, `AgentUsageReport.Sum` over `AgentCost.Sum`: a count is known only where every part with usage has one, and a
+part with usage and no cost is unknown, never nothing). A step budgeted in dollars is never started on an entry
+without a price of each kind its client is billed by (`IAgentClient.BilledBy`, which reads the one fact of the client's
+kind given its entry, `AgentClientKind.BilledBy` through `AgentProviders.BilledBy`: input, cache read and output on
+every client, the claude-api client's cache write of its cache lifetime and both of the claude-code client's), nor
+on a provider that prices in another currency: the runner refuses it, on every client, before any is taken
+(`AgentRunner.Priceless`, in the words of `AgentPrices.BudgetRefusal`) - the step's own first entry ending the step
+`NotStarted`, a later one passed over and handed to the serving client as an entry it may not take. The workflow's
+check asks the same fact first (`WorkflowValidator`'s budget prices), each model of the order against the client it
+is reached through (`AgentResolution.ClientOf`, the one rule the run resolves each entry's client by), so a model the
+run would refuse is refused before the run, naming the model, the client and the missing price. The first request asks for a quarter of the model's `maxOutputTokens` (`ToolLoop.FirstMaxTokens`), a turn
 cut off while it called a tool, before it wrote anything, or while its request held it to a schema (`ToolLoop.WhileHeld`: the
 answer to a nudge would be a whole object of its own), doubling it. Every message the engine sends the agent - the step's
 prompt, a nudge, a repair, the handoff's question, a message to an agent at work - is masked as the system prompt is,
 before it is sent or stored. Every client ends a run in the same words, whatever its wire: a step that
 never began, a model nobody asked for, an answer outside its schema, a declined request and an account at its limit are
 each said by `AgentEndings`, and what a run used, by model, is counted by `AgentUsageTally`.
+
+The requests of one provider and one key go through one lane of the gate (`Agents\ClientGate.cs`, held by its own
+tests over a clock and a wait that move only when told): at most `agentClients.<client>.maxParallel` under way at once
+(`ClientGateSettings.BuiltIn`, 3 for claude-code, 4 for claude-api and 2 for glm where the entry says none; a client
+that signs in with a login one lane by its client, two keys of one provider two lanes keyed by a hash of the key -
+`ClientGates.LaneOf`, made once and shared), the API clients' optional buckets pacing a lane's minute
+(`requestsPerMinute`, `inputTokensPerMinute` counted as a request enters - one larger than the bucket let in alone once
+it is empty - and `outputTokensPerMinute` charged by `ClientSlot.Answered` once the answer is had, each waited out until
+the oldest of the minute is a minute old) and a 429's cool-down holding what its failure covers - a model's rate limit
+that model's requests on the lane, an account's limit every request of it (`ClientGate.Met`, the one reader of a 429's
+wait; `RateLimited`, never shortened by a sooner one; `CoolDownOf`, the longer of the two a model is held by) - all
+counted on the clock's timestamps so a wall clock stepped holds no lane. Each client enters the lane at its own seam
+(`AgentClientCapabilities.PacesRequests`): the loop the API clients share before each request, its input estimated
+(`EstimatedTokens`) - the provider's own search among them, which the loop asks for the tool runtime as the run stands
+(`AgentNativeAsk`, the loop's `NativeSearchAsync` over the wire `IAgentNativeSearch`, `ClaudeApiNativeSearch` on the
+Claude API: the entry serving the run then, its key's lane by the same turn every request takes, `LaneTurnAsync`, and
+what it used counted at once to that entry's part); the runner around each Claude Code launch
+(`AgentRunner.InLaneAsync`), whose requests it cannot see one by one.
+A cool-down past the client's longest wait (`ToolLoopTerms.LongestWaitOf`) is waited by neither: the loop meets it as
+the limit it is, and the runner ends the launch at that limit before it begins, the walk moving on to an entry the
+cool-down does not hold. A wait is said as `WaitingToRetry` and ended by the run's pause - a launch paused at the gate
+never began, and hands off nothing (`AgentRunner.PausedAtTheGate`) - beside the orchestrator's `maxReasoningAgents`.
 
 The `claude-api` client is `Agents\ClaudeApi\ClaudeApiClient`: the loop over `ClaudeApiProvider`, built for each run
 from the run's entries (`AgentEntries`: the provider's, the model's and the client's own where the configuration
@@ -1797,15 +2263,60 @@ record's own rule - `AgentAssumption.Problems`, `AgentQuestion.Problems`: every 
 recommendation among them - which `AgentRunResult.Problem` and the run's `questions.json` hold them to as well), and the
 run's end - `Completed` or `Asked`, with `PersonAsked`, or a repair sent back, then `InvalidOutput`. The runner writes
 the notes as `notes.md` (`OrchestratorLayout.StepNotesFileName`) before `result.json`, and removes an earlier attempt's
-before an attempt begins, for the step's directory is every attempt's. What each client is sent: `--json-schema` the
+before an attempt begins, for the step's directory is every attempt's; it writes the first user message as sent, masked,
+as `user.md` (`OrchestratorLayout.StepUserFileName`) before the client is taken - the parts the attempt was given, held
+by the one owner of their order (`AgentPromptParts.FirstMessage`: the run context, the plan updates and the continuation
+record, the record only where the conversation is a new one - every launch on a client that renders its conversations,
+and any run handed none - the run's prompt as the task). The continuation record itself is built by
+`Agents\AgentContinuation` from the step directories of the agent: the steps so far with each one's notes and output,
+the files changed, the last red build or test, the handoff (never cut), the continuation message after an attempt that
+was cut off, and the last iterations word for word from the stored stream of the newest attempt (`Iterations`, each
+message the engine sent the agent in its place, the earlier iterations kept back from the last until the first that
+does not fit) - whatever is cut named with a copy in the step's own `handed/continuation/` (`OrchestratorLayout.HandedDirectory`,
+`AgentContinuation.CopiesFolder`), which the tool alone writes, through no link, and the agent reads as a root of its own,
+the bounds `agentContext.continuation`'s (`AgentContinuationBounds`: recordChars, stepChars, paths, lastIterations,
+iterationChars, each default one constant the help reads). One owner says what an attempt's events are
+(`Agents\AgentAttempt.cs`): every run that names the attempt, from the first of them on - an attempt that went on with
+an answer is more than one run, each beginning at turn one - its turns numbered across them, and across a launch begun
+again inside a run (`AgentAttempt.Items`), a later launch's first message read as its task alone - the inverse of
+`AgentPromptParts.FirstMessage`, `AgentPromptParts.TaskOf` - never the run context or the continuation record it
+carried, so no record holds another, read alike by the continuation record, the compaction, the engine's handoff and the reason step's compaction
+(`AgentAttempt.Of`). The compaction beside it is `Agents\AgentCompaction` (`Reduce`, over the attempt's events, which
+the caller windows): the engine's own reduction of a conversation that filled its model's context, made where the step's
+limit is answered `compact` - the run context and the task whole as they were first sent, an earlier compaction record
+standing for the items its events hold and never copied again, the last iterations word for
+word by the continuation record's rule, every earlier message of the agent its text whole with its thinking left
+out, every earlier call one line (the tool, its input cut at `callInputChars`, how it ended, the path where its input
+names one), every earlier result left out, and every message the engine sent since the first whole - the bounds
+`agentContext.compaction`'s (`AgentCompactionBounds`: reducedChars 200000, callInputChars 400, the oldest messages cut
+to their first 2,000 characters each where the reduced part is over), what it kept and reduced held by
+`AgentCompacted`. It begins a new conversation, on every client (`AgentRun.Compaction` - the record is the first
+message of one, the old kept whole; the loop and the claude-code client ask it before any parts), the step's stream
+saying it as a `Compacted` event - why, the session left and the one begun, what was kept and reduced, the sizes - and
+its result counting it (`AgentRunResult.Compactions`), once, the event and the count one fact: the runner's one
+`CompactionToSay` hands each launch a sink of its own (`LaunchSink`, in `InLaneAsync`) and says it as the first launch
+given the compacted conversation begins it - its client telling the sink so (`IAgentEventSink.ConversationBegunAsync`,
+told once where the client's own rule of a run never started stops holding: the loop as the provider begins its first
+answer with the model asked - `ChatPart.Began`, else the first answer had - claude-code as a call of it runs or a turn
+of it ends), or the launch ending any way but `NotStarted` having told none - naming the session the launch began. A run
+that ends not started - by the runner, by its client (no model, program, policy or key, a refusal, the web unserved) or
+by the provider before any answer began (a model the plan does not serve, Z.AI's 1311; met once one began, it fails the
+run) - or held at the gate compacted nothing, and a retry or a move given the same record counts no other. A side-task
+whose run given the compaction never started is left outgrown (`SideTaskWorking.Outgrown` reads a run ended
+`NotStarted` as one that never worked), so its next message is given the compaction again and says it then. A
+compaction carried before a task of its own (`AgentCompacted.BeforeItsTask`, a side-task's, whose why is
+`AgentCompaction.OutgrewItsContext`) is the run's continuation in place of the request's (`AgentRunner.ContinuationOf`),
+said and counted the same way. What each client is sent: `--json-schema` the
 envelope as built; the loop's `ChatRequest.Schema`, which the Claude API sends as `output_config.format` in the copy
 `ClaudeApiRequest.Sent` makes - every array bound structured outputs do not take moved into its description, over
 `JsonSchemaSubset.SchemasIn` - and which, once the API refuses it as more than it compiles
 (`ClaudeApiFailures.RefusesTheFormat`, failed as `ChatFailureKind.SchemaRefused`), the loop sends the run's later requests
 none of, the envelope said in words in a message it appends to the conversation (`AgentMessageKind.EnvelopeInWords`) -
 never in the system prompt, which every stored turn's thinking was made under - and which a provider whose wire holds no answer to a schema (`IChatProvider.SendsSchema` false, Z.AI) is told in words
-in the step's first message (`AgentEnvelope.InWords`), an answer that read as no JSON asked again in JSON alone
-(`ChatRequest.JsonAlone`: no tool offered, `response_format` a JSON object).
+in a message of the same kind after the step's first, in every conversation the run begins (`AgentEnvelope.InWords`),
+so the first message is exactly what `AgentPromptParts.FirstMessage` wrote and `AgentPromptParts.TaskOf` takes apart,
+and the attempt's items hold the envelope once (`AgentAttempt.Items`); an answer that read as no JSON asked again in JSON
+alone (`ChatRequest.JsonAlone`: no tool offered, `response_format` a JSON object).
 
 The harness's own web search is built under `Web\Search`: each kind of source an implementation of `IWebSearchKind` -
 pure, asking and reading only what it is handed - found by the one scan of the core (`CoreImplementations<T>`, which
@@ -1883,11 +2394,650 @@ drops a making cut part way - one whose hand-over of the main tree's uncommitted
 (`SeedRecord.HandOverStopped`) seeded again with the rest - and finishes the removal of one found closed
 (`FlowStepResult.NameSpent`); a refusal it meets keeps its cause (`FlowStepResult.Failed`), so a main tree another run
 holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentCreateRequest(..., NoWorktree: true))`
-makes a read-only reason step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
+makes a read-only reason step's agent the same way. `ReasonStepRunner` works the reason step itself: the agent it is
+given - the one its `in` names, the work a `resume` goes on with (`FlowCoordinator.NamedAgentOf` walks the chain), or
+the engine's own read-only one, named with its model before its record (`FlowCoordinator.Start`) and made through
+`CreateAgentRunner.MakeAsync(noWorktree: true)` where the step names none - the definition it works by read where
+the chain of work it goes on with began (`ResumeChain.Root`, the one owner the validator reads it by too: a step that
+goes on with another's work is the same agent going on, and works by that step's definition, client, tier, model,
+writes and web search - its system prompt sent, its limits held, its capabilities and `writes: false` on the ground,
+the sources that step's `search` picks its `web_search`'s - with its own effort and restrictions beside them; a step
+whose chain's root names no definition is refused by the check, never run with no system prompt), the model resolved
+by `AgentResolution.Of` with that definition below its own through the one pick the validator checks by
+(`AgentResolution.Picked`: the step's model, else its tier, else the definition's model, else its tier, each level
+whole), the order, the workspace, the Claude Code directories its ground keeps every action from and the mask built
+as every launch builds them (`ReasonLaunch`, shared with the advisor and the reporter: the agent's worktree at the
+path its record resolves, the run's work directory made before any client is handed it - the advisor's and the
+reporter's, which no agent of the run made, among them - the tool's own `~/.claude` always among the directories,
+every secret the slot answers in the mask), the policy's ground by `AgentStepGround.Of` (a
+read-only agent reading the main tree and writing its work directory alone; the tool's state guarded under each
+tree the agent touches - its worktree, and always the main checkout, whose run records and other worktrees a command
+reaches from the worktree - and git's own files beneath both, `AgentPolicyGround.Trees`), each skill its prompt names
+looked up
+again where the step starts (`AgentSkills.Find`, its name by `AgentSkills.NameIn`'s one rule), the folder copied
+whole into the step's own `handed/skills/<name>/` (`OrchestratorLayout.HandedDirectory`, a root the agent reads and the
+tool alone writes, through no link - never the work directory, where the agent's commands write and could plant one)
+and the block put where the placeholder stood, its `${CLAUDE_SESSION_ID}` the
+id the run's first session begins as (`AgentStepRequest.SessionId`), each skill handed recorded on the request, in
+the stream's `sessionStarted` and on the step's record (`FlowStepResult.Skills`, kept once each over the visit's
+attempts as `FlowStepRecord.Skills`, `step.json`'s `skills[]`, and taken up again by a resume) - the engine having filled every other name into the prompt once and handed it as
+pieces (`FlowStepRun.Prompts`, `FlowTemplate.FillAroundSkills`), so what was filled is never read as a template again
+and a value's braces stand - a skill that cannot be handed refusing the step (12), the work it goes on with rendered
+as its continuation record (`AgentContinuation.Render` over its `FlowStepRun.WorkedFrom`), and the run answered
+through `IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtLimit` for a limit of its own,
+incomplete for a stop, the schema-validated output the step's, with the issues it reports under `preExisting`). The
+step's stream is read by the store's one reader of it (`OrchestrationStore.ReadStepStream`): a whole line that does
+not read refuses the attempt that goes on with it.
+
+Before its agent is launched, a step, the advisor, the reporter and a side-task each ask the operating system's
+isolation of the launch (`IAgentIsolation`, `AgentIsolation.ForLaunchAsync`, through `ReasonLaunch.IsolationAsync` for
+the three of a run). A launch and an execution of the tool's own reach one builder (`AgentIsolation`'s held decision,
+over an `IsolationGround` made of either's ground), which keeps no list of its own beside the ground's and the
+declared caches. An agent that may run no command - the reporter - needs none (`LaunchIsolation.Unneeded`), and
+nothing is probed. Otherwise the platform's mechanism, proved once per process (`IIsolationPlatform`), and a profile
+of the ground, the machine read-only: written, the ground's writable roots, what git writes of each of its trees that
+is itself one of them and its repository's top level (`AgentIsolation.GitPlacesAsync`: `rev-parse
+--path-format=absolute --git-dir --git-common-dir --git-path hooks --git-path reftable --show-toplevel`, git 2.31 or
+newer, so a leg's copy that is no repository of its own writes nothing of the repository above it) -
+each tree's own git directory alone (`AgentIsolation.GitWritten`): a main checkout's `.git` whole,
+and an agent's repository's, which is its repository's own common directory, for git makes its lock
+files directly in it, which no rule at a path grants one name at a time, but a main checkout's
+`commondir`, made naming itself - never made where the repository keeps its refs in a reftable, held
+absent instead - and its `worktrees/`, sealed below; a linked worktree's own git
+directory is its directory under the common directory's `worktrees/`, and the common directory
+itself - its `objects/`, `refs/` and `reftable/` wherever the repository keeps them, its `logs/` and
+`lfs/` where there is one - is read-only to the work, so `git add` and fetch fail inside the isolation
+there, a legacy agent tree's and a leg-pinned plain worktree's work among them, and each launch over
+one says so. So `git add`, commit and fetch write the objects, the index and the refs in a main
+checkout and in an agent's repository, while `git worktree add`, `move`, `remove` and
+`prune` and a `git gc` that expires another worktree's reflog fail in a main checkout. The refs so written are those
+of a repository whose git directory the work writes whole, every branch, tag, stash and remote-tracking ref and their
+reflogs; the push step sends the commit the run's
+commit steps recorded, never what the branch names later - the launch's own temporary directory under the isolation's own (`IsolationCaches.Root`, then `tmp/`;
+none where the mechanism gives one, `OwnTemp`) and the declared tool caches (`IsolationCaches.Declared`, each variable
+pointed into the directory of the child's write scope under `caches/`, `IsolationCaches.Prepared`: one for each set of
+outermost places written and sockets reached, named by their hash, `IsolationCaches.ScopeName`, beside a `.scope`
+record naming them, so a package one child plants is run only by a child that writes everything it writes - never by
+one writing another tree, the main checkout's hooks or reaching the user's SSH agent - and taken away with its record
+once none of its places is left, every directory no record names with it, `IsolationCaches.Sweep`, before each held
+decision; a cache is code a later build runs, so the user's own stay read-only; on Linux Playwright's
+browsers, which the moved `XDG_CACHE_HOME` would hide, named where the user has them, `IsolationCaches.Installed`);
+hidden, every credential slot (`AgentPolicyGround.SlotDirectories`) and every Claude Code directory - one list for a
+launch and an execution alike, `ClaudeCodeDirectories.Of`: `~/.claude`, the tool's own and the one the slot names for
+the claude-code client's logins - with `~/.claude.json` beside `~/.claude`, the shell snapshots Claude Code sources
+read again (`Reopened`); hidden too, every place the user keeps credentials in (`AgentPolicyGround.CredentialPlaces`,
+from the one declared list `UserCredentials.Declared` and `agentPolicy.hiddenPlaces`, which adds and never takes away,
+resolved by `UserCredentials.Of` against the home, `XDG_CONFIG_HOME`, `APPDATA` and each tool's own variable that moves
+its place - `GNUPGHOME`, `DOCKER_CONFIG`, `KUBECONFIG` and their kind - in this process's environment, which every
+child inherits): ssh's directory with its `known_hosts` and `config` read again, for ssh reads them itself to reach a
+host, and AWS's, Azure's, gh's, Kubernetes', Google Cloud's and Docker's logins, `.netrc`, git's credential store,
+GnuPG's private keys and npm's, PyPI's, Cargo's, Maven's and Gradle's credential files whole - each decided by what
+reads it: none is a file a build needs but for a secret it can be handed as a value in the runner's environment,
+and Cargo's and Gradle's homes are moved into the isolation's caches anyway; NuGet's user configuration and Maven's
+`settings.xml` are left out (`UserCredentials.LeftOut`), for every restore and every Maven build reads them for their
+feeds and refuses one it cannot read. A credential place that is not there is made empty only inside a written place,
+as every guarded place is - never in the home, which every child reads alone, so nothing of the user's is changed -
+and one that holds a tree or a written place leaves the launch with no isolation, for hiding it would hide them. The
+words policy holds the same list (`AgentPolicy`'s one list of the places no action reaches: the slots, the Claude
+Code directories and these, each refusal of one read from it): a file tool's read and write in one, a search over one and every command naming
+one or a directory holding one are refused, ssh's own files among them, which inside only ssh reads; written by nobody, git's code-running files and its pointers to its own directories and to
+other content as git names them (the hooks git runs and the common directory's own `hooks/`, which git runs again once
+`core.hooksPath` is gone; the common directory's `config`, `config.worktree`, `info/`, `refs/replace/` and
+`objects/info/`; its own `commondir` (`AgentIsolation.CommonDirectoryFile`), made where a main checkout's `.git`
+holds none naming that directory itself (`AgentIsolation.ItsOwnDirectory`, `.`), which git takes as no pointer while
+an empty one it refuses, so the one file of a main checkout's that would lead every git elsewhere is held as every
+other place is - but never made in a repository that keeps its refs in a reftable (`GitPlaces.Directories`' reftable,
+asked of git as the hooks directory is), for any commondir file in a git directory the work writes breaks every commit
+git makes on a branch, whatever it holds, git splitting the repository's refs over two stores the moment it reads one:
+there the path is held absent, its rule denying every command's making a file at it, which macOS's sandbox does by
+denying every write at the path and MXC's container by meeting the path alone, granting it read with nothing there, but
+which bubblewrap cannot - its every rule a mount, skipped at a path that is not there, and a mount made over one
+putting a file of bubblewrap's own there - so over such a repository's main checkout bubblewrap leaves the ground with
+no isolation, the remedy naming the migration to the files format; its `worktrees/`, so a main checkout's work makes no worktree's git directory and writes no other's;
+each linked worktree's `config.worktree`, `commondir` and `gitdir`; every linked worktree's `.git` file, the tree's
+own and each other `git worktree list` names, which a ground writing the directory it stands in - a worktree a person
+or another tool made inside the main checkout - would otherwise point at a repository of its own; every
+git directory's `modules/` whole, the common one's and each linked worktree's, where git keeps a linked worktree's own),
+every configuration file git reads there (`git config --list --show-origin`) and every file one includes, whether its
+condition holds now or not (`GitPlaces.Includes`, `AgentIsolation.IncludeTargets`, an inactive one read with `git
+config --file` for what it includes in turn), each tree's `.harness-config`, each state path (`StateDirectories`) and
+the launch's own directory - laid parent first, a place both sealed and writable staying sealed
+(`IsolationProfiles.Ordered`); anchored, every directory above a guarded place
+whose holder is written and each writable root itself, which no command renames or removes
+(`IsolationProfile.Anchors`, a property of the profile, so no mechanism keeps a list of its own): a rule stands at a
+path, so a directory above a guarded place moved away would take the place out from under its rule and leave its name
+free to make again - a `.git` moved aside and a new one with hooks of the agent's, run by the tool's own git outside.
+Every place is ruled at its real spelling. A place not there inside a written place and under no guarded one is made
+first - empty, but a `commondir`, made naming its own directory, and one in a repository that keeps its refs in a
+reftable never, its path held absent instead (`IIsolationMechanism.HoldsAnAbsentFile`) - so no command makes it inside
+and has it read or
+run outside later; a state file never is (`HarnessLayout.StateFileNames`), for the tool reads one as meaning
+something, and the words policy alone guards it. A launch has no isolation, said, where its places cannot be held: a
+git that cannot say where a tree keeps its files (`AgentIsolation.Unwhole`) or list its repository's replacements, a
+main checkout's `.git` holding a `commondir` that leads anywhere but to itself (`AgentIsolation.LeadsToItself`, read
+as git reads it, never through a link and never past a line's worth), which git's answers there would follow - a
+`gitdir` there git never follows from a main checkout, so it holds nothing back - a `commondir` there at all, or none
+and the mechanism holds no absent path, in a repository that keeps its refs in a reftable, where any file there breaks
+every commit on a branch and the remedy names its removal or the migration to the files format, a file git's
+configuration includes that is
+not there inside a written place, which a command could make, a link inside a written place on the way to a guarded
+one (`AgentIsolation.LinkOnTheWay`), which a command could replace with one leading elsewhere, or, under a mechanism
+whose rules hold the one spelling
+(`HoldsEveryCase` false: bubblewrap), a guarded place on a file system that ignores letter case
+(`AgentIsolation.FoldsCase`). The anchors cost each mechanism what its type says (`AnchorCost`): nothing under
+bubblewrap, whose mount points keep `.git`'s own files writable, nor under macOS's sandbox, which refuses a
+directory's removal alone; under MXC's container, which refuses no rename alone, an anchor is read alone, so git makes
+no lock file in a `.git` that holds a sealed place, nor in a linked worktree's directory under it - git add, commit,
+fetch and push fail there, a side-task's git over the main tree and a run's commit and push steps among them. Every
+tree's git directories, a linked worktree's and a main checkout's alike, as git named them before the launch, are
+pinned for every later git of the tool's in it (`GitDirectoryPins`), so neither a `.git` file a command rewrote nor a
+`commondir` a main checkout's `.git` came to hold leads one elsewhere; and every git of the tool's runs with its own
+settings (`GitOwnSettings.Apply`, through `GIT_CONFIG_PARAMETERS` and its own variables): no file-system monitor
+(`core.fsmonitor=false`), whose command a repository's configuration names; no hooks but where it runs them on purpose
+(`GitHooks`); no recursion into a submodule but for those (`GitOwnSettings.NoRecursion`, `submodule.recurse=false`); no
+object replaced (`GIT_NO_REPLACE_OBJECTS=1`); with `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where
+there is one; and every comparison of a work tree (`GitOwnSettings.Comparisons`: status, diff, diff-files, diff-index)
+given `--ignore-submodules=dirty` on its command line where it names nothing of submodules (`GitOwnSettings.Arguments`,
+which refuses one asking to look into a submodule's work tree) - a submodule told by the commit its entry records
+against its HEAD, never by asking its own git about its work tree, which would run the repository's own configuration,
+its clean filters among it: a repository an agent made in its tree and put in the index is such a submodule, its
+configuration the agent's. A default in the configuration would not hold: a `.gitmodules` file's `ignore`, a file of
+the tree, outranks it. The repository's configuration is otherwise read as git reads it, its filters among it, which is
+why every configuration file is written by nobody. What the work left in the git directories it wrote that no rule
+can hold is looked at once it has run under a mechanism, however it ended, against what was there before it started
+(`IsolationDecision.AfterwardAsync`, the held decision's `After`, over the git directories the ground's written trees
+are granted, each tree's own alone): the state of an
+operation under way (`AgentIsolation.OperationState`: `rebase-merge/`, `rebase-apply/`, `sequencer/`), which no place
+made empty can stand for - git reads an empty one as an operation under way - made or changed in a tree's own git
+directory, each file read for its hash never through a link (`UnfollowedFiles`) and never past 64 MiB, so a `git
+rebase --continue` outside, the user's or an editor's, would run each `exec` line its todo holds; or a replacement made
+or moved in a repository whose refs it wrote, as `git for-each-ref refs/replace/` lists them - loose, in `packed-refs`
+or in a reftable alike, the tool reading no ref file the work wrote, and a ref store that holds git up answered within
+`AgentIsolation.AfterwardLimit` as unread - which every git started outside would read in an object's place. Either
+ends what asked: `AgentRunner` fails the launch, `LegRunService` the leg, `CommitStepRunner` and `PushStepRunner` the
+step after git's own work, each naming it and the remedy - remove the state, never continue or abort it, for an abort
+puts the branch where the state says. A worktree added while the work ran - by the tool beside a step, or by a person -
+is none of it: no ground writes a worktree's git directory but its own. The user's own git, an editor or a prompt
+started outside read the repository as it stands - the refs and objects the work wrote, and a repository it made
+inside its tree, whose configuration git started in that directory runs as any repository's.
+`agentPolicy.isolation` (`AgentIsolationMode`: `required` where nothing is said, any other word than the two a
+problem of the configuration) turns no mechanism into the launch's refusal (`LaunchIsolation.Refusal`: a step ends
+failed, 14; the advisor's advice is not obtained; `run-side-task` exits 14 having started nothing) - every mode but
+`preferred` refuses - or, under `preferred`, its notice (`LaunchIsolation.Notice`), a `Notice` the runner says at the
+launch's start, as it says the one of a mechanism that leaves something reached (`IIsolationMechanism.Leaves`:
+bubblewrap on a kernel with no Landlock scope), from the same base (`IsolationDecision.NoticeSaying`); and a launch
+whose ground writes a linked worktree - an agent an earlier version of this tool made - says at its start, the same
+way, that git add and fetch fail inside the isolation there and the remedy, one `Notice` per tree
+(`LaunchIsolation.LegacyWorktrees`, from the held decision's own finding of a written tree whose git directory is not
+its common directory), as a leg whose ground writes one says the same on its line
+(`ExecutionIsolation.LegacyWorktrees`, one line of the leg's ledger as its work starts,
+`LegRunService.RunTakenLegAsync`). Every launch's
+result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s `isolation`, an `AgentIsolationRecord`:
+the mode, and the mechanism with its version, what it leaves reached and what
+its anchors cost, or why there was none), and each side-task turn its own (`SideTaskTurn.Isolation`). The request
+carries the launch's isolation (`AgentStepRequest.Isolation`, on to `AgentRun.Isolation`, what its processes run under
+- `LaunchIsolation.Processes`, `LaunchProcesses` - so a client is handed nothing it could end, the decision released
+by its asker once the launch has run): the tool runtime starts each `run_command` inside the commands' profile
+(`LaunchIsolation.ForCommands`, through `PhaseRequest.Isolation`). The claude-code client keeps Claude Code's own
+process apart from its commands where the mechanism takes a command handed to it (`TakesHandedCommands`: bubblewrap and
+macOS's sandbox): Claude Code reads its login and the key it is handed in its own process, and starts each shell command
+through its shell prefix (`ClaudeShell`, `CLAUDE_CODE_SHELL_PREFIX` naming this tool and `--isolated-shell`), which
+`Program` dispatches before anything else to `IsolatedShell.Run`, which reads the launch's isolation from the file
+`DSSHARNESS_ISOLATED_SHELL` names (`claude-isolation.json` in the step's directory) and becomes the mechanism with
+`/bin/bash` inside - so no command reaches Claude Code's directories, its login or its environment
+(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` among the controlled variables, a process namespace of the command's own), and a
+login whose token has run out is renewed by Claude Code in its own process, which writes its directories. Where the
+mechanism starts again inside a layer of its own (`IIsolationMechanism.Unnested` null: bubblewrap, where the probe
+started it inside an outer layer of its own around a shell that ended 0), Claude Code's own process runs in an outer
+layer (`LaunchIsolation.ForClaudeCode`, the profile `AgentIsolation.ClaudeCodeOf` builds): the commands' profile, its
+slots still hidden and git's code-running files, the tool's state and the launch's directory still sealed, but Claude
+Code's own directories and `~/.claude.json` written - Claude Code 2.1.101 fails every shell command with `EROFS` on
+`<config>/session-env` without them, and ends at once, saying nothing, with no `.claude.json` it can write - and the
+step's `claude-receipts` and `claude-tmp` (`ClaudeShell.PlacesIn`), its rules laid parent first
+(`IsolationProfiles.Ordered`); marked `IsolationProfile.Outer`, for which bubblewrap leaves out `--disable-userns`, so
+the isolated shell inside makes each command's layer in a user namespace of its own, where the outer layer's mounts are
+locked and none is undone - no hidden place shown, no read-only one written. A command Claude Code ran without its
+prefix is then held by the outer layer, though it reads Claude Code's login and environment and could write its
+directories; and the outer layer's own process namespace ends whatever the launch left running once bubblewrap's first
+process inside is ended. Where Claude Code never ran, the client makes its directory and the file it keeps its state
+in (`ClaudeTranscripts.StateFile`, holding `{}`) before the launch, for inside it could make neither. Where the
+mechanism starts none inside (`Unnested`: macOS's sandbox, `SandboxExec.NoSandboxInside`; bubblewrap under an AppArmor
+profile that denies its children every capability, as Ubuntu's `bwrap-userns-restrict` does, which the probe's trial
+finds), Claude Code's own process runs outside every layer, the launch says so as it starts
+(`LaunchIsolation.ClaudeCodeOutside`, `LaunchProcesses.ClaudeCodeOutside`), and a command it ran without its prefix
+runs outside with the user's rights. In or out of an outer layer, Claude Code's own process opens no file of the
+agent's: it would open a file by the path the engine decided earlier, apart from the commands' layer, where a link a command - one left running in the background among them - put on the path in between would reach what
+the isolation keeps from every command; so its file tools are given no such launch (`ClaudeCodeTools.Of` with
+`ownFiles: false`, `--tools` its shell alone), and the engine's tool server serves the runtime's in their place
+(`ClaudeCodeTools.FileTools`, `Served`), each file read by `AgentFiles` and decided again by where the system names
+the open file, and each written, made, moved or deleted relative to its directory held from the writable root it was
+decided in (`AgentFiles.Write`, `UnfollowedFiles`). Every shell call the engine allows is given back with a receipt at its command's head
+(`IsolatedShell.Marked`: `: dssharness-receipt <32 hexadecimal digits>; <command>`, the shell's no-op, a new one from
+the system's random source for each call), which `IsolatedShell.Prepared` reads off the line it is handed
+(`ReceiptOf`) and writes, new and never through a link, in the step's `claude-receipts` directory - named in the
+isolation file's handing (`IsolatedShellHanding`), where no command handed over writes - before the shell runs; the shell
+is then given the line without that mark (`IsolatedShell.Unmarked`), and the variables that hand commands over
+(`IsolatedShellHanding.Variables`, the isolation file's among them) are taken from the C library's own environment
+before the mechanism is become (`Containment.Become`'s `unsetenv`), so neither the command's environment and
+`$BASH_EXECUTION_STRING` nor the mechanism's own arguments and environment, which a process inside reads at
+`/proc/1`, name its receipt or the file that says where receipts are written. A call whose result comes back with no
+receipt of its command (`HeldToItsReceipt`) ran without being handed over, by a Claude Code that skipped its prefix, and
+ends the launch failed at once, killed; a call run in the background - whose result comes back before its command is
+handed over - is awaited for `ClaudeCodeClient.ReceiptBound` (20 s), however the launch goes on; a call Claude Code says
+did not run is held to none. However the launch's loop ends (`HeldToTheirReceiptsAsync`) - a turn's result, Claude
+Code gone, its output cut - before anything of it is ended, each receipt still awaited and each of a call allowed whose
+result never came is looked for again until it is there or `ReceiptBound` has passed, and one missing ends the launch
+failed in place of the ending it had; where the launch was stopped or ended at once nothing is waited for, and each
+missing receipt is said once it has gone (`SayUnreceiptedAsync`). A receipt proves only that Claude Code handed the
+command over, and only once it has run - it stops nothing: a command run without the prefix runs where Claude Code's own
+process runs, which writes the receipts, so it could write one of its own - the outer layer, never the receipt, is what
+holds it, and on macOS, or where bubblewrap starts none inside itself, nothing does. Claude Code's own temporary
+directory (`CLAUDE_CODE_TMPDIR`) is the step's `claude-tmp`, beside the receipts and
+equally beyond every command's writes, so nothing Claude Code writes or reads there in its own process - a task's
+output, a prompt's file - is a command's to replace with a link; each command ends by writing the working directory it
+ended in to a file there (`pwd -P >| <claude-tmp>/claude-<hex>-cwd`, the form Claude Code ends every handed command
+with), which `Prepared` reads off the line as the shell reads the word (`EndFileOf`), makes empty and hands that command
+alone, written in place, never removed or replaced - bubblewrap binds the file alone, a mount point no command
+removes or renames onto, and macOS's sandbox allows its data alone written and refuses its removal and its making, a
+rename onto it among them - a line that ends no such way given no file, so its command's last write fails rather than
+reaching further. The directory goes with the launch; the receipts stay beside its records. A tool run as a runtime
+handed its assembly, or from a path holding ` -`, has no prefix Claude Code can split (`ClaudeShell.PrefixOf`), and
+the launch is not started. Where the mechanism takes no handed command (MXC's container, on Windows, where every
+command Claude Code runs is Git Bash's), the whole `claude` runs inside the profile that leaves the Claude Code
+directories and `~/.claude.json` read alone (`LaunchIsolation.ForClaudeCode`): written, they would let a command plant
+what Claude Code runs outside later - its settings' hooks, its own file's servers - so a login whose token has run out
+is not renewed inside until a `claude` run outside renews it, and the launch's commands read its login there; its own
+file tools are given, for they open each file inside the container, which holds every place they reach as it holds
+the commands, its temporary directory MXC's own inside it, and nothing is handed over, so no receipt is asked. Where a
+launch has no isolation at all (`preferred` on a machine with none), Claude Code's own file tools open each file by
+the path the engine decided, the words policy alone between them. Claude
+Code's own Bash sandbox is not used: the tool's own mechanism holds every command, one mechanism for every client, and
+nothing rests on how that sandbox treats the network in print mode or weighs its own write rules against the profile -
+and the launch's settings turn it off (`ClaudeSettings.Render`'s `isolated`, `"sandbox": {"enabled": false}`) over any
+the user's own settings ask for, for no command's layer of the tool's nests another (macOS no sandbox inside a sandbox,
+bubblewrap no namespace inside a command's own) and each command would fail in it; on Windows Claude Code has none of
+its own.
+The machine stays readable as the user reads it but the hidden places - a credential kept anywhere else among it - and
+the system's own credential stores are services, not places: on macOS the login keychain is reached through the
+services that trust certificates, which are the keychain's; on Windows MXC's container shows the Credential Manager
+empty; on Linux the keyring sits behind the user's message bus, hidden with the runtime directory. Under MXC, which
+grants nothing beneath a denial, a hidden directory is hidden whole - `Reopened` is never handed to the container, so
+ssh's `known_hosts` and `config` are not read there. The network is theirs; and what no rule at a path reaches - a
+hard link made before the launch, another path bound to the same files - is reached; inside, no hard link can be made
+from the machine's files into a written place: under bubblewrap each place is a mount of its own and `link(2)` fails
+across mounts (`EXDEV`), macOS's sandbox denies every operation it does not allow and no rule of the profile's allows
+one, and MXC's container grants the machine read alone, which a hard link
+needs written - each held by a canary in its mechanism's real suite (`BubblewrapTests`, `SandboxExecTests`,
+`MxcProcessContainerTests`), whose failure would name the link allowed. Inside the isolation a verb of this tool's that reads a slot or writes state or its install would fail part
+way, so the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a
+step and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's
+own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one or the other.
+
+The same owner decides the isolation of the tool's own executions of what the agents wrote
+(`IAgentIsolation.ForExecutionAsync`, an `ExecutionIsolation`, from an `ExecutionGround` that `ExecutionGrounds` alone
+builds, `IsolationGround.Of` making the builder's ground of it): the profile a launch's is - the machine read-only,
+the slots, every Claude Code directory a launch hides (`ClaudeCodeDirectories.Of`) and every place the user keeps
+credentials in (`UserCredentials.Of`, asked of the tool's own home and environment) hidden, git's code-running files
+of each tree, the configuration directory and the tool's state under each written by nobody, the ground's own places,
+a temporary directory of its own and the declared tool caches written - a state place the execution writes whole, a
+sweep's workers' slot, left unsealed, for the profile keeps a place both sealed and written sealed. A hooks' ground
+alone reaches a socket outside, and only where git's own work needs it (`ExecutionGround.ReachesSshAgent`, set by
+`ExecutionGrounds.OfHooks` from what its caller asked of `GitSsh`: a push whose remote's push address is ssh's,
+`GitSsh.PushesOverSshAsync`, a commit the repository signs with an ssh key, `GitSsh.SignsCommitsWithSshAsync`): the
+user's SSH agent's (`SSH_AUTH_SOCK`, taken at its real path where it is there, and named to the child at that path in
+the profile's `Environment`, for the name the user gives it may be a link inside ssh's hidden directory),
+bound alone under bubblewrap - inside the hidden runtime directory, ssh's hidden directory or the launch's own `/tmp`
+among them - and reached alone under macOS's sandbox
+(`IsolationProfile.Sockets`), so such a push or commit signs with the user's agent - their keys under `~/.ssh` are
+hidden - and nothing else outside is
+reached, and every other commit's, push's and leg's work reaches none; MXC is handed none, and as it hides `~/.ssh` whole
+a push over ssh inside it finds neither key nor `known_hosts` and fails, where a push over https is handed its
+credential as values. A commit signed with gpg or
+x509 reaches no gpg agent hidden with the runtime directory, and fails there; one signed with an ssh key whose
+`user.signingKey` names a file under `~/.ssh` reads no such file, and fails too, where `key::` and the public key's line
+sign through the agent. Its refusal, notice and record are a
+launch's, from one base (`IsolationDecision`),
+with words of their own. A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here
+under `required` ends the step 14, nothing run - and hands the leg service an `ILegIsolation`
+(`LegRunRequest.Isolation`, carried by each leg command's request) that asks it again for each leg this machine runs,
+of its own ground (`ExecutionGrounds.OfLeg`: the tree it works in, what `LegStepRunner.WritesBeside` names - a
+sweep's workers - and the build directory of the leg's run of each runner action its work runs, its runner's and its
+run checks' runners', under the sealed configuration directory, `LegWorkload.WritesIn`, which `LegRunService` hands
+`ILegIsolation.ForLegAsync` - never the run's records, every one of which the tool writes itself from what each phase
+prints, nor the configuration around those build directories);
+`LegRunService` skips a leg whose own is refused (`skipped-unavailable`), says the notice on its line, and holds the
+rest for its work alone (`PhaseIsolation`, an ambient value each leg's flow holds), which `PhaseRunner` gives every
+phase that names none of its own and is not left running - a set-up's lines, run around the work, are never inside
+it: under `required` (`SetUpConfinement`) each runs from an empty directory of the execution's own outside every tree
+(`ExecutionIsolation.Outside`, `outside/<id>` under the isolation's own beside `caches/` and `tmp/`, made with the
+held decision and removed with it), so a program that finds its project where it runs or above it finds none of the
+agents', and `LegSetUps` skips the leg before any set-up is held where a line, read by the policy's own reader
+(`CommandAnalysis.Commands`, every command it runs, `CommandAnalysis.PathsNamed` with each part of a `source:target`
+or a search path, a home at a word's start expanded by `AgentPolicy.HomeExpanded`, each against the directory it runs
+from and every whole directory an `AgentPolicy.Movers` command moves to), or a value of the leg's environment, names a
+place in the leg's tree, the run's or the main checkout, or a directory holding one, as spelt or as its links lead;
+names a place by an expansion its shell makes (`CommandAnalysis.Expansion`); moves to a directory that is no whole
+path; or cannot be read whole. A line that fails there says where it ran and that nothing of the tree is found there,
+with the remedy. A leg another machine runs is that machine's, outside this one's isolation: the request never
+sends it, but a leg placed in a WSL distribution, which reaches this machine's drives under `/mnt`, is decided there
+(`ILegIsolation.ForDistribution`, `ExecutionIsolation.InDistribution`): skipped under `required`, run saying so under
+`preferred`. An ssh host is taken to be another machine that reaches none of this one's files and is not decided: one
+that is this machine, or a WSL distribution, a virtual machine or a container reached over ssh that shares its drives,
+cannot be told from another by its name or its address - ssh's configuration (`HostName`, `ProxyJump`, `ProxyCommand`)
+may point a name anywhere, a loopback port may forward into a distribution, a virtual machine or a container, and a
+LAN address may be a virtual machine's mounting this machine's drives - so no test of one would hold, and a check that
+held for some would read as a guarantee for all; help says to name no such host where the agents' work must be held.
+What the tool reads out of, or writes into, a place such work writes - `RunnerRunService`'s step directories, made
+through `UnfollowedFiles.CreateDirectory`, a link where one goes failing the leg before its step runs, and its kept
+outputs, `KeptOnFailure`'s evidence, `WorkerSite`'s sites a sweep mutates and puts back in a worker, `LocalSyncTransport`'s
+every read, write, removal, listing and emptied directory in a copy - and the engine's own over an agent's places
+(`AgentEvidence`, `AgentFold`'s fold and hand-over, `AgentContinuation`'s and `AgentSkills`' copies, the tool runtime's
+writes) goes through `UnfollowedFiles`, over the one owner of a file operation relative to a held directory
+(`HeldDirectory`, reached through `IFileSystem.Hold`): the place's root opened as it is, then each name below it opened
+as itself relative to the directory before it - `openat` with `O_NOFOLLOW | O_DIRECTORY` and the other `*at` calls on
+Linux and macOS (`UnixHeld`), `NtCreateFile` relative to the parent's handle with `FILE_OPEN_REPARSE_POINT` and the
+entry's reparse tag on Windows (`WindowsHeld`) - so a link on the way, or one swapped in while the tool acts, is
+refused naming it (`LinkOnTheWayException`), and a link at the entry's own place is read as nothing, replaced or
+removed as itself. A write is a file made new in the held directory, then renamed over the one there, keeping its mode;
+a directory removed whole is emptied entry by entry relative to each held directory, a link among them removed as the
+link (every recursive removal the tool makes, `IFileSystem.DeleteDirectory` among them). A pull alone follows a link
+along the path it names, as it is spelt, and refuses one that leads into a place the isolation hides from every
+command, decided by where what it opened stands (`ISyncTransport.PullFileAsync`, `ListFilesAsync` given the hidden
+places of `IAgentIsolation.Hidden`, the one list the profiles hide, `IsolationHidden`); a host over ssh decides it
+against its own (`SyncServe.Pull`, `SyncServe.List`). The step answers `isolation`
+(`AgentIsolationRecord.ToOutput`, in `WorkflowStepTypes`' output of each leg step). The tool's own git runs none of
+the repository's hooks (`GitHooks`: every command `GitClient` runs is given `core.hooksPath` at the null device,
+`/dev/null`, `\\.\NUL` on Windows, through `GitOwnSettings.Apply` with the tool's other settings, but the subcommands
+that only read, `GitHooks.Questions`, which answer where the hooks are as git runs them) but a commit's and a push's
+(`IGitClient.RunWithHooksAsync`), which `GitPublisher` runs inside the isolation `CommitStepRunner` and
+`PushStepRunner` ask of the main checkout's ground (`ExecutionGrounds.OfHooks`) before anything is staged or pushed; a
+push inside one, to a remote over http or https, is handed the credential git's helpers give for its address, asked
+outside (`IGitClient.CredentialAsync`, `git credential fill`), as values its environment holds and the one helper its
+command line names reads (`GitCredentialValues`). Both answer `isolation` beside what they answered.
+A step's records are kept where the one owner of a step instance's
+directory spells it (`OrchestratorLayout.InstanceDirectory`, a work item's brackets as `FlowInstanceId.DirectoryOf`
+writes them), named on the request (`AgentStepRequest.RecordDirectory`) for the runner, the advisor and the handoff's
+read alike. A safe pause - and a plan update that ends a step in order - hands a reason step off by one path
+(`FlowCoordinator.HandoffTurnAsync`): the agent is asked in its own conversation (`FlowTelling.Ask`, the attempt's
+`AgentHandoffSignal`, which the client answers by ending the attempt after the handoff turn), its runner is waited for
+within `handoffSeconds` - all the steps at once - and ended where it outlives them or a stop comes, then waited for
+within `PointOfNoReturn.SafePauseDrain`; only then is the answer read of the step's own record
+(`IFlowHandoffRunner.HandoffAsync`, `AgentRunner.ResultFileName`), the engine writing the handoff where it holds none.
+What the step claimed is held through the turn and let go of after it by one rule for both
+(`FlowCoordinator.AfterTheHandoffTurn`): a runner that has not ended keeps it held until it answers
+(`FlowInstance.Lingering`), so neither an always step of the pause's always phase nor the visit an update makes again
+in its place starts beside a runner still writing; else it is given back.
+The coordinator deletes the read-only agent once no step can go on with its work (`FlowCoordinator.ReadOnlyAgentsOver`,
+over the declarations that resume its maker and the instances drawn of them, each agent once - `_deletedAgents` - through
+the `deleteAgent` the service wires to `IAgentService.DeleteAsync`, which writes a refusal and a throw alike in the
+agent's log and takes an agent with no record as deleted already).
+The key a step starts on is chosen with the order (`balanceKeyUsage`): the resolution's entries built by
+`AgentStepOrder.Of` keep the list's order, or - where the configuration balances the keys - each model's keys run by
+least spent in the last seven days (a tie in the list's order, for `OrderBy` keeps it), the week read by
+`Agents\AgentKeySpend.cs` from `.orchestrators/key-spend.jsonl` - the repository's records across runs, one line for
+each entry that ran (the time, the provider, the key's name never its value, the model, the cost - what the client
+reported where it does, else what the engine counted), written and read under `OrchestrationStore.AcrossRuns`, its
+lines older than the week dropped when it is next written - and each entry's run recorded through the request's
+`IAgentSpendSink` (`AgentRunner.SpentAsync`: each part of the run's usage under the key its requests were signed with -
+a client that moved keys while it worked reports each key's part apart, `AgentModelUsage.Key` and `Cost`, counted by
+`AgentUsageTally` - a part with no cost known or signed with a login recording nothing, and a record that cannot be
+written said as a notice, never ending the step).
+Each request an API client sends, and each Claude Code launch, goes through the gate of its provider and key
+(`ClientGate`): the API clients' loop enters
+the lane for each request and `AgentRunner.InLaneAsync` holds each Claude Code launch - the key's own value is the
+account; a login one lane by its client - the answer's tokens charged to the output bucket and every 429 the account
+met setting the cool-down its failure covers from when the provider said the limit lifts, beside the orchestrator's
+`maxReasoningAgents`.
+The asking is the runner's too: a failed agent is tried again on its model - the step's `retries`, absent
+the workflow's `maxRetries`, waiting its `backoffSeconds`, absent the workflow's, twice as long before each later try
+(`AgentRunner.OrderedAsync`, `AgentStepRequest.Retries`/`BackoffSeconds`, the waits said as `WaitingToRetry`), from the
+entry that served it last and never on a key refused or limited (`AgentRunner.RetryPlace`) - and
+then moved to the next model as a decline moves, past the model's other keys. A run that ended on a key the provider
+refused is no failed agent: it moves to the next key of its provider and client at once, waiting no backoff. The
+run's pause ends a retry's wait and begins no launch after one ended - the step ends handed off with no handoff, saying
+so (`AgentRunner.PausedWhileItWaited`, `PausedBeforeItsNextLaunch`, beside `PausedAtTheGate`). The provider's service failing past the
+client's own tries (`AgentRunResult.ServiceFailed`, set where the loop says so) is neither retried nor moved past, nor
+is a run that ended `RateLimited` with no entry left ended a failure: each is answered `FlowStepResult.SafelyPausing`,
+and the coordinator ends the step stopped and asks the run for a safe pause of the cause `limits`
+(`FlowPauseRequest.Causes`), which resumes that very step - merged with a pause a person asked that the loop has not
+taken yet (`FlowCoordinator.RequestPause`: the first asker's cause, `all` where either said it). What a reason step
+spends is charged to the run's budget as its agent works (`AgentRunSpend`, the request's event sink: each turn's
+`UsageReported`, every token of every kind - `AgentUsage.AllTokens` - and its cost at the configuration's prices for the
+model serving it, handed on by `IFlowRunEvents.Used`), and each launch is held to what is left of the run's dollars
+before its reserve where that is less than its agent's own `maxBudgetUsd`, or where it names none
+(`FlowStepRun.BudgetLeftUsd`, `FlowRunBudget.Bound`); a launch that bound ended is the run's reserve reached and not the
+step's own budget (`FlowStepResult.AtTheRunsReserve`, `PauseCause` `budget`) - of the grant its share was reckoned under
+(`FlowInstance.ShareGrant`, taken as its runner is asked): where that grant still stands the workflow's answers may allow
+more, the step running again at once given its handoff, else the run pauses for its budget; a share reckoned before more
+was granted reaches no reserve of the grant that stands, and the step runs again at once given its handoff. Dollars
+are folded by one owner (`FlowDollars`: the counted sum, and the first reason a part could not be counted) for an agent
+run's turns (`AgentRunSpend.Dollars`), an advice (`FlowAdvice.Dollars`), the reporter's answer (`FlowReported.Dollars`)
+and the run's reasoning (`FlowBudgetSpent.Charge`): a turn whose cost cannot be counted - its model has no price of a
+kind it used - is handed on with no cost and why (`IFlowRunEvents.Used`'s `uncounted`), never as nothing, and leaves the
+run's dollars known only as at least the counted sum - `flow.json`'s `spent.uncounted` (`FlowBudgetRecord.Uncounted`,
+absent where every part was counted, a record without it read as counted whole), said by status, the report and every
+`--json` (`FlowDollars.Said`, `spent.uncounted`, an ask's `cost.uncounted`). In a run budgeted in dollars such a part
+reaches the reserve for the grant that stands as a launch its share ended does (`FlowCoordinator.Charge`), so the run
+asks, and a grant of more goes on with each launch held to what is left as far as the dollars were counted. Either mark
+is kept with what was spent, never in the engine's memory alone (`FlowBudgetSpent.ReserveMetAt`, `flow.json`'s
+`spent.reserveMetAt`, absent where nothing met the reserve past its count and refused at a grant the run was never
+given): the uncounted part's with its charge, the share's set before the write that records the launch's end, so a
+resume after a crash at any write from there asks once, before anything starts again - never by running the step past
+the reserve to meet it a second time - and a grant of more recorded since goes on. A step that says `ask` is paused on its agent's questions
+(`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
+recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back
+into the same attempt (`FlowAnswerGiven` carrying its text and kind): the runner sends the person's words as the
+attempt's next message, handing the stored conversation the step's stream names last (`AgentSessionRef`, found from the
+step's `stream.jsonl` where the engine holds `sessions/<id>/conversation.jsonl`) to the entry that began it alone, and,
+on a client no conversation can be handed to, the step's own continuation record (`AgentContinuation.Render` over the
+step itself) ending with the questions word for word. The rounds it may ask are spent by the answers given
+(`AgentOutput.AskRounds`, less each `ask` answer), what its agents assumed is kept whatever the attempt ended by
+(`FlowStepResult.Assumptions` to the step's record and the `<step>.assumptions` fact, every step's in
+`run.assumptions`), and a limit's answers are served the same way - `more` (offered only where a stored conversation of
+the attempt can be handed, `FlowStepResult.StoredConversation`) grants the bound once again in the same conversation,
+`compact` begins a new one from the engine's reduction of the stream so far (`AgentCompaction.Reduce`), and `retry`
+begins a new attempt given the engine's one-line handoff (`FlowHandoff.ByEngine`, written before the question is
+raised).
+The asking the engine does itself: the repository's bar for a recommendation is read by
+`{recommendations}` - `FlowCoordinator.BarOf`, the orchestrator's `recommendations` file or its folder's own
+`recommendations.md` through the run's workflow-file seam, read live each time it is given so a change holds from the
+next question on, and a sentence naming the orchestrator where the folder has no bar. A `pause` step's `questions`
+expression is read where the step asks (`FlowCoordinator.ShownQuestionsOf` over `EvaluateList`), each element held to
+the envelope's own question shape and shown under the step's own question - one that recommends outside its own
+choices, which no schema of the subset can refuse, shown as it is with a line under it saying so - and the step's
+answer answers them together. What the person gave the run answers first (`AnswerWhatTheInputGave`): the first
+`preAnswer` entry whose `when` holds answers at once by the one answer path with `by: input` and the values its when
+read, and an entry that quotes words holds only where they are not empty and stand in the input they are said to be of
+(`StandsIn`, every run of white space compared as one space) - reported words the input does not hold answer nothing,
+the event log says so, and the person is asked. The advisor: before a person is left with a
+question the engine raises itself, `FlowCoordinator.SeekAdvice` runs the orchestrator's `advisor` block through
+`IFlowAdvisorRunner` (`Runners\AdvisorRunner.cs`) - one reason step that only reads, wherever the asking step works,
+its model resolved and its order built as a step's is, the Claude Code its order starts only found and never installed
+or updated (`ReasonLaunch.ProgramAsync` with `change: false`, as the reporter's is: one missing or too old leaves the
+advice not obtained, saying why), its records and its own conversations under `advice/<n>/` of
+the asking step's own directory (`OrchestratorLayout.InstanceDirectory`, named on the request as `RecordDirectory` and
+`SessionsDirectory`, whatever agent the step names or none), numbered one past the highest already there, its prompt
+filled by the one grammar with the question as an object of its texts (`{question.step}`, `{question.kind}`,
+`{question.problem}` with what was tried, `{question.answers}` each with what it does, `{question.record}` - the
+asking step's own records rendered as a continuation record renders a step), the run's inputs and `{recommendations}`,
+and its output the engine's own schema in the subset every answer is held to - closed objects, `anyOf` one shape for
+the answers that take a text, which it requires, and one for those that do not - whose `answer` enum is the question's
+own answers so the schema itself refuses any other. A step's schema outside the subset never reaches a client:
+`validate-workflow` and a run's start refuse it (12), and since its file can change between, `AgentRunner` refuses it
+again `NotStarted`, the configuration wrong, before any request is sent - both by `JsonSchemaSubset.TextProblems`, the
+one check of a schema's text. The question is raised at
+once with its recommendation marked sought, and the session does not end while the advice runs
+(`FlowCoordinator.TakeAdviceAsync`, the loop's wait); an answer ends the asking (`TakeAnswer` dropping it, the
+recommendation `cancelled`), the asking step not admitted again until the advice's runner has ended (the hold
+`FlowWaits.Advice`); a safe pause and a stop end it too (`DeferAdvice`, `BeginHardStop` through the session's advice stop), the
+question `deferred`, and a session's end ends and waits for whatever is left (`EndAdviceAsync`); a recommendation
+obtained is written with who gave it and where its records are, none obtained said so, and what every advice spent - an
+ended one's among them, counted from its turns (`AgentRunSpend`) - is counted in the run's spend, each held to what is
+left of the run's dollars as a step is; a bar that cannot be read leaves the question `notObtained` saying why, and a
+default `recommendations.md` that could not be looked at is never taken for one that is not there
+(`WorkflowNamedFiles.ReadTextIfThere`); an advice owed at a resume - sought by a session a crash ended, or deferred
+while the run was pausing or stopping - is sought once the session is known to go on (`SeekOwedAdvice` after
+`MakeTheHold`), never by a resume refused. No advisor named, the question says so plainly; a kind only a person or an
+agent answers (`runBudget`, `ask`), a `pause` step's own shown questions, one its `preAnswer` answers (weighed before
+the advisor is sought), and a kind the advisor's `kinds` leaves out, are never advised.
+The handoff, the checks and the stream's account: where an agent gave no handoff of its own - the pause's
+turn gave none, a limit ended its run, or a resume found the attempt cut off by a crash or a stop - the engine writes
+one from the stored stream of the step (`FlowCoordinator.EngineHandoffOf` over `IFlowStreamAccount`, routed by
+`FlowStepRunners` to the reason step runner): its first line says why (`FlowHandoff.ByEngine`), and its body is
+`Agents\AgentStreamAccount.cs`'s account of the newest attempt's events alone, every run of it - the files the attempt
+wrote (its write-tool calls, paths as their inputs name them), the last `AgentStreamAccount.LastCommands` commands it ran
+and how each ended (the earlier ones counted), and its last messages
+word for word, as many as the continuation record keeps - beside the steps before it that left notes, named by step and
+never by path; where the stream holds nothing the handoff stands on its first line alone. A reason step's `writes` given
+as an expression is read where the step starts (`ReadAtStart`'s `writes` key, `FlowList` replaced by the names it
+yielded, none refused for an empty list would read as no narrowing), and narrows the ground as a written-out list does.
+The continuation record says each step of the chain as its own record states it ended
+(`ReasonStepRunner.EndedOf`), the files changed the paths this agent's folds wrote into the main tree (`FoldLedger`)
+and the paths its worktree holds that no fold has taken (`AgentFold.WeighedAsync`, the fold's own rule of what an
+agent's change is, opened to the record), and the red legs of the agent's newest red build or test with where the
+copied ledger and its logs are (`ReasonStepRunner.RedLegsOf` over the run's own index). The engine stores the agent it names for a read-only step as the
+one the step works in, so the runner makes it on that name (`ReasonStepRunner`'s making, `CreateAgentRunner.MakeAsync`
+answering a live one as already made); the run places the step's records under the agent's directory before the agent
+is made, so `AgentService.CreateAsync` makes an agent in a directory that holds only what a run keeps there; the
+program a launch starts is found ready where the step starts (`ClaudeCodeUpdateService.ReadyAsync`, wired into the
+reason step runner, its answer carrying the program and the version it answered; a step's mask holding every form of
+each web-search key it was given, built of `Runners.ActionValues`); and the agent's scratch is the run's own
+`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), where the child is started; the continuation's copies and the
+skills are put in the step's own `handed/` (`OrchestratorLayout.HandedDirectory`), which no command writes.
+The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
+amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
+person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: its entries `u<n>` by order taken, cause
+`amendment` or `changedAnswer`, state `queued`/`underWay`/`done`/`failed`/`refused`), the one owner of what an update
+is, written by the store under the run's lock (`AddUpdate`) and by the engine's records seam
+(`IFlowRecords.Updates`). An amendment handed to a running engine goes by `inbox.json`
+(`FlowInboxAmendment`) and is taken at the poll that first reads it, as a changed answer handed over is - weighed
+against the run as it then stands, never only when the drive ends (`FlowService.Tick`,
+`FlowCoordinator.OfferAmendmentAsync` -> `AmendmentHandedOver`); given while no engine runs it is recorded `queued`, the
+command deciding which of the two in the repository's one section every engine claims its run in
+(`FlowSessions.AcrossRuns`), and the next session takes it before anything else (`FlowCoordinator.TakeQueuedUpdates`). The
+request is never rewritten: the input reads as the value as given with each amendment under a line that says when it
+was made (`FlowUpdatesFile.InputOf`, read wherever `{input.<name>}` is), while a `preAnswer`'s quote is looked for in
+the value as given and never in an amendment. A changed answer is held to the last set a person answered, its
+`changedAnswerMinutes` window from the moment the answer was recorded to the moment the command stamps on what it
+hands over, and once, and what an answer may be is one rule the command and the engine both hold it to
+(`FlowAnswerRules`): both answers are kept, each with when it was given, the new one naming the update
+(`FlowAnswerRecord.Update`, `FlowQuestion.Change`), and a `pause` step whose answer was changed is visited again done
+at once with the new answer (`FlowCoordinator.RevisitPause`) - the update's entry written first, and the change
+finished from it by a session's start where a crash came between the two (`FlowCoordinator.FinishTheChanges`). Both pass the one table of gates
+(`FlowUpdateGates.Refused`, read by the command over the run's files and by the engine over its own state): a run that
+is done, one past the step its `amend.before` names, one past the work items of its last round (a loop at its bound,
+or a work-item group with no loop around it whose newest round has ended and that runs no round more - updates have
+added every round `amend.maxAddedIterations` allows, counted by the rounds their entries name, and none of them waits
+to open, or a group around it ended otherwise than done and draws nothing more, `FlowUpdateGates.NoRoundMore`, the one
+rule the engine reads too; a round an update added that the run's steps do not hold yet (`FlowUpdateGates.RoundNotOpened`)
+takes a change given before the check that opens it has started - the check's visit drawn after the group's newest,
+read of the steps in the order the run made them - which joins it, `FlowUpdateGates.PendingRound`, and once that check
+has started opens with the work it was handed alone, a change refused until the round has opened, which it then joins),
+a definition whose `amend` names no such change. The command records nothing for a change it refuses; the engine
+records an amendment handed over through the inbox, or a queued change it can no longer take at its turn, `refused`
+with why, under its own id. The report lists every update, and `list-orchestrator` says where each stands.
+The planning of a plan update: where the run has begun the scope its plan updates are planned in
+(the group its `amend.step` is directly in), a taken change is not refused but planned - the step the block names is
+raised by the update alone as a handler is raised by an ending (`FlowCoordinator.RaisePlanner`: a new visit of it in
+the newest instance of that scope, `FlowInstance.RaisedByUpdate` in its record, a group around it that had ended in
+progress again), never drawn by the ordinary schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
+everything else (`AdmissionWalk`) - while the run is held (`FlowCoordinator.HoldOf`: nothing starts outside that
+scope, a held step reserving no claim, what is in flight untouched, no next iteration of a loop outside it, no
+redirect made outside it), `flow.json` saying `hold {update, at}` (`FlowHoldRecord`). The step's `amend.then` is
+followed when it is done - the redirect's machinery inside that scope (`FlowCoordinator.SettleUpdates` ->
+`DecideRedirectOf`), a question open on a step it resets withdrawn - and once that scope has come to rest (the step
+ended, what `then` set going ended, and a `repeat` it is in has ended its iteration) the updated plan stands: the
+update is `done`, the hold ends, and the steps that start from here on resolve every name anew. A failed planning
+step is decided by its own handlers and `onFailure` as any step: `stop` ends the run, `pause` asks, `continue` gives
+the update up - `failed`, nothing placed, nobody told, the hold ended, the run going on with the plan as it was, the
+entry saying the request or the answer is recorded and no plan holds it. The prompts of the planning step and of its
+scope read the update (`{update.cause}`, `{update.since}` and `{update.work}`, `FlowCoordinator.UpdateValues`) -
+outside an update each is a sentence that says none is under way. Updates are taken one at a time: one that arrives
+while another is under way is `queued` behind it and taken when that one is done, in the order given
+(`FlowCoordinator.TakeQueuedUpdates`, the one owner of taking what is queued, which settles each queued entry it meets -
+taken, or `refused` with why), and a changed answer queued behind an update is applied when its turn comes. A planning
+step declared in the same iteration of a `repeat` as the work-item group it plans is no circular wait: the group the
+hold keeps open is no work that iteration waits on to come to rest (`FlowCoordinator.HeldOpenForTheUpdate`). The
+whole of it is across a crash and a safe pause: the hold and the raised visit are read back from the run's records at
+the resume, which goes on with the update first.
+The pieces of an update are placed once its plan stands: the pieces the `amend.scope` expression reads -
+each `{kind, item, for, changed, keep, undo, instead}`, of the kind `added`, `changed`, `removed` or `told` - are placed
+by `FlowCoordinator.PlaceThePieces` and kept in the update's entry (`FlowUpdatePiece`: the kind, the work item, where it
+was placed, the visit that carries it). An `added` piece makes one more work item of the work-item group (the `forEach`
+group `amend.whenAddScope` names a step of), at once where the round is in progress and owed to the check that opens the
+round where it has not begun - which checks its own items and the owed ones as one list (`PlanCheckRunner`), its output
+`items` that list, so nothing joins a round unchecked. A `changed` or a `removed` piece finds the newest instance of the
+group whose item has its name: where it waits it is given the piece's item in the place of its own, or - `removed` -
+withdrawn before it began; where it has begun - a step of it started, at any depth - it is brought to rest (nothing
+more started or drawn in it, what it owed dropped, what is drawn or raised in it since skipped, each reason step in
+flight given the handoff turn of a safe pause and stopped, `FlowCoordinator.SettlePiecesEndingAsync`, a runner that
+outlives its stop keeping what it claimed until it answers, and a step of it that ends otherwise than done - failed
+with a retry left or none, asking, past its time limit, or stopped by a pause or a stop - stopped for the update and
+never given a new attempt, `FlowCoordinator.StopForTheUpdate`; each of these reaches every step of a group nested in
+the instance, at any depth, by one walk down it, `FlowCoordinator.StepsWithin`, and its counterpart up from a step,
+`BeingEndedAround`, and each nested group ends stopped for the update once the instance has come to rest, never done
+over work the update takes back) and then visited again, in its place and with its agent - a new
+scope of the piece's kind in which the live agent a `create-agent` step made is taken and not made again, made and named
+in the piece's entry before the instance brought to rest ends, so a crash between finds it and never makes a second;
+where it has ended, one more work item of the group, with new agents. What an update did to an instance is in
+the instance's own records - ended for the update (`FlowStepRecord.EndedFor`), the piece it carries (`PieceOf`) and the
+instance it was visited again in place of (`AgainOf`) - so no session after runs an instance an update ended, a resume
+goes on bringing one to rest, and the pieces are placed once from the update's entry however often a crash makes the
+engine meet its plan standing, an instance an earlier update visited again among them. A visit an update ended waits on
+nothing and is counted ended by the status, by the engine's own rule (`FlowInstance.IsStoppedForAnUpdate`, read by
+`FlowStatus.IsLeft`). Every instance of the group is of one kind, and the step its kind names runs in the place of the one
+`whenAddScope` names - under its name, with its dependencies and its `when` (`FlowCoordinator.DrawWorkItemPlace`) - the
+other two alternatives skipped in its instance, saying why; a read of the add step (`{add.latest}`) or a resume of it
+follows whichever ran (`FlowCoordinator.EndedDoneLastOf`, which `<step>.latest` reads for every step that goes on with
+another's work). The steps of the group read `{piece.kind}`, `{piece.changed}`, `{piece.keep}`, `{piece.undo}`,
+`{piece.instead}` and `{piece.before}` (`FlowCoordinator.PieceValues`, `BeforeOf` - the engine's account, from its own
+records, of the instance that carried the item before); in an instance no update made, the kind is `added` and the texts
+are empty. `PlanValidator.CheckPieces` checks the pieces with the items where a `validate-plan` step's `scope` names
+them - each of the four kinds and its texts, an `added` or `changed` item an item of the plan's list by name and member
+for member, no two pieces one work item, a `changed` or `removed` piece naming a work item the plan had - and the items
+an update places are checked with those of the round they join as one list, only the bound of eight not carried over.
+The pieces are told as they are placed: every `told` piece's message is sent through the attempt's own
+telling (`FlowTelling`, made where a reason attempt starts and handed to the runner - `ReasonStepRunner` wires its
+messages channel and its handoff signal into the agent run) - a reason step in flight that a piece names, by its own
+instance or a scope around it, in one message into the conversation it is in, which lands when its calls have
+finished and never cuts its turn; a step that waits on a question of its own with the answer; a step that starts or
+goes on later in named work in the `<plan-updates>` part of its own prompt (`FlowCoordinator.PlanToldOf`). A reason
+step in flight that no piece names is listed as not concerned and a piece naming nothing under way as not delivered
+with why (`FlowUpdateEntry.Told`/`NotConcerned`/`NotDelivered`, each telling also in the step's own record,
+`FlowStepTold`); a reason step ended in order is told its piece first, as the lead of the handoff question
+(`FlowCoordinator.EndedInOrderLead`, the engine waiting for the client's own turn where the telling is live). Where
+the round a piece joins has ended, the work is owed to the loop's next iteration (`FlowInstance.OwedIterationBy`,
+rebuilt at the resume, by each piece's own state, `FlowUpdatePiece.IsOwed`), which runs whatever its `until` says - a
+loop that ended done runs again for it; only where that loop is at its own bound is one iteration
+added for the update. With no loop around the work-item group, the piece is owed to a round added to the group
+(`FlowCoordinator.AddARoundOwed`): the group is drawn once more as its next visit (`build.items+2`), with the check that
+opens its rounds and every step on the dependency path from that check to the group - a pause asked about the check's
+problems among them - where each was drawn before the round ended, and every group around it that had ended done in
+progress again (`FlowCoordinator.OpenTheRoundAgain`, called again from the entry by a resume that finds the round
+not yet drawn); the check is handed the owed work with its own items as one list, and the visit carries the owed work
+alone (`FlowCoordinator.OpenGroup`), never the items the round before built. An iteration or a round is added once per
+update, at most `amend.maxAddedIterations` over the run, published as an `iterationAdded` event and kept in the entry
+(`FlowUpdateEntry.AddedIteration`, said by `FlowReports.IterationSaidOf` as round n of the loop or of the group); a
+loop at its bound where the run has been given every iteration allowed asks its bound for the owed work - it reaches
+that question whatever its `until` or its `blocking` says, for owed work ends no loop - and each owing entry says so
+once the question is asked, or is found standing at a session's start (`FlowCoordinator.LeaveToTheBound`,
+`FlowUpdateEntry.AskedAtBound`); the answer decides whether the loop runs on to carry it. What
+an update done owes is carried from its entry at every session's start too, so a crash between the update's end and
+its carry loses nothing, and an entry that says its carry was made - the iteration or round added, or its loop's bound
+asked - is carried no second time, so a loop the bound's answer ended is never run again for it
+(`FlowCoordinator.ReopensFor`). Where the group runs no round more - the run has none left to add, or a group around it
+ended otherwise than done and draws nothing more (`FlowUpdateGates.NoRoundMore`, the gates' rule) - an update whose
+work only an added round would carry is given up with why before anything is placed, its pieces never carried out
+(`FlowCoordinator.NoRoundForTheWork`). The report and
+`list-orchestrator` say every piece, where it was carried out and how that ended, the iteration or round added, a loop's
+bound asked for the work (`FlowReports.AskedAtBoundSaidOf`), and who
+was told what, who was not concerned and what was not delivered.
+Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
 orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
 - a `ci-wait`'s commit where it names none - the one the run last pushed - a commit's `folds`, the instances of the
-steps that fold upstream of it), the agent it works in (`FlowStepRun.WorksIn`)
+steps that fold upstream of it) - and a reason step's `prompt` and `resumePrompt` filled around their skills, as
+pieces (`FlowStepRun.Prompts`) - the agent it works in (`FlowStepRun.WorksIn`)
 or, of `others`, the target whose turn it is (`FlowStepRun.Target`), and its keys' templates filled (`FlowStepTemplates`, the one
 reader of which text each template key holds, the definition's check its other caller). The leg steps - `build`, `test`,
 `run`, `check-mutations` - share `LegStepRunner`: the use case of each command (`IBuildLegs`, `ITestLegs`,
@@ -1931,8 +3081,11 @@ branch the run started on (`FlowRunPlace.OffItsBranch`, over `FlowRunContext.Bra
 and the pull request apply), every fold upstream settled (`FoldOwed.Unsettled`), an empty index, each path's digest and
 no path to stage the index marks assume-unchanged or skip-worktree checked before anything is
 staged; the staged set written to the ledger (`FlowCommitEntry`) before `IGitPublisher` stages it by explicit path and
-commits once, then held to what the commit changes against its parent - one that took more, or left a path of the set
-out, is left for a person and kept beside the set (`FlowCommitStray`) - and marked committed in it and in each fold path
+commits once, then held over the commit the branch named before it: its parents, as its own object names them
+(`IGitClient.ParentsOfAsync`, `git cat-file commit`, which no graft or shallow boundary stands in for), that commit
+alone - a hook could move the branch to a commit of its own, standing on one that carries anything - and what it
+changes against that commit the set alone; one that stands elsewhere, took more, or left a path of the set out, is
+left for a person and kept beside the set (`FlowCommitStray`, where it took more or less) - and marked committed in it and in each fold path
 it took (`FlowFoldPath.Committed`); a path git ignores marked `Ignored` and answered under `ignored`
 (`FoldLedger.IgnoredOf`); and a set an attempt before left staged settled first, committed only where the tree holds
 what it staged. Whether HEAD holds a fold's path as the tree does is one answer, `FoldLedger.DifferingAsync` - the blob
@@ -1950,7 +3103,10 @@ refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targe
 `OrchestrationRules.AgentNameOrder`, each claimed on its own tree (`FlowClaims.Of`), retried by its own count and ended
 on its own. `PushStepRunner` and `PullRequestStepRunner` read the main checkout as a run's start does (`FlowCheckout`),
 each refused where it is not on the run's branch (`FlowRunPlace.OffItsBranch`):
-the push sends HEAD to its branch on the step's remote, else `FlowCheckout.Remote` - one, which the definition's check
+the push sends the commit the run's commit steps recorded last in its ledger (`OrchestrationStore.ReadFolds`, the last
+`FlowCommitEntry.Committed` entry's `Sha`), else the one the run started on (`FlowRunPlace.StartCommit`) - never what
+HEAD names by then, which a hook or a build working in the main checkout's git directory, written whole, could have
+moved - to the main checkout's branch on the step's remote, else `FlowCheckout.Remote` - one, which the definition's check
 holds every push step that names a remote to - through `IGitPublisher.PushAsync` -
 `<sha>:refs/heads/<branch>` with `--porcelain`, never forced, its line read for whether the branch moved; the pull
 request is found - among those gh lists from the branch's name, never one from another repository (`isCrossRepository`)
@@ -1960,8 +3116,9 @@ leaving gh to read the remotes itself, where it cannot be told - against `FlowCh
 started (`WorkflowNamedFiles.ReadText`, the one rule the definition's check holds a named file to) and the runner wrote
 to the step's directory; `FlowReports.LeftForAPerson` names each pull request the run opened or found, and each path
 its folds changed that git ignores, as its commits answered them. Every command a
-publishing step runs is one of `PublisherCommands.All`, over `IGitClient.RunWithinAsync` and `GhProcess`, given the
-step's `timeoutMinutes` else the command's own limit. The other step runners - the agents, the rest of the steps over the services the tool already has - are
+publishing step runs is one of `PublisherCommands.All`, over `IGitClient.RunWithinAsync` and `GhProcess` - the commit
+and the push over `IGitClient.RunWithHooksAsync`, the repository's hooks run inside the isolation their step asked -
+given the step's `timeoutMinutes` else the command's own limit. The other step runners - the agents, the rest of the steps over the services the tool already has - are
 the next thing the tool grows.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
@@ -1987,7 +3144,7 @@ read by the configuration's one brace grammar (`FlowTemplate.Pieces`): `{{` and 
 `${...}` is left as written, and a placeholder that names nothing is refused. `piece` is read only in the work-item group, and what only a
 prompt reads - `recommendations`, `question`, `status`, `update`, a skill - by no step's own key.
 What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's
-prompt and the advisor's, `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two -
+prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two -
 `{status.question}` in its `askPrompt` alone - `{update.*}` in the prompts of the step that plans an
 update and of the steps of its scope, and `{piece.*}` in a step of the work-item group; the
 advisor's and the reporter's prompts are read too, and read no step by name, and a pull request's
@@ -2079,7 +3236,10 @@ to be withdrawn. A triage's answer is
 listed and counted before its end is recorded, so the end's one write carries the run's file of
 issues (`FlowSnapshot.Issues`) in the one order; a crash before that file leaves the end written, and
 the resume lists the issue from the triage's answer - once, for one the list already holds the same in
-all but its id and time is not listed again. Each record is written before what follows from it - a question before the record of the
+all but its id and time is not listed again. A change's snapshot holds the run by value - what was spent
+(`FlowBudgetSpent.Recorded`) and the pause (`FlowPauseState.Recorded`) taken as they stood, never the engine's own
+objects - so a write a session's start holds, made once the session goes on, says the run as it stood when the change
+was taken, never paired with a grant or a mark that came since. Each record is written before what follows from it - a question before the record of the
 step that waits on it, an answer before what it changes, a visit with what raised it, a failure
 owed until it is decided, every visit a redirect leaves marked `leftBy` before the redirect leaves
 the run's records, and a handler a redirect leaves before it ended marked `left` in its source's
@@ -2134,6 +3294,230 @@ removes the owner once it is gone. Whether a run's engine is live is asked of on
 naming `pause-orchestrator` and `stop-orchestrator`) and removes a gone engine's owner with the run,
 and `list-orchestrator` says what the engine is doing - none, running, pausing, recording what a
 complete pause left running, or gone.
+
+Two commands answer a person's question about a run (`FlowService.AskStatusAsync`,
+`FlowService.AskAsync`): `ask-orchestrator-status` the tool's own - what is happening now, what is
+done, what is left, what it waits for, and when it may finish - and `ask-orchestrator` a person's,
+over the same facts. The facts are the engine's (`FlowStatus`, pure, over the records the same store
+methods `list-orchestrator` reads: `flow.json`, `questions.json`, `updates.json`, the frozen
+`definition.json` and the run's owner), computed and never guessed, stamped with the moment they
+were read: how the run stands and for how long, its engine and its pause; each step instance in
+progress; what it waits for - each open question with the command that answers it, a plan update
+under way or queued, an instance waiting on another or on a claim or room, a `ci-wait` reading the
+checks of the commit the run last pushed; what is done and what was spent of the budget; what is
+left at least and at most, with the bound that gave the most - each member of a scope still open not
+drawn yet, a loop's iterations to its bound, a handler's visits to its `maxVisits` with the steps its
+`then` sends the run back over, the recovery's visits to its `maxVisits` for each failure it can take
+with the steps it sends the run back over, and what no numeric bound holds named - and when it may
+finish, as a range that rests on this run alone: of each step of
+the definition that works the shortest and the longest time an instance of it took to end `Done` - a
+group's own span is its members' time, never counted beside it - (the lower end laying what is left
+along what depends on what as the engine orders two instances, `FlowInstanceId.Precedes` then
+`FlowGraph.Waits`, so work that runs side by side is counted once; the upper end summing every
+instance that is left and everything the run may still make, one after another), a step no
+instance of which has ended `Done` in this run counted and named and in neither end, the time a
+person takes to answer and a wait for room - a claim, the run to be quiet, a counter of its limits,
+each a word the admission writes from `FlowWaits` and the facts class by it - left out and said to
+be, and no estimate at all where nothing has ended or the run has ended (done or failed: a stopped
+run goes on at its resume, and its stopped instances are among what is left), the facts saying
+which. The most is everything the run may still make by the engine's own bounds and rules
+(`FlowComing`), so it is a bound: in each scope still open - the top level while the run goes on, and
+each group, iteration, item and recovery visit not ended - each member the schedule has not drawn yet;
+`FlowRepeat.Bound` for each repeat instance not ended, past the iterations it made;
+`WorkflowStep.VisitsAllowed` for a handler, in each scope its source can still end in, as the engine
+counts its visits, with the steps its `then` sends the run back over at each visit; and
+`FlowRecover.VisitsAllowed` for each step whose failure the recovery can take (the policy that decides
+for it, `FlowScope.OnFailureOf`, is `recover`), each visit of the recovery with the steps it sends the
+run back over - what a redirect resets read by the engine's one rule of it, `FlowResets.Of`, and a step
+it resets counted as able to end again - each bound widened by what was granted past it (`FlowGrants`,
+the one owner the engine applies an answer by and counts the answers back by at a resume: each `more`
+a repeat's, a handler's or the recovery's bound was answered in `questions.json`, and each iteration a
+plan update added to a loop), a handler's granted visit the run has not carried out yet counted in the
+scope it was granted in, and each piece of a plan update not carried out one item of the work-item
+group. What such a visit makes is counted whole - a group with all that is in it, its loops to their
+bounds and its own handlers and recovery. What no numeric bound holds - a `forEach` not yet expanded, a
+repeat with no numeric bound, a step whose pre-existing issues each raise a triage, a handler that
+sends the run back outside its own group, a plan update still to be planned - is named, the run's own
+bound of instances the only one that holds it; and a question open at a bound is named as what can
+grant more past it. Where the
+workflow's `reporter` names an agent, its words follow the facts, run by the reason step's own
+runner as the advisor is (`ReporterRunner`), its reads narrowed to the run's directory alone
+(`AgentPolicyGround.ReporterRoot`: no command, no write, no web - the three tools that read and no
+other), its answer masked, its cost the person's and never the run's. Both commands only read: no
+state file, no step, no agent, no budget, no lock an engine needs, not even the sweep every other
+command over an orchestrator makes first - what a call leaves behind is its own record under the
+run's `asks/<stamp>/` (the facts as given, the files of its reporter's attempt, the conversations
+its client stores under `sessions/` - never under an agent's of the run - and `ask.json`), a
+directory the engine never reads. Where no model words them the status still prints the facts, says
+`no model worded this` and why, and exits 0 - the facts are the answer, and the words were a
+service; the person's question is refused, naming why (12 where the workflow names no reporter or
+the reporter's own files do not read - whatever keeps the reporter from wording the facts is why no
+model did, read by `KnownCauses.Meaning`, and never an error of the command - 13
+where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model
+failed, 21 where it could not be reached or its account is at its limit - `AgentRunResult.ToOutcome`
+the one mapping), and neither command installs Claude Code or brings one up to date. An orchestrator
+made by hand, which no flow runs, has no reporter and fewer facts: its status prints what
+`list-orchestrator` has of it and says so, and the person's question is refused (12).
+
+A side-task is an agent outside every workflow (`SideTaskService`, `run-side-task` and
+`list-side-tasks`): a conversation between a person and one agent over the repository's main
+tree, asked directly - a chat in the terminal by default (the agent's text streamed, each
+action one line as it is decided, a denial with its rule, Ctrl+C interrupting a turn and a
+second ending the chat, a line ending in a backslash going on to the next, `/exit`, `/model`,
+`/effort` with a level, `<code>=<level>` or `default`, `/records`, `/help`), or one message
+with `--prompt`, answered once (`--json` its one document, a usage error without a prompt).
+No second loop: each turn is an `AgentStepRequest` handed to `IAgentRunner` as the engine
+hands a step's - the model resolved as a step's (`--model`, `--tier`,
+`defaults.agentTier`, `--client`, `--effort <level>` or `--effort <code>=<level>` with
+`all=<level>` for the rest, each checked against what the model takes by the one check of a
+step's, `AgentEffortRules`), the order built with each entry's credential, what it spends counted
+against its key - so the clients, the tool runtime, the stored stream, compaction and the fallback
+are the ones every step uses; one builder sets all of it up (`SideTaskService.SetUpAsync`), at the
+start and again for the chat's `/model` and `/effort` - a new model keeping only the levels that name
+it and the one for the rest - and what a reason step is launched with beyond its model it takes from
+that step's own builder (`ReasonLaunch`): its order, the Claude Code directories its ground keeps it
+from, the mask its records and answers are held to - every secret the configuration appoints that the
+slot answers, each provider's keys and each client's token, beside every form of each search key -
+and the Claude Code it starts, made ready as a step's is and refused on the finder's own code and
+words (12 the configuration, 13 an update refused, 14 the program missing, 21 the install of Claude
+Code timed out or could not reach the registry) - and refused, 14, where `agentPolicy.isolation` is
+`required` and the machine cannot isolate its commands (`AgentIsolation`, below). What differs is what it is given: its
+ground (`SideTaskPolicy`) - no restriction list, no allow list of pages, all four capabilities, the
+main checkout the writable root, the worktree rules and the protected paths off, this tool's own
+verbs open to it as the person's own session's are, but those that read a credential slot or write
+its state (`AgentPolicy.SlotOrStateVerbs`) - with the built-in refusals kept (root
+actions, every credential slot of the main checkout, every Claude Code directory its clients
+use and every place the user keeps credentials in (`AgentPolicyGround.CredentialPlaces`), to its file tools and to every path a word of its commands names (`CommandAnalysis.PathsNamed`),
+a directory that holds one given whole to a program that may read it among them but the main tree
+it works in and those above it - a command over that tree whole, `.` or no path, is not told from
+one over its sources and reaches the slots' files: the policy decides what a command names, it is
+not a sandbox - `Write(.git/**)` and a command's write into `.git`, a removal or a move of a
+directory that holds the main tree's `.git`, the state, a slot, a Claude Code directory or a place
+the user keeps credentials in, the main tree itself among them
+(`AgentPolicy.RemovalRefusal`), the tool's own state - each state path under the main tree,
+`HarnessLayout.StatePathsUnder`, never the tree itself - the commands that print a credential, a
+git or gh command called by a name none of its own commands is, and `run-side-task` itself,
+refused to every agent where a word of a command or of a script the policy reads names it or a verb
+the shell expands may, and refusing itself where the agent's mark, `AgentChildEnvironment.AgentMarker`,
+is in its environment, a command that sets it, takes it away, may take it away or names it but as data refused
+(`AgentPolicy.MarkerTouched`), or where a process of this tool's is among the ones that started it
+(`AgentAncestry`, over the process table's seam: the tree walked parent by parent, a process that took a
+freed id - started after the child that names it - never read as a parent, the tool - its own runtime, as the engine is -
+told by the file the table gives a process: a runtime whose application - the first word past its own options, never
+an argument of it - is the tool's assembly, the file this process runs as, or a host of the tool's package
+(`ToolPackage.HostsPackage`: a file of the tool's command beside the tool's assembly, as a build puts it, or beside the
+store a dotnet tool install keeps the package in); by its command's name (`ToolPackage.IsCommand`, the rule the tool's
+update finds its running copies by) only where the table gives no file, so a launcher of that name - a script, whose
+process runs its interpreter, or another program's shim - is none; one detached from the agent's tree - `at`, a
+`tmux` server, a double fork - told by the mark alone, and a table read by names alone, or one without this
+process, refused saying why, never read as a tree with no agent in it); code an interpreter runs and a process apart from the agent's tree
+are where that reading of words ends); no limits, no output envelope; the web
+search of every configured source turned on, with one more asked beside them: `native`, the
+provider's own search - on the Claude API a request of the harness's own whose only tool is the
+provider's web search (`ClaudeApiNativeSearch`, no server tool in any conversation), asked by the
+loop with the model and key serving the run when the agent asks, through that key's lane, its usage
+counted then to that entry's part and priced at the provider's `pricePerThousandSearches`, a failure
+of it - a hold past the longest wait among them, named - one failed part of the search saying why;
+on Claude Code its own `WebSearch`, kept in a side-task's
+`--tools` beside the engine's server; on Z.AI none. A chat goes on between the person's
+messages the way its client goes on with any conversation: one launch held open where the
+client renders its conversations (Claude Code), the person's later messages reaching the agent through
+the channel a message to an agent at work uses, recorded as the person's (`ChatMessage`), the first
+interrupt cutting the turn alone and leaving the launch open, a message the interrupt dropped said to
+have been dropped, each turn of the launch written to `task.json` as it ends, and a launch that ends
+by itself recorded and the lines it never answered sent again to a new one - counted by the client's
+own count of the messages its turns answered (`AgentRunResult.MessagesAnswered`), never by what was
+written, so a line taken by a turn that ended without answering is sent again. Such a launch is never
+tried again nor moved by the runner: a try or a move begun inside the walk would begin again from its
+first message and lose every line it had taken. Its retries are 0, so a failed turn ends it; and where
+the walk would move on - a decline, a limit, a refused key, a failure - it ends the run on that ending,
+says the move (`FallbackStarted`, `AgentFallback.ChatGoesOn`) and hands back the order it would have
+gone on by with the move that brought it there (`AgentRunResult.GoesOnBy`, an `AgentGoingOn`: the
+entry `AgentFallback.Next` finds, each after it as the walk would take it, and the `AgentMove`). The
+chat goes on in a new launch from the conversation so far with the lines no turn answered - on the
+entry handed back where there is one, as one request per line where that entry's client stores its
+conversations - and its next request carries that move (`AgentStepRequest.Moved`, cleared once the
+person sets the model or effort again), so the walk passes a first entry that cannot be started over
+as one a move of its own reached and, the run being a chat's, hands back the entry after it with the
+same move, never asking the one that cannot start again. A run the person ended before a client
+took it is never launched, by one owner of what ends a run before its launch begins
+(`AgentRunner.Unbegun`): a chat's messages ending - the person left (`AgentMessages.Ended`) - and the
+interrupt of a run that is no chat's, a one shot's turn (`AgentTurnInterrupt.Asked`). The runner
+returns such a run before its turn of the lane and races the gate's wait and a retry's against it as
+it races a handoff, ending it `Cancelled` with nothing launched (`AgentRunner.LeftBeforeItBegan`,
+`AgentRunner.CutBeforeItBegan`). A chat's own interrupt there cuts nothing - no turn of it is under
+way, and it is said so - and ends no wait; spent before a client was given the run, it is never handed
+to the launch (`LaunchedAsync`), so it never cuts the turn the launch begins. The gate's wait is said
+in the chat as it begins (`WaitingToRetry`). A chat's run is begun only on a client that renders its
+conversations - the runner refuses it, never started, on any other - and Claude Code moves to no
+other key inside it, so `MessagesAnswered` is always its one launch's own count; the run's end says
+it (`RunFinished.MessagesAnswered`), and a line given to a launch that never answered it is read once
+in the conversation that goes on and written once in `transcript.md`. Whether a turn of the launch is
+under way is the client's own turns' (`TurnStarted`, `TurnFinished`), however many lines were written
+to it meanwhile, and a line an interrupt drops is said (`MessagesDropped`). The launch's ending is its
+last turn's only where the client says the run ended at that turn's own result
+(`AgentRunResult.EndedWithItsLastTurn`: Claude Code's run ending at a turn's result, or idle with
+nothing waiting as the person leaves), so a launch gone between turns, or in the middle of one, marks
+no finished turn with its failure. The person leaving while a turn runs or a line waits never drops
+that turn: Claude Code interrupts the turn under way with the waiting lines cancelled - unless the
+person's own interrupt is still unanswered - reads on to the cut turn's result within
+`ClaudeCodeClient.InterruptBound`, counts it and ends there, the lines it dropped never counted as
+answered, so what the turn used, cost and spent is kept and a line it never took goes on with the
+chat. `/model` or `/effort` typed while the launch works ends it the same way and carries the lines it
+never took to the new launch (`GoneOnAsync`), each turn written on the entry of the launch that served
+it. One
+request per message where the client stores them, each going on with the stored
+one. A side-task whose last run that worked - one that began a session - ended `ContextExhausted`, a
+chat's or a one shot's, has outgrown its context (`Working.Outgrown`, read from its stream): it keeps
+no stored conversation to go on with, in `task.json` or in this process, for handed again it would
+meet the same wall, and its next request - the chat's next message or launch, or a `--resume` in a
+later process, by the one owner of how the next turn goes on (`Working.GoingOn`) - carries the
+engine's compaction of the conversation as a step's is made - the whole conversation since the last
+compaction, every launch of it read as one, the person's later messages as they said them - as the
+request's `Compaction` before the person's message (`AgentCompacted.BeforeItsTask`), so the runner
+says it in the side-task's stream as `Compacted` and counts it as it does a step's; the person is
+told once, as the run given it begins, and the turn that outgrew it says only how it ended. The side-task's name is the person's (`--name`) or the date and
+time it began - with the first words of its message in one shot; a chat is claimed, and named, before
+its first message is typed, so by the time alone - a suffix freeing it where another began in the
+same second; its owner (`SideTaskOwner`, the owner file beside its records) is claimed before
+anything is written, under one machine-wide lock for the side-tasks' directory, with `task.json`
+written inside the claim, so two commands never take one name - a name another holds refused (13),
+the records it holds named as that side-task's and never as the command's, a dead owner reclaimed
+and said. `--resume` opens one again, refused (13) where it names no
+side-task or another process holds it open, and `--name` beside it a usage error (10); it goes on
+with its stored conversation, or, where the model it now runs on is reached by a client that is
+handed none, from the conversation so far (`AgentContinuation`), on what the person last set it
+to run on (`SideTaskRunsOn` in its record: the tier with the tier's later models, or the model
+named outright) unless the command line names a model or a tier; an effort or a client the
+command line names stands over the record's. Its records live in `.side-tasks/<task>/`, a root slot
+of the layout in `StatePaths`, the tree's floor and the managed ignore block - refused (13) before
+anything is written where git does not ignore it (`SlotIgnored`) - written by the tool alone and
+kept until a person removes them: `task.json` (each turn with its client, provider, model and
+effort, what it used and cost, and what the agent ran under), the stored stream `stream.jsonl`,
+the transcript as a person reads it `transcript.md`, `denials.jsonl` and `web.jsonl` as a step's,
+the stored conversation under `sessions/` where its client stores one - named on every exit,
+in text and in `--json`, or said to be none where the command stopped before any were written.
+Its exits are its turn's (`AgentRunResult.ToOutcome`, the one mapping) in one shot - 20 failed, 21
+cut short, 130 interrupted: a one shot's interrupt cuts its turn by the turn's interrupt
+(`AgentTurnInterrupt`) on every client, never by cancelling the run - Claude Code ending the launch
+at the cut turn's result, the loop of the two APIs leaving its request where it stands and cutting
+the calls running - each ending `Cancelled` (`AgentTurnInterrupt.Cut`) with what it used, cost and
+spent kept, and a launch still waiting at the gate or to be tried again never begun - and, on any client, 12, 13, 14 or 21 where it could not start; a chat's are 0 however the
+person leaves it once it has begun, 130 where two interrupts stop it while it is still being set up
+or opened again. Its interrupts are its own
+(`SideTaskTerminal` over `TerminalSignals`, the one registration of Ctrl+C, SIGTERM and a hang-up,
+with `PointOfNoReturn.ChatsWithAPerson` turning the command line's own handling off for it): the
+first cuts the agent's turn by the run's `AgentTurnInterrupt` on every client - a message to a client
+that stores its conversations ending `Cancelled` with what its request used, the conversation kept to
+its last whole turn (`Working.KeptWhole`, as the chat says it) - the second ends the chat as `/exit` does - a launch held open runs under
+the command's own stop, never the side-task's, so the second cuts its turn, ends its messages and
+waits for its result, what it used, cost and spent kept - each said by whether a turn of the agent's
+was under way to take it (`SideTaskPress.Turning`: for a launch held open, its own turns tell it, so a
+press while it is idle between turns says no turn was cut); and the side-task's own stop, linked to the
+command's, is bound to them (`SideTaskInterrupts.StopsOn`) for wherever no turn runs - being set up
+or opened again, its Claude Code or another model made ready: a one shot's first interrupt
+stops it there, a chat's second, and an interrupt taken before the stop was bound is applied once it
+is. No host serves either verb: a chat is the person's, on this machine (`HostAgentProtocol.NotForwardable`).
 
 A session's interrupts are its own (`FlowTerminal`, `FlowInterrupts`): Ctrl+C, and off Windows
 SIGTERM and a hang-up, are taken by `PosixSignalRegistration` and never end the process, and the
@@ -2474,12 +3858,13 @@ one at a time, writes a node's lines through `EditedText.ReplaceLines` only wher
 handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. Every
 file `body` reads and `edit` writes is reached through the `ConfinedPaths` the tool is handed (`ConfinedPaths.Within` the
 tree where query-codebase-graph runs it), which resolves each link, so a link out of the tree is neither read nor written
-through. The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
+through - and read through `AgentFiles`, where the open file stands decided again by it, and written relative to its
+directory held from the root it was decided in (`AgentFiles.Write`). The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
-it needs, is a usage line (`CodebaseGraphTool.Misused`). Nothing gives a step the tool yet: slice 27d adds it to the tool
-runtime's table with its write rules and edit check. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
+it needs, is a usage line (`CodebaseGraphTool.Misused`). No step is given the tool: the tool
+runtime's table does not hold it. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
 
-The context pack (`CodebaseContextPack`, value 370) is the part of the graph a step's work touches, made at its start
+The context pack (`CodebaseContextPack`) is the part of the graph a step's work touches, made at its start
 from the view and what the step says alone (`ContextPackRequest`: its filled prompt, `writes`, the working sets it is
 given, its changes, its read rule and cap), so the same step on the same tree is given the same pack. Its seeds are what
 the prompt names exactly - a symbol or a path in backquotes (a path standing for its declarations), a qualified name
@@ -2499,7 +3884,7 @@ by file - generated code after every other - within the cap in estimated tokens 
 four, rounded up), a line that does not fit left out whole and counted, and a cap too small for the first and last
 lines gives no pack, every node counted left out; the first line names the view, its commit, the files that differ
 from its base and what the pack was seeded from, the last its nodes, its tokens and what was left out.
-Change-first (value 371) starts from `ICodebaseGraphService.ChangesAsync`: the paths that differ from the base
+Change-first starts from `ICodebaseGraphService.ChangesAsync`: the paths that differ from the base
 (`ICodebaseGraphService.DifferingAsync`: git's diff against it and the untracked list, kept to what the graph's
 `include` and `exclude` list), each file's blob at the base sized first (`IGitClient.ReadBlobSizesAsync`) - one past
 `maxFileBytes` not read - and read in memory as a sync reads a file (`CodebaseGraphService.Read`, the one reading of a
@@ -2518,8 +3903,8 @@ its first line counts the lines the changes lead with, and with no base, its cha
 in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the run's start commit for the main
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
-Slice 27d puts the pack at the head of a step's first message and hands the tool its `Near`.
-The working set (`CodebaseWorkingSet`, value 372) is what a reason step that has a graph worked with, kept in its
+No step's first message is given its pack, and no tool its `Near`.
+The working set (`CodebaseWorkingSet`) is what a reason step that has a graph worked with, kept in its
 directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
 (`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end, at most
 `CodebaseWorkingSet.MostNodes` - edited first, then by how often, the rest counted - and a node the view no longer
@@ -2540,7 +3925,7 @@ depends on directly - its own `dependsOn` and `on` and each enclosing group's, a
 then its own earlier visits of the same work item (`FlowInstanceId.SameStep`: the same id but for the visits and
 iterations after its innermost item), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
 into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
-gone). Slice 27d writes both files as a step ends and hands the seeds to its pack.
+gone). No step writes either file as it ends, and no pack is given the seeds.
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in
@@ -3724,6 +5109,35 @@ tool replaces, where a green result had quietly stopped meaning anything.
   anything the harness wrote: a log header that echoes the command line contains the
   pattern whenever the command does. An empty pattern matches anything and is refused
   when the file is read.
+- A test invocation that does not pass - failed, timed out, unwitnessed, any verdict but a
+  pass - may keep evidence: `keepOnFailure` names paths under the leg's build directory -
+  files, directories or patterns, `{buildDir}` among the names they may use - and what they
+  name is copied into `kept-on-failure/` beside the leg's log, each file's tree as it stood
+  under the build directory, within `keepOnFailureCapBytes` kept in all (64 MiB where it is
+  left out; files past the cap are not copied and are named). A pass keeps nothing; a later
+  step reads nothing from it, for it is evidence beside the verdict and never an output, and
+  a failed step still keeps nothing of what one reads. Only a file of its own is copied: a
+  link is never kept through, wherever on the way from the build directory it stands - an entry
+  that is one, a file beneath a linked directory, each part of the path asked by one helper
+  (`KeptOnFailure.LinkOnTheWay`), and no walk of a directory or of a pattern follows one - for
+  what it leads to may lie outside the build directory or be of any size (the file it leads to
+  is kept where an entry names that), and a pipe or a device is no file to read. A file is measured by what it holds as it is read - never by its
+  directory entry, which says a link's own size and nothing of a file still growing - and no
+  more of it is copied than the cap has left, so one that grows past the cap is refused over
+  it. A directory that cannot be read is passed by and named among the unreadable directories
+  (`KeptOnFailure.UnreadableDirectories`) where an entry could have named what it holds -
+  beneath a directory an entry names, or one a pattern could reach - every file beside it kept, and a stop while the evidence crosses ends the file
+  it stopped in, keeps what is already kept and names what it left. A path naming nothing is
+  said on the leg's line, not refused, for the failure may have been before it was written;
+  the line (text and `--json`) names the directory, how many files were kept and their size,
+  and how many were refused over the cap, could not be read, were left as links, named
+  nothing or were left uncopied by a stop, and how many directories could not be read. On a leg a WSL or ssh
+  host runs, the copy is kept beside that host's own log and crosses back over the host's
+  transport: `sync --pull` takes the kept-on-failure directory within that host's run. Entries
+  that are absolute, climb out of the build directory, name the build directory itself or a
+  directory besides it, spell a path or pattern no reader reads, or are given empty are
+  refused when the file is read, naming the key - and so is a `keepOnFailureCapBytes` where
+  no `keepOnFailure` it applies to names a path, for a key that loads is a key that is read.
 - A build passes only if every file in the project's `buildOutputs` exists afterwards,
   so a build that exited 0 cannot hand its tests a binary left over from an earlier one.
   An entry is a path, or a mapping of platform to path where the platforms disagree about what the
@@ -3852,7 +5266,7 @@ ordered.
 The watch goes only as deep as the inputs: each directory holding one is watched for its
 own files only, and each directory above one - the root among them - for the names of the
 directories in it alone. A directory tracked for a placeholder, as init keeps the
-worktrees root, `.orchestrators`, `.mutations` and `.legs`, costs one shallow watch, and
+worktrees root, `.orchestrators`, `.mutations`, `.legs` and `.side-tasks`, costs one shallow watch, and
 other trees building below it - an agent's worktree, a sweep's worker, a leg's copy - are
 never heard. Measured: watched all the way down, an agent's build below the
 worktrees root overflowed the operating system's buffer, and a run in the main tree that
@@ -4577,7 +5991,7 @@ directory here cannot drift apart.
   same directory, and only one of them deleted somebody's files; the marker is the only thing left
   that can say so.
 - **What survives an adoption is narrower than it looks.** Its `.git` and so every commit, branch
-  and tag in it, its `.orchestrators`, `.mutations` and `.legs`, the rest of `.harness-config` save
+  and tag in it, its `.orchestrators`, `.mutations`, `.legs` and `.side-tasks`, the rest of `.harness-config` save
   the runner's actions, the worktrees root and whatever `sync.neverTransfer` names are protected
   from the deletion — though `config.json` and the actions there are replaced with this tree's,
   and its git HEAD is moved, detached, to this tree's commit where it names another, both of which the refusal says. The ignore list is *not* read from that host: it is this tree's, listed by asking
@@ -4597,11 +6011,13 @@ directory here cannot drift apart.
   adopt list — would quietly delete the rest with nobody asked at all. So a stopped takeover is its
   own state: it still needs `--adopt <host>`, and its refusal says plainly that what the earlier run
   removed is not in the list.
-- **A link the copy holds is named too.** A link sits in no manifest — the walk refuses to follow
-  one — so a file written at its name replaces it and reads as an ordinary write, and everything
-  behind a linked directory is outside any list a plan can build. Reported rather than guarded
-  against: a build directory pointed at another volume is ordinary, and refusing to write through
-  one would refuse `--pull build/...` — a path the reader named, inside the tree they named.
+- **A link the copy holds is named too, and never gone through.** A link sits in no manifest — the
+  walk refuses to follow one — so a file written at its name replaces it, and everything behind a
+  linked directory is outside any list a plan can build. A copy is a place a leg's work writes, and a
+  link there says nothing of what anybody meant, so no read, write, removal or listing of a sync goes
+  through one below the copy's root (`UnfollowedFiles`): each is refused naming the link, and a
+  directory reached through one is never emptied. A `--pull` alone follows a link along the path it
+  names, as it is spelt, and never into a place the isolation hides from every command.
 - **`--dry-run` shows the plan, and exits as the sync would.** For a directory the tool did not
   create, for one whose deletions are over the bound, and for a worktree's copy another worktree
   of the same name still holds, the dry run lists what the sync would do - the bound's own message
@@ -4711,7 +6127,7 @@ directory here cannot drift apart.
   compiling, a deleted test keeps running, and a renamed file exists twice, so the leg's verdict
   describes a tree that no longer exists.
 - **The never-transfer floor is also a never-delete floor.** `.git`, `.orchestrators`,
-  `.mutations`, `.legs`, the worktrees root, everything under `sync.neverTransfer`, and all of
+  `.mutations`, `.legs`, `.side-tasks`, the worktrees root, everything under `sync.neverTransfer`, and all of
   `.harness-config` but `config.json` and the runner's actions are neither written nor deleted. A
   path the harness will not write is one it cannot know the source lacks, so deleting it would
   remove the host's own state rather than a file the source gave up — including the build
@@ -4789,7 +6205,11 @@ directory here cannot drift apart.
   the host's tree for them. A path ending with `/` names a directory instead: the host that holds it
   lists every file below it with its size (`ISyncTransport.ListFilesAsync`, served as `sync-serve
   list`), never following a link below it, and each file then crosses as a file named does, in a
-  request of its own. The side that holds the directory bounds it before a file of it is read - 256
+  request of its own (`ISyncTransport.PullFileAsync`, served as `sync-serve pull`). A link along the
+  path named - to a file or a directory - is followed as it is spelt, a build directory pointed at
+  another volume being ordinary, but a pull that leads into a place the isolation hides from every
+  command - decided by where what it opened stands, as the system names it - fails naming that place,
+  nothing read; on a host the places are the host's own. The side that holds the directory bounds it before a file of it is read - 256
   files, 1 GiB together, no file past what one request carries - and one that is not there, is a
   file, or holds no file fails the pull by name (`SyncService.ListedForPullAsync`), every directory
   before any file has crossed. A directory that cannot be read where it is fails the pull by name
@@ -6040,7 +7460,18 @@ A session of a run (`run-orchestrator`, `resume-orchestrator`, `answer-orchestra
 where it ends paused on a question - a step's, or the budget's at its reserve (`FlowExit.Paused`) -
 so a wrapper that retries 21 never loops on a question nobody answered; otherwise `0` done, `20`
 failed, `21` failed where every failure that ended it was incomplete after its retries, and `130` at
-a safe pause or a stop.
+a safe pause or a stop. `ask-orchestrator-status` exits `0` wherever it read the run's facts, worded
+by a model or not - where none worded them it says why and the facts are still the answer - while
+`ask-orchestrator`, whose answer is the model's words, is refused with the code of why none worded
+them (12, 13, 14, 20 or 21, and 70 where the tool itself failed).
+`run-side-task` in one shot exits as its turn ended, by the one mapping of an agent's ending
+(`AgentRunResult.ToOutcome`): `0` answered, `20` the model failed past its retries and fallback, `21`
+cut short by the account's limit, a stall or the clock, `130` interrupted - an interrupt while it is
+set up among them - and `12`, `13`, `14` or `21` where its agent could not start: the configuration, a key
+missing, the tool elevated or an update of Claude Code refused, the program missing, the install of
+Claude Code timed out or could not reach the registry - a chat's set-up as well. A chat exits `0` however the person leaves it once
+it has begun - `/exit`, the end of its input, a second interrupt - and `130` where two interrupts stop
+it while it is still being set up or opened again.
 `dssharness help exit-codes` prints the shared table from the code itself; this copy, and the
 per-command codes above, are maintained by hand.
 

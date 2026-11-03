@@ -8,11 +8,15 @@ namespace DssHarness.Core.FileSystem;
 public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFileSystem
 {
     /// <summary>
-    /// Attempts at the final rename before a transient refusal is reported: about three seconds of them
-    /// (<see cref="ReplaceWait"/>). A virus scanner on a busy machine held a just-written file past the half second ten
-    /// attempts once gave.
+    /// Attempts at the final rename before a transient refusal is reported. A virus scanner on a busy machine held a
+    /// just-written file past the half second ten attempts once gave, past the three seconds twenty-five gave under a
+    /// full test suite, and past the five and a half seconds thirty-five gave under the suite the tree has grown to - so
+    /// a bound of about thirty seconds was tried, and the scanner's hold outlasted that too, while the wait starved the
+    /// very pool whose load had queued the scanner: more tests stalled longer, not fewer. A holder past five and a half
+    /// seconds is a queue this machine is feeding faster than it drains, and no bound this process picks empties it; the
+    /// refusal is reported rather than outwaited at the cost of everything that waits on the write.
     /// </summary>
-    private const int ReplaceAttempts = 25;
+    private const int ReplaceAttempts = 35;
 
     private readonly IFilePermissions _filePermissions = filePermissions;
 
@@ -91,33 +95,27 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
             return;
         }
 
-        // Each junction first, as a link: the runtime's recursive delete removes one and then reports it refused,
-        // leaving every directory above it, and only the retry below used to finish the job.
-        RemoveJunctions(path);
         DeleteMarked(path);
     }
 
     /// <summary>
-    /// Removes the directory at <paramref name="path"/> and all in it, the files marked read-only among them. It holds
-    /// no junction, or each was removed first.
+    /// Removes the directory at <paramref name="path"/> and all in it, the files marked read-only among them - git marks
+    /// those under <c>.git/objects</c> so - each entry relative to the directory it is in, held from the directory's own
+    /// parent (<see cref="HeldDirectory"/>): a link or a junction anywhere in it removed as itself and never entered, a
+    /// volume mounted on a directory in it refused and never unmounted, and a link a process still writing there swaps in
+    /// while the removal runs reaching nothing. The directory itself, where it is a link, is removed as the link.
     /// </summary>
     /// <param name="path">The directory, which is there.</param>
+    /// <exception cref="JunctionRemovalException">A volume is mounted on a directory in it; what was removed before stays removed.</exception>
+    /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
     internal static void DeleteMarked(string path)
     {
-        try
-        {
-            Directory.Delete(path, recursive: true);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // git marks files under .git/objects read only, and a recursive delete
-            // refuses those on Windows. Clearing the attribute is done only after the
-            // delete actually refuses: doing it up front would walk the whole tree
-            // twice on every delete, and on Unix would add write permission to every
-            // file in a tree that would have deleted cleanly anyway.
-            ClearReadOnlyAttributes(path);
-            Directory.Delete(path, recursive: true);
-        }
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var parent = Path.GetDirectoryName(full) ?? throw new IOException($"'{path}' is a volume's own root, which is never removed");
+
+        using var held = HeldDirectory.Hold(parent, parent, make: false);
+
+        held.DeleteDirectory(Path.GetFileName(full));
     }
 
     public void MoveDirectory(string source, string destination) => Directory.Move(source, destination);
@@ -537,15 +535,32 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         File.SetLastWriteTimeUtc(path, writtenUtc);
     }
 
+    public string FinalPathOf(Stream opened)
+    {
+        ArgumentNullException.ThrowIfNull(opened);
+
+        return opened is FileStream { SafeFileHandle: var handle }
+            ? OpenedFiles.FinalPath(handle)
+            : throw new NotSupportedException($"a {opened.GetType().Name} is open on no file this file system opened, so where it stands cannot be named");
+    }
+
+    public string FinalPathOfDirectory(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        return OperatingSystem.IsWindows() ? OpenedFiles.FinalDirectoryPath(directory) : LinkPaths.Resolve(directory);
+    }
+
     public Stream OpenRead(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        // A pipe, a socket or a device opens as a file does, and a pipe's open waits for a writer past any stop: refused
-        // before it is opened, as a read of what cannot be read fails.
-        if (!OperatingSystem.IsWindows() && UnixFiles.Special(path) is { } special)
+        // A pipe, a socket or a device opens as a file does, and a pipe's open waits for a writer past any stop: opened never
+        // to wait, then refused by what the descriptor is open on before a byte is read - so one put at the path after a
+        // look is met here too, never waited on.
+        if (!OperatingSystem.IsWindows())
         {
-            throw new IOException($"'{path}' is {special}, which is no file to read");
+            return new FileStream(UnixFiles.OpenRegular(path), FileAccess.Read, 4096);
         }
 
         // Sequential, and sharing read access: a tree sync walks every file in a repository while
@@ -560,6 +575,9 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
                 Options = FileOptions.SequentialScan | FileOptions.Asynchronous,
             });
     }
+
+    public HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        => HeldDirectory.Hold(anchor, directory, make, asked);
 
     public IAppendFile OpenForAppend(string path)
     {
@@ -646,8 +664,8 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     /// the caller does.
     /// </summary>
     /// <remarks>
-    /// The synchronous form blocks a thread-pool thread for up to three seconds per file while it waits.
-    /// A tree sync writes thousands of files, and the parallel legs above it are sharing that pool:
+    /// The synchronous form blocks a thread-pool thread for the rename's whole bound (<see cref="ReplaceAttempts"/>)
+    /// while it waits. A tree sync writes thousands of files, and the parallel legs above it are sharing that pool:
     /// sleeping in it makes a transient lock on one file look like a stall in every other leg.
     /// </remarks>
     private static async Task ReplaceWithAsync(string source, string destination, CancellationToken cancellationToken)
@@ -709,24 +727,4 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         }
     }
 
-    private static void ClearReadOnlyAttributes(string directory)
-    {
-        // Reparse points are not followed: Directory.Delete removes the link rather
-        // than its target, so clearing attributes through one would mutate files
-        // outside the tree being deleted and then leave them there.
-        var options = new EnumerationOptions
-        {
-            RecurseSubdirectories = true,
-            AttributesToSkip = FileAttributes.ReparsePoint,
-        };
-
-        foreach (var file in Directory.EnumerateFiles(directory, "*", options))
-        {
-            var attributes = File.GetAttributes(file);
-            if ((attributes & FileAttributes.ReadOnly) != 0)
-            {
-                File.SetAttributes(file, attributes & ~FileAttributes.ReadOnly);
-            }
-        }
-    }
 }

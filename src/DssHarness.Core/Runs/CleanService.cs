@@ -477,14 +477,14 @@ public sealed class CleanService(
             }
 
             // Removed first, and outside the lock: nothing builds in a directory an earlier removal moved aside.
-            var removed = Remove(aside);
+            var removed = Remove(layout.RepositoryRoot, aside);
 
             var moved = false;
             var holder = _runLock.HeldBy(layout, building, () =>
             {
                 if (_fileSystem.DirectoryExists(directory))
                 {
-                    _fileSystem.MoveDirectory(directory, aside);
+                    UnfollowedFiles.Move(_fileSystem, layout.RepositoryRoot, directory, aside, replace: false);
                     moved = true;
                 }
             });
@@ -498,7 +498,7 @@ public sealed class CleanService(
 
             if (moved)
             {
-                removed += Remove(aside);
+                removed += Remove(layout.RepositoryRoot, aside);
             }
 
             var (after, why) = DiskSpace.Measure(_fileSystem, directory);
@@ -614,7 +614,7 @@ public sealed class CleanService(
             // Removed first, and outside the lock: nothing sweeps in a worker an earlier removal moved aside.
             foreach (var aside in asides)
             {
-                removed += Remove(aside);
+                removed += Remove(context.Layout.RepositoryRoot, aside);
                 asidesGone++;
             }
 
@@ -640,7 +640,7 @@ public sealed class CleanService(
                         else if (_fileSystem.DirectoryExists(worker.Path))
                         {
                             // Still there: another leg of this command, cleaning the same tree, may have taken one no leg builds.
-                            _fileSystem.MoveDirectory(worker.Path, RemovalAside.Of(worker.Path));
+                            UnfollowedFiles.Move(_fileSystem, context.Layout.RepositoryRoot, worker.Path, RemovalAside.Of(worker.Path), replace: false);
                             moved.Add(worker);
                         }
                     }
@@ -656,7 +656,7 @@ public sealed class CleanService(
 
             foreach (var worker in moved)
             {
-                removed += Remove(RemovalAside.Of(worker.Path));
+                removed += Remove(context.Layout.RepositoryRoot, RemovalAside.Of(worker.Path));
                 gone.Add(worker);
             }
         }
@@ -782,7 +782,7 @@ public sealed class CleanService(
             // Removed first, and outside the lock: nothing works in a copy an earlier removal moved aside.
             foreach (var aside in asides)
             {
-                removed += Remove(aside);
+                removed += Remove(context.Layout.RepositoryRoot, aside);
                 asidesGone++;
             }
 
@@ -796,7 +796,7 @@ public sealed class CleanService(
                     if (_fileSystem.DirectoryExists(copy.Path))
                     {
                         // Still there: another leg of this command, cleaning the same tree, may have taken one no leg builds.
-                        _fileSystem.MoveDirectory(copy.Path, RemovalAside.Of(copy.Path));
+                        UnfollowedFiles.Move(_fileSystem, context.Layout.RepositoryRoot, copy.Path, RemovalAside.Of(copy.Path), replace: false);
                         moved.Add(copy);
                     }
                 });
@@ -809,7 +809,7 @@ public sealed class CleanService(
 
             foreach (var copy in moved)
             {
-                removed += Remove(RemovalAside.Of(copy.Path));
+                removed += Remove(context.Layout.RepositoryRoot, RemovalAside.Of(copy.Path));
                 gone.Add(copy);
             }
         }
@@ -874,11 +874,11 @@ public sealed class CleanService(
     /// Removes <paramref name="directory"/>, and says what it held: counted only once it is gone, so one that could not
     /// be removed is never among what a clean says it freed - it is still there, for the next clean to count.
     /// </summary>
-    private long Remove(string directory)
+    private long Remove(string root, string directory)
     {
         var held = _fileSystem.DirectorySize(directory);
 
-        _fileSystem.DeleteDirectory(directory);
+        UnfollowedFiles.DeleteDirectory(_fileSystem, root, directory);
 
         return held;
     }

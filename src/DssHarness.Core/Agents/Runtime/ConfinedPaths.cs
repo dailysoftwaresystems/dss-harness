@@ -14,8 +14,12 @@ namespace DssHarness.Core.Agents.Runtime;
 /// </summary>
 /// <remarks>
 /// Each root is compared as its own file system names it (<see cref="PathCase.In"/>), by its real path - the place a link
-/// to it, or a link along the path asked, leads - so no spelling reaches past a root. Known limit, said in help: a link
-/// put in place between this check and the tool's own act.
+/// to it, or a link along the path asked, leads - so no spelling reaches past a root. A link put in place between this
+/// check and the tool's own act reaches nothing at the act: a file is read through the file as it was opened, where the
+/// open file stands decided again before a byte is read (<see cref="AgentFiles.ReadAsync"/>), and a file written, a
+/// directory made, and an entry moved or deleted is acted on relative to its directory held from the writable root it
+/// was decided in (<see cref="WritableRootOf"/>, <see cref="AgentFiles.Write"/>, <see cref="UnfollowedFiles"/>). A
+/// directory listed goes by its path: what a link put in place of one leads to is listed by name, never read.
 /// </remarks>
 public sealed class ConfinedPaths
 {
@@ -61,7 +65,7 @@ public sealed class ConfinedPaths
             .. ground.Roots(platform.PathComparison).Select(Whole).Distinct(comparer).Select(root =>
             {
                 var real = Whole(fileSystem.ResolveLinks(root));
-                return new Root(root, real, ComparisonIn(real), writable.Contains(root));
+                return new Root(root, real, ComparisonIn(real), writable.Contains(root), new Lazy<string?>(() => FinalOf(fileSystem, real)));
             }),
         ];
     }
@@ -78,7 +82,7 @@ public sealed class ConfinedPaths
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tree);
 
-        return new ConfinedPaths(fileSystem, platform, new AgentPolicyGround(tree, [], [tree], [], [], [], [], null, null, null, WorktreeRules: false, ProtectedPaths: false, []));
+        return new ConfinedPaths(fileSystem, platform, new AgentPolicyGround(tree, [], [tree], [], [], [], [], [], null, null, null, WorktreeRules: false, ProtectedPaths: false, []));
     }
 
     /// <summary>
@@ -94,6 +98,55 @@ public sealed class ConfinedPaths
     /// </summary>
     /// <param name="path">The path as the agent gave it.</param>
     public ConfinedPath Write(string path) => Confined(path, write: true);
+
+    /// <summary>
+    /// The place an open file stands at - <paramref name="final"/>, as the system names it (<see cref="IFileSystem.FinalPathOf"/>)
+    /// - decided as a path is: held to the roots by each root's own name in that same form
+    /// (<see cref="IFileSystem.FinalPathOfDirectory"/>) - a substituted or mapped drive, a short name, a link above a root
+    /// all named as the open file is - then the place beneath the root it stands in, decided as <see cref="Read"/> or
+    /// <see cref="Write"/> decide it.
+    /// </summary>
+    /// <param name="final">Where the open file stands, as the system names it.</param>
+    /// <param name="write">Whether the open file is written; read where false.</param>
+    public ConfinedPath Opened(string final, bool write)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(final);
+
+        foreach (var root in _roots.Where(root => !write || root.Writable))
+        {
+            if (root.Final.Value is { } named && PathContainment.IsInsideOrSame(named, final, root.Comparison))
+            {
+                return Confined(Path.Join(root.Real, Path.GetRelativePath(named, final)), write);
+            }
+        }
+
+        return ConfinedPath.Refused(
+            RootsRule,
+            $"'{final}' is where the open file stands, outside the {(write ? "writable roots" : "roots")} of this agent: {string.Join(", ", _roots.Where(root => !write || root.Writable).Select(root => root.Given))}");
+    }
+
+    /// <summary>
+    /// The writable root a place <see cref="Write"/> allowed lies in, spelt as the place is - the root as given, or where
+    /// it resolves - for the place to be acted on relative to it, held from it with no link below
+    /// (<see cref="HeldDirectory"/>).
+    /// </summary>
+    /// <param name="full">A place <see cref="Write"/> allowed, as it answered it.</param>
+    /// <exception cref="ArgumentException">No writable root holds it as it is spelt.</exception>
+    public string WritableRootOf(string full)
+    {
+        ArgumentNullException.ThrowIfNull(full);
+
+        // The deepest that holds it, where one root lies in another: the walk from it is the shortest, and the root nearest
+        // the place is the one a write was decided in.
+        var holding = _roots.Where(root => root.Writable)
+            .SelectMany(root => new[] { root.Given, root.Real }.Select(spelt => (Spelt: spelt, root.Comparison)))
+            .Where(root => PathContainment.IsInsideOrSame(root.Spelt, full, root.Comparison))
+            .OrderByDescending(root => root.Spelt.Length)
+            .Select(root => root.Spelt)
+            .FirstOrDefault();
+
+        return holding ?? throw new ArgumentException($"'{full}' lies in no writable root of this agent as it is spelt.", nameof(full));
+    }
 
     /// <summary>Whether <paramref name="path"/>, absolute, is one of the agent's roots itself, as asked or as it resolves.</summary>
     /// <param name="path">The path, absolute.</param>
@@ -231,8 +284,21 @@ public sealed class ConfinedPaths
     /// <summary>The path made absolute as the runtime makes it, its trailing separator gone.</summary>
     private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
-    /// <summary>One root: as given, where it resolves, how its names compare, and whether a write may fall in it.</summary>
-    private sealed record Root(string Given, string Real, StringComparison Comparison, bool Writable);
+    /// <summary>A root's name as the system names it opened; null where it is not there, or the system would not name it.</summary>
+    private static string? FinalOf(IFileSystem fileSystem, string real)
+    {
+        try
+        {
+            return fileSystem.DirectoryExists(real) ? Whole(fileSystem.FinalPathOfDirectory(real)) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>One root: as given, where it resolves, how its names compare, whether a write may fall in it, and its name as an open file's is given.</summary>
+    private sealed record Root(string Given, string Real, StringComparison Comparison, bool Writable, Lazy<string?> Final);
 }
 
 /// <summary>Where a path given a tool leads, absolute, or why it may not be reached - one or the other.</summary>

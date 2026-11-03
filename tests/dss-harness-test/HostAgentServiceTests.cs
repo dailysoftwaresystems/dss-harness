@@ -939,15 +939,19 @@ public sealed class HostAgentServiceTests
     /// <summary>
     /// The one list of the commands no host is ever asked to run: the host agent's own verb and its hidden helpers, and
     /// the five run verbs - a flow runs where it was typed, and its machine steps reach hosts as legs do, never the
-    /// session that drives them - and stop-run, whose dispatcher's stop is what stops its legs on every host.
+    /// session that drives them - and stop-run, whose dispatcher's stop is what stops its legs on every host - and the
+    /// two side-task verbs, for a chat is the person's, on the machine the person typed on.
     /// </summary>
     [Fact]
     public void TheOneListOfTheCommandsNoHostIsEverAskedToRun()
         => Assert.Equal(
             new[]
             {
+                DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand,
+                DssHarness.Core.Agents.SideTasks.SideTaskService.ListCommand,
                 FlowService.AnswerCommand,
                 DssHarness.Core.Processes.ContainExec.CommandName,
+                DssHarness.Core.Processes.MxcProcessContainer.CommandName,
                 HostAgentProtocol.CommandName,
                 HostExecService.CommandName,
                 DssHarness.Core.Execution.HoldAwakeService.CommandName,
@@ -1220,6 +1224,7 @@ public sealed class HostAgentServiceTests
     [InlineData(HostAgentProtocol.CommandName)]
     [InlineData(HoldAwakeService.CommandName)]
     [InlineData(ContainExec.CommandName)]
+    [InlineData(MxcProcessContainer.CommandName)]
     public async Task Run_RefusesToPassTheWorkOnToAnotherHost(string command)
     {
         using var temp = new TempDirectory();

@@ -676,8 +676,8 @@ public sealed class ClaudeApiProviderTests : IDisposable
     [Fact]
     public void EveryRequest_IsBilledByTheCacheWriteOfItsLifetime()
     {
-        Assert.Equal(new AgentUsage(1, 1, 1, 1, 0, 0), Provider().Uses);
-        Assert.Equal(new AgentUsage(1, 1, 1, 0, 1, 0), Provider(ClaudeApiSettings.Of(new AgentClientConfig { CacheTtl = "1h" })).Uses);
+        Assert.Equal(new AgentUsage(1, 1, 1, 1, 0, 0), ClaudeApiProvider.UsesOf(ClaudeApiSettings.Of(null)));
+        Assert.Equal(new AgentUsage(1, 1, 1, 0, 1, 0), ClaudeApiProvider.UsesOf(ClaudeApiSettings.Of(new AgentClientConfig { CacheTtl = "1h" })));
     }
 
     /// <summary>The cache a request wrote, where the API says it whole alone, is counted by the lifetime the request asked for.</summary>

@@ -403,20 +403,68 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
-    /// A request of a step with a model after its own asks that a decline leave it a credit, and a declined turn's credit is
-    /// the run's, beside what it was of; a step with no model after its own asks none.
+    /// A model the provider will not serve, met after it began an answer with the model asked - one cut part way and
+    /// asked again - fails the step: the provider served the model, so the run began.
     /// </summary>
     [Fact]
-    public async Task ADeclinedTurnsCredit_IsTheRuns_WhereTheStepGoesOn()
+    public async Task AModelUnservedAfterAnAnswerBegan_FailsTheStep()
+    {
+        _chat.Fail(new ChatFailure(ChatFailureKind.Transient, "the stream broke"), written: "half")
+            .Fail(new ChatFailure(ChatFailureKind.Unserved, "the model is not given this organization"));
+
+        var result = await Ran(Run(), Terms(maxRetries: 2));
+
+        Assert.Equal((AgentRunStatus.Failed, null, "the model is not given this organization", 2), (result.Status, result.NotStartedBecause, result.Error, _chat.Requests.Count));
+    }
+
+    /// <summary>
+    /// The run tells its sink the conversation began once, as the provider begins its first answer with the model asked -
+    /// after the session and the first message, before anything the answer wrote - and never where the provider does not
+    /// serve the model before any answer, the run never started though its session began.
+    /// </summary>
+    [Fact]
+    public async Task TheConversation_IsBegunAsItsFirstAnswerBegins_NeverByAModelUnservedBeforeAnyAnswer()
+    {
+        Write("a.txt", "alpha");
+        _chat.Answer(FakeChat.Calling(View("c1", "a.txt"))).Answer(FakeChat.Said("done"));
+        var begun = new Begun();
+
+        var answered = await Ran(Run(), sink: begun);
+
+        Assert.Equal(AgentRunStatus.Completed, answered.Status);
+        var at = Assert.Single(begun.At);
+        Assert.Equal(["SessionStarted", "MessageSent", "TurnStarted"], begun.Events.Take(at).Select(one => one.GetType().Name));
+        Assert.Equal(
+            ["ToolCallStarted", "UsageReported", "AssistantMessage", "TurnFinished", "ToolCallFinished", "TurnStarted", "TextDelta", "UsageReported", "AssistantMessage", "TurnFinished"],
+            begun.Events.Skip(at).Select(one => one.GetType().Name));
+
+        var unserved = new FakeChat();
+        unserved.Fail(new ChatFailure(ChatFailureKind.Unserved, "the model is not given this organization"));
+        var refused = new Begun();
+
+        var never = await Ran(Run(), chat: unserved, sink: refused);
+
+        Assert.Equal(AgentRunStatus.NotStarted, never.Status);
+        Assert.Single(refused.Events.OfType<SessionStarted>());
+        Assert.Empty(refused.At);
+    }
+
+    /// <summary>
+    /// A request of a step with a model after its own asks that a decline leave it a credit, and the decline's credit
+    /// is sent back with the same request on that model; a step with no model after its own asks none, and neither does
+    /// one whose every later entry cannot be used here.
+    /// </summary>
+    [Fact]
+    public async Task ADeclinedTurnsCredit_IsSentBackOnTheStepSNextModel()
     {
         var credit = new AgentFallbackCredit("tok-1", PrefillClaim: true);
-        _chat.Answer(FakeChat.Said(string.Empty, stop: ChatStop.Declined, category: "cyber") with { Credit = credit });
+        _chat.Answer(FakeChat.Said(string.Empty, stop: ChatStop.Declined, category: "cyber") with { Credit = credit }).Answer(FakeChat.Said("done", model: "claude-opus-4-8"));
 
-        var result = await Ran(Run() with { Fallback = [new AgentFallbackModel("claude-opus-4-8", "anthropic", null, null, UsableHere: true)] });
+        var result = await Ran(Run() with { Fallback = [Entry("claude-opus-4-8", "anthropic")] });
 
-        Assert.Equal((AgentRunStatus.Refused, "cyber", credit), (result.Status, result.DeclinedFor, result.Credit));
-        Assert.Equal("the model declined the request (cyber): it wrote nothing before it declined", result.Error);
-        Assert.True(Assert.Single(_chat.Requests).Credit);
+        Assert.Equal((AgentRunStatus.Completed, "done"), (result.Status, result.FinalText));
+        Assert.True(_chat.Requests[0].Credit);
+        Assert.Equal(("tok-1", "claude-opus-4-8"), (_chat.Requests[1].CreditToken!.Token, _chat.Requests[1].Model));
 
         var alone = new FakeChat().Answer(FakeChat.Said("no", stop: ChatStop.Declined));
         var unused = new FakeChat().Answer(FakeChat.Said("no", stop: ChatStop.Declined));
@@ -424,24 +472,8 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Null((await Ran(Run(), chat: alone)).Credit);
         Assert.False(Assert.Single(alone.Requests).Credit);
 
-        await Ran(Run() with { Fallback = [new AgentFallbackModel("claude-opus-4-8", "anthropic", null, null, UsableHere: false)] }, chat: unused);
+        await Ran(Run() with { Fallback = [Entry("claude-opus-4-8", "anthropic", usable: false)] }, chat: unused);
         Assert.False(Assert.Single(unused.Requests).Credit);
-    }
-
-    /// <summary>
-    /// A step held to a budget is refused before it starts where its model lacks the price of a kind its provider's every
-    /// request is billed by - the cache write of a provider whose requests mark what they send - naming the key to fill.
-    /// </summary>
-    [Fact]
-    public async Task ABudgetOnAModelMissingThePriceOfWhatItsProviderBillsBy_NeverStarts()
-    {
-        var writes = new FakeChat { Uses = AgentPrices.EveryRequestUses with { CacheWriteTokens = 1 } };
-
-        var result = await Ran(Run(limits: Limits(budget: 5m)), chat: writes);
-
-        Assert.Equal(AgentRunStatus.NotStarted, result.Status);
-        Assert.Equal($"client 'claude-api' was not started: no price for '{FakeChat.Model}' (providers 'anthropic', model '{FakeChat.Model}': priceCacheWrite), and a budget is charged with the cost counted from them", result.Error);
-        Assert.Empty(writes.Requests);
     }
 
     /// <summary>A request whose answer goes silent past the step's bound on silence is asked again, and still silent past the tries ends the run stalled.</summary>
@@ -502,17 +534,6 @@ public sealed class ToolLoopTests : IDisposable
         var answer = JsonNode.Parse(Assert.Single(stored))!.AsArray()[^1]!;
         Assert.Equal((false, AgentToolRuntime.NotRun(ToolLoop.BudgetSpent)), (answer["ok"]!.GetValue<bool>(), answer["content"]!.GetValue<string>()));
         Assert.Equal(0.00525m, result.Usage!.Cost!.Counted);
-    }
-
-    /// <summary>A step held to a budget on a model missing a price its cost needs is never started, naming the key to fill (user, 2026-10-26).</summary>
-    [Fact]
-    public async Task ABudgetOnAModelMissingAPrice_NeverStarts()
-    {
-        var result = await Ran(Run(limits: Limits(budget: 1)), Terms(priceHit: null));
-
-        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
-        Assert.Equal("client 'claude-api' was not started: no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceInputHit), and a budget is charged with the cost counted from them", result.Error);
-        Assert.Empty(_chat.Requests);
     }
 
     /// <summary>Without a budget, a model missing a price runs: its cost is unknown and says the key to fill, never zero.</summary>
@@ -589,6 +610,98 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal((false, AgentToolRuntime.Interrupted(ToolLoop.Pausing)), Answer(messages, "c1"));
         Assert.Equal((false, AgentToolRuntime.NotRun(ToolLoop.Pausing)), Answer(messages, "c2"));
         Assert.Equal(["user", "assistant"], Roles(stored[1]));
+    }
+
+    /// <summary>
+    /// The person's interrupt leaves the request under way where it stands and ends the run Cancelled with what it used:
+    /// what the provider said the request used counted at the model's prices, the partial answer thrown away so the
+    /// conversation holds nothing of it, and no request sent after it. A request whose provider had said nothing of what
+    /// it used leaves the cost unknown, saying why - never nothing.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonsInterrupt_LeavesTheRequestUnderWay_CountsWhatItsProviderSaid_AndEndsCancelled()
+    {
+        var run = Run() with { Interrupt = new AgentTurnInterrupt() };
+        _chat.Reply((_, cancellationToken) => SaidThenSilent(FakeChat.Used(input: 1000, output: 0), () => run.Interrupt!.Interrupt(), cancellationToken));
+
+        // Bounded, so a cut the loop does not honour fails here rather than waiting on the silent request for good.
+        var result = await Ran(run).WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal((AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut, 1), (result.Status, result.Error, result.Turns));
+        Assert.Equal((FakeChat.Used(input: 1000, output: 0), new AgentCost(Counted: 0.005m)), (result.Usage!.Total, result.Usage.Cost));
+        Assert.Equal(AgentTurnInterrupt.Cut, Assert.Single(_events.All.OfType<TurnRestarted>()).Why);
+        Assert.Equal([(1, "the run ended Cancelled")], _events.All.OfType<TurnFinished>().Select(finished => (finished.Turn, finished.StopReason)));
+        Assert.Single(_chat.Requests);
+        Assert.Empty(File.ReadAllLines(Path.Combine(_sessions, result.Session!, StoredConversation.ConversationFileName)));
+
+        var unsaid = Run() with { Interrupt = new AgentTurnInterrupt() };
+        var silent = new FakeChat();
+        silent.Hang("half", whenHanging: () => unsaid.Interrupt!.Interrupt());
+
+        var unknown = await Ran(unsaid, chat: silent).WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal((AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut), (unknown.Status, unknown.Error));
+        Assert.Equal(
+            (AgentUsage.None, new AgentCost(MissingPrice: $"a request to '{FakeChat.Model}' on WORK_KEY was left before its provider said what it used")),
+            (unknown.Usage!.Total, unknown.Usage.Cost));
+        Assert.Single(silent.Requests);
+
+        // Begins, says what it used and a piece of its answer, then says nothing more - doing what then says once it has.
+        static async IAsyncEnumerable<ChatPart> SaidThenSilent(AgentUsage usage, Action then, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new ChatPart.Began(FakeChat.Model);
+            yield return new ChatPart.Used(usage);
+            yield return new ChatPart.Text("half");
+            then();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The person's interrupt while a turn's calls run cuts them as a handoff does - a command in flight answered as
+    /// interrupted, a call queued behind it as not run, each saying the turn was cut - the turn stored whole with those
+    /// answers, and the run ends Cancelled with no request sent after it.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonsInterrupt_WhileCallsRun_CutsThem_StoresTheTurnWhole_AndEndsCancelled()
+    {
+        Write("a.txt", "alpha");
+        var run = Run() with { Interrupt = new AgentTurnInterrupt() };
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.RunCommand, ("program", "tool"), ("args", new JsonArray("go"))), View("c2", "a.txt")));
+
+        var result = await Ran(run, loop: Loop(processes: new Blocking(() => run.Interrupt!.Interrupt()))).WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal((AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut, 2), (result.Status, result.Error, result.ToolCalls));
+        Assert.Single(_chat.Requests);
+
+        var stored = File.ReadAllLines(Path.Combine(_sessions, result.Session!, StoredConversation.ConversationFileName));
+        var messages = JsonNode.Parse(Assert.Single(stored))!.AsArray().Select(message => message!.ToJsonString()).ToList();
+        Assert.Equal((false, AgentToolRuntime.Interrupted(AgentTurnInterrupt.Cut)), Answer(messages, "c1"));
+        Assert.Equal((false, AgentToolRuntime.NotRun(AgentTurnInterrupt.Cut)), Answer(messages, "c2"));
+    }
+
+    /// <summary>
+    /// The person's interrupt during the wait before a retry ends the run Cancelled with nothing more sent - the wait cut
+    /// where it stands, or a wait that ended as the interrupt came seen before the next request: what the failed request
+    /// said it used is counted, and the wait - no request under way - leaves no cost unknown.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ThePersonsInterrupt_InARetrysWait_SendsNothingMore_AndEndsCancelled(bool waitCut)
+    {
+        var run = Run() with { Interrupt = new AgentTurnInterrupt() };
+        _chat.Reply(Using(1000, new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded")))).Answer(FakeChat.Said("never asked"));
+
+        var result = await Ran(run, loop: Loop(wait: (_, cancellationToken) =>
+        {
+            run.Interrupt!.Interrupt();
+            return waitCut ? Task.Delay(Timeout.Infinite, cancellationToken) : Task.CompletedTask;
+        })).WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        Assert.Equal((AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut), (result.Status, result.Error));
+        Assert.Equal((FakeChat.Used(input: 1000, output: 0), new AgentCost(Counted: 0.005m)), (result.Usage!.Total, result.Usage.Cost));
+        Assert.Single(_chat.Requests);
     }
 
     /// <summary>
@@ -769,6 +882,21 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
+    /// A run the engine made the session id of begins its conversation as that id - the one a skill's
+    /// <c>${CLAUDE_SESSION_ID}</c> in its prompt was given - and says it where its session begins.
+    /// </summary>
+    [Fact]
+    public async Task ARunTheEngineMadeTheSessionIdOf_BeginsItsConversationAsThatId()
+    {
+        _chat.Answer(FakeChat.Said("done"));
+        const string id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+        var result = await Ran(Run() with { SessionId = id });
+
+        Assert.Equal((id, id), (result.Session, Assert.Single(_events.All.OfType<SessionStarted>()).SessionId));
+    }
+
+    /// <summary>
     /// What a run says of itself: the session it began with its tools and its credential's name, each turn numbered and
     /// finished with what it used, the cumulative usage, and the cost counted at the model's prices.
     /// </summary>
@@ -777,19 +905,20 @@ public sealed class ToolLoopTests : IDisposable
     {
         Write("a.txt", "alpha");
         _chat.Answer(FakeChat.Calling(View("c1", "a.txt"))).Answer(FakeChat.Said("done"));
-        var run = Run() with { Skills = [new AgentSkill("review", "the run's skills", "digest", "review")] };
+        var skill = new AgentSkill("review", ".harness-config/skills", "SKILL.md", "digest", "folder digest", "review");
+        var run = Run() with { Skills = [skill] };
 
         var result = await Ran(run);
 
         var began = Assert.Single(_events.All.OfType<SessionStarted>());
-        Assert.Equal(["review"], began.Skills);
+        Assert.Equal([skill], began.Skills);
         Assert.Equal(AgentCredentialSource.EnvironmentFile, began.Credential!.Kind);
         Assert.Equal([FakeChat.Used(), FakeChat.Used()], _events.All.OfType<UsageReported>().Select(used => used.Turn));
         Assert.Equal(("claude-api", FakeChat.Model, "WORK_KEY", false), (began.Client, began.Model, began.Credential!.Variable, began.HandedConversation));
         Assert.Equal(("anthropic", null, result.Session, FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes("system"))), (began.Provider, began.Effort, began.SessionId, began.SystemPromptHash));
         Assert.Equal(FakeChat.Model, result.Model);
         Assert.True(result.Duration > TimeSpan.Zero);
-        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(200, 20, 0, 0, 0, 0))], result.Usage!.PerModel);
+        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(200, 20, 0, 0, 0, 0), "WORK_KEY", new AgentCost(Counted: 0.0015m))], result.Usage!.PerModel);
         Assert.Contains(AgentTools.ViewFile, began.Tools);
         Assert.Equal([1, 2], _events.All.OfType<TurnStarted>().Select(turn => turn.Turn));
         Assert.Equal([1, 2], _events.All.OfType<TurnFinished>().Select(turn => turn.Turn));
@@ -890,6 +1019,31 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal(["WORK_KEY", "SPARE_KEY"], none.KeysRefused);
     }
 
+    /// <summary>
+    /// A run that moved keys while it worked says what it used and cost on each, apart: the part of each model served on
+    /// each key, so the runner books each key's spend to that key and never the whole to the key the run began on.
+    /// </summary>
+    [Fact]
+    public async Task ARunThatMovedKeys_SaysWhatEachKeyUsedAndCost_Apart()
+    {
+        Write("a.txt", "alpha");
+        _chat.Answer(FakeChat.Calling(View("c1", "a.txt")))
+            .Fail(new ChatFailure(ChatFailureKind.KeyRefused, "invalid x-api-key"))
+            .Answer(FakeChat.Said("done"));
+        var run = Run() with { Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-1"), new AgentKey("SPARE_KEY", "sk-2")]) };
+
+        var result = await Ran(run);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(
+            [
+                new AgentModelUsage(FakeChat.Model, new AgentUsage(100, 10, 0, 0, 0, 0), "WORK_KEY", new AgentCost(Counted: 0.00075m)),
+                new AgentModelUsage(FakeChat.Model, new AgentUsage(100, 10, 0, 0, 0, 0), "SPARE_KEY", new AgentCost(Counted: 0.00075m)),
+            ],
+            result.Usage!.PerModel);
+        Assert.Equal((new AgentUsage(200, 20, 0, 0, 0, 0), new AgentCost(Counted: 0.0015m)), (result.Usage.Total, result.Usage.Cost));
+    }
+
     /// <summary>A run the loop cannot sign, keep or serve is never started, saying why, and the provider is asked nothing.</summary>
     [Theory]
     [InlineData("noCredential", "KeyMissing", "the run was given no credential, and every request is signed with a key")]
@@ -902,7 +1056,6 @@ public sealed class ToolLoopTests : IDisposable
     [InlineData("badSession", "ConfigurationWrong", "the conversation it was handed is named '../other', which is no conversation's id: letters, digits, '-' and '_', at most 64")]
     [InlineData("otherClient", "ConfigurationWrong", "the conversation it was handed is client 'claude-code''s, and a conversation is gone on with by the client that began it")]
     [InlineData("search", "ConfigurationWrong", "the run's step has sources to search, and its host was given no web search to search them with")]
-    [InlineData("currency", "ConfigurationWrong", "providers 'anthropic' prices its models in EUR, and a budget is counted in USD")]
     public async Task ARunTheLoopCannotSignKeepOrServe_NeverStarts(string kind, string because, string why)
     {
         var run = kind switch
@@ -917,15 +1070,247 @@ public sealed class ToolLoopTests : IDisposable
             "longSession" => Run(conversation: new AgentSessionRef("claude-api", "anthropic", new string('a', 65))),
             "noMaxOutput" => Run(),
             "search" => Run() with { WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()) },
-            _ => Run(limits: Limits(budget: 1)),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "no such run"),
         };
 
-        var result = await Ran(run, Terms(currency: kind == "currency" ? "EUR" : "USD", maxOutput: kind == "noMaxOutput" ? 0 : 64000));
+        var result = await Ran(run, Terms(maxOutput: kind == "noMaxOutput" ? 0 : 64000));
 
         Assert.Equal((AgentRunStatus.NotStarted, Enum.Parse<AgentNotStartedBecause>(because)), (result.Status, result.NotStartedBecause));
         Assert.Equal($"client 'claude-api' was not started: {why}", result.Error);
         Assert.Empty(_chat.Requests);
         Assert.False(Directory.Exists(_sessions));
+    }
+
+    /// <summary>
+    /// What the provider's own search used - a side-task's native part: its tokens, the results billed as input among
+    /// them, and its searches - joins the run's usage, as the serving model's, and is priced as every request of the
+    /// provider's is: its tokens at the model's prices, its searches at the provider's.
+    /// </summary>
+    [Fact]
+    public async Task WhatTheProvidersOwnSearchUsed_JoinsTheRunsUsage_AndIsPriced()
+    {
+        var run = Run(capabilities: [AgentCapability.Read, AgentCapability.Web]) with
+        {
+            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
+            NativeSearch = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1)),
+        };
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(run, Terms(perThousandSearches: 10), loop: Loop(search: true));
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(new AgentUsage(1200, 70, 0, 0, 0, 1), result.Usage!.Total);
+        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(1200, 70, 0, 0, 0, 1), "WORK_KEY", new AgentCost(Counted: 0.01775m))], result.Usage.PerModel);
+
+        // Two requests of the chat at 100 in and 10 out each, and the search's 1,000 in, 50 out and one search: at 5 and
+        // 25 a million tokens and 10 a thousand searches.
+        Assert.Equal(new AgentCost(Counted: 0.01775m), result.Usage.Cost);
+    }
+
+    /// <summary>
+    /// The provider's own search is asked as the run stands when the agent asks it: a run that moved to its next key -
+    /// the first refused - asks the search with the key serving it then, and what the search used is counted at once to
+    /// that key's part, never the key the run began on.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_IsAskedWithTheEntryServingTheRunNow_AndCountedToIt()
+    {
+        var native = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1));
+        var run = Searching(native) with { Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-1"), new AgentKey("SPARE_KEY", "sk-2")]) };
+        _chat.Fail(new ChatFailure(ChatFailureKind.KeyRefused, "invalid x-api-key"))
+            .Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by"))))
+            .Answer(FakeChat.Said("done"));
+
+        var result = await Ran(run, Terms(perThousandSearches: 10), loop: Loop(search: true));
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([(FakeChat.Model, "SPARE_KEY")], native.Asked);
+        Assert.Equal([new AgentModelUsage(FakeChat.Model, new AgentUsage(1200, 70, 0, 0, 0, 1), "SPARE_KEY", new AgentCost(Counted: 0.01775m))], result.Usage!.PerModel);
+
+        // The search's usage is said when it is had, before the request that follows it.
+        Assert.Equal(
+            [FakeChat.Used(), new AgentUsage(1000, 50, 0, 0, 0, 1), FakeChat.Used()],
+            _events.All.OfType<UsageReported>().Select(used => used.Turn));
+    }
+
+    /// <summary>
+    /// The provider's own search goes through the lane of its provider and the key serving the run, as every request of
+    /// the conversation does: a hold past the client's longest wait fails its part at once, naming the limit, and the
+    /// search is never sent; a shorter one is waited, said as the search waits.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_GoesThroughTheLane_FailingAtOnceWhereItIsHeldPastTheLongestWait()
+    {
+        var clock = new ManualClock();
+        var waits = new List<TimeSpan>();
+        var gates = new ClientGates(clock, (wait, _) =>
+        {
+            waits.Add(wait);
+            clock.Advance(wait);
+            return Task.CompletedTask;
+        });
+        var lane = gates.LaneOf("anthropic", "claude-api", null, new AgentKey("WORK_KEY", "sk-1"));
+        var held = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1));
+        var heldRun = Searching(held) with { Gates = gates };
+
+        // The model is held for an hour as the agent calls the search, past the longest wait of 300 s: the search's part
+        // fails at once, and the run's next request meets the same limit.
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by"))));
+
+        var limited = await Ran(heldRun, Terms(perThousandSearches: 10), loop: Loop(search: true, clock: clock), sink: new Reacting(_events, @event => @event is ToolCallStarted, () => lane.RateLimited(TimeSpan.FromHours(1), FakeChat.Model)));
+        var until = clock.GetUtcNow() + TimeSpan.FromHours(1);
+
+        Assert.Empty(held.Asked);
+        Assert.Empty(waits);
+        Assert.Equal(AgentRunStatus.RateLimited, limited.Status);
+        Assert.EndsWith(
+            DssHarness.Core.Web.WebBlocks.Search("group by", "native", $"native: the lane of WORK_KEY holds '{FakeChat.Model}' by a 429's cool-down until {until:u}"),
+            Assert.Single(_events.All.OfType<ToolCallFinished>()).Result,
+            StringComparison.Ordinal);
+
+        // Held for less than the longest wait, the search waits the hold out, said as the search's wait, and is asked
+        // after it.
+        var shortLane = gates.LaneOf("anthropic", "claude-api", null, new AgentKey("SPARE_KEY", "sk-2"));
+        var chat = new FakeChat();
+        chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+        var waited = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1));
+        var seen = new RecordedEvents();
+        var spare = Searching(waited) with { Gates = gates, Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("SPARE_KEY", "sk-2")]) };
+
+        var shortly = await Ran(spare, Terms(perThousandSearches: 10), loop: Loop(search: true, clock: clock), chat: chat, sink: new Reacting(seen, @event => @event is ToolCallStarted, () => shortLane.RateLimited(TimeSpan.FromSeconds(5), FakeChat.Model)));
+
+        Assert.Equal(AgentRunStatus.Completed, shortly.Status);
+        Assert.Equal([(FakeChat.Model, "SPARE_KEY")], waited.Asked);
+        Assert.Equal([TimeSpan.FromSeconds(5)], waits);
+        Assert.Equal([$"the search waits for {ClientGate.CoolDown}"], seen.All.OfType<WaitingToRetry>().Select(wait => wait.Cause));
+    }
+
+    /// <summary>A side-task's run that searches the configured source alpha and carries <paramref name="native"/>, the provider's own search.</summary>
+    private AgentRun Searching(IAgentNativeSearch native)
+        => Run(capabilities: [AgentCapability.Read, AgentCapability.Web]) with
+        {
+            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
+            NativeSearch = native,
+        };
+
+    /// <summary>
+    /// The provider's own search that meets a 429 holds the lane it was asked through, as the conversation's own request
+    /// does: the model is held there for the wait the 429 named, so the run's next request - past the longest wait - meets
+    /// the limit and is never sent.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_ThatMeetsA429_HoldsTheLaneItWasAskedThrough()
+    {
+        var clock = new ManualClock();
+        var gates = new ClientGates(clock, (wait, _) => Task.CompletedTask);
+        var lane = gates.LaneOf("anthropic", "claude-api", null, new AgentKey("WORK_KEY", "sk-1"));
+        var native = new UsingNativeSearch(AgentUsage.None, failure: new ChatFailure(ChatFailureKind.RateLimited, "rate limited", RetryAfter: TimeSpan.FromHours(1)));
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Searching(native) with { Gates = gates }, Terms(perThousandSearches: 10), loop: Loop(search: true, clock: clock));
+
+        Assert.Equal(AgentRunStatus.RateLimited, result.Status);
+        Assert.Single(_chat.Requests);
+        Assert.Equal((FakeChat.Model, TimeSpan.FromHours(1)), (lane.CoolDownOf(FakeChat.Model)?.Model, lane.CoolDownOf(FakeChat.Model)?.Left));
+    }
+
+    /// <summary>
+    /// The provider's own search whose cost cannot be counted under a budget ends the run before its next request, saying
+    /// so - the agent given the search's answer, and nothing more asked of the model.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_WhoseCostCannotBeCounted_EndsABudgetedRun()
+    {
+        var native = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1));
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Searching(native) with { Limits = Limits(budget: 5m) }, Terms(), loop: Loop(search: true));
+
+        Assert.Equal(
+            (AgentRunStatus.Failed, $"the step's cost cannot be counted against its budget: no price for '{FakeChat.Model}' (providers 'anthropic', model '{FakeChat.Model}': pricePerThousandSearches)"),
+            (result.Status, result.Error));
+        Assert.Single(_chat.Requests);
+    }
+
+    /// <summary>
+    /// The provider's own search, answering one result and saying what its request used and the failure it met - or
+    /// throwing <paramref name="throws"/> - each ask kept with the model and the key it was asked with.
+    /// </summary>
+    private sealed class UsingNativeSearch(AgentUsage used, Exception? throws = null, ChatFailure? failure = null) : IAgentNativeSearch
+    {
+        private readonly List<(string Model, string Key)> _asked = [];
+
+        public IReadOnlyList<(string Model, string Key)> Asked
+        {
+            get
+            {
+                lock (_asked)
+                {
+                    return [.. _asked];
+                }
+            }
+        }
+
+        public string Source => "native";
+
+        public long InputTokens(string query, string model) => 10;
+
+        public Task<AgentNativeSearched> SearchAsync(string query, string model, AgentKey key, CancellationToken cancellationToken)
+        {
+            lock (_asked)
+            {
+                _asked.Add((model, key.Name));
+            }
+
+            return throws is not null
+                ? Task.FromException<AgentNativeSearched>(throws)
+                : Task.FromResult(new AgentNativeSearched(
+                    new DssHarness.Core.Web.Search.WebSearchPart(
+                        Source,
+                        Source,
+                        1,
+                        query,
+                        DssHarness.Core.Web.Search.WebSearchAnswer.Read([new DssHarness.Core.Web.Search.WebSearchResult("One", "https://one.example.test/", "the one")]),
+                        Withheld: 0,
+                        Cached: false,
+                        KeyMissing: null),
+                    used,
+                    failure));
+        }
+    }
+
+    /// <summary>
+    /// The provider's own search that does not answer in time is a failed part of the search, saying so, beside the
+    /// configured sources' answers, and counted as nothing it used.
+    /// </summary>
+    [Fact]
+    public async Task TheProvidersOwnSearch_ThatDoesNotAnswerInTime_IsAFailedPart()
+    {
+        var native = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1), new TaskCanceledException("the request's own clock ran out"));
+        _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
+
+        var result = await Ran(Searching(native), Terms(perThousandSearches: 10), loop: Loop(search: true));
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.EndsWith(
+            DssHarness.Core.Web.WebBlocks.Search("group by", "native", "native: the provider did not answer the search in time"),
+            Answer(_chat.Requests[1].Messages, "c1").Text,
+            StringComparison.Ordinal);
+        Assert.Equal(new AgentUsage(200, 20, 0, 0, 0, 0), result.Usage!.Total);
+    }
+
+    /// <summary>The harness's own search for a loop's host, over <paramref name="fetch"/>, its pace and indexes beside the step.</summary>
+    private DssHarness.Core.Web.Search.HarnessWebSearch Search(HarnessFetch fetch)
+    {
+        var files = new PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create());
+        var indexes = new DssHarness.Core.Web.Index.WebIndexes(files, new DssHarness.Core.Web.Index.SitemapFill(files, fetch, TimeProvider.System, (_, _) => Task.CompletedTask), TimeProvider.System);
+        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask);
+        var search = new DssHarness.Core.Web.Search.HarnessWebSearch(DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild, fetch, indexes, pace, files, TimeProvider.System);
+
+        _opened.Add(search);
+        _opened.Add(indexes);
+
+        return search;
     }
 
     /// <summary>No request is sent once the step's budget is spent: an answer that spent it and needs a repair ends the run there.</summary>
@@ -1705,9 +2090,10 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
-    /// A provider whose wire holds no answer to the schema is told it in words in the step's first message; an answer that
-    /// read as no JSON is asked again in JSON alone, and the request after any other turn - a turn of calls, JSON that did
-    /// not read - is asked as every other is. A provider whose wire holds it is told nothing in words.
+    /// A provider whose wire holds no answer to the schema is told it in words in a message of its own after the step's
+    /// first - the first message exactly the parts the engine writes, which its reader takes apart again to the task - an
+    /// answer that read as no JSON is asked again in JSON alone, and the request after any other turn - a turn of calls,
+    /// JSON that did not read - is asked as every other is. A provider whose wire holds it is told nothing in words.
     /// </summary>
     [Fact]
     public async Task AProviderThatHoldsNoSchema_IsToldItInWords_AndAnAnswerOfNoJson_IsAskedAgainInJsonAlone()
@@ -1715,18 +2101,25 @@ public sealed class ToolLoopTests : IDisposable
         Write("a.txt", "alpha");
         var chat = new FakeChat { SendsSchema = false };
         chat.Answer(FakeChat.Said("not json")).Answer(FakeChat.Calling(View("c1", "a.txt"))).Answer(FakeChat.Said("""{"a":1}""")).Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
+        var run = Run(output: Schema) with { RunContext = "run facts" };
+        var first = AgentPromptParts.FirstMessage(run, newConversation: true);
+        var inWords = AgentEnvelope.InWords(AgentEnvelope.Schema(Schema));
 
-        var result = await Ran(Run(output: Schema), chat: chat);
+        var result = await Ran(run, chat: chat);
 
         Assert.Equal((AgentRunStatus.Completed, """{"a":"x"}"""), (result.Status, result.StructuredOutput));
         Assert.Equal([false, true, false, false], chat.Requests.Select(request => request.JsonAlone));
-        Assert.Equal($"{Asked}\n\n{AgentEnvelope.InWords(AgentEnvelope.Schema(Schema))}", FakeChat.ContentOf(chat.Requests[0].Messages[0]));
+        Assert.Equal([FakeChat.User(first), FakeChat.User(inWords)], chat.Requests[0].Messages);
+        Assert.Equal(
+            [(AgentMessageKind.FirstPrompt, first), (AgentMessageKind.EnvelopeInWords, inWords)],
+            _events.All.OfType<MessageSent>().Take(2).Select(sent => (sent.Which, sent.Text)));
+        Assert.Equal(Asked, AgentPromptParts.TaskOf(_events.All.OfType<MessageSent>().First().Text));
         Assert.Equal([StructuredOutputGate.NoObject], _events.All.OfType<OutputRepair>().First().Problems);
 
         _chat.Answer(FakeChat.Said(Envelopes.Text("""{ "a": "x" }""")));
         await Ran(Run(output: Schema));
 
-        Assert.Equal(Asked, FakeChat.ContentOf(_chat.Requests[0].Messages[0]));
+        Assert.Equal([FakeChat.User(Asked)], _chat.Requests[0].Messages);
     }
 
     /// <summary>
@@ -1986,13 +2379,32 @@ public sealed class ToolLoopTests : IDisposable
     private static AgentLimits Limits(int? maxTurns = null, decimal? budget = null, TimeSpan? maxDuration = null, int? stallSeconds = null)
         => new(maxTurns, budget, maxDuration, stallSeconds);
 
-    private static ToolLoopTerms Terms(double? priceHit = 1, int maxRetries = 3, TimeSpan? maxRetryWait = null, string currency = "USD", long maxOutput = 64000)
+    private static ToolLoopTerms Terms(double? priceHit = 1, int maxRetries = 3, TimeSpan? maxRetryWait = null, string currency = "USD", long maxOutput = 64000, double? perThousandSearches = null)
         => new(
             "claude-api",
-            new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Currency = currency },
+            new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Currency = currency, PricePerThousandSearches = perThousandSearches },
             new AgentModelConfig { Code = FakeChat.Model, MaxOutputTokens = maxOutput, ContextTokens = 200000, PriceInputMiss = 5, PriceInputHit = priceHit, PriceOutput = 25 },
             maxRetries,
             maxRetryWait);
+
+    /// <summary>One entry of the run's order, of the loop's provider and client, for a fallback a test names.</summary>
+    private static AgentRunEntry Entry(string model, string provider = "anthropic", string client = "claude-api", string? key = "WORK_KEY", string? effort = null, bool usable = true)
+        => new(
+            model,
+            provider,
+            client,
+            key,
+            effort,
+            usable,
+            usable ? null : $"no file under '.harness-config/workflows/.env/' declares '{key}'")
+        {
+            Entries = usable
+                ? new AgentEntries(
+                    new AgentProviderConfig { Name = provider, Type = "anthropic", Currency = "USD" },
+                    new AgentModelConfig { Code = model, MaxOutputTokens = 64000, ContextTokens = 200000, PriceInputMiss = 5, PriceInputHit = 1, PriceOutput = 25 },
+                    null)
+                : null,
+        };
 
     /// <summary>The answer a request gave the call <paramref name="id"/>.</summary>
     private static (bool Ok, string Text) Answer(IReadOnlyList<string> messages, string id)
@@ -2040,11 +2452,11 @@ public sealed class ToolLoopTests : IDisposable
             Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-1")]),
         };
 
-    private ToolLoop Loop(IFileSystem? fileSystem = null, IProcessRunner? processes = null, Func<TimeSpan, CancellationToken, Task>? wait = null, Func<double>? jitter = null, TimeProvider? clock = null)
+    private ToolLoop Loop(IFileSystem? fileSystem = null, IProcessRunner? processes = null, Func<TimeSpan, CancellationToken, Task>? wait = null, Func<double>? jitter = null, TimeProvider? clock = null, bool search = false)
     {
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var files = fileSystem ?? _harness.FileSystem;
-        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System);
+        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System, search: search ? Search(fetch) : null);
         _opened.Add(fetch);
 
         return new ToolLoop(
@@ -2075,6 +2487,26 @@ public sealed class ToolLoopTests : IDisposable
 
     /// <summary>A part no provider streams.</summary>
     private sealed record Strange : ChatPart;
+
+    /// <summary>A sink that records every event, and where among them it was told the conversation began.</summary>
+    private sealed class Begun : IAgentEventSink
+    {
+        public List<AgentEvent> Events { get; } = [];
+
+        public List<int> At { get; } = [];
+
+        public ValueTask EmitAsync(AgentEvent @event)
+        {
+            Events.Add(@event);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ConversationBegunAsync()
+        {
+            At.Add(Events.Count);
+            return ValueTask.CompletedTask;
+        }
+    }
 
     /// <summary>A sink that records every event and, at the first that <paramref name="when"/> picks, does <paramref name="then"/>.</summary>
     private sealed class Reacting(RecordedEvents inner, Func<AgentEvent, bool> when, Action then) : IAgentEventSink

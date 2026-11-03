@@ -158,9 +158,10 @@ public sealed class ZaiApiClientTests : IDisposable
     }
 
     /// <summary>
-    /// Z.AI holds no answer to a schema: the step's envelope is said in words in its first message; an answer that read as
-    /// no JSON is asked again in JSON alone - no tool offered, a JSON object asked for - and the request after one that read
-    /// as JSON offers the tools again.
+    /// Z.AI holds no answer to a schema: the step's envelope is said in words in a message of its own after the step's
+    /// first, which is the parts the engine writes and nothing else; an answer that read as no JSON is asked again in JSON
+    /// alone - no tool offered, a JSON object asked for - and the request after one that read as JSON offers the tools
+    /// again.
     /// </summary>
     [Fact]
     public async Task TheEnvelope_IsSaidInWords_AndAnAnswerOfNoJson_IsAskedAgainInJsonAlone()
@@ -170,12 +171,15 @@ public sealed class ZaiApiClientTests : IDisposable
             .Then(ZaiApiFixtures.Answer("The word is alpha."))
             .Then(ZaiApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"wrd":"alpha"}""")).ToJsonString()))
             .Then(ZaiApiFixtures.Answer(Envelopes.Of(JsonNode.Parse("""{"word":"alpha"}""")).ToJsonString()));
+        var run = Run() with { Output = output, RunContext = "run facts" };
 
-        var result = await Ran(Run() with { Output = output });
+        var result = await Ran(run);
 
         Assert.Equal((AgentRunStatus.Completed, """{"word":"alpha"}"""), (result.Status, result.StructuredOutput));
         var bodies = _endpoint.Asked.Select(asked => JsonNode.Parse(asked.Body)!.AsObject()).ToList();
-        Assert.EndsWith($"\n\n{AgentEnvelope.InWords(AgentEnvelope.Schema(output))}", bodies[0]["messages"]![1]!["content"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(
+            [("user", AgentPromptParts.FirstMessage(run, newConversation: true)), ("user", AgentEnvelope.InWords(AgentEnvelope.Schema(output)))],
+            bodies[0]["messages"]!.AsArray().Skip(1).Select(message => (message!["role"]!.GetValue<string>(), message["content"]!.GetValue<string>())));
         Assert.Equal([true, false, true], bodies.Select(body => body.ContainsKey("tools")));
         Assert.Equal([false, true, false], bodies.Select(body => body.ContainsKey("response_format")));
     }
@@ -249,14 +253,64 @@ public sealed class ZaiApiClientTests : IDisposable
         var unpriced = Entries() with { Model = Glm53(priceInputHit: null) };
         _endpoint.Then(ZaiApiFixtures.Reply("answer.sse"));
 
-        var refused = await Client().RunAsync(Run() with { Entries = unpriced, Limits = new AgentLimits(null, 5m, null, null) }, _events, TestContext.Current.CancellationToken);
+        // What the client is billed by is what the runner's one rule asks prices of before any client is taken.
+        IAgentClient client = Client();
         var held = await Ran(Run() with { Limits = new AgentLimits(null, 5m, null, null) });
 
+        Assert.Equal(AgentPrices.EveryRequestUses, client.BilledBy(unpriced));
         Assert.Equal(
-            (AgentRunStatus.NotStarted, "client 'glm' was not started: no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputHit), and a budget is charged with the cost counted from them"),
-            (refused.Status, refused.Error));
+            "no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputHit), and a budget is charged with the cost counted from them",
+            AgentPrices.BudgetRefusal(unpriced.Provider, unpriced.Model, client.BilledBy(unpriced)));
         Assert.Equal(AgentRunStatus.Completed, held.Status);
         Assert.Single(_endpoint.Asked);
+    }
+
+    /// <summary>
+    /// A compacted step worked through Z.AI by the runner: on a model the plan does not serve - 1311, before any answer -
+    /// it never starts, and says and counts no compaction though its session began; served, it says the compaction once,
+    /// as its first request is answered, naming the session it began, and counts it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACompactedStep_SaysItsCompaction_OnlyWhereZaiBeginsItsConversation(bool served)
+    {
+        _endpoint.Then(served
+            ? ZaiApiFixtures.Reply("reasoned.sse", chunk: 3)
+            : Coded(429, "1311", "Your current subscription plan does not yet include access to glm-5.3"));
+        var seen = new RecordedEvents();
+        var run = Run();
+        var step = new AgentStepRequest(
+            "r1", "a1", "s1", 1, null, "zai", ZaiApiClient.ClientName, null, Model, null, null, "be terse", "do the work", null,
+            new AgentWorkspace(null, _worktree, _worktree, [], _worktree, _harness.FileSystem.ResolveLinks(_temp.Combine("run"))),
+            null, null, new AgentLimits(10, null, null, null), null)
+        {
+            RecordDirectory = _step,
+            SessionsDirectory = _sessions,
+            Ground = run.Ground,
+            Credential = run.Credential,
+            Entries = run.Entries,
+            Compaction = new AgentCompacted("the compaction record", KeptWordForWord: 2, Reduced: 3, SizeBefore: 400, SizeAfter: 21) { Left = "the-old-session" },
+        };
+
+        var ran = await new AgentRunner([Client()], _harness.FileSystem, Elevation.User, TimeProvider.System).RunAsync(step, seen, TestContext.Current.CancellationToken);
+
+        Assert.Single(seen.All.OfType<SessionStarted>());
+
+        if (!served)
+        {
+            Assert.Equal((AgentRunStatus.NotStarted, 0), (ran.Status, ran.Compactions));
+            Assert.Empty(seen.All.OfType<Compacted>());
+            return;
+        }
+
+        Assert.Equal((AgentRunStatus.Completed, 1), (ran.Status, ran.Compactions));
+        Assert.Equal(
+            new Compacted(AgentCompaction.AnsweredCompact, "the-old-session", ran.Session!, 2, 3, 400, 21),
+            Assert.Single(seen.All.OfType<Compacted>()) with { Seq = 0, At = default });
+        Assert.Equal(
+            ["RunStarted", "SessionStarted", "MessageSent", "TurnStarted", "Compacted", "UsageReported", "AssistantMessage", "TurnFinished", "RunFinished"],
+            seen.All.Where(one => one is not (TextDelta or ThinkingDelta)).Select(one => one.GetType().Name));
     }
 
     /// <summary>The client says what it can do: streamed, thinking shown, written to while it works, the stored conversation handed, the harness's tools, the five levels.</summary>

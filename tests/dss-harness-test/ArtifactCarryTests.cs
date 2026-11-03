@@ -1,9 +1,11 @@
 using System.Globalization;
 using NSubstitute;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Sync;
@@ -456,7 +458,8 @@ public sealed class ArtifactCarryTests
     /// <summary>
     /// A directory a pull names is walked as it is spelt: a link along its path, or the directory itself being one, is
     /// followed as it is for a file named - a build directory pointed at another volume is ordinary - and what comes
-    /// back lands at the path that was named. Only a link below the directory named is passed over.
+    /// back lands at the path that was named, where the link leads into no place the isolation hides. Only a link below
+    /// the directory named is passed over.
     /// </summary>
     [Theory]
     [InlineData("out/", new[] { "out/deep/b.txt", "out/report.txt" })]
@@ -479,6 +482,53 @@ public sealed class ArtifactCarryTests
         Assert.Equal(brought.Select(file => $"  {file}"), outcome.Details!.Where(line => line.StartsWith("  ", StringComparison.Ordinal)));
         Assert.DoesNotContain(outcome.Details!, line => line.Contains("is a link", StringComparison.Ordinal));
         Assert.All(brought, file => Assert.True(File.Exists(Path.Combine(temp.Path, file)), $"'{file}' was not brought back."));
+    }
+
+    /// <summary>
+    /// A pull naming a file a link on its way leads into a place the isolation hides from every command - a credential
+    /// slot, a Claude Code directory - fails naming that place and brings nothing back: the copy is a place a leg's work
+    /// writes, and the link would carry what that place holds to where the agents read.
+    /// </summary>
+    [Fact]
+    public async Task APullNamingAFileALinkLeadsIntoAHiddenPlace_IsRefused_AndBringsNothingBack()
+    {
+        using var temp = new TempDirectory();
+        using var hidden = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var place = hidden.Path;
+        await File.WriteAllTextAsync(Path.Combine(place, "key.txt"), "secret", cancellationToken);
+        var carriage = await WithAHostAsync(temp, cancellationToken, isolation: new TestIsolation { HiddenPlaces = [new IsolatedPath(place, Directory: true)] });
+        TestLinks.DirectoryLink(Path.Combine(carriage.Copy, "out"), place);
+
+        var outcome = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), ["out/key.txt"], cancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+        Assert.Equal($"'out/key.txt' leads to '{Path.Combine(place, "key.txt")}' from '{carriage.Copy}', inside '{place}', which the isolation hides from every command and no pull reaches; nothing was read from it.", outcome.Message);
+        Assert.False(Directory.Exists(Path.Combine(temp.Path, "out")));
+        Assert.All(carriage.Transport.PulledHidden, given => Assert.Equal([new IsolatedPath(place, Directory: true)], given));
+    }
+
+    /// <summary>
+    /// A pull naming a directory a link on its way leads into a hidden place fails the pull before any file crosses,
+    /// naming that place, and brings nothing back.
+    /// </summary>
+    [Fact]
+    public async Task APullNamingADirectoryALinkLeadsIntoAHiddenPlace_IsRefused_AndBringsNothingBack()
+    {
+        using var temp = new TempDirectory();
+        using var hidden = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var place = hidden.Path;
+        await File.WriteAllTextAsync(Path.Combine(place, "key.txt"), "secret", cancellationToken);
+        var carriage = await WithAHostAsync(temp, cancellationToken, isolation: new TestIsolation { HiddenPlaces = [new IsolatedPath(place, Directory: true)] });
+        TestLinks.DirectoryLink(Path.Combine(carriage.Copy, "out"), place);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), ["out/"], cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+        Assert.Equal($"'out/' leads to '{place}' from '{carriage.Copy}', inside '{place}', which the isolation hides from every command and no pull reaches; nothing was read from it.", refusal.Message);
+        Assert.False(Directory.Exists(Path.Combine(temp.Path, "out")));
+        Assert.All(carriage.Transport.PulledHidden, given => Assert.Equal([new IsolatedPath(place, Directory: true)], given));
     }
 
     /// <summary>
@@ -681,6 +731,7 @@ public sealed class ArtifactCarryTests
     /// <param name="failsWrite">Which write the link drops on, counting from one, or zero for none.</param>
     /// <param name="refusesToDelete">Whether the cleanup after a dropped link can finish.</param>
     /// <param name="failsRead">Which read the link drops on, counting from one, or zero for none.</param>
+    /// <param name="isolation">The isolation whose hidden places a pull is held to; null for the double that hides none.</param>
     /// <remarks>
     /// The host's side is a real transport against a directory here, so what these tests assert
     /// about a copy is what a copy actually became rather than what a stand-in was told to say.
@@ -692,7 +743,8 @@ public sealed class ArtifactCarryTests
         int count = 1,
         int failsWrite = 0,
         bool refusesToDelete = false,
-        int failsRead = 0)
+        int failsRead = 0,
+        IAgentIsolation? isolation = null)
     {
         var harness = new HarnessFactory();
 
@@ -746,7 +798,8 @@ public sealed class ArtifactCarryTests
                 ? new HostReport { Host = host, Os = "windows", Processor = "x86_64" }
                 : new HostReport { Host = host, Os = "linux", Processor = "arm64" }),
             transports: factory,
-            local: local);
+            local: local,
+            isolation: isolation);
 
         return new Carriage(harness, service, transport, copy);
     }

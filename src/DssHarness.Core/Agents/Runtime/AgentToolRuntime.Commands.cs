@@ -70,7 +70,11 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed($"there is no directory at '{Said(directory)}' to start in");
         }
 
-        if (_policy.Run([program, .. arguments], directory).Refusal() is { } denied)
+        // What the command is written as its input is text the policy does not read: a program that reads its script from
+        // its input is refused where it is given one.
+        var stdin = Text(input, "stdin");
+
+        if (_policy.Run([program, .. arguments], directory, inputGiven: stdin is not null).Refusal() is { } denied)
         {
             return Answer.Refused(command, denied);
         }
@@ -86,11 +90,12 @@ public sealed partial class AgentToolRuntime
             LogFile = log,
             WorkingDirectory = directory,
             Environment = AgentChildEnvironment.Of(_host.Environment().Keys, _run.Withheld, commands.KeepEnvironment),
-            StandardInput = Text(input, "stdin") is { } stdin ? ChildInput.Of(stdin) : null,
+            StandardInput = stdin is not null ? ChildInput.Of(stdin) : null,
             Timeout = TimeSpan.FromSeconds(seconds),
             StallSeconds = _run.Limits.StallSeconds ?? 0,
             Mask = _run.Mask,
             Contained = true,
+            Isolation = _run.Isolation?.Commands,
             SessionRecord = _host.Sessions.For(_run.StepDirectory),
         };
 
@@ -195,7 +200,9 @@ public sealed partial class AgentToolRuntime
     /// <summary>
     /// <c>web_search</c>: the query asked of the step's sources - those it names, else every one - by the harness's own
     /// search, every rule of which is <see cref="Web.Search.HarnessWebSearch"/>'s; each source's part in turn, and a
-    /// search none of whose sources answered failed, each part's cause said.
+    /// search none of whose sources answered failed, each part's cause said. A side-task's search asks one more beside
+    /// them: the provider's own, its <c>native</c> part, where the run carries one - asked through the client's loop, as
+    /// the run stands when the agent asks.
     /// </summary>
     private async Task<Answer> WebSearchAsync(JsonObject input, CancellationToken cancellationToken)
     {
@@ -213,7 +220,32 @@ public sealed partial class AgentToolRuntime
                 : Answer.Failed(refusal);
         }
 
+        if (_native is { } native)
+        {
+            searched = searched with { Parts = [.. searched.Parts, await NativeAsync(native, query, cancellationToken).ConfigureAwait(false)] };
+        }
+
         return searched.Answered ? Answer.Done(searched.Text) : Answer.Failed($"no source answered the search:\n\n{searched.Text}");
+    }
+
+    /// <summary>
+    /// The provider's own search, asked as one more source of the same search through the client's loop - which asks it
+    /// with the entry serving the run, through the gate, and counts what it used - its part recorded as every source's
+    /// is; a part that failed never hides the configured sources' answers. The run stopped is no failed part: the stop
+    /// goes on as every stop of the run does.
+    /// </summary>
+    /// <param name="native">What asks the provider's own search, as the run stands.</param>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="cancellationToken">Stops the search.</param>
+    private async Task<Web.Search.WebSearchPart> NativeAsync(AgentNativeAsk native, string query, CancellationToken cancellationToken)
+    {
+        Tally.Asked();
+
+        var part = await native(query, cancellationToken).ConfigureAwait(false);
+
+        await _records.WebSearchedAsync(part).ConfigureAwait(false);
+
+        return part;
     }
 
     /// <summary>What records the step's searches: its own records, and its tally of the requests it made.</summary>

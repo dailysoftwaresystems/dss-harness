@@ -196,7 +196,7 @@ public sealed class FlowRecordsTests
     [Fact]
     public void EveryKindOfEventIsAKindOfChange_ByItsName()
     {
-        Assert.Equal(["sessionBegan", "resumed", "step", "pauseBegan", "handoff", "pauseCompleted", "sessionEnded", "answer"], FlowEvent.Kinds);
+        Assert.Equal(["sessionBegan", "resumed", "step", "pauseBegan", "handoff", "pauseCompleted", "sessionEnded", "answer", "advised", "iterationAdded"], FlowEvent.Kinds);
         Assert.Throws<ArgumentOutOfRangeException>(() => FlowEvent.KindOf((FlowChangeKind)99));
     }
 
@@ -211,6 +211,26 @@ public sealed class FlowRecordsTests
         Assert.Equal("its redirects: it names no step to go to", (file with { Redirects = [new FlowRedirectRecord("one", "two", ["one"]), new FlowRedirectRecord("one", " ", [])] }).Problem());
         Assert.Equal("its handoff: a handoff the engine wrote says why", (step with { Handoff = new FlowHandoffRecord("engine") }).Problem());
         Assert.Null((step with { Handoff = new FlowHandoffRecord("agent") }).Problem());
+    }
+
+    /// <summary>
+    /// What a plan update did to an instance is held to its own rules in the instance's record: it was ended for an
+    /// update by that update's id, and only an instance of the work-item group carries an update's piece or visits
+    /// another again - for a piece, by that instance's id.
+    /// </summary>
+    [Fact]
+    public void WhatAPlanUpdateDidToAnInstance_IsHeldToItsOwnRules()
+    {
+        var group = new FlowStepRecord("rounds.items[1]", "rounds.items", true, "Running", 1, 1, [], [], PieceOf: "u1", AgainOf: "rounds.items[0]");
+        var step = new FlowStepRecord("rounds.items[0].build", "rounds.items.build", false, "Stopped", 1, 1, [], [], EndedFor: "u1");
+
+        Assert.Null(group.Problem());
+        Assert.Null(step.Problem());
+        Assert.Equal("it was ended for 'later', which is not an update's id", (step with { EndedFor = "later" }).Problem());
+        Assert.Equal("it carries a piece of 'x1', which is not an update's id", (group with { PieceOf = "x1" }).Problem());
+        Assert.Equal("it carries a piece of a plan update, and only an instance of the work-item group does", (step with { PieceOf = "u1" }).Problem());
+        Assert.Equal("it visits 'nowhere!' again, which is not an instance id", (group with { AgainOf = "nowhere!" }).Problem());
+        Assert.Equal("it visits an instance again for no piece of a plan update", (group with { PieceOf = null }).Problem());
     }
 
     /// <summary>
@@ -457,7 +477,7 @@ public sealed class FlowRecordsTests
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
 
-            var handoff = layout.StepHandoffFile("think");
+            var handoff = layout.HandoffFile("a1", "think");
 
             Assert.True(harness.FileSystem.KindOf(handoff) == PathKind.File);
             Assert.Equal("what the agent said it was doing\n", harness.FileSystem.ReadAllText(handoff));
@@ -614,7 +634,7 @@ public sealed class FlowRecordsTests
 
     /// <summary>A snapshot of a run holding <paramref name="steps"/>, as the coordinator hands one to its records.</summary>
     private static FlowSnapshot Snapshot(IReadOnlyList<FlowSnapshotStep> steps)
-        => new(FlowRunStatus.Running, null, new FlowBudgetSpent(), 0, null, steps, [], []);
+        => new(FlowRunStatus.Running, null, new FlowBudgetRecord(0, 0, 0), 0, null, steps, [], []);
 
     /// <summary>One step of a snapshot, as little as a record of it needs.</summary>
     private static FlowSnapshotStep StepOf(string instance, FlowInstanceState state, FlowHandoff? handoff = null)

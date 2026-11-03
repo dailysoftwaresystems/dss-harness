@@ -335,7 +335,7 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double usd) { }
+        public void Used(long tokens, double? usd, string? uncounted = null) { }
 
         public void HandoffTaken() { }
     }

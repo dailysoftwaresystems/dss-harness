@@ -66,7 +66,7 @@ public sealed class FlowPauseTests
             return this;
         }
 
-        /// <summary>Answers <paramref name="step"/>'s handoff turn with one account, every time it is asked.</summary>
+        /// <summary>Answers <paramref name="step"/>'s handoff turn with one account, as its record holds it once the turn has ended the attempt.</summary>
         public FakeRunner HandsOff(string step, string? account)
         {
             _handoffs[step] = (_, _) => Task.FromResult(account);
@@ -81,28 +81,18 @@ public sealed class FlowPauseTests
         }
 
         /// <summary>
-        /// Holds <paramref name="step"/>'s handoff turn open until a stop or its bound cancels it; answers the signal that
-        /// the turn has begun.
+        /// Holds <paramref name="step"/>'s handoff turn open - its agent asked, and answering nothing - until a stop or
+        /// its bound ends the attempt; answers the signal that the turn has begun.
         /// </summary>
         public Task HandoffHeld(string step)
         {
             var begun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _handoffs[step] = async (_, token) =>
-            {
-                begun.TrySetResult();
-
-                try
-                {
-                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
-                    return null;
-                }
-                catch (OperationCanceledException)
-                {
-                    return null;
-                }
-            };
+            _heldTurns[step] = begun;
+            _handoffs[step] = (_, _) => Task.FromResult<string?>(null);
             return begun.Task;
         }
+
+        private readonly Dictionary<string, TaskCompletionSource> _heldTurns = new(StringComparer.Ordinal);
 
         /// <summary>
         /// Holds <paramref name="step"/> open until the test completes it, or - where it hears the stop - a stop cancels
@@ -124,7 +114,8 @@ public sealed class FlowPauseTests
         private readonly HashSet<string> _deaf = new(StringComparer.Ordinal);
 
         /// <inheritdoc/>
-        public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
+        /// <inheritdoc/>
+        public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
             Started.Add(run.Instance);
 
@@ -137,17 +128,53 @@ public sealed class FlowPauseTests
 
             if (_scripts.TryGetValue(run.Step.Name, out var script))
             {
-                return script(run);
+                return Task.FromResult(script(run));
             }
 
-            if (_gates.TryGetValue(run.Step.Name, out var gate))
+            if (!_gates.TryGetValue(run.Step.Name, out var gate))
             {
-                return _deaf.Contains(run.Step.Name)
-                    ? await gate.Task.ConfigureAwait(false)
-                    : await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
             }
 
-            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            if (_deaf.Contains(run.Step.Name))
+            {
+                return gate.Task;
+            }
+
+            // The stop ends the step's task in the stop's own thread, before anything else the runner does: registered
+            // where the run begins, with no await before it, so no load on the machine leaves it to be attached late.
+            // An engine whose clock makes its drain pass at once then still finds the runner ended.
+            var ended = new TaskCompletionSource<FlowStepResult>();
+            _ = cancellationToken.Register(() => ended.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "stopped")), useSynchronizationContext: false);
+            _ = gate.Task.ContinueWith(done => ended.TrySetResult(done.Result), cancellationToken, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+            if (_heldTurns.TryGetValue(run.Step.Name, out var turning))
+            {
+                // The turn stays open until the run is stopped or the test ends it; the held turn is said to begin once
+                // the engine has asked for the handoff, as a client that took the question would say it.
+                var asked = run.Telling?.Handoff.WhenAsked ?? new TaskCompletionSource<DssHarness.Core.Agents.AgentHandoffAsked>().Task;
+                _ = asked.ContinueWith(_ => turning.TrySetResult(), cancellationToken, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                return ended.Task;
+            }
+
+            return AnswersAsync(run, gate, cancellationToken);
+        }
+
+        /// <summary>
+        /// A step that hears the run answers the handoff the engine asks for, as a client does: the turn is answered and
+        /// the attempt ends, unless the test ends the step first or a stop ends the run.
+        /// </summary>
+        private async Task<FlowStepResult> AnswersAsync(FlowStepRun run, TaskCompletionSource<FlowStepResult> gate, CancellationToken cancellationToken)
+        {
+            var asked = run.Telling?.Handoff.WhenAsked ?? new TaskCompletionSource<DssHarness.Core.Agents.AgentHandoffAsked>().Task;
+            var first = await Task.WhenAny(gate.Task, asked).WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            if (first == gate.Task)
+            {
+                return await gate.Task.ConfigureAwait(false);
+            }
+
+            return FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "handed off");
         }
 
         /// <summary>Every handoff turn asked, with what it was asked with.</summary>
@@ -201,6 +228,10 @@ public sealed class FlowPauseTests
 
         /// <inheritdoc/>
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+        {
+        }
+
+        public void Updates(FlowUpdatesFile updates)
         {
         }
     }
@@ -332,6 +363,81 @@ public sealed class FlowPauseTests
         Assert.Equal("Written by the engine: the agent's answer to its handoff turn held no account.", think.Handoff.Text);
         Assert.Equal("the agent's answer to its handoff turn held no account", think.Handoff.Why);
         Assert.Equal(["think"], end.Pause!.Handoffs);
+    }
+
+    /// <summary>
+    /// The handoff the engine writes carries the account of the attempt's stored stream - what the stream shows and no
+    /// more - read through the run's own runner, under its first line that says why the engine wrote it.
+    /// </summary>
+    [Fact]
+    public async Task TheHandoffTheEngineWrites_CarriesTheAccountOfTheAttemptsStoredStream()
+    {
+        var definition = Parse("""
+            name: flow
+            handoffSeconds: 60
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new FakeRunner();
+        _ = runner.Hold("think");
+        var account = new StreamAccount("- src/one.cs (create_file)");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), streamAccount: account);
+
+        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        await runner.StartedAsync("think");
+        coordinator.RequestPause("command");
+
+        _ = await session;
+
+        var think = coordinator.Instances["think"];
+        Assert.Equal("engine", think.Handoff!.By);
+        Assert.Equal("Written by the engine: the agent's answer to its handoff turn held no account.\n- src/one.cs (create_file)", think.Handoff.Text);
+        var asked = Assert.Single(account.Asked);
+        Assert.Equal(("think", runner.Runs.Single().Attempt), (asked.Instance, asked.Attempt));
+    }
+
+    /// <summary>
+    /// The handoff a limit writes - the engine's, for the agent's run had ended and cannot answer - carries the account
+    /// of the attempt's stored stream under its first line, as a pause's does.
+    /// </summary>
+    [Fact]
+    public async Task TheHandoffALimitWrites_CarriesTheAccountOfTheAttemptsStoredStream()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var account = new StreamAccount("The files the attempt wrote: none.");
+        var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), streamAccount: account);
+
+        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var end = await session;
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var think = coordinator.Instances["think"];
+        Assert.Equal("Written by the engine: 'think' reached its turns.\nThe files the attempt wrote: none.", think.Handoff!.Text);
+        Assert.Single(account.Asked);
+    }
+
+    /// <summary>An account of a stored stream, as a run's runner answers one for the engine's handoff to carry.</summary>
+    private sealed class StreamAccount(string body) : IFlowStreamAccount
+    {
+        /// <summary>Every run the account was asked of, in order.</summary>
+        public List<FlowStepRun> Asked { get; } = [];
+
+        public string? Account(FlowStepRun run)
+        {
+            Asked.Add(run);
+            return body;
+        }
     }
 
     /// <summary>A handoff turn that runs past its bound - the workflow's handoffSeconds, or 180 where it says none - is ended there, and the engine writes the handoff, saying the bound it passed.</summary>
@@ -1512,6 +1618,75 @@ public sealed class FlowPauseTests
     }
 
     /// <summary>
+    /// A part whose cost could not be counted, in a run budgeted in dollars, reaches the reserve for the grant that
+    /// stands: dollars not all counted are not known to be short of it, so the run pauses and asks, saying at least what
+    /// was counted and why the rest is not known. A grant of more lets the run go on - each agent held to what is left as
+    /// far as the dollars were counted - and is not asked again until another such part comes.
+    /// </summary>
+    [Fact]
+    public async Task APartNotCounted_InARunBudgetedInDollars_AsksOnce_AndAGrantGoesOn()
+    {
+        const string Why = "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)";
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [think]
+            """);
+        var runner = new FakeRunner()
+            .On("think", run =>
+            {
+                // Only the first attempt reports this spend: the re-run goes on with the same conversation.
+                if (run.Attempt == 1)
+                {
+                    run.Events.Used(tokens: 1_000, usd: 2.0);
+                    run.Events.Used(tokens: 500, usd: null, uncounted: Why);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
+            })
+            .On("after", run =>
+            {
+                run.Events.Used(tokens: 1_000, usd: 1.0);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
+            });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("budget", end.Pause!.Cause);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal(
+            "run 'r7' has spent at least 2.00 of 50.00 USD (the rest is not known: no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)) (its reserve of 10% was reached)",
+            asked.Problem);
+
+        Assert.True(coordinator.TryAnswer(asked.Id, "more", out var problem), problem);
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["think", "think", "after"], runner.Started);
+        Assert.Single(coordinator.Questions);
+
+        lock (runner.Runs)
+        {
+            Assert.Equal(new double?[] { 45.0, 88.0, 88.0 }, runner.Runs.Select(run => run.BudgetLeftUsd));
+        }
+    }
+
+    /// <summary>
     /// The minutes a reason step runs count while it runs: a step that runs past the reserve pauses the run on a tick of
     /// the clock, before its budget is spent, rather than only when its attempt ends.
     /// </summary>
@@ -2106,7 +2281,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner();
         var thinking = runner.Hold("think", hearsTheStop: false);
         var limitStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        FlowBudgetSpent? spent = null;
+        FlowBudgetRecord? spent = null;
         var records = new RecordsWatch(
             (_, snapshot, _, _) => spent = snapshot.Spent,
             (_, detail) => { if (detail == "passed its timeoutMinutes (5): stopped") { limitStopped.TrySetResult(); } });
@@ -2181,8 +2356,8 @@ public sealed class FlowPauseTests
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner().HandsOff("think", "half way through");
 
-        // Its agent does not hear the pause: nothing but the pause itself ends the limit's timer.
-        var thinking = runner.Hold("think", hearsTheStop: false);
+        // Its agent answers the handoff and its attempt ends: the pause has ended the limit's timer before it.
+        var thinking = runner.Hold("think");
         var clock = new TimerClock();
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
 
@@ -2205,5 +2380,239 @@ public sealed class FlowPauseTests
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal((FlowInstanceState.Done, null), (coordinator.Instances["think"].State, coordinator.Instances["think"].Error));
         Assert.Equal(2, runner.Runs.Count);
+    }
+
+    /// <summary>
+    /// Each attempt is handed what is left of the run's dollars before its reserve as it starts - what was spent by the
+    /// steps before it taken off - so its agent's launch is held to it; a run that budgets no dollars hands none.
+    /// </summary>
+    [Fact]
+    public async Task EachAttempt_IsHandedWhatIsLeftOfTheRunsDollarsBeforeItsReserve()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            steps:
+              - name: first
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: second
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [first]
+            """);
+        var runner = new FakeRunner().On("first", run =>
+        {
+            run.Events.Used(tokens: 1_000, usd: 5.0);
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+
+        var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(new double?[] { 45.0, 40.0 }, runner.Runs.Select(run => run.BudgetLeftUsd));
+
+        var unbudgeted = new FakeRunner();
+        _ = await new FlowCoordinator(Parse("name: flow\nsteps:\n  - name: think\n    type: reason\n    prompt: work.md\n    outputs: work.json\n"), unbudgeted, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(unbudgeted.Runs.Single().BudgetLeftUsd);
+    }
+
+    /// <summary>
+    /// An attempt whose launch the run's share ended - the client stopped at what was left before the reserve, at its own
+    /// reckoning - reaches the run's reserve, never the step's own budget: the step stops where it stands with the
+    /// engine's handoff, the run pauses for its budget, and its question is asked once the pause has ended.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchTheRunsShareEnded_PausesTheRunForItsBudget()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new FakeRunner().On("think", run =>
+        {
+            run.Events.Used(tokens: 1_000, usd: 44.0);
+            return FlowStepResult.AtTheRunsReserve("'think' spent what was left of the run's budget before its reserve");
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var think = coordinator.Instances["think"];
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("budget", end.Pause!.Cause);
+        Assert.Equal((FlowInstanceState.Stopped, HarnessExit.Incomplete), (think.State, think.Exit));
+        Assert.Equal("Written by the engine: 'think' spent what was left of the run's budget before its reserve.", think.Handoff!.Text);
+        var question = coordinator.OpenQuestions.Single();
+        Assert.Equal(("runBudget", "run 'r7' has spent 44.00 of 50.00 USD (its reserve of 10% was reached)"), (question.Kind, question.Problem));
+    }
+
+    /// <summary>
+    /// Where the workflow's own answers allow the budget once again, an attempt the run's share ended runs again at once,
+    /// given its handoff - the run is not paused - and the question is recorded answered by the configuration.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchTheRunsShareEnded_RunsAgainAtOnce_WhereTheWorkflowAllowsMore()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            answers:
+              runBudget:
+                answer: more
+                times: 1
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new FakeRunner().On("think", run => run.Attempt == 1
+            ? FlowStepResult.AtTheRunsReserve("'think' spent what was left of the run's budget before its reserve")
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Null(end.Pause);
+        Assert.Equal(("more", "configuration"), (coordinator.Questions.Single().Given.Single().Answer, coordinator.Questions.Single().Given.Single().By));
+        Assert.Equal(
+            "Written by the engine: 'think' spent what was left of the run's budget before its reserve.",
+            runner.Runs.Single(run => run.Attempt == 2).Handoff);
+    }
+
+    /// <summary>
+    /// Two launches whose shares were reckoned under one grant both end at the run's reserve: the first reaches it and the
+    /// workflow allows more; the second's share was reckoned before that grant, so it reaches no reserve of the grant that
+    /// stands - it runs again at once, given its handoff, and neither a second <c>more</c> nor a question is spent on it.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchWhoseShareWasReckonedBeforeMoreWasGranted_RunsAgain_AndReachesNoReserveOfTheNewGrant()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 100
+              reservePercent: 10
+            answers:
+              runBudget:
+                answer: more
+                times: 1
+            steps:
+              - name: one
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: two
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new FakeRunner()
+            .On("one", run => run.Attempt == 1
+                ? FlowStepResult.AtTheRunsReserve("'one' spent what was left of the run's budget before its reserve")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("two", run => run.Attempt == 1
+                ? FlowStepResult.AtTheRunsReserve("'two' spent what was left of the run's budget before its reserve")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // Both launched under the first grant, before either ended.
+        Assert.Equal(new double?[] { 90.0, 90.0 }, runner.Runs.Where(run => run.Attempt == 1).Select(run => run.BudgetLeftUsd));
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Null(end.Pause);
+        var asked = Assert.Single(coordinator.Questions);
+        Assert.Equal(("runBudget", "more", "configuration"), (asked.Kind, asked.Given.Single().Answer, asked.Given.Single().By));
+        Assert.Equal(
+            [
+                ("one", "Written by the engine: 'one' spent what was left of the run's budget before its reserve."),
+                ("two", "Written by the engine: 'two' spent what was left of the run's budget before its reserve."),
+            ],
+            runner.Runs.Where(run => run.Attempt == 2).Select(run => (run.Instance, run.Handoff)).OrderBy(run => run.Instance, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A reason step whose runner outlives the pause's handoff turn - past the turn's bound and the drain's - keeps what it
+    /// claimed until it answers: an always step of the pause's always phase that works in the same agent's tree waits on
+    /// that claim and starts only once the old runner has answered, so two never write one worktree at once.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepsRunnerThatOutlivesThePausesHandoffTurn_KeepsItsTreeHeldUntilItAnswers()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: builder
+              - name: think
+                type: reason
+                agent: builder
+                in: make
+                access: write
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [make]
+              - name: tidy
+                type: build
+                in: make
+                always: true
+                dependsOn: [make]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var thinking = runner.Hold("think", hearsTheStop: false);
+        var tidyWaits = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch((_, snapshot, _, _) =>
+        {
+            if (snapshot.Steps.Any(step => step.Instance == "tidy" && step.WaitsOn.Contains(FlowWaits.Claim)))
+            {
+                tidyWaits.TrySetResult();
+            }
+        });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command");
+
+        // The agent gives no answer: the turn's bound passes, then the drain's, its runner still going.
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(180));
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(90));
+
+        // The always step is drawn, and waits on the claim the old runner still holds - never started beside it.
+        var first = await Task.WhenAny(tidyWaits.Task, runner.StartedAsync("tidy")).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        Assert.Same(tidyWaits.Task, first);
+        Assert.DoesNotContain("tidy", runner.Started);
+
+        // The old runner answers and gives its claim back: the always step runs, and the run stands paused.
+        thinking.Done();
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Contains("tidy", runner.Started);
+        Assert.Equal(
+            (FlowInstanceState.Stopped, "engine"),
+            (coordinator.Instances["think"].State, coordinator.Instances["think"].Handoff!.By));
     }
 }

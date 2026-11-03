@@ -80,6 +80,39 @@ public static class ToolPackage
     private static string[] Kept(string? toolPath) => toolPath is null ? ["--global"] : ["--tool-path", toolPath];
 
     /// <summary>
+    /// Whether <paramref name="program"/>, a path or a bare name, is the tool's own command (<see cref="Command"/>), as
+    /// a process listing names a program: what tells a running process of the tool's from the rest by its program's
+    /// name alone, which a launcher of the same name - a script, another program's shim - shares.
+    /// </summary>
+    /// <param name="program">The program a process runs, a path or a bare name; null where the listing gave none.</param>
+    public static bool IsCommand(string? program)
+        => program is not null && HostProbes.ListsProcess(program, Command);
+
+    /// <summary>The file of the tool's own assembly, as the CLI project declares it (<c>AssemblyName</c>): what a runtime runs, or a host of the package loads.</summary>
+    public const string Assembly = Command + ".dll";
+
+    /// <summary>Where a dotnet tool install keeps the package, below the directory that holds the shims it writes, a directory at a time: the package's id, lower case.</summary>
+    private static readonly string[] Store = [".store", Id.ToLowerInvariant()];
+
+    /// <summary>
+    /// Whether <paramref name="program"/>, the file a process runs, is a host of the tool's package: a file of the tool's
+    /// command (<see cref="IsCommand"/>) beside the tool's assembly (<see cref="Assembly"/>), as a build or a publish
+    /// puts it, or beside the store a dotnet tool install keeps the package in, as the shim that install writes is. A
+    /// launcher of the same name anywhere else - another program's shim, which starts the tool as a child - is none.
+    /// </summary>
+    /// <param name="program">The whole path of the file a process runs.</param>
+    /// <param name="files">The file system the file is on.</param>
+    public static bool HostsPackage(string program, FileSystem.IFileSystem files)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(program);
+        ArgumentNullException.ThrowIfNull(files);
+
+        return IsCommand(program)
+            && Path.GetDirectoryName(program) is { Length: > 0 } directory
+            && (files.FileExists(Path.Combine(directory, Assembly)) || files.DirectoryExists(Path.Combine([directory, .. Store])));
+    }
+
+    /// <summary>
     /// Where a global install of the tool is, from the home directory commands start in, with the extension
     /// the host's operating system needs and the separator its shell needs.
     /// </summary>

@@ -160,6 +160,7 @@ public sealed partial class AgentToolRuntime : IDisposable
     private readonly IReadOnlyDictionary<string, JsonNode> _schemas;
     private readonly ConcurrentDictionary<string, string> _viewed;
     private readonly Web.Search.WebSearchStep? _webSearch;
+    private readonly AgentNativeAsk? _native;
 
     /// <summary>The runtime of <paramref name="run"/>, its ground decided once.</summary>
     /// <param name="run">The run.</param>
@@ -167,11 +168,13 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// <param name="host">What its tools are run with.</param>
     /// <param name="records">The run's records, where its client keeps them already - they are not closed with the runtime; the runtime's own where none is given.</param>
     /// <param name="only">The tools it offers of those the step is given, by name; every one where none is given.</param>
-    internal AgentToolRuntime(AgentRun run, IAgentEventSink events, AgentToolHost host, AgentCallRecords? records = null, IReadOnlyCollection<string>? only = null)
+    /// <param name="native">What asks the run's native search as the run stands; null where the run carries none.</param>
+    internal AgentToolRuntime(AgentRun run, IAgentEventSink events, AgentToolHost host, AgentCallRecords? records = null, IReadOnlyCollection<string>? only = null, AgentNativeAsk? native = null)
     {
         _run = run;
         _events = events;
         _host = host;
+        _native = native;
 
         var ground = run.Ground ?? throw new ArgumentException(AgentEndings.NoPolicy, nameof(run));
 
@@ -425,7 +428,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.ViewFile => await ViewAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.FindFiles => await FindAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.SearchFiles => await SearchAsync(input, cancellationToken).ConfigureAwait(false),
-            AgentTools.CreateFile => await CreateAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.CreateFile => Create(input),
             AgentTools.ReplaceInFile => await ReplaceAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.InsertInFile => await InsertAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.CreateDirectory => CreateDirectory(input),
@@ -496,6 +499,12 @@ public sealed partial class AgentToolRuntime : IDisposable
 
     /// <summary>A place a write reaches, decided: held to the writable roots and through no link, then asked of the policy.</summary>
     private Decided WritePlace(string path) => Decide(_paths.Write(path), full => _policy.Write(full));
+
+    /// <summary>
+    /// The place an open file stands at, decided: held to the roots by their own names as the system gives an open file's
+    /// (<see cref="ConfinedPaths.Opened"/>), then asked of the policy as a write where it is written, else as a read.
+    /// </summary>
+    private Decided OpenedPlace(string final, bool write) => Decide(_paths.Opened(final, write), full => write ? _policy.Write(full) : _policy.Read(full));
 
     /// <summary>A place decided: refused where it is not confined to the roots, else as <paramref name="policy"/> answers it - reached only where it allows.</summary>
     private static Decided Decide(ConfinedPath confined, Func<string, AgentPolicyAnswer> policy)
@@ -605,13 +614,27 @@ public sealed class AgentToolHost(
     /// <summary>Opens the runtime of <paramref name="run"/>: its tools, its policy and its records.</summary>
     /// <param name="run">The run, whose ground decides every call.</param>
     /// <param name="events">Where its calls' ends, denials and requests of the web are emitted.</param>
-    /// <exception cref="ArgumentException">The run was given no ground: no call runs undecided.</exception>
-    public AgentToolRuntime Open(AgentRun run, IAgentEventSink events)
+    /// <param name="native">
+    /// What asks the run's native search - the client's loop, as the run stands when the agent asks - where the run
+    /// carries one (<see cref="AgentRun.NativeSearch"/>); null for a run that carries none.
+    /// </param>
+    /// <exception cref="ArgumentException">
+    /// The run was given no ground: no call runs undecided; or it carries a native search and nothing asks it, or is
+    /// given an asker and carries no native search.
+    /// </exception>
+    public AgentToolRuntime Open(AgentRun run, IAgentEventSink events, AgentNativeAsk? native = null)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(events);
 
-        return new AgentToolRuntime(run, events, this);
+        if ((run.NativeSearch is null) != (native is null))
+        {
+            throw new ArgumentException(
+                run.NativeSearch is null ? "the run carries no native search, and the runtime was given one to ask" : "the run carries a native search, and nothing was given to ask it as the run stands",
+                nameof(native));
+        }
+
+        return new AgentToolRuntime(run, events, this, native: native);
     }
 
     /// <summary>

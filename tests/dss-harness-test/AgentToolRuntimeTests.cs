@@ -309,6 +309,25 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
+    /// A file grown past the bound since the look that measured it - by a command still running, in the instant between
+    /// the look and the read - is refused with nothing of it read, never read past the bound the read was given.
+    /// </summary>
+    [Fact]
+    public async Task AFileGrownPastTheBoundSinceItWasMeasured_IsRefusedWithNothingOfItRead()
+    {
+        Write("a.txt", new string('x', (int)AgentTools.MostViewedBytes + 1));
+        var full = Path.Combine(_worktree, "a.txt");
+        var runtime = Open(fileSystem: new Understated(_harness.FileSystem, full));
+
+        var viewed = await View(runtime, "a.txt");
+
+        Assert.Equal(
+            (false, $"view_file failed: '{full}' holds more than {DiskSpace.Size(AgentTools.MostViewedBytes)} now, past what it held when it was measured, and nothing of it was read"),
+            (viewed.Ok, viewed.Text));
+        Assert.Equal((int)AgentTools.MostViewedBytes + 1, new FileInfo(full).Length);
+    }
+
+    /// <summary>
     /// A file link out of the roots - a tracked notes.md leading to a key under the home - is read, written and searched by
     /// no tool: a view, a replace, an insert and an overwrite refuse it by where it leads, nothing written, and a search and
     /// a find never list a link, so the text it leads to is in no answer.
@@ -498,6 +517,176 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal("deleted 'full' and the 3 entry(ies) it held", (await Call(runtime, AgentTools.DeleteDirectory, ("path", "full"), ("recursive", true))).Text);
         Assert.False(Directory.Exists(Path.Combine(_worktree, "full")));
         Assert.Equal("there is no directory at 'full'", (await Call(runtime, AgentTools.DeleteDirectory, ("path", "full"))).Text);
+    }
+
+    /// <summary>
+    /// A file whose open stands somewhere its path did not lead when it was decided - a link put on its way between the
+    /// check and the open - is decided again where the open file stands before a byte passes: a view, an edit and a search
+    /// read nothing outside the roots or in a Claude Code directory; and a write whose directory, held, stands outside the
+    /// writable roots - moved there since it was decided - lands nothing there, the target as it was. Each refusal is
+    /// recorded as every denial is.
+    /// </summary>
+    [Fact]
+    public async Task AFileWhoseOpenStandsElsewhere_IsDecidedAgain_BeforeAByte()
+    {
+        var claude = Path.Combine(_main, "cc");
+        var secret = Path.Combine(_outside, "id_rsa");
+        var credential = Path.Combine(claude, ".credentials.json");
+        Write("a.txt", "BEGIN plain\n");
+        Write("b.txt", "BEGIN kept\n");
+        var files = new OpenedElsewhere(_harness.FileSystem, new Dictionary<string, string>(StringComparer.Ordinal) { ["a.txt"] = secret, ["b.txt"] = credential }, _outside);
+        var runtime = Open(fileSystem: files, claudeCodeDirectories: [claude]);
+        var a = Path.Combine(_worktree, "a.txt");
+        var b = Path.Combine(_worktree, "b.txt");
+        var c = Path.Combine(_worktree, "c.txt");
+        var policy = new AgentPolicy(_harness.FileSystem, _harness.Platform, PolicyGrounds.Of(_worktree, [_main], [_worktree], [], [claude], [], null, null, null, null));
+
+        string Unread(string asked, string opened, string why) => $"'{asked}' was opened as '{opened}', where a link put on its way after it was decided leads; nothing was read: {why}";
+
+        Assert.Equal(
+            (false, Unread(a, secret, $"'{secret}' is where the open file stands, outside the roots of this agent: {_worktree}, {_main}")),
+            Said(await View(runtime, "a.txt")));
+        Assert.Equal((false, Unread(b, credential, policy.Read(credential).Refusal()!.Reason)), Said(await View(runtime, "b.txt")));
+        Assert.Equal(
+            (false, Unread(a, secret, $"'{secret}' is where the open file stands, outside the writable roots of this agent: {_worktree}")),
+            Said(await Replace(runtime, "a.txt", "BEGIN", "END")));
+        Assert.Equal(
+            (true, $"no line matches, in {ReportText.Counted(0, "file")} read\n{AgentListing.Refused(2)}"),
+            Said(await Call(runtime, AgentTools.SearchFiles, ("pattern", "BEGIN"))));
+
+        var landing = Path.Combine(_outside, "c.txt");
+        Assert.Equal(
+            (false, $"'{c}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: '{landing}' is where the open file stands, outside the writable roots of this agent: {_worktree}"),
+            Said(await Call(runtime, AgentTools.CreateFile, ("path", "c.txt"), ("content", "x"))));
+
+        Assert.Equal(["a.txt", "b.txt"], Directory.GetFiles(_worktree).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.Equal(["BEGIN plain\n", "BEGIN kept\n"], [this.Read("a.txt"), this.Read("b.txt")]);
+        Assert.Empty(Directory.GetFiles(_outside));
+        Assert.Equal(4, _events.All.OfType<PermissionDenied>().Count());
+
+        static (bool, string) Said(AgentToolCallResult result) => (result.Ok, result.Text);
+    }
+
+    /// <summary>
+    /// A directory made a real link at the moment a file under it is opened - after the file's path was decided - is met
+    /// by where the open file stands, as the system names it, for a view of the file, which reads nothing from where the
+    /// link leads; and by the write's own walk to its directory, which opens each directory on the way as itself and meets
+    /// the link, so a file written under it is refused naming the link and lands nothing there.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryMadeALink_AtAFilesOpen_LeadsNoReadOrWriteOutOfTheRoots()
+    {
+        Write("docs/a.txt", "plain");
+        File.WriteAllText(Path.Combine(_outside, "a.txt"), "SECRET");
+        var docs = Path.Combine(_worktree, "docs");
+        var runtime = Open(fileSystem: new LinkedAtOpen(_harness.FileSystem, docs, _outside));
+        var opened = Path.Combine(_outside, "a.txt");
+
+        var view = await View(runtime, "docs/a.txt");
+
+        Assert.Equal(
+            (false, $"'{Path.Combine(docs, "a.txt")}' was opened as '{opened}', where a link put on its way after it was decided leads; nothing was read: '{opened}' is where the open file stands, outside the roots of this agent: {_worktree}, {_main}"),
+            (view.Ok, view.Text));
+
+        // The link is back to the directory it was: a write under it is begun where the link leads at its open.
+        Directory.Delete(docs);
+        Directory.Move(docs + "-was", docs);
+        var landing = Path.Combine(_outside, "b.txt");
+
+        var written = await Call(runtime, AgentTools.CreateFile, ("path", "docs/b.txt"), ("content", "x"));
+
+        Assert.Equal(
+            (false, $"'{Path.Combine(docs, "b.txt")}' is reached through the link '{docs}', which the tool never follows in a place an isolated process writes; nothing was done"),
+            (written.Ok, written.Text));
+        Assert.False(File.Exists(landing));
+        Assert.Equal(["a.txt"], Directory.GetFiles(_outside).Select(Path.GetFileName));
+        Assert.Equal("SECRET", File.ReadAllText(opened));
+    }
+
+    /// <summary>
+    /// A command left running in the background that swaps a directory of the worktree for a link to a place outside every
+    /// root, back and forth, while the agent's tools delete in it, move into it and write in it, leads no tool outside: each
+    /// acts relative to the directory held from the writable root it was decided in, opened as itself, so a call decided
+    /// while the directory was one and acting once the link is there is refused, and the user's file outside stays, nothing
+    /// landing beside it.
+    /// </summary>
+    [Fact]
+    public async Task ALinkSwappedOnTheWayWhileTheToolsAct_LeadsNoToolOutOfTheRoots()
+    {
+        var runtime = Open();
+        var x = Path.Combine(_worktree, "x");
+        var real = Path.Combine(_worktree, "x-dir");
+        var link = Path.Combine(_worktree, "x-link");
+        var victim = Path.Combine(_outside, "victim.txt");
+        Directory.CreateDirectory(real);
+        TestLinks.DirectoryLink(link, _outside);
+        File.WriteAllText(victim, "the user's own file");
+
+        using var stop = new CancellationTokenSource();
+        var swapper = Task.Run(
+            () =>
+            {
+                static void Try(Action act)
+                {
+                    try
+                    {
+                        act();
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // Held by a call at that instant: the swap goes on with the next step.
+                    }
+                }
+
+                while (!stop.IsCancellationRequested)
+                {
+                    Try(() => Directory.Move(real, x));
+                    Try(() => Directory.Move(x, real));
+                    Try(() => Directory.Move(link, x));
+                    Try(() => Directory.Move(x, link));
+
+                    // A directory a call made at x while nothing stood there goes, so the swap can go on.
+                    Try(() =>
+                    {
+                        if (Directory.Exists(real) && Directory.Exists(link) && new DirectoryInfo(x) is { Exists: true, LinkTarget: null })
+                        {
+                            Directory.Delete(x, recursive: true);
+                        }
+                    });
+                }
+            },
+            Token);
+
+        var calls = 0;
+
+        try
+        {
+            for (var until = Environment.TickCount64 + 4000; Environment.TickCount64 < until && Directory.GetFiles(_outside).Length == 1; calls++)
+            {
+                try
+                {
+                    File.WriteAllText(Path.Combine(real, "victim.txt"), "the agent's");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Moved at that instant: the delete has its own file to find another time.
+                }
+
+                File.WriteAllText(Path.Combine(_worktree, "payload.txt"), "payload");
+                await Call(runtime, AgentTools.DeleteFile, ("path", "x/victim.txt"));
+                await Call(runtime, AgentTools.MovePath, ("from", "payload.txt"), ("to", "x/landed.txt"), ("overwrite", true));
+                await Call(runtime, AgentTools.CreateFile, ("path", "x/written.txt"), ("content", "planted"), ("overwrite", true));
+            }
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await swapper;
+        }
+
+        Assert.True(calls > 0);
+        Assert.Equal(["victim.txt"], Directory.GetFiles(_outside).Select(Path.GetFileName));
+        Assert.Equal("the user's own file", File.ReadAllText(victim));
     }
 
     /// <summary>
@@ -976,6 +1165,21 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.StartsWith("'dh-no-such-program-7f3' could not be started: ", missing.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A command is decided with the input its call writes it: a program that reads its script from its input is refused
+    /// where the call gives one, and nothing of it runs.
+    /// </summary>
+    [Fact]
+    public async Task RunCommand_GivenAnInput_IsDecidedAsTheProgramReadsIt()
+    {
+        var runtime = Open();
+
+        var given = await Call(runtime, AgentTools.RunCommand, "c1", ("program", "sh"), ("stdin", "echo hi\n"));
+
+        Assert.False(given.Ok);
+        Assert.Equal("this tool could not decide 'sh' ('sh' reads the script it runs from its input, which this does not read): it denies what it cannot decide", given.Text);
+    }
+
     /// <summary>A program named by a relative path is the one where the command starts, never one in this process's directory.</summary>
     [Fact]
     public async Task RunCommand_ReadsARelativeProgramWhereItStarts()
@@ -1023,6 +1227,31 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.True(request.Contained);
         Assert.NotNull(request.SessionRecord);
         Assert.Equal(["tool go: a process outside the job"], runtime.Tally.Uncontained);
+    }
+
+    /// <summary>
+    /// A command runs inside the isolation its launch was given for commands - the profile that hides the Claude Code
+    /// directories, never the one a whole Claude Code runs in - and with none where the launch was given none.
+    /// </summary>
+    [Fact]
+    public async Task RunCommand_RunsInsideTheLaunchsIsolationForCommands()
+    {
+        var processes = new Uncontaining();
+        var mechanism = new PassThroughMechanism();
+        var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []);
+        var launch = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null);
+        var runtime = Open(processes: processes, isolation: launch);
+
+        var ran = await Call(runtime, AgentTools.RunCommand, ("program", "tool"), ("args", new[] { "go" }));
+
+        Assert.True(ran.Ok, ran.Text);
+        Assert.Equal(new DssHarness.Core.Processes.ProcessIsolation(mechanism, commands), Assert.Single(processes.Started).Isolation);
+
+        var bare = new Uncontaining();
+        var plain = Open(processes: bare);
+
+        Assert.True((await Call(plain, AgentTools.RunCommand, ("program", "tool"), ("args", new[] { "go" }))).Ok);
+        Assert.Null(Assert.Single(bare.Started).Isolation);
     }
 
     /// <summary>A command the run's own stop ends still keeps what its container could not reach, and the stop goes on.</summary>
@@ -1312,6 +1541,85 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal(["alpha", "alpha", "beta"], lines.Where(line => line["line"]!.GetValue<string>() == "decided").Select(line => line["by"]!.GetValue<string>()).Order(StringComparer.Ordinal));
     }
 
+    /// <summary>
+    /// The provider's own search is asked through what its opener gives - the client's loop, as the run stands - and the
+    /// part it comes to is one more part of the same search, recorded as every source's is, beside the configured
+    /// sources' answers; the run stopped while it searches is no failed part - the stop goes on as every stop of the run
+    /// does.
+    /// </summary>
+    [Fact]
+    public async Task WebSearch_TheNativePart_IsAskedThroughItsOpener_TheRunStoppedIsAStop()
+    {
+        var endpoint = new WebEndpoint(_ => SearchAnswer("""{ "items": [ { "title": "One", "link": "https://one.example.test/" } ] }"""));
+        var asked = new List<string>();
+        var failing = Open(
+            capabilities: [AgentCapability.Read, AgentCapability.Web],
+            endpoint: endpoint,
+            webSearch: TwoSources(),
+            native: (query, _) =>
+            {
+                asked.Add(query);
+                return Task.FromResult(NoWire.FailedPart(query, "the lane of WORK_KEY is held"));
+            });
+
+        var answered = await Call(failing, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
+
+        Assert.True(answered.Ok);
+        Assert.Equal(["group by"], asked);
+        Assert.EndsWith(DssHarness.Core.Web.WebBlocks.Search("group by", "native", "native: the lane of WORK_KEY is held"), answered.Text, StringComparison.Ordinal);
+        failing.Dispose();
+
+        var searched = File.ReadAllLines(Path.Combine(_step, AgentCallRecords.WebFileName)).Select(line => JsonNode.Parse(line)!).Where(line => line["line"]!.GetValue<string>() == "searched").ToList();
+
+        Assert.Equal([("alpha", "Ok"), ("native", "Failed")], searched.Select(line => (line["by"]!.GetValue<string>(), line["outcome"]!.GetValue<string>())));
+
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var stopped = Open(
+            capabilities: [AgentCapability.Read, AgentCapability.Web],
+            endpoint: endpoint,
+            webSearch: TwoSources(),
+            native: async (_, cancellationToken) =>
+            {
+                await stop.CancelAsync();
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new InvalidOperationException("the stop did not reach the search");
+            });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stopped.RunAsync(Request("call_1", AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" })), stop.Token));
+    }
+
+    /// <summary>
+    /// A runtime opened for a run that carries a native search is given what asks it, and one given an asker carries a
+    /// native search: neither is left without the other.
+    /// </summary>
+    [Fact]
+    public void ANativeSearch_AndWhatAsksIt_AreGivenTogether()
+    {
+        var host = new AgentToolHost(_harness.FileSystem, _harness.Platform, _harness.GitClient, new PhaseRunner(_harness.ProcessRunner, _harness.FileSystem, _harness.Output), _harness.ChildSessions, new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain"))), new RunningToolDouble("1.2.3"), TimeProvider.System);
+        var run = AgentRuns.Of(_step, _worktree, null, PolicyGrounds.Of(_worktree, [_main], [_worktree], [], [], [], [AgentCapability.Read]));
+
+        Assert.Equal(
+            "the run carries a native search, and nothing was given to ask it as the run stands (Parameter 'native')",
+            Assert.Throws<ArgumentException>(() => host.Open(run with { NativeSearch = new NoWire() }, _events)).Message);
+        Assert.Equal(
+            "the run carries no native search, and the runtime was given one to ask (Parameter 'native')",
+            Assert.Throws<ArgumentException>(() => host.Open(run, _events, (query, _) => Task.FromResult(NoWire.FailedPart(query, "never")))).Message);
+    }
+
+    /// <summary>A provider's own search the runtime never asks itself: the loop asks it, as the run stands.</summary>
+    private sealed class NoWire : IAgentNativeSearch
+    {
+        public string Source => "native";
+
+        public long InputTokens(string query, string model) => 0;
+
+        public Task<AgentNativeSearched> SearchAsync(string query, string model, AgentKey key, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("the runtime asked the wire itself");
+
+        /// <summary>The part of a search of <paramref name="query"/> that failed for <paramref name="why"/>, in the one shape the wire gives it.</summary>
+        public static DssHarness.Core.Web.Search.WebSearchPart FailedPart(string query, string why) => ((IAgentNativeSearch)new NoWire()).Failed(query, why);
+    }
+
     /// <summary>A query holding the run's secret is denied by the mask, nothing asked; a search no source answered fails, saying what each came to.</summary>
     [Fact]
     public async Task WebSearch_ASecretIsDenied_AndASearchNoneAnsweredFails()
@@ -1518,7 +1826,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
         AgentLimits? limits = null,
         IProcessRunner? processes = null,
         TimeProvider? clock = null,
-        AgentWebSearch? webSearch = null)
+        AgentWebSearch? webSearch = null,
+        AgentNativeAsk? native = null,
+        DssHarness.Core.Agents.Isolation.LaunchIsolation? isolation = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -1536,7 +1846,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var files = fileSystem ?? _harness.FileSystem;
         var search = webSearch is null ? null : Search(fetch, clock ?? TimeProvider.System);
         var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), clock ?? TimeProvider.System, search: search);
-        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch), _events);
+        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire(), Isolation = isolation?.Processes }, _events, native);
 
         _opened.Add(fetch);
         _opened.Add(runtime);
@@ -1679,6 +1989,61 @@ public sealed class AgentToolRuntimeTests : IDisposable
             => unread.Contains(Path.GetFileName(path)) ? throw new IOException("it is held by another process.") : base.OpenRead(path);
     }
 
+    /// <summary>A file system whose standing of one file understates its length, as one grown past the bound since it was measured.</summary>
+    private sealed class Understated(IFileSystem inner, string file) : PassThroughFileSystem(inner)
+    {
+        public override FileStanding? StandingOf(string path)
+            => Path.GetFullPath(path) == Path.GetFullPath(file) && base.StandingOf(path) is { } standing ? standing with { Length = 1 } : base.StandingOf(path);
+    }
+
+    /// <summary>
+    /// A file system whose open files stand elsewhere than their paths led, as a link put on their way after the check
+    /// would make them: a file named in <paramref name="opened"/> stands at the place it maps it to, and a directory a write
+    /// holds stands at <paramref name="begun"/>, as one moved there since would.
+    /// </summary>
+    private sealed class OpenedElsewhere(IFileSystem inner, IReadOnlyDictionary<string, string> opened, string begun) : PassThroughFileSystem(inner)
+    {
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null) => base.Hold(begun, begun, make, asked);
+
+        public override string FinalPathOf(Stream stream)
+        {
+            var real = base.FinalPathOf(stream);
+            var name = Path.GetFileName(real);
+
+            return opened.TryGetValue(name, out var elsewhere) ? elsewhere
+                : name.Contains(".tmp-", StringComparison.Ordinal) ? Path.Combine(begun, name)
+                : real;
+        }
+    }
+
+    /// <summary>
+    /// A file system that makes <paramref name="directory"/> a real link to <paramref name="target"/> - the directory moved
+    /// aside - the moment a file under it is opened to be read or written, after its path was decided.
+    /// </summary>
+    private sealed class LinkedAtOpen(IFileSystem inner, string directory, string target) : PassThroughFileSystem(inner)
+    {
+        public override Stream OpenRead(string path)
+        {
+            Link(path);
+            return base.OpenRead(path);
+        }
+
+        public override HeldDirectory Hold(string anchor, string held, bool make, string? asked = null)
+        {
+            Link(asked ?? held);
+            return base.Hold(anchor, held, make, asked);
+        }
+
+        private void Link(string path)
+        {
+            if (path.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !IsLink(directory))
+            {
+                Directory.Move(directory, directory + "-was");
+                TestLinks.DirectoryLink(directory, target);
+            }
+        }
+    }
+
     /// <summary>A file system whose reads of files under a directory take a while, which counts how many are under way at once.</summary>
     private sealed class SlowReads(IFileSystem inner, string under) : PassThroughFileSystem(inner)
     {
@@ -1705,9 +2070,15 @@ public sealed class AgentToolRuntimeTests : IDisposable
             return new Slow(base.OpenRead(path), () => Interlocked.Decrement(ref _open));
         }
 
+        /// <summary>Where the file a slowed stream wraps stands, as the file system names the stream it opened.</summary>
+        public override string FinalPathOf(Stream opened) => base.FinalPathOf(opened is Slow slow ? slow.Inner : opened);
+
         /// <summary>A stream each read of which waits a little first, and says when it is closed.</summary>
         private sealed class Slow(Stream inner, Action closed) : Stream
         {
+            /// <summary>The stream the file system opened, which this one slows.</summary>
+            public Stream Inner => inner;
+
             public override bool CanRead => true;
 
             public override bool CanSeek => false;

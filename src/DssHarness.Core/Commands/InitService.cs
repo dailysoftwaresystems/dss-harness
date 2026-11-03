@@ -28,6 +28,9 @@ public sealed class InitService(
     ManagedIgnoreCheck managedIgnoreCheck,
     IHostPlatform platform) : IUseCase
 {
+    /// <summary>The command's name, as it is typed.</summary>
+    public const string CommandName = "init";
+
     /// <summary>
     /// Builds the ignore rules the harness owns, from the layout constants rather than by repeating
     /// the literals. A renamed directory would otherwise leave the rules pointing at the old path,
@@ -41,10 +44,10 @@ public sealed class InitService(
     /// the harness's directory (<see cref="HarnessLayout.SecretSlots"/>) - <c>sshItems</c>, <c>wslDistros</c>,
     /// <c>runner/.env</c>, <c>runner/.secrets</c> and the agent clients' <c>workflows/.env</c> - are small
     /// directories a person fills by hand, and keeping each one in the repository tells that person where
-    /// the file goes. The four at the root of the tree (<see cref="HarnessLayout.RootSlots"/>) - the
-    /// worktrees root, the directory orchestrators keep what they hold in, and the two a tree keeps its own
-    /// copies in - are kept so a clone arrives with each in place, and the commands that make worktrees,
-    /// records and copies make them there.
+    /// the file goes. The five at the root of the tree (<see cref="HarnessLayout.RootSlots"/>) - the
+    /// worktrees root, the directory orchestrators keep what they hold in, the one side-tasks keep their
+    /// records in, and the two a tree keeps its own copies in - are kept so a clone arrives with each in
+    /// place, and the commands that make worktrees, records and copies make them there.
     /// </para>
     /// <para>
     /// The worktrees root was excluded whole, with no placeholder, and the costs of this shape are
@@ -140,13 +143,19 @@ public sealed class InitService(
     /// <param name="workflowFiles">
     /// The files git keeps under the workflows directory now, for the same reason
     /// <paramref name="actionFiles"/> is given: a workflow's files are the definition a repository
-    /// runs, and a hand-written rule that drops one is reported rather than passed over.
+    /// runs, and a hand-written rule that drops one is a workflow that no longer is.
+    /// </param>
+    /// <param name="skillFiles">
+    /// The files git keeps under the skills directory now, for the same reason
+    /// <paramref name="actionFiles"/> is given: a skill is text a step's prompt is told, and one a
+    /// hand-written rule drops is a workflow whose prompt names what is no longer there.
     /// </param>
     internal static IReadOnlyList<string> KeptInGit(
         IEnumerable<AnchorRegistry> registries,
         IEnumerable<string> actionFiles,
         WorktreeSettings? worktrees = null,
-        IEnumerable<string>? workflowFiles = null)
+        IEnumerable<string>? workflowFiles = null,
+        IEnumerable<string>? skillFiles = null)
     {
         var root = HarnessLayout.DirectoryName;
 
@@ -159,6 +168,7 @@ public sealed class InitService(
             $"{HarnessLayout.WorkflowsDirectoryRelative}/{ManagedIgnoreRule.AnyDirectoryName}/{ManagedIgnoreRule.AnyName}",
             .. actionFiles,
             .. workflowFiles ?? [],
+            .. skillFiles ?? [],
             .. registries.Where(registry => !registry.IsIgnored).Select(registry => registry.RelativePath.Replace('\\', '/')),
         ];
     }
@@ -429,7 +439,8 @@ public sealed class InitService(
                 registries,
                 await ActionFilesAsync(root, cancellationToken).ConfigureAwait(false),
                 worktrees,
-                await WorkflowFilesAsync(root, cancellationToken).ConfigureAwait(false));
+                await WorkflowFilesAsync(root, cancellationToken).ConfigureAwait(false),
+                await SkillFilesAsync(root, cancellationToken).ConfigureAwait(false));
 
             findings = await _managedIgnoreCheck
                 .FindAsync(root, _fileSystem.ReadAllText(gitIgnorePath), rules, kept, cancellationToken)
@@ -490,6 +501,19 @@ public sealed class InitService(
     private async Task<IReadOnlyList<string>> WorkflowFilesAsync(string root, CancellationToken cancellationToken)
         => [.. (await _gitClient
                 .ListTreeFilesAsync(root, HarnessLayout.WorkflowsDirectoryRelative, cancellationToken)
+                .ConfigureAwait(false))
+            .Select(name => name.Text)];
+
+    /// <summary>
+    /// The files git keeps under the skills directory of the tree at <paramref name="root"/>, as
+    /// <see cref="ActionFilesAsync"/> lists the actions': a skill is text a step's prompt is told, and one a
+    /// hand-written rule drops is a workflow whose prompt names what is no longer there. The directory itself is
+    /// not one init creates: no shipped file goes there.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not list them.</exception>
+    private async Task<IReadOnlyList<string>> SkillFilesAsync(string root, CancellationToken cancellationToken)
+        => [.. (await _gitClient
+                .ListTreeFilesAsync(root, AgentSkills.HarnessPlace, cancellationToken)
                 .ConfigureAwait(false))
             .Select(name => name.Text)];
 

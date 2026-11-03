@@ -75,6 +75,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
                 Workload = new LegWorkload(Build: !request.SkipBuild, Test: true, []) { SetUp = request.SetUp },
                 LocalTrees = LegTrees.Asked(request.LocalCopy, request.InPlace),
                 Watch = request.Watch,
+                Isolation = request.Isolation,
             },
             (work, token) => RunLegAsync(_builds, _tests, _toolchains, work, filter, request.Excludes, request.Labels, request.SkipBuild, token),
             cancellationToken).ConfigureAwait(false);

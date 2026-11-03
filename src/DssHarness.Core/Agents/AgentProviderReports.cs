@@ -129,11 +129,10 @@ public static class AgentProviderReports
                     string.Join(", ", provider.Models.Select(model => model.Code))));
             }
 
-            // Choosing a key is the engine's, when it runs a run's steps: the line says what it is to do, and that no
-            // command of this build does it.
+            // Choosing a key is the engine's, as it starts each of a run's steps: the line says how it chooses.
             lines.Add(list.BalanceKeyUsage
-                ? "balanceKeyUsage is on: a run's steps are to take the key that spent least - no command runs a step in this build"
-                : "balanceKeyUsage is off: a run's steps are to take each provider's keys in order - no command runs a step in this build");
+                ? "balanceKeyUsage is on: a run's steps take the key that spent least"
+                : "balanceKeyUsage is off: a run's steps take each provider's keys in order");
         }
 
         foreach (var provider in list.Providers)

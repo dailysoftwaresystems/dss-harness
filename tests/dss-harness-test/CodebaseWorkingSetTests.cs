@@ -27,6 +27,9 @@ public sealed class CodebaseWorkingSetTests
 
         var claude = Make(tree, view, Call("1", ClaudeCodeTools.Read, new() { ["file_path"] = Full(tree, Loyalty), ["offset"] = 8, ["limit"] = 4 }, "     8→    public decimal Apply(Order order, decimal total)\n     9→    {\n    10→        return 1;\n    11→    }"));
         var runtime = Make(tree, view, Call("1", AgentTools.ViewFile, new() { ["path"] = Loyalty, ["start_line"] = 9, ["end_line"] = 10 }, "9\t    {\n10\t        return 1;", AgentToolRunner.Harness));
+
+        // Claude Code's call of the engine's tool server is the runtime's tool it serves.
+        var served = Make(tree, view, Call("1", ClaudeCodeTools.ServedName(AgentTools.ViewFile), new() { ["path"] = Loyalty, ["start_line"] = 9, ["end_line"] = 10 }, "9\t    {\n10\t        return 1;", AgentToolRunner.Harness));
         var whole = Make(tree, view, Call("1", AgentTools.ViewFile, new() { ["path"] = Loyalty }, string.Concat(Enumerable.Range(1, 13).Select(line => $"{line}\tx\n")), AgentToolRunner.Harness));
 
         // The lines given stand nowhere now: their numbers place them. Where they stand once, they place themselves.
@@ -43,6 +46,7 @@ public sealed class CodebaseWorkingSetTests
         var gapped = Make(tree, view, Call("1", AgentTools.ViewFile, new() { ["path"] = Loyalty }, "8\t{\n10\t    public decimal Apply(Order order, decimal total)", AgentToolRunner.Harness));
         Assert.Equal(["Shop.Pricing.LoyaltyDiscount.Apply"], gapped.Nodes.Select(node => Qualified(view, node)));
         Assert.Equal(["Shop.Pricing.LoyaltyDiscount.Apply"], runtime.Nodes.Select(node => Qualified(view, node)));
+        Assert.Equal([("Shop.Pricing.LoyaltyDiscount.Apply", WorkingSetUses.Read)], served.Nodes.Select(node => (Qualified(view, node), Assert.Single(node.Uses))));
         Assert.Equal(["Shop.Pricing.LoyaltyDiscount", "Shop.Pricing.LoyaltyDiscount.Apply"], whole.Nodes.Select(node => Qualified(view, node)).Order(StringComparer.Ordinal));
 
         var apply = Assert.Single(claude.Nodes);

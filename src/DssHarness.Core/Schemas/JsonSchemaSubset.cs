@@ -99,6 +99,36 @@ public static class JsonSchemaSubset
     }
 
     /// <summary>
+    /// Why <paramref name="text"/>, a schema as its file holds it, is not a schema this engine reads, or nothing where it
+    /// is: text that is not JSON, JSON that is no object, or what <see cref="SubsetProblems"/> says of the object. The one
+    /// check of a schema's text, made where a workflow is checked - so a run never starts over a schema no answer could be
+    /// held to - and again before a step's client is taken, for the file can change between.
+    /// </summary>
+    /// <param name="text">The schema's text.</param>
+    public static IReadOnlyList<string> TextProblems(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        JsonNode? parsed;
+
+        try
+        {
+            parsed = JsonNode.Parse(text);
+        }
+        catch (JsonException ex)
+        {
+            return [$"$: is not JSON ({ex.Message})"];
+        }
+
+        // JSON's null parses to no node at all, and is no schema as any other value that is not an object is not.
+        return parsed is null ? [NoObject("$")] : SubsetProblems(parsed);
+    }
+
+    /// <summary>What is said of a place in a schema that holds something other than a JSON object.</summary>
+    /// <param name="at">The place, as a JSON path from the schema's root.</param>
+    private static string NoObject(string at) => $"{at}: a schema is a JSON object";
+
+    /// <summary>
     /// Why <paramref name="document"/> does not answer <paramref name="schema"/>, or nothing where it does: a
     /// value of the wrong type, a required property missing, a property the schema says nothing of, a scalar no
     /// <c>enum</c> holds, a format or a pattern unmet. Each problem names the document's own path, so a model
@@ -496,7 +526,7 @@ public static class JsonSchemaSubset
     {
         if (node is not JsonObject schema)
         {
-            problems.Add($"{at}: a schema is a JSON object");
+            problems.Add(NoObject(at));
             return;
         }
 

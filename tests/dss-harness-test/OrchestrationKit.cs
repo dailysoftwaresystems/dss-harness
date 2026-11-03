@@ -96,6 +96,25 @@ internal sealed class OrchestrationKit
     }
 
     /// <summary>
+    /// Creates agent <paramref name="agent"/> as an earlier version of the tool made every agent: its worktree one of git's
+    /// linked worktrees, detached at its base, and its record naming no tree. Made as create-agent makes one, then its
+    /// repository replaced by a linked worktree at the same commit and its record's tree taken out, so its seed and its
+    /// directories are create-agent's own; the main tree is to hold nothing uncommitted, so nothing was handed to it.
+    /// </summary>
+    public async Task<string> CreateLegacyAgentAsync(string agent)
+    {
+        var worktree = await CreateAgentAsync(agent, empty: true);
+        var record = Record(agent);
+
+        Harness.FileSystem.DeleteDirectory(worktree);
+        await GitAsync(Main, "worktree", "add", "--detach", worktree, record.Base!);
+        Harness.OrchestrationStore.UpdateAgent(Layout, agent, current => current with { Tree = null });
+
+        Assert.Null(Record(agent).Tree);
+        return worktree;
+    }
+
+    /// <summary>
     /// Creates agent <paramref name="agent"/> with no worktree, which reads the main tree and records no session, failing
     /// the test where it is not created.
     /// </summary>

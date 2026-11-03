@@ -162,6 +162,18 @@ public static class FlowInstanceId
     }
 
     /// <summary>
+    /// The path of the declaration <paramref name="id"/> is an instance of: each segment's name, its marks gone -
+    /// <c>rounds.items.fix</c> of <c>rounds#2.items[0].fix+2</c>.
+    /// </summary>
+    /// <param name="id">An instance id.</param>
+    public static string PathOf(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        return string.Join(".", id.Split('.').Select(segment => segment.IndexOfAny(Marks) is >= 0 and var first ? segment[..first] : segment));
+    }
+
+    /// <summary>
     /// Whether two well-formed ids are visits of one step of one work item: the same, but for each visit and each
     /// iteration written after the innermost item - an iteration or a visit outside it may hold another item at the same
     /// place, so there they must match. <c>rounds#1.items[0].fix#2.revise.rework</c> and

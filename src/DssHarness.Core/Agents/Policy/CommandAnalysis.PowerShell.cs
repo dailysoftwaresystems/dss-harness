@@ -113,8 +113,30 @@ public static partial class CommandAnalysis
 
         private static bool IsNameChar(char character) => char.IsLetterOrDigit(character) || character == '_';
 
-        /// <summary>Text quoted for the shell reader, whole and literal.</summary>
+        /// <summary>Text quoted for the shell reader, whole and literal: a quoted string's, which PowerShell hands a native program as it stands.</summary>
         private static string Literal(string text) => "'" + text.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+
+        /// <summary>
+        /// A bareword's literal text for the shell reader: quoted but for its wildcard characters, which stand open as an
+        /// unquoted word's do, for pwsh on Linux and macOS expands them in a native program's arguments as a shell would
+        /// (<c>git p*sh</c> may be <c>git push</c>), and a cmdlet reads them as its pattern.
+        /// </summary>
+        private static string Bareword(string text)
+        {
+            var spelled = new StringBuilder("'");
+
+            foreach (var character in text)
+            {
+                _ = character switch
+                {
+                    '\'' => spelled.Append("'\\''"),
+                    '*' or '?' or '[' or ']' => spelled.Append('\'').Append(character).Append('\''),
+                    _ => spelled.Append(character),
+                };
+            }
+
+            return spelled.Append('\'').ToString();
+        }
 
         /// <summary>Passes blanks, line continuations and comments - where a token begins - and newlines too where <paramref name="newlines"/>.</summary>
         private void Skip(bool newlines)
@@ -370,7 +392,7 @@ public static partial class CommandAnalysis
                     throw CodeSetting();
                 }
 
-                if (EnvironmentName(variable) is { } name)
+                if ((EnvironmentName(variable) ?? PlainName(variable)) is { } name)
                 {
                     lines.Add(name + "=" + Value);
                 }
@@ -513,10 +535,10 @@ public static partial class CommandAnalysis
             }
 
             // PowerShell's own aliases a sign spells, by the cmdlets they are: % and ? are no variable and no pattern.
-            words[0] = words[0] switch
+            words[0] = LiteralText(words[0]) switch
             {
-                "'%'" => "'ForEach-Object'",
-                "'?'" => "'Where-Object'",
+                "%" => "'ForEach-Object'",
+                "?" => "'Where-Object'",
                 _ => words[0],
             };
 
@@ -536,8 +558,9 @@ public static partial class CommandAnalysis
                 && (dashed.Equals("iex", StringComparison.OrdinalIgnoreCase) || dashed.Equals("Invoke-Expression", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
-        /// The text a word is, where it is literal text alone - one or more of <see cref="Literal"/>'s quoted runs and
-        /// escaped quotes, glued - as the shell reader would hand it a program; null where any of it is an expansion.
+        /// The text a word is, where it is literal text alone - one or more of <see cref="Literal"/>'s quoted runs,
+        /// escaped quotes and <see cref="Bareword"/>'s open wildcards, glued - as the shell reader would hand it a program;
+        /// null where any of it is an expansion.
         /// </summary>
         private static string? LiteralText(string word)
         {
@@ -550,18 +573,18 @@ public static partial class CommandAnalysis
 
             foreach (System.Text.RegularExpressions.Match run in LiteralRun().Matches(word))
             {
-                text.Append(run.Value == "\\'" ? "'" : run.Value[1..^1]);
+                text.Append(run.Value == "\\'" ? "'" : run.Value.Length == 1 ? run.Value : run.Value[1..^1]);
             }
 
             return text.ToString();
         }
 
-        /// <summary>A word that is quoted literal runs and escaped quotes alone, as <see cref="Literal"/> writes them.</summary>
-        [System.Text.RegularExpressions.GeneratedRegex(@"^(?:'[^']*'|\\')+$")]
+        /// <summary>A word that is quoted literal runs, escaped quotes and open wildcards alone, as <see cref="Literal"/> and <see cref="Bareword"/> write them.</summary>
+        [System.Text.RegularExpressions.GeneratedRegex(@"^(?:'[^']*'|\\'|[*?\[\]])+$")]
         private static partial System.Text.RegularExpressions.Regex LiteralRuns();
 
-        /// <summary>One quoted literal run, or one escaped quote, of a word <see cref="LiteralRuns"/> matches.</summary>
-        [System.Text.RegularExpressions.GeneratedRegex(@"'[^']*'|\\'")]
+        /// <summary>One quoted literal run, one escaped quote, or one open wildcard, of a word <see cref="LiteralRuns"/> matches.</summary>
+        [System.Text.RegularExpressions.GeneratedRegex(@"'[^']*'|\\'|[*?\[\]]")]
         private static partial System.Text.RegularExpressions.Regex LiteralRun();
 
         /// <summary>
@@ -620,19 +643,14 @@ public static partial class CommandAnalysis
                 }
             }
 
-            if (scripts.Count != 1 || !SingleQuoted().IsMatch(scripts[0]))
+            if (scripts.Count != 1 || LiteralText(scripts[0]) is not { } script)
             {
                 throw new NotSupportedException("PowerShell's Invoke-Expression runs a script no one string here spells, which this does not read");
             }
 
-            var script = scripts[0][1..^1].Replace("'\\''", "'", StringComparison.Ordinal);
             var read = new PowerShellReader(script, _nesting + 1).Read();
             return read.Length == 0 ? "'echo'" : "'echo' $(\n" + read + "\n)";
         }
-
-        /// <summary>A word that is one literal's text, quoted whole: what a single string, and a double one with nothing expanded, read as.</summary>
-        [System.Text.RegularExpressions.GeneratedRegex(@"^'(?:[^']|'\\'')*'$")]
-        private static partial System.Text.RegularExpressions.Regex SingleQuoted();
 
         /// <summary>
         /// A redirect where one begins - its stream, <c>&gt;</c> or <c>&gt;&gt;</c>, and its file, <c>$null</c> the null
@@ -787,18 +805,18 @@ public static partial class CommandAnalysis
                 }
                 else if (character is '\'' or '"')
                 {
-                    Flush(word, literal);
+                    Flush(word, literal, bare: true);
                     word.Append(character == '\'' ? Single() : Expandable());
                 }
                 else if (character == '$' && At(1) == '(')
                 {
-                    Flush(word, literal);
+                    Flush(word, literal, bare: true);
                     _at++;
                     word.Append(Parenthesized());
                 }
                 else if (character == '$' && VariableBegins(At(1)))
                 {
-                    Flush(word, literal);
+                    Flush(word, literal, bare: true);
                     word.Append(Variable());
                 }
                 else
@@ -808,14 +826,18 @@ public static partial class CommandAnalysis
                 }
             }
 
-            Flush(word, literal);
+            Flush(word, literal, bare: true);
         }
 
-        private static void Flush(StringBuilder word, StringBuilder literal)
+        /// <summary>
+        /// The literal text gathered so far, into <paramref name="word"/> and cleared: a quoted string's as it stands
+        /// (<see cref="Literal"/>), a bareword's with its wildcards open (<see cref="Bareword"/>).
+        /// </summary>
+        private static void Flush(StringBuilder word, StringBuilder literal, bool bare = false)
         {
             if (literal.Length > 0)
             {
-                word.Append(Literal(literal.ToString()));
+                word.Append(bare ? Bareword(literal.ToString()) : Literal(literal.ToString()));
                 literal.Clear();
             }
         }
@@ -1401,8 +1423,9 @@ public static partial class CommandAnalysis
                         var variable = new StringBuilder(named);
                         Members(variable);
 
-                        // An environment variable, an assignment's target where one follows: each target is set.
-                        if (EnvironmentName(named) is { } name)
+                        // A variable - the environment's, or the script's own by a plain name - an assignment's target where one
+                        // follows: each target is set, so a later word that names it is read by what it holds.
+                        if ((EnvironmentName(named) ?? PlainName(named)) is { } name)
                         {
                             environments.Add(name);
                         }
@@ -1447,6 +1470,15 @@ public static partial class CommandAnalysis
                 ? name
                 : null;
 
+        /// <summary>
+        /// The name of a variable of the script's own a variable's expansion names whole - <c>$name</c>, <c>${name}</c> -
+        /// where the shell spells the name alike; else null. A scope's or a drive's variable is none.
+        /// </summary>
+        private static string? PlainName(string variable)
+            => variable.StartsWith("\"${", StringComparison.Ordinal) && variable.EndsWith("}\"", StringComparison.Ordinal) && variable[3..^2] is var name && IsAssignment(name + "=x")
+                ? name
+                : null;
+
         private static NotSupportedException CodeSetting() => new("PowerShell's setting of a function's or an alias's text, which this does not read");
 
         /// <summary>A variable of PowerShell's function: or alias: drive: what is set to it is code.</summary>
@@ -1472,8 +1504,9 @@ public static partial class CommandAnalysis
         }
 
         /// <summary>
-        /// An assignment's right side, read as a statement; each environment variable among its <paramref name="targets"/>
-        /// written as the setting it is too - a lone target's one word's value, else a value this cannot know.
+        /// An assignment's right side, read as a statement; each variable among its <paramref name="targets"/> - the
+        /// environment's, or the script's own by a plain name - written as the setting it is too: a lone target's one
+        /// word's value, else a value this cannot know.
         /// </summary>
         private void Assigned(List<string> targets, bool alone, string assignment, List<string> lines, char close)
         {

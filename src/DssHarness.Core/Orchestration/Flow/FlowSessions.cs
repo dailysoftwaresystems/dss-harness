@@ -132,7 +132,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
                 new FlowSnapshot(
                     FlowRunStatus.Running,
                     null,
-                    new FlowBudgetSpent(),
+                    new FlowBudgetRecord(0, 0, 0),
                     0,
                     null,
                     [],

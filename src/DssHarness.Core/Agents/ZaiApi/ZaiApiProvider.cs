@@ -58,9 +58,6 @@ public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiS
     private long? _held;
     private bool _heldShortened;
 
-    /// <summary>What every request is billed by: its input, the input its cache served and its output - Z.AI caches by itself and bills no write.</summary>
-    public AgentUsage Uses => AgentPrices.EveryRequestUses;
-
     /// <inheritdoc cref="IChatProvider.SendsSchema"/>
     public bool SendsSchema => ZaiApiRequest.HoldsToSchema;
 

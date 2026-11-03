@@ -108,8 +108,9 @@ public static class AgentEndings
 }
 
 /// <summary>
-/// What a run used, request by request: in all, each model's part, and the model that served it from its first turn -
-/// what every client's result says of its usage (<see cref="AgentUsageReport"/>).
+/// What a run used, request by request: in all, each model's part on each key it was signed with, with what that part
+/// cost, and the model that served it from its first turn - what every client's result says of its usage
+/// (<see cref="AgentUsageReport"/>).
 /// </summary>
 public sealed class AgentUsageTally
 {
@@ -122,28 +123,37 @@ public sealed class AgentUsageTally
     /// <summary>The model that served the run from its first turn, and that turn: the first counted.</summary>
     public IReadOnlyList<AgentServedModel> Served => _served;
 
-    /// <summary>Counts what one request of <paramref name="model"/> used, in turn <paramref name="turn"/>.</summary>
+    /// <summary>
+    /// Counts what one request of <paramref name="model"/>, signed with <paramref name="key"/>, used in turn
+    /// <paramref name="turn"/>, and what it cost: the part of that model on that key, its cost the requests' summed
+    /// (<see cref="AgentCost.Sum"/>) - unknown once a request that used something has no cost said or counted.
+    /// </summary>
     /// <param name="model">The model that served it, as the step asked for it.</param>
     /// <param name="usage">What it used.</param>
     /// <param name="turn">The turn it was of, from one: the first model counted serves from it.</param>
-    public void Add(string model, AgentUsage usage, int turn)
+    /// <param name="key">The key it was signed with, by its name; null for a login, or where the client names none.</param>
+    /// <param name="cost">What it cost; null where nothing said or counted it.</param>
+    public void Add(string model, AgentUsage usage, int turn, string? key = null, AgentCost? cost = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(usage);
 
         Total = Total.Plus(usage);
-        var at = _perModel.FindIndex(part => string.Equals(part.Model, model, StringComparison.Ordinal));
+        var at = _perModel.FindIndex(part => string.Equals(part.Model, model, StringComparison.Ordinal) && string.Equals(part.Key, key, StringComparison.Ordinal));
+        var priced = cost ?? (usage == AgentUsage.None ? null : AgentCost.Unknown);
 
         if (at < 0)
         {
-            _perModel.Add(new AgentModelUsage(model, usage));
+            _perModel.Add(new AgentModelUsage(model, usage, key, priced));
         }
         else
         {
-            _perModel[at] = _perModel[at] with { Usage = _perModel[at].Usage.Plus(usage) };
+            _perModel[at] = _perModel[at] with { Usage = _perModel[at].Usage.Plus(usage), Cost = AgentCost.Sum(_perModel[at].Cost, priced) };
         }
 
-        if (_served.Count == 0)
+        // The model that served the run from its first turn, and that turn: the first counted, and each later model
+        // that took over from the turn it began at - one entry per model that served, in order.
+        if (_served.Count == 0 || !string.Equals(_served[^1].Model, model, StringComparison.Ordinal))
         {
             _served.Add(new AgentServedModel(model, turn));
         }

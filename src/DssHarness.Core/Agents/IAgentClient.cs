@@ -32,6 +32,20 @@ public interface IAgentClient
     /// </param>
     /// <returns>How the run ended, and everything it knows beyond its text.</returns>
     Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// A token of each kind a run of this client on <paramref name="entries"/> is billed by: the prices a run budgeted in
+    /// dollars needs before the client is taken (<see cref="AgentPrices.BudgetRefusal"/>). Its kind's, given the client's
+    /// own entry (<see cref="AgentProviders.BilledBy"/>) - the one fact the definition's check reads too - and what every
+    /// request of every provider may be billed by for a client of no kind the tool builds in.
+    /// </summary>
+    /// <param name="entries">The entries the run would work on: its provider, its model, the client's own.</param>
+    AgentUsage BilledBy(AgentEntries entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        return AgentProviders.BilledBy(Name, entries.Client);
+    }
 }
 
 /// <summary>
@@ -44,6 +58,15 @@ public interface IAgentEventSink
     /// <summary>Takes one event, in order.</summary>
     /// <param name="event">The event, numbered and stamped.</param>
     ValueTask EmitAsync(AgentEvent @event);
+
+    /// <summary>
+    /// The run a client works has begun its conversation: from now on it never ends
+    /// <see cref="AgentRunStatus.NotStarted"/>. A client tells it once, where its own rule of a run never started stops
+    /// holding - the loop as the provider begins its first answer with the model asked, Claude Code as a call of it runs
+    /// or a turn of it ends - in order with its events; the runner says the step's compaction then. A sink that keeps
+    /// nothing of it does nothing.
+    /// </summary>
+    ValueTask ConversationBegunAsync() => ValueTask.CompletedTask;
 }
 
 /// <summary>
@@ -78,6 +101,11 @@ public interface IAgentRunner : Application.IUseCase
 /// <param name="EffortLevels">The effort levels it takes.</param>
 /// <param name="ProviderType">The type of provider whose models it reaches.</param>
 /// <param name="ToldModelBy">How it is told which model to run.</param>
+/// <param name="PacesRequests">
+/// Whether it goes through the gate's lane for each request it sends itself (<see cref="AgentRun.Gates"/>), as the loop
+/// the API clients share does; the runner holds the lane around each run of a client that does not, whose requests it
+/// cannot see one by one.
+/// </param>
 public sealed record AgentClientCapabilities(
     bool Streaming,
     bool Thinking,
@@ -89,7 +117,8 @@ public sealed record AgentClientCapabilities(
     bool ReportsCost,
     IReadOnlyList<string> EffortLevels,
     string ProviderType,
-    string ToldModelBy);
+    string ToldModelBy,
+    bool PacesRequests = false);
 
 /// <summary>How a client goes on with the conversation the engine stored.</summary>
 public enum AgentConversationHandling
@@ -158,6 +187,13 @@ public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2,
     /// <inheritdoc cref="AgentOutput" path="/param[@name='AskRounds']"/>
     public int? AskRounds { get; init => field = value is { } rounds ? Counted(rounds, nameof(AskRounds)) : null; } = AskRounds is { } rounds ? Counted(rounds, nameof(AskRounds)) : null;
 
+    /// <summary>
+    /// Why <see cref="Schema"/> is no schema an answer can be held to, as <see cref="Schemas.JsonSchemaSubset.TextProblems"/>
+    /// says it, or nothing where it is one: checked before any client is taken, so no model is paid for an answer
+    /// nothing could read.
+    /// </summary>
+    public IReadOnlyList<string> SchemaProblems() => Schemas.JsonSchemaSubset.TextProblems(Schema);
+
     /// <summary>A count, as given; refused below naught, which no count of repairs or rounds is.</summary>
     private static int Counted(int value, string name)
     {
@@ -188,20 +224,14 @@ public sealed record AgentLimits(int? MaxTurns, decimal? MaxBudgetUsd, TimeSpan?
     public static readonly TimeSpan DefaultHandoffBound = TimeSpan.FromSeconds(180);
 }
 
-/// <summary>One model the step goes on with, in the fallback's order.</summary>
-/// <param name="Model">The model.</param>
-/// <param name="Provider">Its provider.</param>
-/// <param name="Client">Its client.</param>
-/// <param name="Effort">The effort it was asked for, where one is.</param>
-/// <param name="UsableHere">Whether it can be used on this machine.</param>
-public sealed record AgentFallbackModel(string Model, string Provider, string? Client, string? Effort, bool UsableHere);
-
-/// <summary>One skill the step's prompt named, as the run was given it.</summary>
-/// <param name="Name">The skill's name.</param>
-/// <param name="Where">Where it was read.</param>
-/// <param name="Digest">Its digest.</param>
+/// <summary>One skill the step's prompt named, as the run was given it - what the step's stream names where its session begins.</summary>
+/// <param name="Name">The skill's name: its folder's.</param>
+/// <param name="Place">The place it was read, as the prompt's block names it.</param>
+/// <param name="File">The <c>SKILL.md</c> it was read from.</param>
+/// <param name="Digest">The SHA-256 of its <c>SKILL.md</c>, lowercase hex.</param>
+/// <param name="FolderDigest">The SHA-256 of its folder, over each file's path and content in order.</param>
 /// <param name="Folder">The folder handed to the step.</param>
-public sealed record AgentSkill(string Name, string Where, string Digest, string Folder);
+public sealed record AgentSkill(string Name, string Place, string File, string Digest, string FolderDigest, string Folder);
 
 /// <summary>
 /// The signal the engine raises when a run is pausing, beside the cancellation token, which stays the hard stop: the
@@ -367,12 +397,21 @@ public sealed class AgentMessages
     private readonly Channel<string> _messages = Channel.CreateUnbounded<string>(
         new UnboundedChannelOptions { SingleReader = true });
 
+    private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Completes once the messages are ended (<see cref="Complete"/>), whatever is still unread: for a chat, the person
+    /// leaving - which ends every stage of its run before a client is given it, as the run's pause does.
+    /// </summary>
+    public Task Ended => _ended.Task;
+
     /// <summary>Tells the agent <paramref name="message"/>.</summary>
     /// <param name="message">The message, whole.</param>
-    public void Post(string message)
+    /// <returns>Whether the channel holds it for the agent: false where the run's messages were ended, so nothing posted to an ended run is lost unsaid.</returns>
+    public bool Post(string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        _messages.Writer.TryWrite(message);
+        return _messages.Writer.TryWrite(message);
     }
 
     /// <summary>
@@ -390,12 +429,46 @@ public sealed class AgentMessages
         => _messages.Reader.ReadAllAsync(cancellationToken);
 
     /// <summary>Ends the messages: no more will be posted, and the reader's wait ends.</summary>
-    public void Complete() => _messages.Writer.TryComplete();
+    public void Complete()
+    {
+        _messages.Writer.TryComplete();
+        _ended.TrySetResult();
+    }
 }
 
 /// <summary>
-/// A step an agent is to work, as the engine resolved it: everything a run needs, before a client is chosen. The work
-/// it goes on with is not here yet - the continuation record comes with its own slice, and joins this request then.
+/// The signal the engine raises to interrupt the agent's current turn alone, leaving the conversation open: what a
+/// person's Ctrl+C asks of a side-task. The turn is cut where it stands, and the next message goes on from the
+/// conversation as its client keeps it.
+/// </summary>
+/// <remarks>
+/// No bound is kept and nothing is asked of the agent: an interrupt is not a handoff, which asks what the agent leaves.
+/// Every client the tool builds in honours it, what the cut turn used kept: Claude Code interrupts its launch's turn and
+/// reads its result - a chat's launch held open after it, a one shot's run ended <see cref="AgentRunStatus.Cancelled"/>
+/// at it - and the loop of the API clients leaves its request where it stands and cuts the calls running, its run ended
+/// Cancelled with what its provider said the request used counted and a cost it said nothing of unknown, its
+/// conversation stored whole up to its last whole turn and the cut answer thrown away. Raised before a client is given
+/// the run - while it waits at the gate or to be tried again - it ends a run that is no chat's there, no launch begun,
+/// and cuts nothing of a chat's, whose launch is never handed it (<see cref="AgentRunner"/>).
+/// </remarks>
+public sealed class AgentTurnInterrupt
+{
+    /// <summary>How a run whose turn the interrupt cut ends, as its error says it.</summary>
+    public const string Cut = "the turn was interrupted where it stood";
+
+    private readonly TaskCompletionSource _asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Interrupts the agent's current turn.</summary>
+    public void Interrupt() => _asked.TrySetResult();
+
+    /// <summary>Completes once <see cref="Interrupt"/> is raised.</summary>
+    public Task Asked => _asked.Task;
+}
+
+/// <summary>
+/// A step an agent is to work, as the engine resolved it: everything a run needs, before a client is chosen - the work it
+/// goes on with among it, as its continuation record (<see cref="Continuation"/>) and the compaction it begins from
+/// (<see cref="Compaction"/>).
 /// </summary>
 /// <param name="Run">The orchestrator run's name.</param>
 /// <param name="Agent">The agent the step works as.</param>
@@ -412,8 +485,10 @@ public sealed class AgentMessages
 /// <param name="Effort">The step's own effort, where it names one.</param>
 /// <param name="Fallback">The step's own fallback, in order, where it names one.</param>
 /// <param name="SystemPrompt">The system prompt, filled from the definition's body.</param>
-/// <param name="PromptTemplate">The prompt's template, before its values are filled.</param>
-/// <param name="PromptValues">The template's values.</param>
+/// <param name="Prompt">
+/// The prompt, whole as whoever built the request filled it: sent as it is and never read as a template again, so a
+/// brace a filled value holds stays a brace.
+/// </param>
 /// <param name="ResumeTemplate">The resume template, where the step goes on with earlier work.</param>
 /// <param name="Workspace">Where the run works.</param>
 /// <param name="Output">The output it is to produce, where its step names one.</param>
@@ -433,8 +508,7 @@ public sealed record AgentStepRequest(
     string? Effort,
     IReadOnlyList<string>? Fallback,
     string SystemPrompt,
-    string PromptTemplate,
-    IReadOnlyDictionary<string, string> PromptValues,
+    string Prompt,
     string? ResumeTemplate,
     AgentWorkspace Workspace,
     AgentOutput? Output,
@@ -448,6 +522,13 @@ public sealed record AgentStepRequest(
     /// </summary>
     public Policy.AgentPolicyGround? Ground { get; init; }
 
+    /// <summary>
+    /// The operating system's isolation the launch's agent runs under - the mechanism and what it denies each command, or
+    /// why there is none - as the engine decided it from the ground; null where none was decided, and every command then
+    /// runs on the words policy alone.
+    /// </summary>
+    public Isolation.LaunchIsolation? Isolation { get; init; }
+
     /// <summary>The credential the run signs in with, where its client signs in; null for the machine's login.</summary>
     public AgentCredential? Credential { get; init; }
 
@@ -457,6 +538,17 @@ public sealed record AgentStepRequest(
     /// <summary>The version that program answered when the engine found it ready, as a refusal names it; null where it was not asked.</summary>
     public string? ProgramVersion { get; init; }
 
+    /// <summary>The skills the prompt holds, each as the step was given it: what the step's stream names where its session begins.</summary>
+    public IReadOnlyList<AgentSkill> Skills { get; init; } = [];
+
+    /// <summary>
+    /// The id the session the step's first launch begins is given, made before the prompt was written - a skill's
+    /// <c>${CLAUDE_SESSION_ID}</c> is it - where the step begins a conversation of its own; null where it goes on with a
+    /// stored one, or the client makes the id. A later launch of the same attempt - a retry, a move to another model -
+    /// begins a session of its own.
+    /// </summary>
+    public string? SessionId { get; init; }
+
     /// <summary>
     /// The names a child the run starts never inherits, whatever the tool's own environment holds: every name the
     /// configuration appoints a value of the slot for, so no other company's key and no token reaches it.
@@ -465,6 +557,16 @@ public sealed record AgentStepRequest(
 
     /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
     public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
+
+    /// <summary>
+    /// How many times a failed agent is asked again on its model before the step moves to the next model of its order,
+    /// and how long to wait before the first ask, doubling each time: the step's own where it says them, the workflow's
+    /// where it does not. Null where the caller gives no rule, and none is retried.
+    /// </summary>
+    public int? Retries { get; init; }
+
+    /// <summary>How long to wait before the first retry of a failed agent, in seconds, doubling each time; null with <see cref="Retries"/>.</summary>
+    public int? BackoffSeconds { get; init; }
 
     /// <summary>The web search the agent is given: its sources, bounds and keys; <see langword="null"/> where it searches none.</summary>
     public AgentWebSearch? WebSearch { get; init; }
@@ -477,6 +579,71 @@ public sealed record AgentStepRequest(
 
     /// <summary>The configuration's entries the step's model is reached by, as the engine resolved them; null where it gave none.</summary>
     public AgentEntries? Entries { get; init; }
+
+    /// <summary>
+    /// The step's whole order as the engine resolved it for running - the entry that serves first and each entry the
+    /// engine's fallback may move it to - and null where the engine gave none, for a step worked as one run on one
+    /// client with no move. An entry the machine cannot use is said and passed over when its turn comes; where none of
+    /// the first model's keys is in the slot the run is refused before it starts.
+    /// </summary>
+    public IReadOnlyList<AgentRunEntry>? Order { get; init; }
+
+    /// <summary>The run context, the block of the run's facts the engine gives every step; null where it gave none.</summary>
+    public string? RunContext { get; init; }
+
+    /// <summary>Each plan update that told this work something, with what raised it; null where the engine gave none.</summary>
+    public string? PlanUpdates { get; init; }
+
+    /// <summary>The continuation record of the work the step goes on with; null where the step begins its own.</summary>
+    public string? Continuation { get; init; }
+
+    /// <summary>
+    /// The engine's compaction of the conversation the run begins from, where it compacted one: the record the new
+    /// conversation's first message is - or, carried before a task of its own (<see cref="AgentCompacted.BeforeItsTask"/>),
+    /// the run's continuation - and what it kept and reduced, said as the run's <see cref="Compacted"/> event and counted
+    /// in its compactions once a client is given it; null where it did not. A run given one begins a new conversation.
+    /// </summary>
+    public AgentCompacted? Compaction { get; init; }
+
+    /// <summary>Where the run's every entry records what its key spent, for the next step's choice of one; null where nothing is counted.</summary>
+    public IAgentSpendSink? Spend { get; init; }
+
+    /// <summary>
+    /// Where this run's own records are kept: a reason step's own directory as the one owner of where a step instance is
+    /// kept spells it (<see cref="Orchestration.OrchestratorLayout.InstanceDirectory"/>), an advice's under the asking
+    /// step's <c>advice/&lt;n&gt;/</c>, the run's reporter's under the run's <c>asks/&lt;stamp&gt;/</c>. Null where the
+    /// caller names none, and the runner keeps them where that owner says of the request's agent and instance.
+    /// </summary>
+    public string? RecordDirectory { get; init; }
+
+    /// <summary>
+    /// Where a client handed a conversation stores it, where not under the request's agent's own sessions: a side-task
+    /// keeps its conversation under its own records, an advice under its own directory, whatever agent - if any - the
+    /// step it was asked for names, and the run's reporter under its own <c>asks/&lt;stamp&gt;/</c>. Null where the
+    /// agent's own sessions hold it.
+    /// </summary>
+    public string? SessionsDirectory { get; init; }
+
+    /// <summary>
+    /// The signal that interrupts the agent's current turn alone, where the engine gave one: a side-task's chat, whose
+    /// Ctrl+C cuts the turn and leaves the conversation open. Null where nothing raises it.
+    /// </summary>
+    public AgentTurnInterrupt? Interrupt { get; init; }
+
+    /// <summary>
+    /// Whether this run is a side-task's chat, whose client holds its turn open between the person's messages: a client
+    /// that renders its conversations keeps its launch open and reads the person's later messages from its messages
+    /// channel, ending only when they end. False for every step of a run.
+    /// </summary>
+    public bool Chat { get; init; }
+
+    /// <summary>
+    /// The move that brought a chat to the first entry of its <see cref="Order"/>, where an earlier run's walk handed it
+    /// back (<see cref="AgentRunResult.GoesOnBy"/>): the walk goes on from it as from its own, so a first entry that
+    /// cannot be started is passed over as one a move brought it to, and the chat handed the entries after it. Null where
+    /// the run's order is its own.
+    /// </summary>
+    public AgentMove? Moved { get; init; }
 }
 
 /// <summary>
@@ -492,7 +659,7 @@ public sealed record AgentStepRequest(
 /// <param name="Provider">The provider the step's model is of.</param>
 /// <param name="Model">The model it runs on, where the step named one; null where it did not, before the resolution that names one.</param>
 /// <param name="Effort">The effort it was asked for, where one is.</param>
-/// <param name="Fallback">The models it goes on with, in order.</param>
+/// <param name="Fallback">The entries it may go on with, in order: the step's later entries, of every client, each usable or said and passed over.</param>
 /// <param name="Files">The files the run was handed, by path.</param>
 /// <param name="Skills">The skills its prompt named, as it was given them.</param>
 /// <param name="Mask">What masks the secrets its lines may carry; never null, masking nothing where the step carries none.</param>
@@ -506,6 +673,10 @@ public sealed record AgentStepRequest(
 /// </param>
 /// <param name="Handoff">The signal the engine raises when the run is pausing.</param>
 /// <param name="Messages">What the engine has to tell the agent while it works.</param>
+/// <param name="RunContext">The run context, the block of the run's facts the engine gives every step; null where it gave none.</param>
+/// <param name="PlanUpdates">Each plan update that told this work something, with what raised it; null where the engine gave none.</param>
+/// <param name="Continuation">The continuation record of the work the step goes on with; null where the step begins its own.</param>
+/// <param name="Compaction">The compaction record of the conversation this run begins, where the engine compacted one; null where it did not.</param>
 public sealed record AgentRun(
     string SystemPrompt,
     string UserPrompt,
@@ -516,13 +687,17 @@ public sealed record AgentRun(
     string? Provider,
     string? Model,
     string? Effort,
-    IReadOnlyList<AgentFallbackModel> Fallback,
+    IReadOnlyList<AgentRunEntry> Fallback,
     IReadOnlyList<string> Files,
     IReadOnlyList<AgentSkill> Skills,
     ILineMask Mask,
     string StepDirectory,
     AgentHandoffSignal Handoff,
-    AgentMessages Messages)
+    AgentMessages Messages,
+    string? RunContext = null,
+    string? PlanUpdates = null,
+    string? Continuation = null,
+    string? Compaction = null)
 {
     /// <summary>
     /// What the agent's policy is decided against - its capabilities among it, which name the tools a launch offers; null
@@ -530,7 +705,22 @@ public sealed record AgentRun(
     /// </summary>
     public Policy.AgentPolicyGround? Ground { get; init; }
 
-    /// <summary>The credential the run signs in with, where its client signs in; null for the machine's login.</summary>
+    /// <summary>
+    /// The operating system's isolation the run's processes are started under (<see cref="Agents.Isolation.LaunchIsolation.Processes"/>):
+    /// a command of the API clients' runtime, and each shell command a Claude Code launch hands over through its shell
+    /// prefix, Claude Code's own process outside it - or that whole process inside, where the mechanism takes no command
+    /// handed to it; null where none was decided.
+    /// </summary>
+    public Isolation.LaunchProcesses? Isolation { get; init; }
+
+    /// <summary>
+    /// The credential the run signs in with, where its client signs in; null for the machine's login. Its keys are the
+    /// run's model's keys in the order they are tried - the one the run starts on first - and each client moves through
+    /// them its own way before the model changes: the loop the API clients share on a key the provider refuses and at an
+    /// account's limit, sending the same request again; the claude-code client only on a key refused before its launch
+    /// did any work, with a new launch of the step's prompt - a key refused later, and every limit, end the launch, and
+    /// the runner moves the step.
+    /// </summary>
     public AgentCredential? Credential { get; init; }
 
     /// <summary>The program a client that starts one starts, as the engine found it ready; null for a client that starts none.</summary>
@@ -538,6 +728,13 @@ public sealed record AgentRun(
 
     /// <summary>The version that program answered when the engine found it ready, as a refusal names it; null where it was not asked.</summary>
     public string? ProgramVersion { get; init; }
+
+    /// <summary>
+    /// The id the session this launch begins is given, where the engine made it before the prompt was written - the
+    /// step's first launch of a conversation of its own; null where the client makes its own, or goes on with a stored
+    /// conversation, whose id it keeps.
+    /// </summary>
+    public string? SessionId { get; init; }
 
     /// <summary>The names a child the run starts never inherits: every name the configuration appoints a value of the slot for.</summary>
     public IReadOnlyList<string> Withheld { get; init; } = [];
@@ -560,7 +757,84 @@ public sealed record AgentRun(
     /// resolved them; null where it gave none, and a client that builds every request from them is not started.
     /// </summary>
     public AgentEntries? Entries { get; init; }
+
+    /// <summary>
+    /// Whether this run is a side-task's chat, whose client holds its turn open between the person's messages: a client
+    /// that renders its conversations keeps its launch open and reads the person's later messages from
+    /// <see cref="Messages"/>, ending only when they end; every other client ends at each turn, the conversation stored
+    /// and handed back. False for every step of a run.
+    /// </summary>
+    public bool Chat { get; init; }
+
+    /// <summary>
+    /// The signal that interrupts the agent's current turn alone: a chat's launch held open stays open for the next
+    /// message, and any other run ends <see cref="AgentRunStatus.Cancelled"/> with what it used
+    /// (<see cref="AgentTurnInterrupt.Cut"/>); null where the engine gave none.
+    /// </summary>
+    public AgentTurnInterrupt? Interrupt { get; init; }
+
+    /// <summary>
+    /// The provider's own web search, which a side-task's <c>web_search</c> asks beside the configured sources - its
+    /// <c>native</c> part, asked by the client's loop as the run stands when the agent asks it, with the entry serving the
+    /// run then; null where this run's provider runs none - every client but the Claude API's - and for every step of a
+    /// run, whose web is the harness's own alone.
+    /// </summary>
+    public IAgentNativeSearch? NativeSearch { get; init; }
+
+    /// <summary>
+    /// The gate's lanes, which a client that paces its own requests (<see cref="AgentClientCapabilities.PacesRequests"/>)
+    /// enters for each request it sends - the lane of the run's provider and the key the request is signed with - and
+    /// sets the cool-down of on every 429; null where the runner holds no gate, or holds the lane around the whole run
+    /// itself.
+    /// </summary>
+    public ClientGates? Gates { get; init; }
 }
+
+/// <summary>
+/// The provider's own web search, as its wire asks it: one query of the model and the key it is given, answered as a
+/// source's part of the same search, with what the request used - its tokens, the results billed as input among them,
+/// and its searches - and the failure it met. Which entry it asks, the gate it goes through and the part of the run's
+/// usage it is counted to are the asking loop's, as they are for every request of the conversation.
+/// </summary>
+public interface IAgentNativeSearch
+{
+    /// <summary>The part's source name, as the answer and the records name it: <c>native</c>.</summary>
+    string Source { get; }
+
+    /// <summary>The tokens a search of <paramref name="query"/> on <paramref name="model"/> sends, as the gate counts a request's input as it enters.</summary>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="model">The model the search is asked of.</param>
+    long InputTokens(string query, string model);
+
+    /// <summary>Searches <paramref name="query"/> with the provider's own search, asked of <paramref name="model"/> and signed with <paramref name="key"/>.</summary>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="model">The model the search is asked of: the one serving the run when the agent asks.</param>
+    /// <param name="key">The key the request is signed with: the one serving the run when the agent asks.</param>
+    /// <param name="cancellationToken">Stops the search.</param>
+    /// <returns>The part it came to - failed, saying why, where the provider did not answer with a search - what its request used, and the failure it met.</returns>
+    Task<AgentNativeSearched> SearchAsync(string query, string model, AgentKey key, CancellationToken cancellationToken);
+
+    /// <summary>The part of a search of <paramref name="query"/> that failed for <paramref name="why"/>: the one shape every failed native part takes.</summary>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="why">Why it failed, as the part says it.</param>
+    Web.Search.WebSearchPart Failed(string query, string why)
+        => new(Source, Source, Version: 1, query, Web.Search.WebSearchAnswer.Failed(why), Withheld: 0, Cached: false, KeyMissing: null);
+}
+
+/// <summary>What one request of the provider's own search came to.</summary>
+/// <param name="Part">The part it came to, failed where the provider did not answer with a search.</param>
+/// <param name="Used">What the request used.</param>
+/// <param name="Failure">The failure the request met, read as every failure of the provider's is; null where it answered.</param>
+public sealed record AgentNativeSearched(Web.Search.WebSearchPart Part, AgentUsage Used, Loop.ChatFailure? Failure = null);
+
+/// <summary>
+/// Asks a run's native search for its tool runtime, as the run stands when the agent asks it: the client's loop, which
+/// knows the entry serving the run then, goes through its gate and counts what the search used.
+/// </summary>
+/// <param name="query">The query, as the agent wrote it.</param>
+/// <param name="cancellationToken">Stops the search: the run's stop and the turn's cut.</param>
+/// <returns>The part the search came to.</returns>
+public delegate Task<Web.Search.WebSearchPart> AgentNativeAsk(string query, CancellationToken cancellationToken);
 
 /// <summary>
 /// The configuration's entries a run's model is reached by: its provider - the API's address and the currency of its

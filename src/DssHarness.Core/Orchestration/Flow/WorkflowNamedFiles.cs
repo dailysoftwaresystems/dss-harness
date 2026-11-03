@@ -35,11 +35,26 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
     /// <param name="what">What names the file, as a problem says it.</param>
     /// <param name="path">The file with every link along it followed, where it could be resolved.</param>
     public string? Problem(string named, string directory, string name, string what, out string path)
+        => Problem(named, directory, name, what, out path, out _);
+
+    /// <summary>
+    /// <see cref="Problem(string, string, string, string, out string)"/>, saying beside it whether the one problem is
+    /// that the file is not there - looked for, inside the workflow's directory, and not found - never where it could not
+    /// be looked at.
+    /// </summary>
+    /// <param name="named">The file, as the definition names it.</param>
+    /// <param name="directory">The workflow's directory, every link along it followed (<see cref="Directory"/>).</param>
+    /// <param name="name">The workflow.</param>
+    /// <param name="what">What names the file, as a problem says it.</param>
+    /// <param name="path">The file with every link along it followed, where it could be resolved.</param>
+    /// <param name="missing">Whether the problem is that the file is not there.</param>
+    private string? Problem(string named, string directory, string name, string what, out string path, out bool missing)
     {
         ArgumentNullException.ThrowIfNull(named);
         ArgumentNullException.ThrowIfNull(directory);
 
         path = string.Empty;
+        missing = false;
         var relative = $"{HarnessLayout.WorkflowDirectoryRelative(name)}/";
 
         // Rooted by every platform's rules, as an action's path is: a drive written on Linux would otherwise read as a
@@ -73,13 +88,15 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
             return null;
         }
 
+        missing = unlooked is null;
+
         return unlooked is null
             ? $"'{named}', {what}, is not at '{relative}{named.Replace('\\', '/')}'; write it there, beside the definition that names it"
             : $"'{named}', {what}, could not be looked at: {unlooked}";
     }
 
     /// <summary>
-    /// The text of a file the definition names, as a run reads it where it needs it, held to <see cref="Problem"/>'s rule.
+    /// The text of a file the definition names, as a run reads it where it needs it, held to <see cref="Problem(string, string, string, string, out string)"/>'s rule.
     /// </summary>
     /// <param name="layout">The repository's layout.</param>
     /// <param name="name">The workflow.</param>
@@ -87,6 +104,29 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
     /// <param name="what">What names the file, as a refusal says it.</param>
     /// <exception cref="HarnessException">It breaks the rule, or could not be read (<see cref="HarnessExit.ConfigInvalid"/>), saying why.</exception>
     public string ReadText(HarnessLayout layout, string name, string named, string what)
+        => Read(layout, name, named, what, missingIsNone: false)!;
+
+    /// <summary>
+    /// The text of a file the workflow may hold and owes none of, as a run reads it where it needs it: null where it is
+    /// not there - looked for inside the workflow's directory and not found - and held to
+    /// <see cref="Problem(string, string, string, string, out string)"/>'s rule otherwise, so a file that could not be
+    /// looked at or read is never taken for one that is not there.
+    /// </summary>
+    /// <param name="layout">The repository's layout.</param>
+    /// <param name="name">The workflow.</param>
+    /// <param name="named">The file, as the workflow's own folder names it.</param>
+    /// <param name="what">What names the file, as a refusal says it.</param>
+    /// <exception cref="HarnessException">It breaks the rule but for not being there, or could not be read (<see cref="HarnessExit.ConfigInvalid"/>), saying why.</exception>
+    public string? ReadTextIfThere(HarnessLayout layout, string name, string named, string what)
+        => Read(layout, name, named, what, missingIsNone: true);
+
+    /// <summary>The text of a file the definition names, held to the rule; null where <paramref name="missingIsNone"/> and it is not there.</summary>
+    /// <param name="layout">The repository's layout.</param>
+    /// <param name="name">The workflow.</param>
+    /// <param name="named">The file, as the definition names it.</param>
+    /// <param name="what">What names the file, as a refusal says it.</param>
+    /// <param name="missingIsNone">Whether a file that is not there answers null rather than a refusal.</param>
+    private string? Read(HarnessLayout layout, string name, string named, string what, bool missingIsNone)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
@@ -101,9 +141,9 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
             throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', {what}, could not be read: the workflow's directory '{layout.WorkflowDirectory(name)}' could not be resolved: {exception.Message}");
         }
 
-        if (Problem(named, directory, name, what, out var path) is { } problem)
+        if (Problem(named, directory, name, what, out var path, out var missing) is { } problem)
         {
-            throw new HarnessException(HarnessExit.ConfigInvalid, problem);
+            return missingIsNone && missing ? null : throw new HarnessException(HarnessExit.ConfigInvalid, problem);
         }
 
         try

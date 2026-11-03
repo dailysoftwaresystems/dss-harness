@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Help;
@@ -12,7 +13,7 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// What only the repository can answer about the workflows it declares: that each definition file is there, reads,
-/// holds, and names files that are there - the one command that reads a workflow's whole definition and its files
+/// holds, and names files that are there, each schema one the engine reads - the one command that reads a workflow's whole definition and its files
 /// together, changing nothing.
 /// </summary>
 public sealed class WorkflowValidationServiceTests
@@ -48,6 +49,40 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.Equal(HarnessExit.ConfigInvalid, unresolved.ExitCode);
         Assert.EndsWith("could not be resolved: too many levels of links", unresolved.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A file the workflow may hold and owes none of is read by the same rule, with one difference: one looked for and
+    /// not there answers nothing, never a refusal - and one the file system would not let be looked at, or that is spelt
+    /// out of the workflow's directory, is refused all the same, never taken for one that is not there.
+    /// </summary>
+    [Fact]
+    public void AFileTheWorkflowMayHold_IsNoneOnlyWhereItWasLookedForAndIsNotThere()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        Directory.CreateDirectory(layout.WorkflowDirectory("flow"));
+        File.WriteAllText(Path.Combine(layout.WorkflowDirectory("flow"), "recommendations.md"), "the bar\n");
+        var named = new WorkflowNamedFiles(harness.FileSystem, harness.Platform.PathComparison);
+
+        Assert.Equal("the bar\n", named.ReadTextIfThere(layout, "flow", "recommendations.md", "a workflow file"));
+        Assert.Null(named.ReadTextIfThere(layout, "flow", "absent.md", "a workflow file"));
+
+        var outside = Assert.Throws<HarnessException>(() => named.ReadTextIfThere(layout, "flow", "../flow.yml", "a workflow file"));
+
+        Assert.StartsWith("'../flow.yml', a workflow file, does not name a file inside the workflow's directory", outside.Message, StringComparison.Ordinal);
+
+        // A file the file system would not let be looked at: it may be there, and is refused saying why.
+        var unlookable = Substitute.For<IFileSystem>();
+        unlookable.ResolveLinks(Arg.Any<string>()).Returns(call => call.Arg<string>());
+        unlookable.FileExists(Arg.Any<string>()).Returns(false);
+        unlookable.KindOf(Arg.Any<string>()).Returns(_ => throw new UnauthorizedAccessException("access to the path is denied."));
+        var denied = Assert.Throws<HarnessException>(() => new WorkflowNamedFiles(unlookable, harness.Platform.PathComparison).ReadTextIfThere(layout, "flow", "recommendations.md", "a workflow file"));
+
+        Assert.Equal(
+            (HarnessExit.ConfigInvalid, "'recommendations.md', a workflow file, could not be looked at: access to the path is denied"),
+            (denied.ExitCode, denied.Message));
     }
 
     /// <summary>
@@ -96,6 +131,36 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal("1 workflow(s) checked, all valid", outcome.Message);
+    }
+
+    /// <summary>
+    /// A skill a step's prompt names is looked for by the service's own check, in the repository's places: the missing
+    /// sentence names every one, under the definition's refusal, and nothing is run.
+    /// </summary>
+    [Fact]
+    public async Task ASkillAStepsPromptNames_IsLookedForInTheRepositorysOwnPlaces()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+
+        Directory.CreateDirectory(Path.Combine(directory, "prompts"));
+        Directory.CreateDirectory(Path.Combine(directory, "agents"));
+        Directory.CreateDirectory(Path.Combine(directory, "schemas"));
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
+        File.WriteAllText(Path.Combine(directory, "prompts", "implement.md"), "Use {skill.release-notes}.\n");
+        File.WriteAllText(Path.Combine(directory, "agents", "worker.md"), "---\nname: worker\ndescription: does the work\n---\nYou do the work.\n");
+        File.WriteAllText(Path.Combine(directory, "schemas", "implement.json"), """{ "type": "object", "additionalProperties": false, "properties": { } }""");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.False(report.Passed);
+        var problem = Assert.Single(report.Workflows[0].Lines);
+        Assert.StartsWith(
+            $"{Shown("flow")}: prompt 'prompts/implement.md' line 1 names {{skill.release-notes}}, and there is no such skill. Looked for:",
+            problem);
+        Assert.Contains(Path.Combine(repository.Path, ".harness-config", "skills", "release-notes", "SKILL.md"), problem);
+        Assert.Contains(Path.Combine(repository.Path, ".claude", "skills", "release-notes", "SKILL.md"), problem);
+        Assert.EndsWith("A plugin's skill, a managed one and a .claude/commands file are not looked for: copy the skill's folder to .harness-config/skills/release-notes.", problem.TrimEnd());
     }
 
     /// <summary>
@@ -688,8 +753,61 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.Equal(
             [
-                $"{Shown("small")}: 'schemas/broken.json', step 'broken''s outputs, is not valid JSON ({JsonReason("{ not json")})",
-                $"{Shown("small")}: 'schemas/listed.json', step 'listed''s outputs, holds no JSON object; a schema is a mapping of properties",
+                $"{Shown("small")}: 'schemas/broken.json', step 'broken''s outputs, is not a schema the engine reads: $: is not JSON ({JsonReason("{ not json")})",
+                $"{Shown("small")}: 'schemas/listed.json', step 'listed''s outputs, is not a schema the engine reads: $: a schema is a JSON object",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A schema that says what the engine does not read is refused where the workflow is checked, never first where a
+    /// step's client is about to be paid: each problem on its own line, naming the file, the step that names it and the
+    /// place in the schema that says it - a schema two steps name said for each.
+    /// </summary>
+    [Fact]
+    public async Task ASchemaOutsideTheSubset_IsRefused_EachProblemNamingTheStepAndTheFile()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: draft
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/open.json
+              - name: again
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/open.json
+                dependsOn: [draft]
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/open.json");
+        await File.WriteAllTextAsync(
+            Path.Combine(repository.Path, ".harness-config", "workflows", "small", "schemas", "open.json"),
+            """{"type":"object","properties":{"plan":{"type":"string","minLength":1}},"required":["plan"]}""",
+            cancellationToken);
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+        var open = $"{Shown("small")}: 'schemas/open.json'";
+        var unread = "is not a schema the engine reads:";
+
+        Assert.False(report.Passed);
+        Assert.Equal(
+            [
+                $"{open}, step 'draft''s outputs, {unread} $.properties.plan.minLength: is said by no schema this engine reads",
+                $"{open}, step 'draft''s outputs, {unread} $: an object holds additionalProperties: false, saying every property is one it names",
+                $"{open}, step 'again''s outputs, {unread} $.properties.plan.minLength: is said by no schema this engine reads",
+                $"{open}, step 'again''s outputs, {unread} $: an object holds additionalProperties: false, saying every property is one it names",
             ],
             report.Lines);
     }
@@ -1047,24 +1165,21 @@ public sealed class WorkflowValidationServiceTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's, "
-                + "{question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
+            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own recommendations.md, read live each time it is given so a change holds from the next question on, and a sentence saying none was written where the folder has no one - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
                 + "{update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and {piece.<name>} in a step of "
                 + "the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's body, which the "
                 + "engine fills and no agent reads, reads what a template key reads and no skill.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's, "
-                + "`{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
                 + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
                 + "work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's `body`, which the engine "
                 + "fills and no agent reads, reads what a template key reads and no skill.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's, "
-                + "`{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
                 + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
                 + "work-item group; the advisor's and the reporter's prompts are read too, and read no step by name, and a pull request's "
                 + "`body`, which the engine fills and no agent reads, reads what a template key reads and no skill.",
@@ -1293,7 +1408,7 @@ public sealed class WorkflowValidationServiceTests
     {
         try
         {
-            using var document = JsonDocument.Parse(text);
+            _ = JsonNode.Parse(text);
         }
         catch (JsonException ex)
         {
@@ -1364,7 +1479,14 @@ public sealed class WorkflowValidationServiceTests
             var path = Path.Combine([directory, .. file.Split('/')]);
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            await File.WriteAllTextAsync(path, file.EndsWith(".json", StringComparison.Ordinal) ? "{}\n" : "text\n", cancellationToken);
+            await File.WriteAllTextAsync(
+                path,
+                file.EndsWith(".json", StringComparison.Ordinal)
+                    ? "{}\n"
+                    : file.EndsWith(".md", StringComparison.Ordinal)
+                        ? $"---\nname: {Path.GetFileNameWithoutExtension(file)}\ndescription: does the work the steps ask of it\n---\nYou do the work the steps ask of you.\n"
+                        : "text\n",
+                cancellationToken);
         }
     }
 

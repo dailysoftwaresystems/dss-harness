@@ -97,8 +97,8 @@ public enum GraphToolOutcome
 /// The one tool <c>graph</c>, over the lookups of <see cref="CodebaseGraphQueries"/>: its seven operations - <c>find</c>,
 /// <c>node</c>, <c>related</c>, <c>outline</c>, <c>body</c>, <c>edit</c> and <c>wholeFile</c> - the same on every client, each
 /// answering in bounded lines of text with a line range and a hash on every node, and a text search where the graph is not
-/// sure. The schema a step is given holds only the operations it may use. Nothing opens it in a step yet (part 03's tool
-/// runtime; slice 27d gives it one); the <c>query-codebase-graph</c> verb runs its read operations by hand.
+/// sure. The schema a step is given holds only the operations it may use. No step opens it: the tool
+/// runtime's table does not hold it. The <c>query-codebase-graph</c> verb runs its read operations by hand.
 /// </summary>
 /// <remarks>
 /// It answers from the view it was handed - checked fresh by the caller, as the engine checks every answer's files
@@ -107,8 +107,8 @@ public enum GraphToolOutcome
 /// served, and an edit's file after it is written, and the tool answers from the view that gives from then on.
 /// </remarks>
 /// <param name="queries">The indexed view it answers from.</param>
-/// <param name="files">The one search a text fallback runs, as <c>search_files</c> runs it.</param>
-/// <param name="fileSystem">Reads a body fresh, and writes an edit.</param>
+/// <param name="files">The one search a text fallback runs, as <c>search_files</c> runs it, and the one way a body is read fresh and an edit written.</param>
+/// <param name="fileSystem">Looks a body's file up.</param>
 /// <param name="paths">
 /// Where a body's read and an edit's write may reach, as the runtime's file tools' do: the step's agent's roots in a step,
 /// the tree alone for the verb (<see cref="ConfinedPaths.Within"/>) - so a file of the view that became a link out of the
@@ -689,7 +689,11 @@ public sealed class CodebaseGraphTool(
         var was = edited.LineCount;
         edited.ReplaceLines(card.Start, card.End, text);
         var moved = edited.LineCount - was;
-        await _fileSystem.WriteAllBytesAtomicAsync(Full(card.Path), edited.Bytes(), cancellationToken).ConfigureAwait(false);
+        // Where it lands decided again before a byte is written, as the runtime's own writes are (AgentFiles.Write).
+        if (_files.Write(_paths.WritableRootOf(Full(card.Path)), Full(card.Path), edited.Bytes(), landing => _paths.Opened(landing, write: true).Denied) is { } landed)
+        {
+            return new GraphToolAnswer(landed.Reason, GraphToolOutcome.Refused, card.Path, landed);
+        }
 
         var after = await ExtractedAgainAsync(card.Path, cancellationToken).ConfigureAwait(false);
         var written = card.End - card.Start + 1 + moved;
@@ -767,7 +771,9 @@ public sealed class CodebaseGraphTool(
         try
         {
             var pattern = new Regex($@"(?<![\p{{L}}\p{{N}}_]){Regex.Escape(word)}(?![\p{{L}}\p{{N}}_])", RegexOptions.CultureInvariant, AgentFiles.PatternBound);
-            var search = await _files.SearchAsync(_queries.Tree, pattern, null, StringComparison.Ordinal, 0, TextHits, file => _mayRead(Relative(file)), cancellationToken).ConfigureAwait(false);
+            // Each file held to the tree as well as to what the graph may read: the search decides again where each file it
+            // opened stands, and a link put on its way since may lead out of the tree, where no relative path reads.
+            var search = await _files.SearchAsync(_queries.Tree, pattern, null, StringComparison.Ordinal, 0, TextHits, file => _paths.Read(file).Full is not null && _mayRead(Relative(file)), cancellationToken).ConfigureAwait(false);
 
             var notes = string.Concat(search.LeftOut(path => path).Select(note => "\n  " + note));
 
@@ -787,8 +793,9 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>
     /// The file at <paramref name="path"/> read whole, in its encoding, or why it is not: a place the runtime's own tools
-    /// may not read (<see cref="ConfinedPaths.Read"/>) - a link out of the tree put along it since the view was read - none
-    /// there, past the bytes a view holds whole (<see cref="AgentTools.MostViewedBytes"/>), or no text this tool reads.
+    /// may not read (<see cref="ConfinedPaths.Read"/>) - a link out of the tree put along it since the view was read, by its
+    /// path or, once opened, by where the open file stands (<see cref="AgentFiles.ReadAsync"/>) - none there, past the bytes
+    /// a view holds whole (<see cref="AgentTools.MostViewedBytes"/>), or no text this tool reads.
     /// </summary>
     private async Task<(EncodedTextReading? Reading, string? Why)> ReadFileAsync(string path, CancellationToken cancellationToken)
     {
@@ -809,7 +816,14 @@ public sealed class CodebaseGraphTool(
             return (null, $"'{path}' holds {DiskSpace.Size(standing.Length)}, past the {DiskSpace.Size(AgentTools.MostViewedBytes)} a body or an edit reads whole: read a range of it");
         }
 
-        var reading = EncodedText.Read(await _fileSystem.ReadAllBytesAsync(full, cancellationToken).ConfigureAwait(false));
+        var read = await _files.ReadAsync(full, AgentTools.MostViewedBytes, opened => _paths.Opened(opened, write: false).Denied, cancellationToken).ConfigureAwait(false);
+
+        if (read.Denied is { } moved)
+        {
+            return (null, moved.Reason);
+        }
+
+        var reading = EncodedText.Read(read.Bytes!);
         return reading.IsRead ? (reading, null) : (null, $"'{path}' is {(reading.Binary ? "binary" : "no text this tool reads")}: {reading.Why}");
     }
 

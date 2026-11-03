@@ -29,7 +29,7 @@ public sealed class AgentStreamTests
         using var temp = new TempDirectory();
         var stream = StoredStream.Open(Disk(), Step(temp), new Masking("s3cret", "***"));
 
-        await stream.EmitAsync(new SessionStarted("fake", "model-x", "hash", ["Read"], ["skill-a"], HandedConversation: false, SessionId: "s1"));
+        await stream.EmitAsync(new SessionStarted("fake", "model-x", "hash", ["Read"], [new AgentSkill("skill-a", ".harness-config/skills", "SKILL.md", "digest", "folder digest", "skills/skill-a")], HandedConversation: false, SessionId: "s1"));
         await stream.EmitAsync(new MessageSent("the key is s3cret", AgentMessageKind.FirstPrompt));
         await stream.EmitAsync(new AssistantMessage("done, holding s3cret", [new AgentToolCall("c1", "Read")]));
         await stream.EmitAsync(new RunFinished(AgentRunStatus.Completed));
@@ -250,7 +250,7 @@ public sealed class AgentStreamTests
             kinds.Select(kind => kind.DerivedType).OrderBy(type => type.Name, StringComparer.Ordinal),
             typeof(AgentEvent).Assembly.GetTypes().Where(type => type.IsSubclassOf(typeof(AgentEvent)) && !type.IsAbstract).OrderBy(type => type.Name, StringComparer.Ordinal));
         Assert.Equal(
-            ["sessionStarted", "messageSent", "turnStarted", "turnFinished", "textDelta", "thinkingDelta", "assistantMessage",
+            ["sessionStarted", "messageSent", "messagesDropped", "turnStarted", "turnFinished", "textDelta", "thinkingDelta", "assistantMessage",
                 "toolCallStarted", "toolCallInputDelta", "toolCallFinished", "permissionDenied", "webRequested", "usageReported",
                 "waitingToRetry", "turnRestarted", "fallbackStarted", "fallbackPassedOver", "outputRepair", "compacted",
                 "handoffAsked", "handoffAnswered", "personAsked", "personAnswered", "notice", "runStarted", "runFinished"],
@@ -285,7 +285,7 @@ public sealed class AgentStreamTests
         var lines = File.ReadAllLines(StreamFile(temp));
 
         Assert.Equal(stored.Count, lines.Length);
-        Assert.Equal(26 * 3, stored.Count + shown.Count);
+        Assert.Equal(27 * 3, stored.Count + shown.Count);
 
         foreach (var (@event, fill, line) in stored.Zip(lines, (one, line) => (one.Event, one.Fill, line)).Concat(shown))
         {
@@ -567,7 +567,8 @@ public sealed class AgentStreamTests
 
     /// <summary>
     /// A value of <paramref name="type"/>, built from its widest constructor and its settable members, every member that
-    /// may be absent filled or left null as <paramref name="fill"/> says.
+    /// may be absent filled or left null as <paramref name="fill"/> says - but a member never written, which holds what
+    /// is handed across a call alone and so is no part of what reads back.
     /// </summary>
     private static object? Sample(Type type, Fill fill)
     {
@@ -636,7 +637,9 @@ public sealed class AgentStreamTests
             .ToArray();
         var made = constructor.Invoke(arguments);
 
-        foreach (var property in type.GetProperties().Where(property => property.SetMethod is { IsPublic: true } && !constructor.GetParameters().Any(parameter => string.Equals(parameter.Name, property.Name, StringComparison.Ordinal))))
+        foreach (var property in type.GetProperties().Where(property => property.SetMethod is { IsPublic: true }
+            && property.GetCustomAttribute<JsonIgnoreAttribute>() is not { Condition: JsonIgnoreCondition.Always }
+            && !constructor.GetParameters().Any(parameter => string.Equals(parameter.Name, property.Name, StringComparison.Ordinal))))
         {
             property.SetValue(made, Absent(nullability.Create(property).WriteState, property.PropertyType, fill) ? null : Sample(property.PropertyType, fill));
         }

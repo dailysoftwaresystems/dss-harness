@@ -47,7 +47,7 @@ public sealed class AgentRunnerTests
 
         var search = new AgentWebSearch([], 3, 4, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
         var entries = new AgentEntries(new AgentProviderConfig { Name = "anthropic" }, new AgentModelConfig { Code = "model-x" }, new AgentClientConfig { MaxRetries = 2 });
-        var step = Step(temp, promptValues: new Dictionary<string, string> { ["item"] = "login form" }) with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"], Entries = entries };
+        var step = Step(temp, prompt: "do the login form") with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"], Entries = entries };
 
         var result = await Runner(client).RunAsync(step, new Collecting(seen), TestContext.Current.CancellationToken);
 
@@ -66,6 +66,112 @@ public sealed class AgentRunnerTests
         Assert.Equal(new RunStarted(1) { At = seen[0].At, Seq = 1 }, seen[0]);
         Assert.Equal(new RunFinished(AgentRunStatus.Completed) { At = seen[^1].At, Seq = 5 }, seen[^1]);
         Assert.Equal(JsonSerializer.Serialize(result, JsonStateFile.Options) + "\n", File.ReadAllText(ResultFile(temp)));
+    }
+
+    /// <summary>
+    /// A launch the engine decided runs on the words policy alone says so at its start, in its own stream, right after the
+    /// run starts; the client is handed what its processes run under, never the decision its asker releases; and the result
+    /// records the isolation the launch ran under - one that runs under a mechanism says no notice and records the mechanism.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchWithoutIsolation_SaysSoAtItsStart_AndItsResultRecordsWhatItRanUnder()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (run, _, _) => Task.FromResult(Completed(run)) };
+        var without = new DssHarness.Core.Agents.Isolation.LaunchIsolation("preferred", null, null, "bubblewrap is not here", "install it");
+        var seen = new List<AgentEvent>();
+
+        var result = await Runner(client).RunAsync(Step(temp) with { Isolation = without }, new Collecting(seen), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["runStarted", "notice", "runFinished"], seen.Select(Kind));
+        Assert.Equal(new Notice(without.Notice!) { At = seen[1].At, Seq = 2 }, seen[1]);
+        Assert.Equal(without.Processes, client.Run!.Isolation);
+        Assert.Equal(new DssHarness.Core.Agents.Isolation.AgentIsolationRecord("preferred") { None = "bubblewrap is not here" }, result.Isolation);
+        Assert.Contains("\"isolation\": {\n    \"mode\": \"preferred\",\n    \"none\": \"bubblewrap is not here\"\n  }", File.ReadAllText(ResultFile(temp)), StringComparison.Ordinal);
+
+        seen.Clear();
+        var under = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism("bubblewrap", "0.9.0"), DssHarness.Core.Processes.IsolationProfile.Nothing, null, null);
+        var isolated = await Runner(client).RunAsync(Step(temp) with { Isolation = under, Attempt = 2 }, new Collecting(seen), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["runStarted", "runFinished"], seen.Select(Kind));
+        Assert.Equal(new DssHarness.Core.Agents.Isolation.LaunchProcesses(under.ForCommands, null), client.Run!.Isolation);
+        Assert.Same(under.Mechanism, client.Run.Isolation!.Commands!.Mechanism);
+        Assert.Equal(new DssHarness.Core.Agents.Isolation.AgentIsolationRecord("required") { Mechanism = "bubblewrap", Version = "0.9.0" }, isolated.Isolation);
+    }
+
+    /// <summary>
+    /// A launch over a linked worktree an earlier version of this tool made says so at its start, in its own stream, right
+    /// after the run starts - each tree one saying - for inside the isolation git add and git fetch fail there, and the
+    /// remedy names the verbs that give the agent a repository of its own.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchOverALegacyLinkedWorktree_SaysSoAtItsStart()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (run, _, _) => Task.FromResult(Completed(run)) };
+        var isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation(
+            "required",
+            new PassThroughMechanism("bubblewrap", "0.9.0"),
+            DssHarness.Core.Processes.IsolationProfile.Nothing,
+            null,
+            null)
+        {
+            LegacyWorktrees = [$"'{Path.Combine(temp.Path, "wt")}' is a linked worktree an earlier version made: git add and fetch fail there; delete-agent and a new agent give it a repository of its own"],
+        };
+        var seen = new List<AgentEvent>();
+
+        await Runner(client).RunAsync(Step(temp) with { Isolation = isolation }, new Collecting(seen), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["runStarted", "notice", "runFinished"], seen.Select(Kind));
+        Assert.Equal(new Notice(isolation.LegacyWorktrees[0]) { At = seen[1].At, Seq = 2 }, seen[1]);
+    }
+
+    /// <summary>
+    /// A launch under a mechanism that leaves something reached says what at its start, as one under none does; and what its
+    /// agent's commands made in the trees' git directories that no git may go on over fails its run, saying it, in its
+    /// result and its record's end.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchUnderAMechanismThatLeavesSomething_SaysIt_AndOneThatMadeAPointer_Fails()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (run, _, _) => Task.FromResult(Completed(run)) };
+        const string Made = "'x' was made while it ran";
+        var leaving = new DssHarness.Core.Agents.Isolation.LaunchIsolation(
+            "required",
+            new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" },
+            DssHarness.Core.Processes.IsolationProfile.Nothing,
+            null,
+            null) { After = _ => Task.FromResult<string?>(Made) };
+        var seen = new List<AgentEvent>();
+
+        var result = await Runner(client).RunAsync(Step(temp) with { Isolation = leaving }, new Collecting(seen), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["runStarted", "notice", "runFinished"], seen.Select(Kind));
+        Assert.Equal(new Notice("the agent's commands run inside bubblewrap, which leaves abstract Unix sockets reached") { At = seen[1].At, Seq = 2 }, seen[1]);
+        Assert.Equal((AgentRunStatus.Failed, Made), (result.Status, result.Error));
+        Assert.Equal((AgentRunStatus.Failed, Made), (((RunFinished)seen[2]).Status, ((RunFinished)seen[2]).Error));
+    }
+
+    /// <summary>
+    /// A run the engine keeps elsewhere than an agent's steps - the run's reporter, whose attempt's files belong under
+    /// the run's <c>asks/</c> - keeps its stream, its record and its first message there, by the directory its request
+    /// names.
+    /// </summary>
+    [Fact]
+    public async Task ARunKeptElsewhereThanAnAgentsSteps_KeepsItsRecordsWhereItsRequestNames()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (run, _, _) => Task.FromResult(Completed(run)) };
+        var asks = Path.Combine(temp.Path, ".orchestrators", "r1", "asks", "20261030T101000Z-1f3ab");
+
+        var result = await Runner(client).RunAsync(Step(temp) with { RecordDirectory = asks }, events: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.True(File.Exists(Path.Combine(asks, StoredStream.FileName)), "the stored stream is kept where the request names");
+        Assert.True(File.Exists(Path.Combine(asks, AgentRunner.ResultFileName)), "and the run's own record beside it");
+        Assert.True(File.Exists(Path.Combine(asks, "user.md")), "and the first user message as sent");
+        Assert.False(Directory.Exists(StepDirectory(temp)), "and nothing under the agent's steps");
     }
 
     /// <summary>
@@ -584,7 +690,8 @@ public sealed class AgentRunnerTests
 
     /// <summary>
     /// The run's own record and its stream are written through the file system the runner was given: the stream opened
-    /// for appending, and <c>result.json</c> put in place in one step, so one that is there was written whole.
+    /// for appending, and the first user message (<c>user.md</c>, before the client is taken) and <c>result.json</c>
+    /// (after the stream's last line) each put in place in one step, so one that is there was written whole.
     /// </summary>
     [Fact]
     public async Task TheRecordsAreWritten_ThroughTheFileSystemTheRunnerWasGiven()
@@ -596,7 +703,7 @@ public sealed class AgentRunnerTests
         await new AgentRunner([client], disk, Elevation.User, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
 
         Assert.Equal([StreamFile(temp)], disk.Appended);
-        Assert.Equal([ResultFile(temp)], disk.Written);
+        Assert.Equal([UserMdFile(temp), ResultFile(temp)], disk.Written);
     }
 
     /// <summary>
@@ -764,6 +871,27 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
+    /// A step whose output is held to a schema outside the subset every answer is held to never begins: the client is
+    /// never asked - no paid request is sent for an answer no gate could read - and the run says the configuration is
+    /// why, naming each place in the schema the subset does not read.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhoseOutputSchemaIsOutsideTheSubset_NeverBegins_AndNoClientIsAsked()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient();
+        const string schema = """{"type":"object","properties":{"answer":{"type":"string"},"text":null},"allOf":[{"if":{},"then":{}}]}""";
+        var problems = string.Join("; ", DssHarness.Core.Schemas.JsonSchemaSubset.SubsetProblems(System.Text.Json.Nodes.JsonNode.Parse(schema)!));
+
+        var result = await Runner(client).RunAsync(Step(temp) with { Output = new AgentOutput("advice", schema) }, events: null, TestContext.Current.CancellationToken);
+
+        Assert.Null(client.Run);
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
+        Assert.NotEmpty(problems);
+        Assert.Equal($"The step's output 'advice' is held to a schema this engine does not read: {problems}.", result.Error);
+    }
+
+    /// <summary>
     /// A step that names no client is worked by the one there is; where there are two, none is taken, and the run never
     /// began, saying which are registered.
     /// </summary>
@@ -786,22 +914,39 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
-    /// The prompt is filled in one pass, by the one template grammar: a value that names another value is put in as it
-    /// is, never filled in its turn; a doubled brace stands for one, another expander's group and a name with no value
-    /// stand as written, and a name may be dotted.
+    /// The skills a step was given and the session id the engine made before its prompt was written reach the client's
+    /// run, for its stream to record the one and its session to begin as the other.
     /// </summary>
     [Fact]
-    public async Task ThePromptIsFilledInOnePass_AValueNamingAnotherIsPutInAsItIs()
+    public async Task TheSkillsAndTheSessionId_ReachTheClientsRun()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient();
+        var skill = new AgentSkill("review", ".harness-config/skills", "SKILL.md", "digest", "folder digest", "skills/review");
+        const string id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+        await Runner(client).RunAsync(Step(temp) with { Skills = [skill], SessionId = id }, events: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(id, client.Run!.SessionId);
+        Assert.Equal([skill], client.Run.Skills);
+    }
+
+    /// <summary>
+    /// The prompt is handed to the client as the request gives it - the engine filled it once, and the runner never reads
+    /// it as a template again - so a value's braces, a doubled brace and another expander's group all stand as written.
+    /// </summary>
+    [Fact]
+    public async Task ThePrompt_IsHandedAsGiven_NeverReadAsATemplateAgain()
     {
         using var temp = new TempDirectory();
         var client = new FakeClient();
 
         await Runner(client).RunAsync(
-            Step(temp, template: "do {a} then {b}, leaving {c} and {{d}} ${e} for {item.title}", promptValues: new Dictionary<string, string> { ["a"] = "{b}", ["b"] = "x", ["item.title"] = "t" }),
+            Step(temp, prompt: """do {"red":["a"]} then {b}, leaving {{d}} ${e}"""),
             events: null,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("do {b} then x, leaving {c} and {d} ${e} for t", client.Run!.UserPrompt);
+        Assert.Equal("""do {"red":["a"]} then {b}, leaving {{d}} ${e}""", client.Run!.UserPrompt);
     }
 
     /// <summary>
@@ -1220,8 +1365,7 @@ public sealed class AgentRunnerTests
     private static AgentStepRequest Step(
         TempDirectory temp,
         string? client = null,
-        Dictionary<string, string>? promptValues = null,
-        string template = "do the {item}",
+        string prompt = "do the thing",
         int? handoffSeconds = null,
         int attempt = 1)
         => new(
@@ -1237,8 +1381,7 @@ public sealed class AgentRunnerTests
             Effort: null,
             Fallback: null,
             SystemPrompt: "be terse",
-            PromptTemplate: template,
-            promptValues ?? new Dictionary<string, string> { ["item"] = "thing" },
+            Prompt: prompt,
             ResumeTemplate: null,
             new AgentWorkspace(
                 Worktree: null,
@@ -1265,6 +1408,9 @@ public sealed class AgentRunnerTests
 
     /// <summary>The run's own record, beside its stream.</summary>
     private static string ResultFile(TempDirectory temp) => Path.Combine(StepDirectory(temp), AgentRunner.ResultFileName);
+
+    /// <summary>The first user message as sent, beside its stream.</summary>
+    private static string UserMdFile(TempDirectory temp) => Path.Combine(StepDirectory(temp), "user.md");
 
     /// <summary>The stream's lines, read beside its writer, which may still hold it.</summary>
     private static List<string> Lines(TempDirectory temp) => [.. ReadBeside(StreamFile(temp))];

@@ -126,6 +126,10 @@ public static class ServiceRegistration
         // One answer per command to which variables git reads a repository from, shared by every child
         // that runs git: the git client's and the forge's command line's.
         services.AddSingleton<GitLocalVariables>();
+
+        // The git directories of each tree an isolated agent works over, as git named them before its launch: every later
+        // git of this tool's own in that tree is given them.
+        services.AddSingleton<GitDirectoryPins>();
         services.AddSingleton<IGitClient, GitClient>();
         services.AddSingleton<IRepositoryLocator, RepositoryLocator>();
         services.AddSingleton<IConfigStore, JsonConfigStore>();
@@ -168,10 +172,12 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowService, FlowService>();
         services.AddSingleton<PlanValidator>();
         services.AddSingleton<CreateAgentRunner>();
+        services.AddSingleton<ReasonStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, OrientRunner>();
         services.AddSingleton<IFlowStepTypeRunner, GraphifyCodebaseRunner>();
         services.AddSingleton<IFlowStepTypeRunner, PlanCheckRunner>();
         services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<CreateAgentRunner>());
+        services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<ReasonStepRunner>());
         services.AddSingleton<IFlowStepTypeRunner, BuildStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, TestStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RunStepRunner>();
@@ -201,7 +207,11 @@ public static class ServiceRegistration
 
         // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its
         // slice lands - claude-code, then claude-api over the one connection the API clients share - and a test registers
-        // its fake the same way.
+        // its fake the same way. The lanes a run's requests go through are one registry for the whole process, one per
+        // provider and key, paced by the clock.
+        services.AddSingleton<ClientGates>(provider => new ClientGates(
+            provider.GetRequiredService<TimeProvider>(),
+            (wait, token) => Task.Delay(wait, provider.GetRequiredService<TimeProvider>(), token)));
         services.AddSingleton<IAgentClient>(provider => new Agents.ClaudeCode.ClaudeCodeClient(
             provider.GetRequiredService<IProcessRunner>(),
             provider.GetRequiredService<IFileSystem>(),
@@ -221,6 +231,47 @@ public static class ServiceRegistration
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<Agents.Http.ApiConnection>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
+
+        // The operating system's isolation of agents' commands: this machine's mechanism, proved once per process by its
+        // probe, and the owner that builds each launch's profiles from its ground and decides by agentPolicy.isolation.
+        services.AddSingleton<IIsolationPlatform>(provider => new IsolationPlatform(
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<IProcessRunner>()));
+        services.AddSingleton<Agents.Isolation.IAgentIsolation>(provider => new Agents.Isolation.AgentIsolation(
+            provider.GetRequiredService<IIsolationPlatform>(),
+            provider.GetRequiredService<Git.IGitClient>(),
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            pins: provider.GetRequiredService<GitDirectoryPins>(),
+            claudeCode: new Agents.Isolation.ClaudeCodeDirectories(
+                provider.GetRequiredService<IFileSystem>(),
+                provider.GetRequiredService<IHostPlatform>(),
+                provider.GetRequiredService<DssHarness.Core.Secrets.AgentKeyStore>())));
+
+        // A side-task: an agent outside every workflow, a conversation between a person and one agent over the main tree,
+        // through the same runner every step is worked by. Its chat is the person's, on this machine, so no host serves
+        // its verbs (HostAgentProtocol.NotForwardable).
+        services.AddSingleton<Agents.SideTasks.ISideTaskService>(provider => new Agents.SideTasks.SideTaskService(
+            provider.GetRequiredService<IHarnessContextLoader>(),
+            provider.GetRequiredService<IAgentRunner>(),
+            provider.GetRequiredService<IEnumerable<IAgentClient>>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<IProcessIdentity>(),
+            provider.GetRequiredService<OrchestrationStore>(),
+            provider.GetRequiredService<DssHarness.Core.Secrets.AgentKeyStore>(),
+            provider.GetRequiredService<Web.Search.WebSearchKeys>(),
+            provider.GetRequiredService<DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService>(),
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHarnessOutput>(),
+            provider.GetRequiredService<Git.IGitClient>(),
+            new AgentAncestry(
+                provider.GetRequiredService<IProcessTable>(),
+                provider.GetRequiredService<IProcessIdentity>(),
+                provider.GetRequiredService<IOwnProgram>(),
+                provider.GetRequiredService<IHostPlatform>(),
+                provider.GetRequiredService<IFileSystem>()),
+            provider.GetRequiredService<Agents.Isolation.IAgentIsolation>(),
+            provider.GetRequiredService<TimeProvider>()));
 
         // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the
         // engine's tool server: the one fetch of the process, the system's own lookup of a name, and the host a runtime is

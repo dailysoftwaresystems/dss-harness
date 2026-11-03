@@ -56,14 +56,42 @@ public static partial class CommandAnalysis
     /// gone into, its environment first where it carries one.
     /// </summary>
     /// <param name="argv">The command as the tool runtime hands it: a program and its arguments, never a shell string.</param>
+    /// <param name="splitByItsProgram">
+    /// Whether the program is handed its words as one command line that it splits itself, as every program on Windows
+    /// is: a Cygwin or MSYS program, and one a C runtime's wildcard expansion is linked into, expands the patterns and
+    /// the braces among its words as a shell would, so their characters are read as open ones. Elsewhere a program is
+    /// handed its words as they are, and nothing expands them.
+    /// </param>
+    /// <param name="inputGiven">
+    /// Whether the program is given an input this does not see - the text the tool runtime writes to it - which a program
+    /// that reads its script from its input would run (<see cref="AnalyzedCommand.InputGiven"/>).
+    /// </param>
     /// <exception cref="NotSupportedException">The command holds what this does not read, named.</exception>
-    public static IReadOnlyList<AnalyzedCommand> Commands(IReadOnlyList<string> argv)
+    public static IReadOnlyList<AnalyzedCommand> Commands(IReadOnlyList<string> argv, bool splitByItsProgram = false, bool inputGiven = true)
     {
         ArgumentNullException.ThrowIfNull(argv);
         Uncut(argv);
 
-        return Uncut([.. FromWords(argv, [], 1, []).Where(command => command.Whole.Count > 0)]);
+        // An argument list crosses no shell: a variable, a substitution and a cmd percent in one are what they spell. A
+        // program that splits its own command line may still expand a pattern or a brace in it, which is read as open.
+        IReadOnlyList<string> spelled = [.. argv.Select(word => string.Concat(word.Select(character
+            => splitByItsProgram && ExpandedByItsProgram.Contains(character) ? WordQuoting.Open : WordQuoting.Literal)))];
+
+        return Uncut([.. FromWords(argv, spelled, [], 1, [], inputGiven: inputGiven).Where(command => command.Whole.Count > 0)]);
     }
+
+    /// <summary>
+    /// The characters a program that splits its own command line expands, as Cygwin's and MSYS's runtimes do and a C
+    /// runtime's wildcard expansion: a pattern's - <c>*</c>, <c>?</c>, a bracket - and a brace's with its commas.
+    /// </summary>
+    private const string ExpandedByItsProgram = "*?[]{},";
+
+    /// <summary>
+    /// The characters that name a program by a pattern however they are quoted: PowerShell's call operator finds the
+    /// program a quoted path names by its wildcards (<c>&amp; 'C:\Git\cmd\gi?.exe'</c> runs git), and no program's own
+    /// name holds one.
+    /// </summary>
+    private const string ProgramPatterns = "*?[]";
 
     /// <summary>The commands a shell string runs, however it hides them.</summary>
     /// <param name="shell">The command as Claude Code's shell tool hands it: one string the system's own shell would run.</param>
@@ -132,8 +160,9 @@ public static partial class CommandAnalysis
     /// item, and its <c>Copy-Item</c>, <c>Move-Item</c> and <c>Rename-Item</c> onto one (<see cref="ItemMovers"/>),
     /// whose value this cannot see.
     /// </summary>
-    internal static IReadOnlyList<string> Declarations(IReadOnlyList<string> words)
+    internal static IReadOnlyList<string> Declarations(IReadOnlyList<string> words, IReadOnlyList<string>? quoted = null)
     {
+        quoted ??= [];
         var environment = EnvironmentOf(words);
         var declared = words.Take(environment).ToList();
 
@@ -148,13 +177,20 @@ public static partial class CommandAnalysis
         // A name an expansion gives is one this cannot see: it may be any, git's configuration or a program's among them.
         // Each program's naming words only: an export's and its kind's assignments, a set's one name (its '--' ends the
         // search, for what follows is a positional, not a name), and an item cmdlet's env: references (never a -Value or
-        // a path that names no env: item).
-        var naming = Is(program, "export", "declare", "typeset", "local", "readonly") ? rest.Where(word => DeclaredName(word) is { } name && Expansion(name) is not null)
-            : Is(program, "set", "setenv", "setx") ? rest.TakeWhile(word => word != "--").Where(word => !word.StartsWith('-') && !word.StartsWith('/')).Take(1).Where(word => Expansion(AssignedName(word)) is not null)
-            : Is(program, ["Set-Item", "si", "New-Item", "ni", "Set-Content", "sc", "Add-Content", "ac", .. ItemMovers]) ? rest.Where(word => EnvironmentReference().Match(word) is { Success: true } reference && Expansion(reference.Groups["name"].Value) is not null)
+        // a path that names no env: item). The expansion is read where the shell would make it: a name in quotes is a
+        // name, not one a variable gave - each word's quoting taken by where it stands, before any word is passed over.
+        var placed = rest.Select((word, index) => (Word: word, Quoted: At(quoted, environment + 1 + index))).ToList();
+        var naming = Is(program, "export", "declare", "typeset", "local", "readonly")
+            ? placed.Where(each => DeclaredName(each.Word) is { } name && Expansion(name, Within(each.Word, each.Quoted, name)) is not null)
+            : Is(program, "set", "setenv", "setx")
+                ? placed.TakeWhile(each => each.Word != "--").Where(each => !each.Word.StartsWith('-') && !each.Word.StartsWith('/')).Take(1)
+                    .Where(each => Expansion(AssignedName(each.Word), Within(each.Word, each.Quoted, AssignedName(each.Word))) is not null)
+            : Is(program, ["Set-Item", "si", "New-Item", "ni", "Set-Content", "sc", "Add-Content", "ac", .. ItemMovers])
+                ? placed.Where(each => EnvironmentReference().Match(each.Word) is { Success: true } reference
+                    && Expansion(reference.Groups["name"].Value, Within(each.Word, each.Quoted, reference.Groups["name"].Value)) is not null)
             : [];
 
-        if (naming.FirstOrDefault() is { } unread)
+        if (naming.Select(each => each.Word).FirstOrDefault() is { } unread)
         {
             var named = Is(program, "set", "setenv", "setx") ? AssignedName(unread)
                 : EnvironmentReference().Match(unread) is { Success: true } reference ? reference.Groups["name"].Value
@@ -240,9 +276,9 @@ public static partial class CommandAnalysis
     /// prefix of it from <c>-wo</c>, its value the next word or glued after a <c>:</c>): sought among every word, past where
     /// its command begins too, so a place it may start in is never missed.
     /// </summary>
-    private static List<string> PowerShellDirectories(IReadOnlyList<string> words)
+    private static List<(string Directory, int Word)> PowerShellDirectories(IReadOnlyList<string> words)
     {
-        var directories = new List<string>();
+        var directories = new List<(string Directory, int Word)>();
 
         for (var at = 1; at < words.Count; at++)
         {
@@ -257,7 +293,7 @@ public static partial class CommandAnalysis
             {
                 if ((named.Length == 2 ? words[at].Split(':', 2)[1] : words.ElementAtOrDefault(at + 1)) is { } directory)
                 {
-                    directories.Add(directory);
+                    directories.Add((directory, named.Length == 2 ? at : at + 1));
                 }
             }
         }
@@ -297,9 +333,28 @@ public static partial class CommandAnalysis
             _ when Is(program, ["Set-Item", "si", "New-Item", "ni", "Set-Content", "sc", "Add-Content", "ac", .. ItemMovers]) && rest.Any(word => CodeItem().IsMatch(word))
                 => "defines a function or an alias from a text",
             _ when Is(program, "ForEach-Object", "%", "foreach") && CallsByName(rest) => "calls a method by its name",
+            _ when Is(program, [.. SessionPrograms]) && !AsksASessionNothing(program, rest)
+                => "runs or types commands in a terminal session that lives apart from the agent, whose place and state this cannot tell",
+            _ when Is(program, "crontab") && !rest.Any(word => word.Length > 1 && word[0] == '-' && word[1] != '-' && word.IndexOfAny(['l', 'r']) > 0) || (Is(program, "crontab") && rest.Contains("-e", StringComparer.Ordinal))
+                => "installs a table of commands cron runs apart from the agent",
+            _ when Is(program, "launchctl") && rest.Any(word => LaunchdStarts.Contains(word, StringComparer.Ordinal))
+                => "has launchd start or schedule a job apart from the agent",
+            _ when Is(program, "systemctl") && rest.Any(word => SystemdStarts.Contains(word, StringComparer.Ordinal))
+                => "has systemd start or schedule a unit apart from the agent",
             _ => null,
         };
     }
+
+    /// <summary>launchctl's verbs that start, schedule or set up what launchd runs apart from the agent.</summary>
+    private static readonly string[] LaunchdStarts = ["load", "bootstrap", "submit", "start", "kickstart", "enable", "asuser", "bsexec", "setenv"];
+
+    /// <summary>systemctl's verbs that start a unit, or set one to start, apart from the agent.</summary>
+    private static readonly string[] SystemdStarts =
+    [
+        "start", "restart", "try-restart", "reload-or-restart", "try-reload-or-restart", "reload", "enable", "reenable", "link", "isolate",
+        "set-environment", "import-environment", "edit", "preset", "preset-all", "add-wants", "add-requires", "default", "rescue",
+        "emergency",
+    ];
 
     /// <summary>Whether ForEach-Object's words name a method it calls: its -MemberName, or a word by position that is no script block.</summary>
     private static bool CallsByName(IReadOnlyList<string> words)
@@ -336,12 +391,19 @@ public static partial class CommandAnalysis
             : word.StartsWith('-') || word.StartsWith('/') ? null
             : word;
 
-    /// <summary>An item of PowerShell's <c>env:</c> drive - <c>env:NAME</c>, <c>Env:\NAME</c> - a parameter's name glued before it too.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:-[A-Za-z]+:)?env:[\\/]?(?<name>[A-Za-z_][A-Za-z0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    /// <summary>
+    /// An item of PowerShell's <c>env:</c> drive - <c>env:NAME</c>, <c>Env:\NAME</c>, by its provider's name
+    /// (<c>Environment::NAME</c>, <c>Microsoft.PowerShell.Core\Environment::NAME</c>) - a parameter's name glued before it too.
+    /// </summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:-[A-Za-z]+:)?(?:env:|(?:Microsoft\.PowerShell\.Core\\)?Environment::)[\\/]?(?<name>[A-Za-z_][A-Za-z0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
     private static partial System.Text.RegularExpressions.Regex EnvironmentItem();
 
-    /// <summary>A word that references PowerShell's <c>env:</c> drive, its <c>name</c> whatever follows - an expansion among it, where an item cmdlet names an env: item by one this cannot see.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:-[A-Za-z]+:)?env:[\\/]?(?<name>.+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    /// <summary>
+    /// A word that references PowerShell's <c>env:</c> drive, by the drive or its provider's name, its <c>name</c>
+    /// whatever follows - a wildcard or an expansion among it, where an item cmdlet names an env: item by one this
+    /// cannot see.
+    /// </summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:-[A-Za-z]+:)?(?:env:|(?:Microsoft\.PowerShell\.Core\\)?Environment::)[\\/]?(?<name>.+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
     private static partial System.Text.RegularExpressions.Regex EnvironmentReference();
 
     /// <summary>How many of a command's first words are its environment: the assignments before its program.</summary>
@@ -380,10 +442,26 @@ public static partial class CommandAnalysis
     /// </param>
     /// <exception cref="NotSupportedException">The command's own git or gh is given an option before its subcommand this does not know, which may take the word after it.</exception>
     public static IReadOnlyList<IReadOnlyList<string>> ForRules(IReadOnlyList<string> words, bool program = true)
+        => [.. ForRules(words, program, null).Select(reading => reading.Words)];
+
+    /// <summary>
+    /// The readings of <paramref name="quoted"/>: each word with how it stands to the shell, where the command's own
+    /// spelling was kept - a word a reading makes reads as wholly open, refused as an expansion rather than quietly
+    /// passed.
+    /// </summary>
+    /// <param name="words">One command's words, its environment first where it has one.</param>
+    /// <param name="program">
+    /// Whether the words' first is the command's own program, rather than a word of another program's tried as one: a git
+    /// or a gh tried so (<c>grep -rn git --include=*.cs</c>) reads an option it does not know as one word, never refused.
+    /// </param>
+    /// <param name="quoted">How each word's characters stand to the shell, kept in step with <paramref name="words"/>, or null where none was kept.</param>
+    /// <exception cref="NotSupportedException">The command's own git or gh is given an option before its subcommand this does not know, which may take the word after it.</exception>
+    public static IReadOnlyList<RuleReading> ForRules(IReadOnlyList<string> words, bool program, IReadOnlyList<string>? quoted)
     {
         ArgumentNullException.ThrowIfNull(words);
 
-        var readings = new List<IReadOnlyList<string>>();
+        quoted ??= [];
+        var readings = new List<RuleReading>();
 
         // Setting git's configuration through the environment is configuring git, whatever runs
         // with it: an export alone, an env, the words before git itself - what the command declares
@@ -391,60 +469,68 @@ public static partial class CommandAnalysis
         // another program's last word, an assignment before no program.
         var environment = EnvironmentOf(words);
 
-        var declared = program || environment < words.Count ? Declarations(words) : [];
+        var declared = program || environment < words.Count ? Declarations(words, quoted) : [];
 
         if (declared.FirstOrDefault(SetsGitConfiguration) is { } setting)
         {
-            readings.Add(["git", "config", AssignedName(setting), .. words.Skip(environment)]);
+            readings.Add(new RuleReading(
+                ["git", "config", AssignedName(setting), .. words.Skip(environment)],
+                [string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]));
         }
 
         // Setting where gh reads its configuration from is gh config set of the setter's choosing: its editor, pager and
         // browser among it, each a program any gh command runs.
         if (declared.FirstOrDefault(word => IsAssignment(word) && GhConfigurationNames.Contains(AssignedName(word), StringComparer.OrdinalIgnoreCase)) is { } ghSetting)
         {
-            readings.Add(["gh", "config", "set", AssignedName(ghSetting), .. words.Skip(environment)]);
+            readings.Add(new RuleReading(
+                ["gh", "config", "set", AssignedName(ghSetting), .. words.Skip(environment)],
+                [string.Empty, string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]));
         }
 
-        var (command, configured) = Plain(words, program);
+        var (command, commandQuoted, configured) = Plain(words, program, quoted);
 
         if (configured || ClonesConfigured(command))
         {
-            readings.Add(["git", "config", .. command.Skip(1)]);
+            readings.Add(new RuleReading(["git", "config", .. command.Skip(1)], [string.Empty, string.Empty, .. commandQuoted.Skip(1)]));
         }
 
-        readings.Add(command);
+        readings.Add(new RuleReading(command, commandQuoted));
 
         return readings;
     }
 
     /// <summary>
-    /// A command's words as the rules read them (<see cref="ForRules"/>) - its environment left out,
+    /// A command's words as the rules read them (<see cref="ForRules(IReadOnlyList{string}, bool, IReadOnlyList{string}?)"/>) - its environment left out,
     /// git's and gh's own options before their command dropped - and whether git's configuration is
-    /// set on its command line.
+    /// set on its command line. How each word stands to the shell is read with them, a word made by
+    /// the reading itself standing as wholly open.
     /// </summary>
-    private static (IReadOnlyList<string> Command, bool Configured) Plain(IReadOnlyList<string> words, bool program)
+    private static (IReadOnlyList<string> Command, IReadOnlyList<string> Quoted, bool Configured) Plain(IReadOnlyList<string> words, bool program, IReadOnlyList<string> quoted)
     {
         var environment = EnvironmentOf(words);
 
         if (environment == words.Count)
         {
-            return (environment == 0 ? words : [.. words.Skip(environment)], false);
+            return (environment == 0 ? words : [.. words.Skip(environment)], environment == 0 ? quoted : [.. quoted.Skip(environment)], false);
         }
 
         // git-push, as git's own directory holds each of its commands, is git push.
         if (Name(words[environment]) is { Length: > 4 } dashed && dashed.StartsWith("git-", StringComparison.OrdinalIgnoreCase))
         {
             words = [.. words.Take(environment), "git", dashed[4..], .. words.Skip(environment + 1)];
+            quoted = [.. quoted.Take(environment), string.Empty, string.Empty, .. quoted.Skip(environment + 1)];
         }
 
         if (Is(Name(words[environment]), "gh"))
         {
-            return (GhForRules([.. words.Skip(environment)], program), false);
+            var (read, howRead) = GhForRules([.. words.Skip(environment)], program, [.. quoted.Skip(environment)]);
+
+            return (read, howRead, false);
         }
 
         if (!Is(Name(words[environment]), "git"))
         {
-            return (environment == 0 ? words : [.. words.Skip(environment)], false);
+            return (environment == 0 ? words : [.. words.Skip(environment)], environment == 0 ? quoted : [.. quoted.Skip(environment)], false);
         }
 
         var config = false;
@@ -509,7 +595,9 @@ public static partial class CommandAnalysis
             throw new NotSupportedException($"'{option}' is an option of git's own this does not read, which may take the word after it as its value");
         }
 
-        return at >= words.Count ? ([.. words.Skip(environment)], false) : (["git", .. words.Skip(at)], config);
+        return at >= words.Count
+            ? ([.. words.Skip(environment)], [.. quoted.Skip(environment)], false)
+            : (["git", .. words.Skip(at)], [string.Empty, .. quoted.Skip(at)], config);
     }
 
     /// <summary>
@@ -593,9 +681,10 @@ public static partial class CommandAnalysis
     /// A gh command as its rules read it: gh, the words of its command's path, each by gh's own name for it
     /// (<see cref="GhAliases"/>) - its flags before the path's end taken out, a flag's value with it - then the rest as it
     /// stands. gh finds its command past any flag, so <c>gh pr -R o/r merge 5</c> is <c>gh pr merge 5</c>. A flag before
-    /// the path's end that this does not know may take the word after it, and is refused.
+    /// the path's end that this does not know may take the word after it, and is refused. The path's words are made by
+    /// this reading, and stand as wholly open; the rest keep the spelling the shell read them with.
     /// </summary>
-    private static IReadOnlyList<string> GhForRules(IReadOnlyList<string> words, bool program)
+    private static (IReadOnlyList<string> Words, IReadOnlyList<string> Quoted) GhForRules(IReadOnlyList<string> words, bool program, IReadOnlyList<string> quoted)
     {
         var path = new List<string> { "gh" };
         var at = 1;
@@ -647,7 +736,7 @@ public static partial class CommandAnalysis
             throw new NotSupportedException($"'{word}' is a flag of gh's own this does not read, which may take the word after it as its value");
         }
 
-        return [.. path, .. words.Skip(at)];
+        return ([.. path, .. words.Skip(at)], [.. path.Select(_ => string.Empty), .. quoted.Skip(at)]);
     }
 
     /// <summary>git's global options that take their value as the next word, read before its subcommand.</summary>
@@ -841,12 +930,31 @@ public static partial class CommandAnalysis
     /// shell another program runs - an <c>eval</c> read as the script it is, and the value of a
     /// variable that names a program another runs (<c>GIT_PAGER</c>, <c>EDITOR</c>) read as the
     /// script it is. The redirects the shell makes for the words stay with the command they are made for, or a command
-    /// of their own where the words' own is gone into, so the files they name are decided.
+    /// of their own where the words' own is gone into, so the files they name are decided. A script the words' program
+    /// runs reads the input the program does: the one around it (<paramref name="inputGiven"/>), or its own redirect's.
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> FromWords(IReadOnlyList<string> words, IReadOnlyList<ShellRedirect> redirects, int depth, IReadOnlyList<string> environment)
+    private static IEnumerable<AnalyzedCommand> FromWords(IReadOnlyList<string> words, IReadOnlyList<string> quoted, IReadOnlyList<ShellRedirect> redirects, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? outerWrappers = null, bool inputGiven = true, int level = 0, string? joined = null)
     {
+        // A program another starts elsewhere, and every script one runs, stands a level deeper than the words' own command.
+        var inner = level + 1;
+
+        // What a script the program runs reads as its input: what the program is given around it, or by its own redirect.
+        var scriptsInput = inputGiven || redirects.Any(redirect => redirect.Descriptor == 0);
+
+        // Each word with how its characters stand to the shell, kept in step: a word whose spelling was not kept - a
+        // mask short of it - reads as wholly open, refused as an expansion rather than quietly passed.
+        IReadOnlyList<string> masks = quoted;
+
+        if (masks.Count < words.Count)
+        {
+            masks = [.. masks, .. Enumerable.Repeat(string.Empty, words.Count - masks.Count)];
+        }
+
         // The assignments this level gives, whose program-valued names run their values.
         var given = new List<string>();
+
+        // Each wrapper's words as they stood before it was stripped, outermost first: what it does to the environment.
+        var wrapped = new List<IReadOnlyList<string>>(outerWrappers ?? []);
 
         // Each wrapper is stripped in turn, here rather than by going into it, so no length of
         // wrappers overflows the stack.
@@ -865,6 +973,7 @@ public static partial class CommandAnalysis
                 given.AddRange(words.Take(assigned));
                 environment = [.. environment, .. words.Take(assigned)];
                 words = [.. words.Skip(assigned)];
+                masks = [.. masks.Skip(assigned)];
             }
 
             if (words.Count == 0)
@@ -874,10 +983,10 @@ public static partial class CommandAnalysis
                 // program one names is read.
                 if (environment.Count > 0 || redirects.Count > 0)
                 {
-                    yield return new AnalyzedCommand(environment, redirects);
+                    yield return new AnalyzedCommand(environment, redirects) { Wrappers = wrapped, InputGiven = inputGiven, Level = level, Joined = joined };
                 }
 
-                foreach (var command in ProgramsNamed(given, depth, environment))
+                foreach (var command in ProgramsNamed(given, depth, environment, wrapped, inner))
                 {
                     yield return command;
                 }
@@ -891,25 +1000,28 @@ public static partial class CommandAnalysis
             // first, as a cd before it would.
             foreach (var directory in MovesOf(words))
             {
-                yield return Moved(directory);
+                // The move is the program's own, and the program stands a level deeper with it.
+                level = inner;
+                inner = level + 1;
+                yield return Moved(directory) with { Level = level };
             }
 
             // A script the command names, gone into: sh -c 'a && b' and the words after its script, a
             // here-string or here-document a shell reads, cmd /c a & b, powershell -Command and a
             // decoded -EncodedCommand, trap's, watch's, script's and flock's command line.
-            if (Into(name, words, redirects, program: true) is { } scripts)
+            if (Into(name, words, masks, redirects, program: true, inputGiven: inputGiven) is { } scripts)
             {
                 if (redirects.Count > 0)
                 {
-                    yield return new AnalyzedCommand([], redirects);
+                    yield return new AnalyzedCommand([], redirects) { Level = level, Joined = joined };
                 }
 
-                foreach (var command in GoneInto(scripts, depth, environment))
+                foreach (var command in GoneInto(scripts, depth, environment, [.. wrapped, words], scriptsInput, inner))
                 {
                     yield return command;
                 }
 
-                foreach (var command in ProgramsNamed(given, depth, environment))
+                foreach (var command in ProgramsNamed(given, depth, environment, wrapped, inner))
                 {
                     yield return command;
                 }
@@ -926,7 +1038,7 @@ public static partial class CommandAnalysis
                     throw Nested(words);
                 }
 
-                foreach (var command in FromWords(SplitInto(split), redirects, depth + 1, environment))
+                foreach (var command in FromWords(SplitInto(split), [], redirects, depth + 1, environment, [.. wrapped, words], inputGiven, level, joined))
                 {
                     yield return command;
                 }
@@ -939,12 +1051,13 @@ public static partial class CommandAnalysis
             {
                 if (redirects.Count > 0)
                 {
-                    yield return new AnalyzedCommand([], redirects);
+                    yield return new AnalyzedCommand([], redirects) { Level = level, Joined = joined };
                 }
 
+                // eval's script runs in the shell that reads it, at the level of the words' own command.
                 if (words.Count > 1)
                 {
-                    foreach (var command in GoneInto([string.Join(' ', words.Skip(1))], depth, environment))
+                    foreach (var command in GoneInto([string.Join(' ', words.Skip(1))], depth, environment, [.. wrapped, words], scriptsInput, level))
                     {
                         yield return command;
                     }
@@ -955,16 +1068,18 @@ public static partial class CommandAnalysis
 
             // Wrappers, with their own options and values, stripped until a command is left; env's
             // pairs become the command's environment.
-            if (Stripped(name, words) is not { } stripped)
+            if (Stripped(name, words, masks) is not { } stripped)
             {
                 break;
             }
 
-            words = stripped;
+            wrapped.Add(words);
+            (words, masks) = (stripped.Words, stripped.Quoted);
         }
 
-        // The program itself: one named by an expansion the shell makes is not read at all.
-        if (Expansion(words[0]) is { } expansion)
+        // The program itself: one named by an expansion the shell makes is not read at all, and a pattern's characters
+        // name it by a pattern whatever quotes stand around them (ProgramPatterns).
+        if (Expansion(words[0], Opened(words[0], masks.Count > 0 ? masks[0] : null, ProgramPatterns)) is { } expansion)
         {
             throw new NotSupportedException($"'{words[0]}' names the program it runs by {expansion}, which this does not read");
         }
@@ -976,9 +1091,9 @@ public static partial class CommandAnalysis
             throw new NotSupportedException($"'{string.Join(' ', words)}' gives a name a command run in its place, which this does not read");
         }
 
-        // A program among its words that starts what it runs in another directory - stdbuf's env -C - moves the command's
-        // paths there, before the command is read.
-        for (var at = 1; at < words.Count; at++)
+        // A program a program that runs its words starts in another directory - stdbuf's env -C, setsid's tar -C - moves the
+        // command's paths there, before the command is read.
+        for (var at = 1; at < words.Count && RunsAt(words, at); at++)
         {
             if (MayMove(words[at]))
             {
@@ -989,11 +1104,20 @@ public static partial class CommandAnalysis
             }
         }
 
-        yield return new AnalyzedCommand(environment.Count == 0 ? words : [.. environment, .. words], redirects);
+        yield return new AnalyzedCommand(
+            environment.Count == 0 ? words : [.. environment, .. words],
+            redirects,
+            environment.Count == 0 ? masks : [.. environment.Select(_ => string.Empty), .. masks])
+        {
+            Wrappers = wrapped,
+            InputGiven = inputGiven,
+            Level = level,
+            Joined = joined,
+        };
 
         // A program another runs by a variable: the environment's own, and what the command
         // declares (Declarations).
-        foreach (var command in ProgramsNamed([.. given, .. Declarations(words)], depth, environment))
+        foreach (var command in ProgramsNamed([.. given, .. Declarations(words, masks)], depth, environment, [.. wrapped, words], inner))
         {
             yield return command;
         }
@@ -1002,7 +1126,16 @@ public static partial class CommandAnalysis
         // alias's '!' line, as the variables above are read.
         if (GitWords(words) is { } git && GitSettingScripts(git, environment) is { Count: > 0 } settings)
         {
-            foreach (var command in GoneInto(settings, depth, environment))
+            foreach (var command in GoneInto(settings, depth, environment, [.. wrapped, words], level: inner))
+            {
+                yield return command;
+            }
+        }
+
+        // The command line gh alias set gives a name, which a later command calls by that name alone.
+        if (GhAliasScript(words) is { } aliased)
+        {
+            foreach (var command in GoneInto([aliased], depth, environment, [.. wrapped, words], level: inner))
             {
                 yield return command;
             }
@@ -1017,7 +1150,17 @@ public static partial class CommandAnalysis
                 throw Nested(words);
             }
 
-            foreach (var command in FromWords(executed, redirects, depth + 1, environment))
+            foreach (var command in FromWords(executed, [], redirects, depth + 1, environment, [.. wrapped, words], inputGiven, inner))
+            {
+                yield return command;
+            }
+        }
+
+        // The command lines the program runs besides being run itself - sed's e, ssh's remote command, wsl's, at's job -
+        // each a script of its own.
+        foreach (var script in ScriptsItRuns(words, masks, redirects, program: true, inputGiven))
+        {
+            foreach (var command in GoneInto([script], depth, environment, [.. wrapped, words], scriptsInput, inner))
             {
                 yield return command;
             }
@@ -1028,10 +1171,25 @@ public static partial class CommandAnalysis
         for (var at = 1; at < words.Count; at++)
         {
             var rest = words.Skip(at).ToList();
+            var restMasks = masks.Skip(at).ToList();
 
-            if (Into(Name(words[at]), rest, redirects, program: false) is { } inner)
+            // A program a program that runs its words starts runs its command lines as well (setsid ssh host 'x').
+            if (RunsAt(words, at))
             {
-                foreach (var command in GoneInto(inner, depth, environment))
+                foreach (var script in ScriptsItRuns(rest, restMasks, redirects, program: true, inputGiven))
+                {
+                    foreach (var command in GoneInto([script], depth, environment, [.. wrapped, words], scriptsInput, inner))
+                    {
+                        yield return command;
+                    }
+                }
+            }
+
+            // A shell a program that runs its words starts is a command's own (setsid sh, wsl -e sh): one that reads its
+            // script from its input is refused as the command's own is.
+            if (Into(Name(words[at]), rest, restMasks, redirects, program: RunsAt(words, at), inputGiven: inputGiven) is { } innerScripts)
+            {
+                foreach (var command in GoneInto(innerScripts, depth, environment, [.. wrapped, words], scriptsInput, inner))
                 {
                     yield return command;
                 }
@@ -1043,7 +1201,7 @@ public static partial class CommandAnalysis
                     throw Nested(rest);
                 }
 
-                foreach (var command in FromWords(SplitInto(innerSplit), redirects, depth + 1, environment))
+                foreach (var command in FromWords(SplitInto(innerSplit), [], redirects, depth + 1, environment, [.. wrapped, rest], inputGiven, inner))
                 {
                     yield return command;
                 }
@@ -1053,23 +1211,30 @@ public static partial class CommandAnalysis
 
     /// <summary>
     /// The names whose value is a program another runs through the shell - git's pager, editor,
-    /// ssh, askpass and proxy, its external diff, gh's editor, pager and browser, and the pager,
-    /// editor and browser any program runs: set for a command, each runs a command of the setter's
-    /// choosing, read as the script it is.
+    /// ssh, askpass and proxy, its external diff, gh's editor, pager and browser, the pager,
+    /// editor and browser any program runs, and the command bash runs before each prompt: set for
+    /// a command, each runs a command of the setter's choosing, read as the script it is.
     /// </summary>
     private static readonly string[] ProgramValued =
     [
         "GIT_PAGER", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_PROXY_COMMAND",
         "GIT_EXTERNAL_DIFF", "GH_EDITOR", "GH_PAGER", "GH_BROWSER", "PAGER", "EDITOR", "VISUAL", "BROWSER", "SSH_ASKPASS", "MANPAGER",
+        "PROMPT_COMMAND",
     ];
 
     /// <summary>
-    /// The commands the program-valued names among <paramref name="assignments"/> run, each value read as a script - and
-    /// what git's configuration through the environment sets, which git may run so too: each <c>GIT_CONFIG_VALUE_n</c>
-    /// of a key git runs as a command line (<see cref="RunsProgram"/>) or of none named, and each such setting
-    /// <c>GIT_CONFIG_PARAMETERS</c> holds.
+    /// The shell's prompts, which an interactive shell expands as it prints each - its substitutions run, as in a double
+    /// quote's text: set for a command, each is read as that text.
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> ProgramsNamed(IReadOnlyList<string> assignments, int depth, IReadOnlyList<string> environment)
+    private static readonly string[] PromptValued = ["PS0", "PS1", "PS2", "PS4"];
+
+    /// <summary>
+    /// The commands the program-valued names among <paramref name="assignments"/> run, each value read as a script, and
+    /// the substitutions each prompt's (<see cref="PromptValued"/>) runs - and what git's configuration through the
+    /// environment sets, which git may run so too: each <c>GIT_CONFIG_VALUE_n</c> of a key git runs as a command line
+    /// (<see cref="RunsProgram"/>) or of none named, and each such setting <c>GIT_CONFIG_PARAMETERS</c> holds.
+    /// </summary>
+    private static IEnumerable<AnalyzedCommand> ProgramsNamed(IReadOnlyList<string> assignments, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers, int level)
     {
         var pairs = assignments
             .Select(assignment => new[] { AssignedName(assignment), assignment.Split('=', 2)[1] })
@@ -1089,6 +1254,11 @@ public static partial class CommandAnalysis
             {
                 values.Add(pair[1]);
             }
+            else if (PromptValued.Contains(pair[0], StringComparer.Ordinal))
+            {
+                // A prompt's text in a double quote, its backslashes and quotes its own: what it substitutes runs.
+                values.Add($": \"{pair[1].Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"");
+            }
             else if (pair[0].StartsWith("GIT_CONFIG_VALUE_", StringComparison.OrdinalIgnoreCase))
             {
                 var key = pairs.LastOrDefault(other => other[0].Equals("GIT_CONFIG_KEY_" + pair[0]["GIT_CONFIG_VALUE_".Length..], StringComparison.OrdinalIgnoreCase));
@@ -1107,7 +1277,7 @@ public static partial class CommandAnalysis
             }
         }
 
-        return values.Count == 0 ? [] : GoneInto(values, depth, environment);
+        return values.Count == 0 ? [] : GoneInto(values, depth, environment, wrappers, level: level);
     }
 
     /// <summary>
@@ -1177,7 +1347,126 @@ public static partial class CommandAnalysis
             scripts.Add(SettingScript(setting.Split('=', 2)[0], setting.Split('=', 2)[1]));
         }
 
+        // git config's own setting of such a key runs later, wherever git reads it - an alias a later command calls by a
+        // name no rule reads (git config alias.cf 'credential fill', then git cf) - so it is read where it is set. A key
+        // the shell expands may be any, an alias among them: its value is read both ways.
+        if (at < words.Count && words[at].Equals("config", StringComparison.OrdinalIgnoreCase) && ConfigSetting(words, at + 1) is (var configKey, var setValue))
+        {
+            if (RunsProgram(configKey))
+            {
+                scripts.Add(SettingScript(configKey, setValue));
+            }
+            else if (Expansion(configKey) is not null)
+            {
+                scripts.AddRange([SettingScript("alias.x", setValue), SettingScript("core.pager", setValue)]);
+            }
+        }
+
         return scripts;
+    }
+
+    /// <summary>
+    /// The key and the value <c>git config</c> sets with its words from <paramref name="from"/> on: its first two words
+    /// that are no option and no option's value, after a <c>set</c> where it names one - none where it reads, unsets,
+    /// renames, removes, lists or edits rather than setting, or names no value.
+    /// </summary>
+    /// <param name="words">A git command's words, its program first.</param>
+    /// <param name="from">Where the words after <c>config</c> begin.</param>
+    private static (string Key, string Value)? ConfigSetting(IReadOnlyList<string> words, int from)
+    {
+        var positional = new List<string>();
+
+        for (var at = from; at < words.Count; at++)
+        {
+            var word = words[at];
+
+            if (word == "--")
+            {
+                positional.AddRange(words.Skip(at + 1));
+                break;
+            }
+
+            if (word.Length > 1 && word[0] == '-')
+            {
+                var name = word.Split('=', 2)[0];
+
+                if (GitConfigReads.Contains(name, StringComparer.Ordinal))
+                {
+                    return null;
+                }
+
+                at += GitConfigValued.Contains(name, StringComparer.Ordinal) && !word.Contains('=', StringComparison.Ordinal) ? 1 : 0;
+                continue;
+            }
+
+            positional.Add(word);
+        }
+
+        // git config's own verbs: only set sets.
+        if (positional.Count > 0 && GitConfigVerbs.Contains(positional[0], StringComparer.Ordinal))
+        {
+            if (positional[0] != "set")
+            {
+                return null;
+            }
+
+            positional.RemoveAt(0);
+        }
+
+        return positional.Count >= 2 ? (positional[0], positional[1]) : null;
+    }
+
+    /// <summary>git config's options that take their value as the next word.</summary>
+    private static readonly string[] GitConfigValued = ["-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url"];
+
+    /// <summary>git config's options that read, unset, rename, remove, list or edit rather than setting a value.</summary>
+    private static readonly string[] GitConfigReads =
+        ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "--unset", "--unset-all", "--rename-section", "--remove-section", "-l", "--list", "-e", "--edit"];
+
+    /// <summary>git config's verbs, of which <c>set</c> alone sets.</summary>
+    private static readonly string[] GitConfigVerbs = ["list", "get", "set", "unset", "rename-section", "remove-section", "edit"];
+
+    /// <summary>
+    /// The command line <c>gh alias set</c> gives a name, read where it is given, for a later command calls it by a name
+    /// no rule reads (<c>gh alias set tk 'auth token'</c>, then <c>gh tk</c>): its expansion as the gh command it is, or,
+    /// marked <c>!</c> or given <c>--shell</c>, as the shell script gh runs. Null where the words are no <c>gh alias set</c>.
+    /// </summary>
+    /// <param name="words">One command's words, its program first.</param>
+    /// <exception cref="NotSupportedException">
+    /// The words give names commands this does not read: an expansion read from the input, or <c>gh alias import</c>'s
+    /// file of them.
+    /// </exception>
+    private static string? GhAliasScript(IReadOnlyList<string> words)
+    {
+        if (words.Count < 3 || !Is(Name(words[0]), "gh") || !words[1].Equals("alias", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (words[2].Equals("import", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new NotSupportedException($"'{string.Join(' ', words)}' gives names commands from a file this does not read");
+        }
+
+        if (!words[2].Equals("set", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var shell = words.Skip(3).Any(word => word is "-s" or "--shell");
+        var positional = words.Skip(3).Where(word => !word.StartsWith('-') || word == "-").ToList();
+
+        if (positional.Count < 2)
+        {
+            return null;
+        }
+
+        if (positional[1] == "-")
+        {
+            throw new NotSupportedException($"'{string.Join(' ', words)}' gives a name a command read from its input, which this does not read");
+        }
+
+        return shell || positional[1].StartsWith('!') ? positional[1].TrimStart('!') : "gh " + positional[1];
     }
 
     /// <summary>
@@ -1223,8 +1512,12 @@ public static partial class CommandAnalysis
         [".textconv", ".command", ".driver", ".clean", ".smudge", ".process", ".cmd", ".path", ".helper", ".program",
          ".sendmailcmd", ".smtpserver", ".uploadpack", ".receivepack", ".update"];
 
-    /// <summary>The commands each script runs, one level further in: refused past <see cref="Depth"/>.</summary>
-    private static IEnumerable<AnalyzedCommand> GoneInto(IReadOnlyList<string> scripts, int depth, IReadOnlyList<string> environment)
+    /// <summary>
+    /// The commands each script runs, one level further in: refused past <see cref="Depth"/>. Each reads the input
+    /// <paramref name="inputGiven"/> says the script is given - one it is given where nothing says it is not - and stands
+    /// at <paramref name="level"/> and the levels its own subshells add (<see cref="AnalyzedCommand.Level"/>).
+    /// </summary>
+    private static IEnumerable<AnalyzedCommand> GoneInto(IReadOnlyList<string> scripts, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers, bool inputGiven = true, int level = 1)
     {
         if (depth > Depth)
         {
@@ -1240,7 +1533,7 @@ public static partial class CommandAnalysis
 
         foreach (var script in scripts)
         {
-            foreach (var command in FromScript(script, depth + 1, environment))
+            foreach (var command in FromScript(script, depth + 1, environment, wrappers, inputGiven, level))
             {
                 yield return command;
             }
@@ -1257,12 +1550,122 @@ public static partial class CommandAnalysis
     /// variable (<c>$X</c>, cmd's <c>%X%</c>), a pattern (<c>*</c>, <c>?</c>, <c>[</c>) or a brace
     /// (<c>{a,b}</c>, <c>{a..b}</c>); null where it names none.
     /// </summary>
-    internal static string? Expansion(string word)
-        => word.Contains("$(", StringComparison.Ordinal) || word.Contains("<(", StringComparison.Ordinal) || word.Contains(">(", StringComparison.Ordinal) ? "a substitution"
-            : word.Contains('$', StringComparison.Ordinal) || word.Contains('%', StringComparison.Ordinal) || DelayedVariable().IsMatch(word) ? "a variable"
-            : word.IndexOfAny(['*', '?']) >= 0 || (word.IndexOf('[', StringComparison.Ordinal) is var open and >= 0 && word.IndexOf(']', open + 1) > open + 1) ? "a pattern"
-            : word.Contains('{', StringComparison.Ordinal) && (word.Contains(',', StringComparison.Ordinal) || word.Contains("..", StringComparison.Ordinal)) ? "a brace"
-            : null;
+    /// <summary>
+    /// What the shell expands in <paramref name="word"/>, as a refusal names it - a substitution, a variable, a
+    /// pattern or a brace - or <see langword="null"/> where it expands nothing: each character asked where it stands
+    /// to the shell by <paramref name="quoted"/> (<see cref="WordQuoting"/>), so a quoted character is never read as
+    /// an expansion the shell would not make. A word whose spelling was not kept - <see langword="null"/>, or a mask
+    /// short of the word - reads as wholly open: refused as an expansion rather than quietly passed. A cmd percent is
+    /// live inside double quotes as out of them, for the shell never expands one and cmd reads the word past every
+    /// quote the shell read; what cmd reads again of a batch argument is <see cref="Processes.BatchFiles"/>' own rule.
+    /// </summary>
+    /// <param name="word">The word, its quotes read as the shell reads them.</param>
+    /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
+    internal static string? Expansion(string word, string? quoted = null)
+    {
+        // A word another program fills in as it runs its command stands as an expansion, whatever the quoting around
+        // it says: what fills it in is not the shell, and may give any word at all.
+        if (word.Contains(InputWord, StringComparison.Ordinal))
+        {
+            return "a substitution";
+        }
+
+        var classes = ClassesOf(word, quoted);
+
+        for (var at = 0; at < word.Length; at++)
+        {
+            // A dollar that still expands - in the open or inside double quotes - runs what follows it as a
+            // substitution; the process substitutions run only in the open, for inside double quotes they are text.
+            if (word[at] == '$' && classes[at] != WordQuoting.Literal && at + 1 < word.Length && word[at + 1] == '(')
+            {
+                return "a substitution";
+            }
+
+            if (word[at] is '<' or '>' && classes[at] == WordQuoting.Open
+                && at + 1 < word.Length && word[at + 1] == '(' && classes[at + 1] == WordQuoting.Open)
+            {
+                return "a substitution";
+            }
+
+            // A dollar expands wherever it stands but inside single quotes or an escape; a cmd percent there too, for
+            // cmd reads the word past every quote the shell read.
+            if ((word[at] == '$' || word[at] == '%') && classes[at] != WordQuoting.Literal)
+            {
+                return "a variable";
+            }
+
+            // A glob and a bracket class expand only in the open: inside quotes of any kind the shell hands them on.
+            if (word[at] is '*' or '?' && classes[at] == WordQuoting.Open)
+            {
+                return "a pattern";
+            }
+
+            if (word[at] == '[' && classes[at] == WordQuoting.Open
+                && word.IndexOf(']', Math.Min(at + 2, word.Length)) is var close && close > at + 1 && classes[close] == WordQuoting.Open)
+            {
+                return "a pattern";
+            }
+
+            // A brace expands only in the open, and only with a comma or a range in it that is open with it.
+            if (word[at] == '{' && classes[at] == WordQuoting.Open)
+            {
+                for (var rest = at + 1; rest < word.Length; rest++)
+                {
+                    if (word[rest] == ',' && classes[rest] == WordQuoting.Open)
+                    {
+                        return "a brace";
+                    }
+
+                    if (word[rest] == '.' && rest + 1 < word.Length && word[rest + 1] == '.' && classes[rest] == WordQuoting.Open && classes[rest + 1] == WordQuoting.Open)
+                    {
+                        return "a brace";
+                    }
+                }
+            }
+        }
+
+        return DelayedVariable().IsMatch(BlankLiterals(word, classes)) ? "a variable" : null;
+    }
+
+    /// <summary><paramref name="word"/> with its literal characters blanked, so a pattern reads only what still expands.</summary>
+    private static string BlankLiterals(string word, string classes)
+        => string.Create(word.Length, (word, classes), (span, state) =>
+        {
+            for (var at = 0; at < span.Length; at++)
+            {
+                span[at] = state.classes[at] == WordQuoting.Literal ? '\u0001' : state.word[at];
+            }
+        });
+
+    /// <summary>
+    /// How each of <paramref name="word"/>'s characters stands to the shell: <paramref name="quoted"/>'s own class per
+    /// character, and <see cref="WordQuoting.Open"/> wherever the word's spelling was not kept - a mask short of the
+    /// word, or none at all - so a word read without its spelling is refused as an expansion exactly as it was before
+    /// any of this was read.
+    /// </summary>
+    private static string ClassesOf(string word, string? quoted)
+    {
+        if (quoted is null || quoted.Length < word.Length)
+        {
+            return new(string.Empty.PadLeft(word.Length, WordQuoting.Open));
+        }
+
+        return quoted;
+    }
+
+    /// <summary>
+    /// How <paramref name="word"/>'s characters stand to the shell (<see cref="ClassesOf"/>), each of
+    /// <paramref name="characters"/> among them standing open whatever quotes were around it: where what reads the word
+    /// expands those characters past every quote the shell read.
+    /// </summary>
+    private static string Opened(string word, string? quoted, string characters)
+        => string.Create(word.Length, (word, classes: ClassesOf(word, quoted), characters), (span, state) =>
+        {
+            for (var at = 0; at < span.Length; at++)
+            {
+                span[at] = state.characters.Contains(state.word[at], StringComparison.Ordinal) ? WordQuoting.Open : state.classes[at];
+            }
+        });
 
     /// <summary>
     /// The commands <paramref name="words"/>' program runs with words it fills in as it runs them: find's <c>-exec</c>,
@@ -1339,6 +1742,38 @@ public static partial class CommandAnalysis
                 yield return executed;
             }
         }
+        else if (Is(program, "tar", "gtar", "bsdtar"))
+        {
+            // The programs tar runs through the shell: a filter for what it extracts, a compressor, a checkpoint's action,
+            // a remote shell and the scripts it runs between volumes.
+            foreach (var option in Getopt(TarStyled(words).Words, TarOptions).Options.Where(option => option.Value is { Length: > 0 }))
+            {
+                if (option.Option is "to-command" or "use-compress-program" or "I" or "rsh-command" or "info-script" or "new-volume-script" or "F")
+                {
+                    yield return ["sh", "-c", option.Value!];
+                }
+                else if (option.Option == "checkpoint-action" && option.Value!.StartsWith("exec=", StringComparison.Ordinal))
+                {
+                    yield return ["sh", "-c", option.Value!["exec=".Length..]];
+                }
+            }
+        }
+        else if (Is(program, "rsync"))
+        {
+            // The remote shell rsync connects by, its words split as rsync splits them, the host and rsync's own server after.
+            foreach (var option in Getopt(words, RsyncOptions).Options.Where(option => option.Option is "e" or "rsh" && option.Value is { Length: > 0 }))
+            {
+                yield return [.. SplitWords(option.Value!), InputWord, "rsync", "--server"];
+            }
+        }
+        else if (Is(program, "install"))
+        {
+            // The program install strips what it installs with, the file it installs after it.
+            foreach (var option in Getopt(words, InstallOptions).Options.Where(option => option.Option == "strip-program" && option.Value is { Length: > 0 }))
+            {
+                yield return [option.Value!, InputWord];
+            }
+        }
     }
 
     /// <summary>
@@ -1359,7 +1794,7 @@ public static partial class CommandAnalysis
     /// </summary>
     private static IEnumerable<IReadOnlyList<string>> GitExecuted(IReadOnlyList<string> words)
     {
-        var (command, _) = Plain(words, program: false);
+        var (command, _, _) = Plain(words, program: false, []);
 
         if (command.Count < 2 || !Is(Name(command[0]), "git"))
         {
@@ -1660,17 +2095,36 @@ public static partial class CommandAnalysis
         => ["env", .. split.Pairs, .. SplitWords(split.Script), .. split.Tail];
 
     /// <summary>
-    /// env's own words before its command, as GNU env reads them: its NAME=value pairs; its options - <c>-i</c>,
-    /// <c>-0</c>, <c>-v</c> and their long names, the signal ones, and <c>-u</c>, <c>-C</c> and <c>-a</c> with their
-    /// values, glued or the next word's, in a short cluster too; and <c>-S</c>'s command line, the split string. At is
-    /// where its command begins - after the split string where one is given, or past every word where a help or a
-    /// version runs nothing. An option it does not know is where its command begins, as a word this reads. Directories
-    /// are those <c>-C</c> and <c>--chdir</c> start its command in, each in the order given.
+    /// GNU env's options: <c>-u</c> and <c>--unset</c> take a name away, <c>-C</c> and <c>--chdir</c> move where its
+    /// command starts, <c>-a</c> and <c>--argv0</c> name it, <c>-S</c> and <c>--split-string</c> give its command line;
+    /// the signal ones take their signals after an <c>=</c> alone.
     /// </summary>
-    private static (List<string> Pairs, int At, string? Split, List<string> Directories) EnvWords(IReadOnlyList<string> words)
+    private static readonly OptionTable EnvOptions = new(
+        "aCSu",
+        string.Empty,
+        ["argv0", "chdir", "split-string", "unset"],
+        ["block-signal", "default-signal", "ignore-signal"],
+        ["debug", "help", "ignore-environment", "list-signal-handling", "null", "version"]);
+
+    /// <summary>The short options of env's that take no value: <c>-i</c> starts its command with no environment.</summary>
+    private const string EnvFlags = "i0v";
+
+    /// <summary>
+    /// env's own words before its command, as GNU env reads them (<see cref="EnvRead"/>): its NAME=value pairs; its options
+    /// (<see cref="EnvOptions"/>), a long one named by its whole name or by any prefix that begins it alone, as getopt_long
+    /// names it (<see cref="LongOption"/>), each that takes a value taking it glued or the next word's, in a short cluster
+    /// too; and <c>-S</c>'s command line, the split string. Its help and its version run nothing, and nor does an option
+    /// missing its value, or given one it takes none of, for env refuses it.
+    /// </summary>
+    /// <exception cref="NotSupportedException">env is given an option it does not name alone - none of its own, or a prefix of more than one - which env refuses where it is GNU's and another env may take as an option of its own.</exception>
+    private static EnvRead EnvWords(IReadOnlyList<string> words)
     {
         var pairs = new List<string>();
-        var directories = new List<string>();
+        var directories = new List<(string Directory, int Word)>();
+        var unsets = new List<(string Name, int Word)>();
+        var cleared = false;
+
+        EnvRead Read(int at, string? split) => new(pairs, at, split, directories, unsets, cleared);
 
         for (var at = 1; at < words.Count; at++)
         {
@@ -1684,94 +2138,179 @@ public static partial class CommandAnalysis
 
             if (option == "--")
             {
-                return (pairs, at + 1, null, directories);
+                return Read(at + 1, null);
             }
 
-            if (option.StartsWith("--", StringComparison.Ordinal))
+            if (option == "-")
             {
-                var equals = option.IndexOf('=', StringComparison.Ordinal);
-                var named = equals > 0 ? option[..equals] : option;
-
-                if (named == "--split-string")
-                {
-                    return equals > 0 ? (pairs, at + 1, option[(equals + 1)..], directories)
-                        : at + 1 < words.Count ? (pairs, at + 2, words[at + 1], directories)
-                        : (pairs, words.Count, null, directories);
-                }
-
-                if (named is "--help" or "--version")
-                {
-                    return (pairs, words.Count, null, directories);
-                }
-
-                if (named is "--unset" or "--chdir" or "--argv0")
-                {
-                    if (named == "--chdir" && (equals > 0 ? option[(equals + 1)..] : words.ElementAtOrDefault(at + 1)) is { } directory)
-                    {
-                        directories.Add(directory);
-                    }
-
-                    at += equals > 0 ? 0 : 1;
-                    continue;
-                }
-
-                if (named is "--ignore-environment" or "--null" or "--debug" or "--block-signal" or "--default-signal" or "--ignore-signal" or "--list-signal-handling")
-                {
-                    continue;
-                }
-
-                return (pairs, at, null, directories);
+                cleared = true;
+                continue;
             }
 
             if (option.Length < 2 || option[0] != '-')
             {
-                return (pairs, at, null, directories);
+                return Read(at, null);
             }
 
-            for (var letter = 1; letter < option.Length; letter++)
-            {
-                switch (option[letter])
-                {
-                    case 'i' or '0' or 'v':
-                        continue;
-                    case 'S':
-                        return letter + 1 < option.Length ? (pairs, at + 1, option[(letter + 1)..], directories)
-                            : at + 1 < words.Count ? (pairs, at + 2, words[at + 1], directories)
-                            : (pairs, words.Count, null, directories);
-                    case 'u' or 'C' or 'a':
-                        if (option[letter] == 'C' && (letter + 1 < option.Length ? option[(letter + 1)..] : words.ElementAtOrDefault(at + 1)) is { } directory)
-                        {
-                            directories.Add(directory);
-                        }
+            // The option's name - a long one's as getopt_long names it - with its value glued to it, or null.
+            var equals = option.IndexOf('=', StringComparison.Ordinal);
+            var (name, glued) = option[1] == '-'
+                ? (LongOption(equals < 0 ? option[2..] : option[2..equals], EnvOptions).Name, equals < 0 ? null : option[(equals + 1)..])
+                : (option[1].ToString(), option.Length > 2 ? option[2..] : null);
 
-                        at += letter + 1 < option.Length ? 0 : 1;
-                        letter = option.Length;
+            if (option[1] != '-' && EnvFlags.Contains(name, StringComparison.Ordinal))
+            {
+                // A cluster of flags, a valued letter ending it with its value glued: each read in turn.
+                for (var letter = 1; letter < option.Length; letter++)
+                {
+                    if (EnvFlags.Contains(option[letter], StringComparison.Ordinal))
+                    {
+                        cleared |= option[letter] == 'i';
                         continue;
-                    default:
-                        return (pairs, at, null, directories);
+                    }
+
+                    (name, glued) = (option[letter].ToString(), letter + 1 < option.Length ? option[(letter + 1)..] : null);
+                    break;
+                }
+
+                if (EnvFlags.Contains(name, StringComparison.Ordinal))
+                {
+                    continue;
                 }
             }
+
+            var valued = name.Length == 1 ? EnvOptions.ShortValued.Contains(name, StringComparison.Ordinal) : EnvOptions.LongValued.Contains(name, StringComparer.Ordinal);
+
+            if (!valued && !EnvOptions.LongOptional.Contains(name, StringComparer.Ordinal) && !EnvOptions.LongFlags.Contains(name, StringComparer.Ordinal))
+            {
+                throw new NotSupportedException($"'{option}' names no option of env's alone - none of them, or the start of more than one - which GNU env refuses and another env may take as one of its own, which this does not read");
+            }
+
+            if (name is "help" or "version" || (!valued && glued is not null && option[1] == '-' && EnvOptions.LongFlags.Contains(name, StringComparer.Ordinal)))
+            {
+                // Its help, its version and a flag given a value run nothing.
+                return Read(words.Count, null);
+            }
+
+            if (!valued)
+            {
+                cleared |= name == "ignore-environment";
+                continue;
+            }
+
+            // A value glued to its option, or the next word; none runs nothing, for env refuses its option.
+            var (value, word) = glued is not null ? (glued, at) : at + 1 < words.Count ? (words[at + 1], at + 1) : ((string?)null, at);
+
+            if (value is null)
+            {
+                return Read(words.Count, null);
+            }
+
+            if (name is "S" or "split-string")
+            {
+                return Read(word + 1, value);
+            }
+
+            if (name is "C" or "chdir")
+            {
+                directories.Add((value, word));
+            }
+            else if (name is "u" or "unset")
+            {
+                unsets.Add((value, word));
+            }
+
+            at = word;
         }
 
-        return (pairs, words.Count, null, directories);
+        return Read(words.Count, null);
     }
 
     /// <summary>
-    /// The directories the program <paramref name="words"/> begin with starts what it runs in - env's <c>-C</c> and
-    /// <c>--chdir</c>, PowerShell's <c>-WorkingDirectory</c> - each a move the policy follows as it follows a <c>cd</c>
+    /// env's own words, as <see cref="EnvWords"/> reads them.
+    /// </summary>
+    /// <param name="Pairs">Its NAME=value pairs.</param>
+    /// <param name="At">Where its command begins: after the split string where one is given, or past every word where a help or a version runs nothing.</param>
+    /// <param name="Split">The split string <c>-S</c> gives, or null.</param>
+    /// <param name="Directories">The directories <c>-C</c> and <c>--chdir</c> start its command in, each with the word that names it, in the order given.</param>
+    /// <param name="Unsets">The names <c>-u</c> and <c>--unset</c> take away from its command's environment, each with the word that names it.</param>
+    /// <param name="Cleared">Whether it starts its command with no environment of its own: <c>-i</c>, <c>-</c>, <c>--ignore-environment</c>.</param>
+    private sealed record EnvRead(List<string> Pairs, int At, string? Split, List<(string Directory, int Word)> Directories, List<(string Name, int Word)> Unsets, bool Cleared);
+
+    /// <summary>
+    /// What env, as the program <paramref name="words"/> begin with, does to the environment of the command it starts: the
+    /// names its <c>-u</c> and <c>--unset</c> take away, each with the word that names it, and whether it clears the
+    /// environment whole (<c>-i</c>, <c>-</c>, <c>--ignore-environment</c>); nothing where the program is no env.
+    /// </summary>
+    /// <param name="words">The words, env's name first.</param>
+    internal static (IReadOnlyList<(string Name, int Word)> Unsets, bool Cleared) EnvironmentTakenAway(IReadOnlyList<string> words)
+        => words.Count > 0 && Is(Name(words[0]), "env") && EnvWords(words) is var read ? (read.Unsets, read.Cleared) : ([], false);
+
+    /// <summary>
+    /// The directories the program <paramref name="words"/> begin with starts what it runs in, or works in - env's
+    /// <c>-C</c> and <c>--chdir</c>, PowerShell's <c>-WorkingDirectory</c>, tar's, make's, ninja's and git's <c>-C</c>,
+    /// patch's <c>-d</c> (<see cref="OwnDirectories"/>) - each a move the policy follows as it follows a <c>cd</c>
     /// (<see cref="Moved"/>); none where the program moves nothing.
     /// </summary>
     private static IReadOnlyList<string> MovesOf(IReadOnlyList<string> words)
+        => [.. MoveWordsOf(words).Select(move => move.Directory)];
+
+    /// <summary>The moves of <see cref="MovesOf"/>, each with the word of <paramref name="words"/> that names its directory.</summary>
+    private static IReadOnlyList<(string Directory, int Word)> MoveWordsOf(IReadOnlyList<string> words)
         => words.Count == 0 ? []
             : Is(Name(words[0]), "env") ? EnvWords(words).Directories
             : Is(Name(words[0]), "powershell", "pwsh") ? PowerShellDirectories(words)
-            : [];
+            : OwnDirectories(words);
 
     /// <summary>
-    /// Whether <paramref name="word"/> names a program that may start what it runs in another directory (<see cref="MovesOf"/>):
-    /// asked before the words after it are copied for that question, so a long command is not copied at each of its words.
+    /// The words of <paramref name="command"/> that name a directory its program starts what it runs in, or works in
+    /// (<see cref="MovesOf"/>), each followed as a <c>cd</c> before the command (<see cref="Moved"/>), by where each stands:
+    /// a word that moves reads nothing where it goes. Read of the command's own program, and of a program a program that
+    /// runs its words starts (<c>setsid tar -C x</c>, <c>stdbuf env -C x</c>) - among any other program's words such a word
+    /// is that program's data (<c>grep -r x env -C dir</c>), which a move of its own never excuses.
     /// </summary>
-    private static bool MayMove(string word) => Is(Name(word), "env", "powershell", "pwsh");
+    /// <param name="command">A command's words, its environment before them.</param>
+    public static IReadOnlySet<int> MoveWords(IReadOnlyList<string> command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var moving = new HashSet<int>();
+        var environment = EnvironmentOf(command);
+
+        for (var at = environment; at < command.Count && RunsAt(command, at); at++)
+        {
+            if (MayMove(command[at]))
+            {
+                moving.UnionWith(MoveWordsOf([.. command.Skip(at)]).Select(move => at + move.Word));
+            }
+        }
+
+        return moving;
+    }
+
+    /// <summary>
+    /// Whether the word of <paramref name="command"/> at <paramref name="at"/> may be a program that runs: the command's own
+    /// program, past its environment, or any word after a program that runs the words after it (<see cref="CommandRunners"/>),
+    /// whose options and their values this does not read. A word of any other program's is that program's data.
+    /// </summary>
+    /// <param name="command">A command's words, its environment before them.</param>
+    /// <param name="at">Which word.</param>
+    public static bool RunsAt(IReadOnlyList<string> command, int at)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var environment = EnvironmentOf(command);
+
+        return at == environment || (at > environment && environment < command.Count && RunsItsWords(command[environment]));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="word"/> names a program that may start what it runs in another directory, or work in one
+    /// (<see cref="MovesOf"/>): asked before the words after it are copied for that question, so a long command is not copied
+    /// at each of its words.
+    /// </summary>
+    private static bool MayMove(string word)
+        => Is(Name(word), "env", "powershell", "pwsh", "tar", "gtar", "bsdtar", "make", "gmake", "bmake", "ninja", "git", "patch");
 
     /// <summary>
     /// A move to <paramref name="directory"/>, as the command it is - <c>cd -- directory</c>, before the command it starts
@@ -1789,13 +2328,16 @@ public static partial class CommandAnalysis
     /// </summary>
     /// <param name="name">The program's name, as <see cref="Name"/> reads it.</param>
     /// <param name="words">The program and its words.</param>
+    /// <param name="quoted">How each word's characters stand to the shell, kept in step with <paramref name="words"/>.</param>
     /// <param name="redirects">The redirects the shell makes for the command the words stand in.</param>
     /// <param name="program">Whether the words are a command's own, its program first, rather than another program's arguments.</param>
-    private static IReadOnlyList<string>? Into(string name, IReadOnlyList<string> words, IReadOnlyList<ShellRedirect> redirects, bool program)
+    /// <param name="scriptFile">Told each word the program reads as its script file, where one does (<see cref="ScriptFilesOf"/>).</param>
+    /// <param name="inputGiven">Whether the command's input is given by what stands around it (<see cref="AnalyzedCommand.InputGiven"/>).</param>
+    private static IReadOnlyList<string>? Into(string name, IReadOnlyList<string> words, IReadOnlyList<string> quoted, IReadOnlyList<ShellRedirect> redirects, bool program, Action<string>? scriptFile = null, bool inputGiven = true)
     {
         if (Is(name, "fish"))
         {
-            return FishScripts(name, words, redirects, program);
+            return FishScripts(name, words, redirects, program, scriptFile, inputGiven);
         }
 
         // A help or a version runs nothing, where the program reads it as its own option: before what it runs, or, for a
@@ -1813,12 +2355,12 @@ public static partial class CommandAnalysis
 
                 if (option == "--")
                 {
-                    return at + 1 < words.Count ? ScriptFile(words[at + 1], name, redirects, program) : Input(name, redirects, program);
+                    return at + 1 < words.Count ? ScriptFile(words[at + 1], name, redirects, program, quoted: At(quoted, at + 1), seen: scriptFile, inputGiven: inputGiven) : Input(name, redirects, program, inputGiven: inputGiven);
                 }
 
                 if (!(option.StartsWith('-') || option.StartsWith('+')))
                 {
-                    return ScriptFile(option, name, redirects, program);
+                    return ScriptFile(option, name, redirects, program, quoted: At(quoted, at), seen: scriptFile, inputGiven: inputGiven);
                 }
 
                 // An option that takes a value in the next word: the value is no script and no option - an o or an O
@@ -1854,12 +2396,12 @@ public static partial class CommandAnalysis
                 }
             }
 
-            return Input(name, redirects, program);
+            return Input(name, redirects, program, inputGiven: inputGiven);
         }
 
         if (Is(name, "source", "."))
         {
-            return words.Count > 1 ? ScriptFile(words[1], name, redirects, program) : null;
+            return words.Count > 1 ? ScriptFile(words[1], name, redirects, program, quoted: At(quoted, 1), seen: scriptFile, inputGiven: inputGiven) : null;
         }
 
         if (Is(name, "cmd"))
@@ -1882,7 +2424,7 @@ public static partial class CommandAnalysis
                 }
             }
 
-            return Input(name, redirects, program, CmdAsPosix);
+            return Input(name, redirects, program, CmdAsPosix, inputGiven: inputGiven);
         }
 
         if (Is(name, "powershell", "pwsh"))
@@ -1897,7 +2439,7 @@ public static partial class CommandAnalysis
 
                 if (option == "-")
                 {
-                    return Input(name, redirects, program, PowerShellAsPosix);
+                    return Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven);
                 }
 
                 if (PowerShellParameter(option) is not { } parameter)
@@ -1939,14 +2481,14 @@ public static partial class CommandAnalysis
                 {
                     return at + 1 >= words.Count ? null
                         : words[at + 1] != "-" ? [PowerShellAsPosix(string.Join(' ', words.Skip(at + 1)))]
-                        : Input(name, redirects, program, PowerShellAsPosix);
+                        : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven);
                 }
 
                 if ("file".StartsWith(parameter, StringComparison.Ordinal))
                 {
                     return at + 1 >= words.Count ? null
-                        : words[at + 1] == "-" ? Input(name, redirects, program, PowerShellAsPosix)
-                        : ScriptFile(words[at + 1], name, redirects, program, PowerShellAsPosix);
+                        : words[at + 1] == "-" ? Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven)
+                        : ScriptFile(words[at + 1], name, redirects, program, PowerShellAsPosix, seen: scriptFile, inputGiven: inputGiven);
                 }
 
                 // Windows PowerShell's other parameters: a valued one's value passed, a switch alone; one it does not
@@ -1974,8 +2516,8 @@ public static partial class CommandAnalysis
                 }
             }
 
-            return file is not null ? ScriptFile(file, name, redirects, program, PowerShellAsPosix)
-                : Input(name, redirects, program, PowerShellAsPosix);
+            return file is not null ? ScriptFile(file, name, redirects, program, PowerShellAsPosix, seen: scriptFile, inputGiven: inputGiven)
+                : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven);
         }
 
         // trap's first word is the command it runs at a signal; script's and flock's -c, and the
@@ -2036,20 +2578,60 @@ public static partial class CommandAnalysis
     /// where it names the input (<c>/dev/stdin</c>, <c>/dev/fd/0</c>), read as <see cref="Input"/>
     /// reads it - and refused where an expansion names it (<c>bash &lt;(curl ...)</c>,
     /// <c>source $F</c>) or another open descriptor does (<c>/dev/fd/3</c>), where the words are a
-    /// command's own, for what it runs is what another command printed.
+    /// command's own, for what it runs is what another command printed. The expansion is read where
+    /// the shell would make it: a file named in quotes is a file of that name, not one a variable
+    /// gave. <paramref name="seen"/> is told the file first.
     /// </summary>
-    private static IReadOnlyList<string>? ScriptFile(string file, string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null)
-        => Folded(file) is "/dev/stdin" or "/dev/fd/0" or "/proc/self/fd/0" ? Input(name, redirects, program, spelled)
-            : program && Unread(file) is { } unread ? throw new NotSupportedException($"'{file}' names the script it runs by {unread}, which this does not read")
+    private static IReadOnlyList<string>? ScriptFile(string file, string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null, string? quoted = null, Action<string>? seen = null, bool inputGiven = true)
+    {
+        seen?.Invoke(file);
+
+        return Folded(file) is "/dev/stdin" or "/dev/fd/0" or "/proc/self/fd/0" ? Input(name, redirects, program, spelled, inputGiven)
+            : program && Unread(file, quoted) is { } unread ? throw new NotSupportedException($"'{file}' names the script it runs by {unread}, which this does not read")
             : null;
+    }
+
+    /// <summary>
+    /// The script files the program <paramref name="words"/> start with reads and runs: a shell's, <c>source</c>'s and
+    /// PowerShell's script file, as <see cref="Into"/> reads their words, and sed's <c>-f</c> files - never a word a
+    /// <c>-c</c> runs as a command line, nor the arguments after a script. None where it reads none.
+    /// </summary>
+    /// <param name="words">The program and its words.</param>
+    /// <param name="quoted">How each word's characters stand to the shell, kept in step with <paramref name="words"/>.</param>
+    internal static IReadOnlyList<string> ScriptFilesOf(IReadOnlyList<string> words, IReadOnlyList<string> quoted)
+    {
+        if (words.Count == 0)
+        {
+            return [];
+        }
+
+        var name = Name(words[0]);
+        var files = new List<string>();
+
+        try
+        {
+            if (Is(name, "sed", "gsed"))
+            {
+                return SedOf(words, quoted)?.Files ?? [];
+            }
+
+            _ = Into(name, words, quoted, [], program: false, files.Add);
+        }
+        catch (NotSupportedException)
+        {
+            // Words this cannot read are refused where the command is flattened, before a file of theirs is asked.
+        }
+
+        return files;
+    }
 
     /// <summary>
     /// What names a script file by what this does not read - an expansion, or an open descriptor's own name however its
     /// path is spelled (<c>/dev//stdin</c>, <c>/dev/../dev/fd/3</c>), or relative to where the command may stand
     /// (<c>stdin</c>, <c>fd/3</c>) - or null.
     /// </summary>
-    private static string? Unread(string file)
-        => Expansion(file) ?? (OpenDescriptor().IsMatch(Folded(file)) ? "an open descriptor" : null);
+    private static string? Unread(string file, string? quoted = null)
+        => Expansion(file, quoted) ?? (OpenDescriptor().IsMatch(Folded(file)) ? "an open descriptor" : null);
 
     /// <summary>A POSIX path with its doubled slashes, its '.' and its '..' folded away, as the system walks it.</summary>
     private static string Folded(string path)
@@ -2083,10 +2665,12 @@ public static partial class CommandAnalysis
     /// <summary>
     /// The script a program that reads one from its input is given: a here-string's or a
     /// here-document's text, spelled for the shell reader; null where a file is its input - a
-    /// script file, unseen as any is. A program given nothing reads what an earlier command printed,
-    /// and is refused, where the words are a command's own.
+    /// script file, unseen as any is. A program given no input of its own reads the one around it
+    /// (<paramref name="inputGiven"/>): what an earlier command printed, or the text the tool runtime
+    /// writes to it, refused where the words are a command's own; or, where nothing gives it one -
+    /// the agent's own command's input - no script at all, null.
     /// </summary>
-    private static IReadOnlyList<string>? Input(string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null)
+    private static IReadOnlyList<string>? Input(string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null, bool inputGiven = true)
     {
         // The shell reads what the last redirect of its descriptor 0 gives it: a text, or a file
         // unseen as any script file is; one duplicated from another descriptor, or named by one,
@@ -2101,7 +2685,7 @@ public static partial class CommandAnalysis
                 throw new NotSupportedException($"'{name}' reads the script it runs from '{other}', which this does not read");
         }
 
-        return program
+        return program && inputGiven
             ? throw new NotSupportedException($"'{name}' reads the script it runs from its input, which this does not read")
             : null;
     }
@@ -2127,7 +2711,7 @@ public static partial class CommandAnalysis
     public static IReadOnlyList<string> CommandRunners { get; } =
         ["setsid", "stdbuf", "ionice", "chrt", "taskset", "unshare", "nsenter", "prlimit", "numactl", "cpulimit", "firejail", "flock",
          "torsocks", "proxychains", "proxychains4", "faketime", "strace", "ltrace", "valgrind", "caffeinate", "chroot", "runuser",
-         "watch", "ssh", "wsl", "start", "call"];
+         "watch", "ssh", "wsl", "start", "call", "dtach", "abduco", "daemonize"];
 
     /// <summary>Whether <paramref name="program"/> runs the words after its own options (<see cref="CommandRunners"/>), by its name in any case.</summary>
     public static bool RunsItsWords(string program) => Is(Name(program), [.. CommandRunners]);
@@ -2141,7 +2725,7 @@ public static partial class CommandAnalysis
     /// its value, runs nothing.
     /// </summary>
     /// <exception cref="NotSupportedException">The command's own fish is given an option this does not know, which may take a value.</exception>
-    private static IReadOnlyList<string>? FishScripts(string name, IReadOnlyList<string> words, IReadOnlyList<ShellRedirect> redirects, bool program)
+    private static IReadOnlyList<string>? FishScripts(string name, IReadOnlyList<string> words, IReadOnlyList<ShellRedirect> redirects, bool program, Action<string>? scriptFile = null, bool inputGiven = true)
     {
         var scripts = new List<string>();
         var commanded = false;
@@ -2220,8 +2804,8 @@ public static partial class CommandAnalysis
         }
 
         var read = commanded ? [.. words.Skip(at).Where(word => word != InputWord)]
-            : at < words.Count ? ScriptFile(words[at], name, redirects, program)
-            : Input(name, redirects, program);
+            : at < words.Count ? ScriptFile(words[at], name, redirects, program, seen: scriptFile, inputGiven: inputGiven)
+            : Input(name, redirects, program, inputGiven: inputGiven);
 
         return scripts.Count > 0 ? [.. scripts, .. read ?? []] : read;
     }
@@ -2251,6 +2835,9 @@ public static partial class CommandAnalysis
     /// <summary>The shells whose <c>-c</c> takes a script - fish's read on their own (<see cref="FishScripts"/>).</summary>
     private static readonly string[] Shells =
         ["sh", "bash", "zsh", "dash", "ksh", "mksh", "pdksh", "oksh", "ash", "yash", "posh", "rbash", "csh", "tcsh"];
+
+    /// <summary>Whether <paramref name="name"/>, as <see cref="Name"/> reads a program's name, is a shell whose script this reads: one of <see cref="Shells"/>, or fish.</summary>
+    internal static bool IsShell(string name) => Is(name, Shells) || Is(name, "fish");
 
     /// <summary>The shells' own options that take a value in the next word.</summary>
     private static readonly string[] ShellValueTaking = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"];
@@ -2311,9 +2898,10 @@ public static partial class CommandAnalysis
     /// and <c>env A=1 git push</c> the <c>A=1 git push</c> it is - or null where
     /// <paramref name="name"/> wraps nothing. What <c>xargs</c> hands its command from its input
     /// stands as <see cref="InputWord"/>, an expansion: at its replace string, else after the
-    /// command's words, so a rule its words would meet is not decided without it.
+    /// command's words, so a rule its words would meet is not decided without it. How each word
+    /// stands to the shell is stripped with them, in step.
     /// </summary>
-    private static IReadOnlyList<string>? Stripped(string name, IReadOnlyList<string> words)
+    private static (IReadOnlyList<string> Words, IReadOnlyList<string> Quoted)? Stripped(string name, IReadOnlyList<string> words, IReadOnlyList<string> quoted)
     {
         if (!Is(name, "env", "nohup", "time", "timeout", "nice", "xargs", "command", "builtin", "exec", "busybox"))
         {
@@ -2332,7 +2920,10 @@ public static partial class CommandAnalysis
             // flattener above this.
             var read = EnvWords(words);
 
-            return [.. read.Pairs, .. words.Skip(read.At)];
+            // The pairs are spelled as env reads them, made here: their spelling is not kept.
+            var envMade = Enumerable.Repeat(string.Empty, read.Pairs.Count);
+
+            return ([.. read.Pairs, .. words.Skip(read.At)], [.. envMade, .. quoted.Skip(read.At)]);
         }
 
         if (name == "timeout")
@@ -2407,9 +2998,13 @@ public static partial class CommandAnalysis
             // With no command of its own it echoes what it is handed.
             IReadOnlyList<string> command = at < words.Count ? [.. words.Skip(at)] : ["echo"];
 
-            return replace is { Length: > 0 }
+            // What xargs fills from its input is an expansion, wherever it stands among these words: they are made
+            // here, not read from the command line, so their spelling is not kept.
+            IReadOnlyList<string> filled = replace is { Length: > 0 }
                 ? Filled(command, word => word.Contains(replace, StringComparison.Ordinal), adds: false)
                 : Filled(command, word => false, adds: true);
+
+            return (filled, [.. filled.Select(_ => string.Empty)]);
         }
         else if (name is "command" or "builtin")
         {
@@ -2425,7 +3020,9 @@ public static partial class CommandAnalysis
             }
         }
 
-        return [.. words.Skip(at)];
+        // A word xargs fills from its input is an expansion wherever the shell would leave it alone, so the words a
+        // wrapper leaves keep the spelling it read them with.
+        return ([.. words.Skip(at)], [.. quoted.Skip(at)]);
     }
 
     /// <summary>A duration as timeout takes it: digits, with a unit and a fraction.</summary>
@@ -2436,6 +3033,59 @@ public static partial class CommandAnalysis
     private static bool Is(string name, params string[] programs)
         => programs.Any(program => name.Equals(program, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// How the word at <paramref name="at"/> stands to the shell, from <paramref name="quoted"/>, or null where the
+    /// word's spelling was not kept: a mask to hand <see cref="Expansion"/> with the word itself.
+    /// </summary>
+    private static string? At(IReadOnlyList<string> quoted, int at)
+        => at >= 0 && at < quoted.Count && quoted[at].Length > 0 ? quoted[at] : null;
+
+    /// <summary>
+    /// How the part of the word at <paramref name="at"/> that begins at <paramref name="start"/>, <paramref name="length"/>
+    /// characters long, stands to the shell: the word's own mask from <paramref name="quoted"/> cut to the part, or null
+    /// where the word's spelling was not kept - a part taken by its place in its own word, never looked up by its text.
+    /// </summary>
+    private static string? Cut(IReadOnlyList<string> quoted, int at, int start, int length)
+        => At(quoted, at) is { } mask && start >= 0 && length >= 0 && start + length <= mask.Length ? mask.Substring(start, length) : null;
+
+    /// <summary>
+    /// How each of a command's words the rules read stands to the shell: the environment's words, then the words from
+    /// <paramref name="start"/>, as the policy reads the command - each word's own mask where the command's spelling was
+    /// kept, and an empty one where it was not, which reads as wholly open.
+    /// </summary>
+    /// <param name="command">The command, as <see cref="Commands(IReadOnlyList{string}, bool, bool)"/> flattened it.</param>
+    /// <param name="start">Which word the command's own program stands at.</param>
+    internal static IReadOnlyList<string> QuotedOf(AnalyzedCommand command, int start)
+    {
+        var quoted = command.Quoted ?? [];
+
+        while (quoted.Count < command.Words.Count)
+        {
+            quoted = [.. quoted, string.Empty];
+        }
+
+        var environment = EnvironmentOf(command.Words);
+
+        return [.. quoted.Take(environment), .. quoted.Skip(start)];
+    }
+
+    /// <summary>
+    /// <paramref name="part"/> as it stands in <paramref name="word"/>: how the shell reads it there, cut from
+    /// <paramref name="quoted"/> at the place it is found, or null where it is not found or its spelling was not kept -
+    /// and a word a caller holds without its place reads as wholly open.
+    /// </summary>
+    private static string? Within(string word, string? quoted, string part)
+    {
+        if (quoted is null)
+        {
+            return null;
+        }
+
+        var at = word.IndexOf(part, StringComparison.Ordinal);
+
+        return at >= 0 && at + part.Length <= quoted.Length ? quoted[at..(at + part.Length)] : null;
+    }
+
     /// <summary>A niceness as nice takes it: a dash and digits, one word.</summary>
     [System.Text.RegularExpressions.GeneratedRegex(@"^-\d+$")]
     private static partial System.Text.RegularExpressions.Regex Niceness();
@@ -2443,13 +3093,14 @@ public static partial class CommandAnalysis
     /// <summary>
     /// The commands a script runs, read as the system's own shell reads it: split on its
     /// separators, its command substitutions and subshells read as commands of their own, each
-    /// command then flattened again - its own words may name a script or carry a wrapper.
+    /// command then flattened again - its own words may name a script or carry a wrapper. Each reads the input the
+    /// script is given (<paramref name="inputGiven"/>), or the one what stands around it in the script gives it.
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> FromScript(string script, int depth, IReadOnlyList<string> environment)
+    private static IEnumerable<AnalyzedCommand> FromScript(string script, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers = null, bool inputGiven = false, int level = 0)
     {
         foreach (var command in Script(script, 0))
         {
-            foreach (var flat in FromWords(command.Words, command.Redirects, depth, environment))
+            foreach (var flat in FromWords(command.Words, [.. command.Quoted ?? command.Words.Select(_ => string.Empty)], command.Redirects, depth, environment, wrappers, inputGiven || command.InputGiven, level + command.Level, command.Joined))
             {
                 yield return flat;
             }

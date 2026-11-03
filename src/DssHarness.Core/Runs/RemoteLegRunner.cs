@@ -412,6 +412,10 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             // Relative to the tree, which is the same path in this machine's tree: what sync --pull takes.
             KeptOutputs = [.. entry.KeptOutputs ?? []],
 
+            // What the host's test invocation kept there when it did not pass, as the host's ledger wrote it: its
+            // directory spelled as that host spells it, its home as ~, and each file it names.
+            KeptOnFailure = entry.KeptOnFailure,
+
             // Each arm the host's sweep was asked about, as it judged it there: its records stay on that host, named as
             // the host names them, and its detail named by the host this machine knows, as the leg's is.
             Arms = [.. (entry.Arms ?? []).Select(arm => new ArmEntry
@@ -505,6 +509,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<string>? RanSteps = null,
         BuildSpace? Space = null,
         IReadOnlyList<string>? KeptOutputs = null,
+        KeptOnFailure? KeptOnFailure = null,
         AdmissionFact? Admission = null,
         IReadOnlyList<RemoteLedgerArm>? Arms = null,
         string? Records = null,

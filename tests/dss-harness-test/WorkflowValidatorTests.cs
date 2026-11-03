@@ -576,9 +576,9 @@ public sealed class WorkflowValidatorTests
 
     /// <summary>
     /// A step goes on with its own work only where it runs again - inside a repeat, where a handler's then sends the run
-    /// back to it, or in the recovery - and only such a step has a resume prompt to be asked with when it does. A step
-    /// that goes on with another's work runs in that step's agent, on its model and in its worktree, and so names none of
-    /// them, nor what it writes.
+    /// back to it, or in the recovery - and only such a step has a resume prompt to be asked with when it does; it began
+    /// that work, so it names the agent definition it works by. A step that goes on with another's work runs in that
+    /// step's agent, on its model and in its worktree, and so names none of them, nor what it writes.
     /// </summary>
     [Fact]
     public void AStepGoesOnWithItsOwnWork_OnlyWhereItRunsAgain_AndWithAnothersNamingNothingOfItsOwn()
@@ -608,6 +608,17 @@ public sealed class WorkflowValidatorTests
                     resume: again
                     prompt: prompts/think.md
                     resumePrompt: prompts/again.md
+                    outputs: schemas/think.json
+                  - name: alone
+                    type: reason
+                    resume: alone
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: after-alone
+                    type: reason
+                    resume: alone
+                    dependsOn: [alone]
+                    prompt: prompts/think.md
                     outputs: schemas/think.json
               - name: sent-back
                 type: reason
@@ -662,6 +673,10 @@ public sealed class WorkflowValidatorTests
         Assert.Equal(
             [
                 "step 'once' resumes itself and runs once; a step goes on with its own work only where it runs again - inside a repeat, where a handler's then sends the run back to it, or as a step of the recovery",
+
+                // A step that goes on with its own work begins it, so the definition it works by is its own to name: the
+                // check refuses it once there, never again at each step that goes on with it.
+                "step 'looped.alone' names no agent and resumes itself; a step that goes on with its own work works by the agent definition it began it with, which it names",
                 "step 'borrows' resumes 'builder' and names agent, client, tier, access, in, writes; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, client, tier, model, access, in or writes",
                 "step 'borrows' says resumePrompt and does not resume itself; resumePrompt is what a step that goes on with its own work is asked with when it runs again, and any other step is asked with its prompt",
             ],
@@ -1698,7 +1713,7 @@ public sealed class WorkflowValidatorTests
 
         // A step that names neither a tier nor a model, where the configuration names no default tier.
         Assert.Equal(
-            ["workflow 'default' step 'plan' names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, or under defaults.agentTier"],
+            ["workflow 'default' step 'plan' names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, in its agent's definition, or under defaults.agentTier"],
             WorkflowValidator.Validate(Parse("""
                 name: default
                 steps:
@@ -1781,7 +1796,6 @@ public sealed class WorkflowValidatorTests
                     prompt: prompts/think.md
                     outputs: schemas/think.json
                 """), hasCommitTemplate: false, files: null, providers));
-
         // Where the model's own entry gave the level, the first sentence stands alone: it has a level of its own, and
         // the level is what is wrong.
         Assert.Equal(
@@ -1872,6 +1886,131 @@ public sealed class WorkflowValidatorTests
                     outputs: schemas/think.json
                 """), hasCommitTemplate: false, files: null, TwoModels()));
     }
+
+    /// <summary>
+    /// A step's agent definition is the level below it: what the definition names stands where the step names nothing,
+    /// its file's problems are said with the file that holds them, and the step's own names win over the definition's -
+    /// its effort read after the step's, its remedy pointing at the definition where the level came from there.
+    /// </summary>
+    [Fact]
+    public void AStepsAgentDefinition_StandBelowItsOwnNames()
+    {
+        var providers = TwoModels();
+
+        // The definition's tier serves a step that names neither, and its effort map is checked against every model
+        // of it - the remedy pointing at the definition, where the level came from there.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs 'glm-5.3' (tier 'best') at effort 'xhigh', which it does not take. It takes: low, high, max. Give it a level of its own under effort, in the agent's definition: glm-5.3: max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: AgentFiles(("thinker", "---\nname: thinker\ndescription: thinks\ntier: best\neffort:\n  all: xhigh\n---\nYou think.\n")), providers: providers));
+
+        // The step's own tier over the definition's model (part 03), and its own level over the definition's map.
+        Assert.Empty(WorkflowValidator.Validate(Parse("""
+            name: default
+            steps:
+              - name: plan
+                type: reason
+                agent: thinker
+                tier: balanced
+                effort: high
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """), hasCommitTemplate: false, files: AgentFiles(("thinker", "---\nname: thinker\ndescription: thinks\nmodel: claude-fable-5-1\neffort: xhigh\n---\nYou think.\n")), providers: providers));
+
+        // A definition's own problems are said with the file that holds them, once wherever it is named.
+        Assert.Equal(
+            ["agents/worker.md: line 4, column 1: 'fallback' is not a key of an agent; a fallback is the order of the tier's models in tierConfig."],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: worker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: AgentFiles(("worker", "---\nname: worker\ndescription: works\nfallback: []\n---\nYou work.\n")), providers: providers));
+    }
+
+    /// <summary>
+    /// A step's model is checked as the run resolves it, by the one pick: the step's tier whole over the definition's
+    /// model - never the definition's model beside the step's tier - so the level the definition gives is held to the
+    /// tier's own models, which are what run.
+    /// </summary>
+    [Fact]
+    public void AStepsTier_IsCheckedWhole_OverItsDefinitionsModel()
+    {
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs at effort 'xhigh', which 'glm-5.3' (tier 'balanced') does not take. It takes: low, high, max. Give it a level of its own under effort, in the agent's definition: glm-5.3: max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: balanced
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: AgentFiles(("thinker", "---\nname: thinker\ndescription: thinks\nmodel: claude-fable-5-1\neffort: xhigh\n---\nYou think.\n")), providers: TwoModels()));
+    }
+
+    /// <summary>
+    /// A step that goes on with another's work is checked as the same agent going on: the client, the tier and the
+    /// definition of the step its chain of work began with - a client that signs in with the machine's login reading no
+    /// key, for the step that names it and every step that goes on with its work alike.
+    /// </summary>
+    [Fact]
+    public void AStepThatGoesOnWithAnothersWork_IsCheckedWithTheClientItsChainBeganWith()
+    {
+        var config = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { AgentTier = "best" },
+            Providers =
+            [
+                new()
+                {
+                    Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", ApiKeyNames = ["ANTHROPIC_API_KEY"], Client = "claude-api",
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models = [new() { Code = "claude-fable-5-1", Name = "Claude Fable 5.1", Tiers = ["best"], Efforts = ["low", "high"], ContextTokens = 1_000_000, MaxOutputTokens = 128_000 }],
+                },
+            ],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["best"] = ["claude-fable-5-1"] },
+        };
+        var definition = Parse("""
+            name: default
+            steps:
+              - name: plan
+                type: reason
+                tier: best
+                client: claude-code
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+              - name: check
+                type: reason
+                resume: plan
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+              - name: mend
+                type: reason
+                resume: check
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """);
+
+        Assert.Empty(WorkflowValidator.MissingKeys(definition, AgentProviders.Resolve(config).Providers!, held: []));
+    }
+
+    /// <summary>The named files of a workflow's directory, reading each agent definition the steps name.</summary>
+    private static Func<string, string?>? AgentFiles(params (string Agent, string Text)[] agents)
+        => agents.Length == 0 ? null : named => named is { } file && file.StartsWith("agents/", StringComparison.Ordinal) && file.EndsWith(".md", StringComparison.Ordinal)
+            ? agents.FirstOrDefault(agent => agent.Agent == file["agents/".Length..^".md".Length]).Text
+            : "text";
 
     /// <summary>A test step's filterWhen is an expression as when is, with the same reads, and must yield a boolean.</summary>
     [Fact]
@@ -2072,6 +2211,38 @@ public sealed class WorkflowValidatorTests
             new Dictionary<string, string> { ["make"] = "claude-fable-5-1", ["idle"] = "glm-5.3" },
             WorkflowValidator.AgentModels(definition, TwoModels()!));
 
+        // A reason step that resumes itself begins work of its own again, and makes an agent like one that resumes
+        // nothing; one that goes on with another's work makes none.
+        Assert.Equal(
+            new Dictionary<string, string> { ["plan"] = "claude-fable-5-1", ["loop.think"] = "claude-fable-5-1" },
+            WorkflowValidator.AgentModels(Parse("""
+                name: flow
+                steps:
+                  - name: plan
+                    type: reason
+                    tier: best
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: loop
+                    repeat:
+                      until: think.done
+                      maxIterations: 2
+                    steps:
+                      - name: think
+                        type: reason
+                        tier: best
+                        prompt: prompts/think.md
+                        resumePrompt: prompts/think.md
+                        outputs: schemas/think.json
+                        resume: think
+                  - name: check
+                    type: reason
+                    resume: plan
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    dependsOn: [plan]
+                """), TwoModels()!));
+
         Assert.Equal(
             ["workflow 'flow' step 'idle' makes an agent no reason step works in, which is made for the first model of the default tier, and the configuration names no defaults.agentTier; name the tier there"],
             WorkflowValidator.Validate(Parse("""
@@ -2108,6 +2279,105 @@ public sealed class WorkflowValidatorTests
                     type: create-agent
                     agent: agents/worker.md
                 """), hasCommitTemplate: false, files: null, providers: Providers(agentTier: "deep")));
+    }
+
+    /// <summary>
+    /// A reason step charged to a run budgeted in dollars on a model without the prices every request is billed by is
+    /// refused before the run, in the words the run itself refuses it in; a budget of tokens alone, or none, needs no
+    /// price.
+    /// </summary>
+    [Fact]
+    public void AStepUnderABudgetInDollars_NeedsItsModelsPrices_BeforeTheRun()
+    {
+        const string Steps = """
+            steps:
+              - name: think
+                type: reason
+                agent: agents/worker.md
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """;
+
+        Assert.Equal(
+            ["workflow 'flow' step 'think' runs under a budget in dollars through client 'glm', and no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceInputHit, priceOutput), and a budget is charged with the cost counted from them"],
+            WorkflowValidator.Validate(Parse($"name: flow\nbudget:\n  usd: 5\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
+        Assert.Empty(WorkflowValidator.Validate(Parse($"name: flow\nbudget:\n  tokens: 5000\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
+        Assert.Empty(WorkflowValidator.Validate(Parse($"name: flow\n{Steps}"), hasCommitTemplate: false, files: null, providers: Providers()));
+    }
+
+    /// <summary>
+    /// A model priced for what every request is billed by - input, cached input and output - is checked before the run
+    /// against what its own client is billed by too, as the run asks it before any client is taken: claude-api the cache
+    /// write of the lifetime its entry says, claude-code both writes, glm nothing more. Each model of a tier is checked
+    /// against the client it is reached through, and a step's own client is the one its models are checked against.
+    /// </summary>
+    [Fact]
+    public void AStepUnderABudgetInDollars_NeedsThePricesItsOwnClientIsBilledBy()
+    {
+        const string Budgeted = "name: flow\nbudget:\n  usd: 5\nsteps:\n  - name: think\n    type: reason\n    agent: agents/worker.md\n    prompt: prompts/think.md\n    outputs: schemas/think.json\n";
+        const string Tail = "and a budget is charged with the cost counted from them";
+
+        IReadOnlyList<string> Checked(string client, string? cacheTtl = null, string flow = Budgeted)
+            => WorkflowValidator.Validate(Parse(flow), hasCommitTemplate: false, files: null, providers: PricedForEveryRequest(client, cacheTtl));
+
+        Assert.Equal(
+            [$"workflow 'flow' step 'think' runs under a budget in dollars through client 'claude-api', and no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite), {Tail}"],
+            Checked("claude-api"));
+        Assert.Equal(
+            [$"workflow 'flow' step 'think' runs under a budget in dollars through client 'claude-api', and no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite1h), {Tail}"],
+            Checked("claude-api", cacheTtl: "1h"));
+        Assert.Equal(
+            [$"workflow 'flow' step 'think' runs under a budget in dollars through client 'claude-code', and no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite, priceCacheWrite1h), {Tail}"],
+            Checked("claude-code"));
+
+        // glm is billed by nothing more than every request is: its model priced so is priced for a budget.
+        Assert.Empty(Checked("claude-api", flow: Budgeted.Replace("    agent: agents/worker.md\n", "    agent: agents/worker.md\n    model: glm-5.3\n", StringComparison.Ordinal)));
+
+        // The step's own client is the one its model is checked against, whatever its provider's own is.
+        Assert.Equal(
+            [$"workflow 'flow' step 'think' runs under a budget in dollars through client 'claude-code', and no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite, priceCacheWrite1h), {Tail}"],
+            Checked("claude-api", flow: Budgeted.Replace("    agent: agents/worker.md\n", "    agent: agents/worker.md\n    model: claude-opus-5-5\n    client: claude-code\n", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A configuration whose tier <c>best</c> holds Claude's model, reached through <paramref name="client"/>, and GLM's,
+    /// reached through glm - each priced for what every request is billed by and nothing more.
+    /// </summary>
+    /// <param name="client">The client the anthropic provider reaches its model through.</param>
+    /// <param name="cacheTtl">The cache lifetime claude-api's entry says; null where the configuration declares no entry.</param>
+    private static AgentProviders? PricedForEveryRequest(string client, string? cacheTtl)
+    {
+        var config = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { AgentTier = "best" },
+            AgentClients = cacheTtl is null
+                ? new(StringComparer.OrdinalIgnoreCase)
+                : new(StringComparer.OrdinalIgnoreCase) { ["claude-api"] = new AgentClientConfig { CacheTtl = cacheTtl } },
+            Providers =
+            [
+                new()
+                {
+                    Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", ApiKeyNames = ["ANTHROPIC_API_KEY"], Client = client,
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new() { Code = "claude-opus-5-5", Name = "Opus", Tiers = ["best"], Efforts = ["low", "high"], ContextTokens = 200_000, MaxOutputTokens = 32_000, PriceInputMiss = 10, PriceInputHit = 1, PriceOutput = 50 },
+                    ],
+                },
+                new()
+                {
+                    Name = "zai", Type = "zai", Api = "https://api.z.ai", ApiKeyNames = ["ZAI_API_KEY"], Client = "glm",
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new() { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["best"], Efforts = ["low", "high"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072, PriceInputMiss = 1, PriceInputHit = 0.2, PriceOutput = 3 },
+                    ],
+                },
+            ],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["best"] = ["claude-opus-5-5", "glm-5.3"] },
+        };
+
+        return AgentProviders.Resolve(config).Providers;
     }
 
     /// <summary>One provider, one model, one tier, as the config-half tests spell the configuration.</summary>

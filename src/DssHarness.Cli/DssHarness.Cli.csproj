@@ -45,6 +45,10 @@
     <!-- Apache-2.0 section 4(d): a distribution of a work that has a NOTICE file carries it. -->
     <None Include="../../NOTICE" Pack="true" PackagePath="/" />
     <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+
+    <!-- The MIT License asks its copyright and permission notice of each package the tool
+         carries to go with every copy of it. -->
+    <None Include="../../THIRD-PARTY-NOTICES" Pack="true" PackagePath="/" />
   </ItemGroup>
 
   <ItemGroup>

@@ -223,9 +223,10 @@ public static partial class HarnessConfigValidator
             problems.Add("worktrees.root cannot be the repository root itself");
         }
 
-        // The directories the harness keeps apart from the worktrees: git's own, the one orchestrators keep what they
-        // hold in, beside which their agents' worktrees are made, and the two a tree keeps its own copies in. A root that
-        // is one, or inside one, would mix them. Compared ignoring case: on Windows and macOS the two spellings are one
+        // The directories the harness keeps apart from the worktrees - the never-transfer floor: git's own, and every
+        // root slot the layout names - the one orchestrators keep what they hold in, beside which their agents' worktrees
+        // are made, the one side-tasks keep their records in, and the two a tree keeps its own copies in. A root that is
+        // one, or inside one, would mix them. Compared ignoring case: on Windows and macOS the two spellings are one
         // directory.
         var root = Repository.PathPatterns.Normalize(worktrees.Root);
 
@@ -1978,6 +1979,43 @@ public static partial class HarnessConfigValidator
                 $"{setting}.coresArgs",
                 problems,
                 [CoreCounts.PlaceholderName]);
+
+            // What a run that did not pass keeps of the files its build directory holds, as evidence beside its verdict.
+            // Given empty it is refused as every such list is; an entry that is not a path inside the build directory,
+            // or names a directory besides it, could never name evidence, and saying so here names the line to fix
+            // before a run has spent its build on it.
+            RefuseGivenEmpty(invocation.KeepOnFailure, $"{setting}.keepOnFailure", "name the files a failed run keeps as evidence", "no evidence kept", problems);
+            RequireRelativePaths(invocation.KeepOnFailure ?? [], $"{setting}.keepOnFailure", problems, inside: "the build directory");
+
+            foreach (var kept in invocation.KeepOnFailure ?? [])
+            {
+                if (Escapes(kept))
+                {
+                    continue;
+                }
+
+                if (NamesTheBuildDirectory(kept))
+                {
+                    problems.Add($"{setting}.keepOnFailure names '{kept}', which is the build directory itself; name a path inside it");
+                }
+                else if (BeyondTheBuildDirectory(kept) is { } beyond)
+                {
+                    problems.Add($"{setting}.keepOnFailure names '{{{beyond}}}', which is not under the build directory; name a path inside it");
+                }
+                else if (GlobPattern.Problem(kept) is { } problem)
+                {
+                    // Asked of the entry whether it holds a wildcard or not: the misspelling rule is one the whole
+                    // file's path lists are held to, and the name the keep reports is the entry as written.
+                    problems.Add($"{setting}.keepOnFailure names '{kept}', which {problem}");
+                }
+            }
+
+            CheckPlaceholders(invocation.KeepOnFailure, $"{setting}.keepOnFailure", problems);
+
+            if (invocation.KeepOnFailureCapBytes is < 1)
+            {
+                problems.Add($"{setting}.keepOnFailureCapBytes must be at least 1 byte, found {invocation.KeepOnFailureCapBytes}");
+            }
         }
 
         // What runs on a platform is its own section merged over 'all', field by field. Every
@@ -2018,6 +2056,23 @@ public static partial class HarnessConfigValidator
         var merged = applicable
             .Select(entry => (entry.Platform, Invocation: TestInvocationResolver.InvocationFor(test, entry.Platform)))
             .ToList();
+
+        // A cap on what keepOnFailure keeps is read only where an invocation it applies to keeps something - 'all's on each
+        // system whose own section gives no cap of its own - and a key that loads is a key that is read: given where none
+        // does, it caps nothing, which is said rather than passed.
+        foreach (var (section, _) in sections.Where(entry => entry.Invocation?.KeepOnFailureCapBytes is not null))
+        {
+            var capped = section == "all"
+                ? merged.Where(entry => platforms.First(platform => platform.Platform == entry.Platform).Specific?.KeepOnFailureCapBytes is null)
+                : merged.Where(entry => entry.Platform == section);
+
+            if (!capped.Any(entry => entry.Invocation.KeepOnFailure is { Count: > 0 }))
+            {
+                problems.Add(
+                    $"{owner} test.{section}.keepOnFailureCapBytes caps what keepOnFailure keeps, and no keepOnFailure it applies to names "
+                    + "a path; name what a failed run keeps in keepOnFailure, or leave the cap out");
+            }
+        }
 
         // How --filter, --label and --exclude reach ctest, each problem said once with the systems it
         // holds for: read otherwise, they run the opposite of what was asked, and say nothing.
@@ -2192,19 +2247,45 @@ public static partial class HarnessConfigValidator
     /// demand, something that belongs to another leg. Decided the same way on every platform,
     /// so a file valid on one machine is valid on all of them.
     /// </summary>
-    private static void RequireRelativePaths(IEnumerable<string> paths, string setting, List<string> problems)
+    private static void RequireRelativePaths(IEnumerable<string> paths, string setting, List<string> problems, string inside = "the tree")
     {
         foreach (var path in paths)
         {
-            var escapes = string.IsNullOrWhiteSpace(path)
-                || PlatformPaths.IsRootedOnAnyPlatform(path)
-                || PlatformPaths.ClimbsOut(path);
-
-            if (escapes)
+            if (Escapes(path))
             {
-                problems.Add($"{setting} entry '{path}' must be a relative path inside the tree, without '..'");
+                problems.Add($"{setting} entry '{path}' must be a relative path inside {inside}, without '..'");
             }
         }
+    }
+
+    /// <summary>Whether <paramref name="path"/> is blank, absolute on any platform, or climbs out with "..".</summary>
+    private static bool Escapes(string? path)
+        => string.IsNullOrWhiteSpace(path) || PlatformPaths.IsRootedOnAnyPlatform(path) || PlatformPaths.ClimbsOut(path);
+
+    /// <summary>
+    /// The first directory name <paramref name="entry"/> names that is never under a leg's build directory, or
+    /// <see langword="null"/>: the keep copies only what the build directory holds, so a directory besides it names
+    /// evidence no run could ever keep.
+    /// </summary>
+    private static string? BeyondTheBuildDirectory(string entry)
+        => LegPathNames.NamesIn(entry).FirstOrDefault(name => LegPathNames.Directories.Contains(name, StringComparer.Ordinal));
+
+    /// <summary>
+    /// Whether <paramref name="entry"/> names the build directory itself - spelled plainly, as <c>.</c>, or as
+    /// <c>{buildDir}</c> with nothing after it - which no path inside it is: an entry read as evidence that names only
+    /// where evidence lives keeps nothing on every failure.
+    /// </summary>
+    private static bool NamesTheBuildDirectory(string entry)
+    {
+        var normalized = PathPatterns.Normalize(entry);
+
+        if (normalized is "." or "")
+        {
+            return true;
+        }
+
+        return normalized.StartsWith($"{{{LegPathNames.BuildDirectory}}}", StringComparison.Ordinal)
+            && PathPatterns.Normalize(normalized[(LegPathNames.BuildDirectory.Length + 2) ..]) is "" or ".";
     }
 
     /// <summary>A CMake language name, such as <c>C</c>, <c>CXX</c> or <c>Fortran</c>.</summary>

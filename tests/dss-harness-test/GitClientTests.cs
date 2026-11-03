@@ -4,6 +4,7 @@ using NSubstitute;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
@@ -2779,17 +2780,23 @@ public sealed class GitClientProtocolTests
         // Each outranks `-C <directory>`. A git hook runs with some of them set, so a harness command
         // invoked from a hook, or from a shell left in another checkout, would read and write a
         // repository nobody named: with GIT_COMMON_DIR naming another repository, deleting a worktree
-        // was refused and left it registered. Every name the list gives is cleared, not three of them.
+        // was refused and left it registered. Every name the list gives is cleared, not three of them - git's variable for
+        // its command line's settings then holding the tool's own alone, never an inherited one, and the one that keeps
+        // objects from being replaced set.
         var (git, requests) = Scripted(Exited(0));
 
         await git.RunAsync("/repo", ["status"], cancellationToken: TestContext.Current.CancellationToken);
 
         var environment = Assert.Single(requests).Environment;
+        var own = $"'core.fsmonitor=false' 'submodule.recurse=false' 'core.hooksPath={(OperatingSystem.IsWindows() ? @"\\.\NUL" : "/dev/null")}'";
+
+        Assert.Contains(GitOwnSettings.ParametersVariable, LocalNames);
+        Assert.Contains(GitOwnSettings.NoReplaceVariable, LocalNames);
 
         foreach (var name in LocalNames)
         {
             Assert.True(environment.ContainsKey(name), $"{name} was not cleared.");
-            Assert.Null(environment[name]);
+            Assert.Equal(name == GitOwnSettings.ParametersVariable ? own : name == GitOwnSettings.NoReplaceVariable ? "1" : null, environment[name]);
         }
     }
 
@@ -3123,6 +3130,142 @@ public sealed class GitClientProtocolTests
 
         Assert.Equal(HarnessExit.CommandFailed, failed.ExitCode);
         Assert.Equal("Could not read which files 0123456789abcdef0123456789abcdef01234567 holds: fatal: the remote end hung up unexpectedly", failed.Message);
+    }
+
+    /// <summary>
+    /// Every git of the tool's own runs with no file-system monitor and no object replaced, and every one but a question
+    /// with no hook - each set in git's own variables, once the inherited ones are gone - while one that runs the hooks on
+    /// purpose keeps them; in the root of a tree whose git directories were pinned, git is given them, and in any other
+    /// directory none.
+    /// </summary>
+    [Fact]
+    public async Task EveryGitOfTheTools_RunsNoMonitor_NoHookButOnPurpose_AndInAPinnedTree_ItsPinnedDirectories()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var requests = new List<ProcessRequest>();
+        var runner = Substitute.For<IProcessRunner>();
+        runner.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>()).Returns(Exited(0));
+        runner.FindExecutable("git").Returns("git");
+        var pins = new GitDirectoryPins();
+        pins.Pin("/r/.worktrees/a1", "/r/.git/worktrees/a1", "/r/.git");
+        var git = new GitClient(runner, Substitute.For<IHarnessOutput>(), localVariables: GitLocalVariables.Fixed(LocalNames), platform: new SaidPlatform(PlatformId.Linux), pins: pins);
+
+        await git.RunAsync("/r/.worktrees/a1", ["add", "a.txt"], cancellationToken: cancellationToken);
+        await git.RunAsync("/r/.worktrees/a1/src", ["rev-parse", "HEAD"], cancellationToken: cancellationToken);
+        await git.RunWithHooksAsync("/r", ["commit", "-m", "x"], TimeSpan.FromMinutes(1), isolation: null, values: null, cancellationToken);
+
+        Assert.Equal(["add", "a.txt"], requests[0].Arguments);
+        Assert.Equal(
+            ("'core.fsmonitor=false' 'submodule.recurse=false' 'core.hooksPath=/dev/null'", "/r/.git/worktrees/a1", "/r/.git", Path.GetFullPath("/r/.worktrees/a1")),
+            (requests[0].Environment!["GIT_CONFIG_PARAMETERS"], requests[0].Environment!["GIT_DIR"], requests[0].Environment!["GIT_COMMON_DIR"], requests[0].Environment!["GIT_WORK_TREE"]));
+        Assert.Equal(("'core.fsmonitor=false' 'submodule.recurse=false'", (string?)null), (requests[1].Environment!["GIT_CONFIG_PARAMETERS"], requests[1].Environment!["GIT_DIR"]));
+        Assert.Equal(("'core.fsmonitor=false'", (string?)null), (requests[2].Environment!["GIT_CONFIG_PARAMETERS"], requests[2].Environment!["GIT_DIR"]));
+        Assert.All(requests, request => Assert.Equal("1", request.Environment!["GIT_NO_REPLACE_OBJECTS"]));
+        Assert.Equal(@"'core.fsmonitor=false' 'submodule.recurse=false' 'core.hooksPath=\\.\NUL'", GitOwnSettingsOn(PlatformId.Windows));
+    }
+
+    /// <summary>
+    /// Every comparison of a work tree the tool runs tells a submodule by its commit alone - given right after its
+    /// subcommand where it names nothing of submodules, a command that hides them left as it is, and one that would look
+    /// into a submodule's work tree refused - and every other command is run as it was asked.
+    /// </summary>
+    [Fact]
+    public void EveryComparisonOfTheTools_TellsASubmoduleByItsCommit_AndNoneLooksIntoItsWorkTree()
+    {
+        Assert.Equal(
+            ["--no-optional-locks", "status", "--ignore-submodules=dirty", "--porcelain=v2", "-z"],
+            GitOwnSettings.Arguments(["--no-optional-locks", "status", "--porcelain=v2", "-z"]));
+        Assert.Equal(["-c", "a=b", "diff", "--ignore-submodules=dirty", "--name-only", "HEAD", "--"], GitOwnSettings.Arguments(["-c", "a=b", "diff", "--name-only", "HEAD", "--"]));
+        Assert.Equal(["diff-files", "--ignore-submodules=dirty"], GitOwnSettings.Arguments(["diff-files"]));
+        Assert.Equal(["diff-index", "--ignore-submodules=dirty", "HEAD"], GitOwnSettings.Arguments(["diff-index", "HEAD"]));
+        Assert.Equal(["status", "--ignore-submodules=all"], GitOwnSettings.Arguments(["status", "--ignore-submodules=all"]));
+        Assert.Equal(["diff", "--name-only", "--ignore-submodules=dirty"], GitOwnSettings.Arguments(["diff", "--name-only", "--ignore-submodules=dirty"]));
+        Assert.Equal(["diff", "--ignore-submodules=dirty", "--", "--ignore-submodules=none"], GitOwnSettings.Arguments(["diff", "--", "--ignore-submodules=none"]));
+        Assert.Equal(["add", "--", "status"], GitOwnSettings.Arguments(["add", "--", "status"]));
+        Assert.Equal(["rev-parse", "HEAD"], GitOwnSettings.Arguments(["rev-parse", "HEAD"]));
+
+        foreach (var looking in new[] { "--ignore-submodules=none", "--ignore-submodules=untracked" })
+        {
+            var refused = Assert.Throws<ArgumentException>(() => GitOwnSettings.Arguments(["status", looking]));
+            Assert.StartsWith($"No git of the tool's looks into a submodule's work tree, which '{looking}' asks.", refused.Message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// A repository an agent made in its tree and put in the index as a submodule's entry - its own configuration naming a
+    /// clean filter, a file of its work tree changed - is listed by its commit by every status, diff and listing of the
+    /// tool's, and none of them runs anything of that configuration: git never asks the repository's own git about its
+    /// work tree.
+    /// </summary>
+    [Fact]
+    public async Task ARepositoryPlantedAsASubmodule_IsListedByItsCommit_AndNoStatusOrDiffOfTheToolsRunsItsFilter()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var tree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var marker = temp.Combine("ran.txt");
+        await harness.InitializeGitRepositoryAsync(tree, cancellationToken);
+        await PlantFilteredRepositoryAsync(harness, tree, "sub", marker, cancellationToken);
+
+        var status = await harness.GitClient.ReadStatusAsync(tree, cancellationToken);
+        var since = await harness.GitClient.ListNamesChangedSinceAsync(tree, "HEAD", cancellationToken);
+        var working = await harness.GitClient.ListWorkingFilesAsync(tree, cancellationToken);
+        var dirty = await harness.GitClient.IsDirtyAsync(tree, cancellationToken);
+        var asked = new[] { new[] { "status", "--porcelain" }, ["diff", "--name-only"], ["diff-files", "--name-only"], ["diff-index", "--name-only", "HEAD"] };
+        var raw = new List<GitCommandResult>();
+
+        // A comparison asked by its bare arguments is told by the commit as the client's own reads are.
+        foreach (var arguments in asked)
+        {
+            raw.Add(await harness.GitClient.RunAsync(tree, arguments, cancellationToken: cancellationToken));
+        }
+
+        Assert.False(File.Exists(marker), "The planted repository's clean filter ran.");
+        Assert.All(raw, result => Assert.Equal(0, result.ExitCode));
+        var entry = Assert.Single(status);
+        Assert.Equal(("sub", 'A', ' '), (entry.Path.Text, entry.Index, entry.WorkTree));
+        Assert.Equal(["sub"], since.Select(name => name.Text));
+        Assert.Equal(["sub"], working.Select(file => file.Name.Text));
+        Assert.True(dirty);
+    }
+
+    /// <summary>
+    /// Makes a repository of its own at <paramref name="name"/> in <paramref name="tree"/>, as an agent may: its
+    /// configuration names a clean filter that writes <paramref name="marker"/> whenever it runs, for every file; it is put
+    /// in the tree's index as a submodule's entry naming its commit; and a file of its work tree is changed after, at the
+    /// size it had, so a status of its own reads that file again, through the filter - which a status of its own, asked
+    /// once, is proved to run. The marker is gone when it returns.
+    /// </summary>
+    internal static async Task PlantFilteredRepositoryAsync(HarnessFactory harness, string tree, string name, string marker, CancellationToken cancellationToken)
+    {
+        var planted = Directory.CreateDirectory(Path.Combine(tree, name)).FullName;
+        await harness.InitializeGitRepositoryAsync(planted, cancellationToken);
+
+        // Quoted whole, as git reads a configuration value: a semicolon outside quotes starts a comment there.
+        File.AppendAllText(Path.Combine(planted, ".git", "config"), $"[filter \"x\"]\n\tclean = \"sh -c 'echo ran >> \\\"{marker.Replace('\\', '/')}\\\"; cat'\"\n");
+        File.WriteAllText(Path.Combine(planted, ".gitattributes"), "* filter=x\n");
+        File.WriteAllText(Path.Combine(planted, "f.txt"), "f\n");
+        await harness.RunGitAsync(planted, ["add", "f.txt", ".gitattributes"], cancellationToken);
+        await harness.RunGitAsync(planted, ["commit", "--quiet", "-m", "planted"], cancellationToken);
+        var commit = (await harness.RunGitAsync(planted, ["rev-parse", "HEAD"], cancellationToken)).StandardOutput.Trim();
+        await harness.RunGitAsync(tree, ["update-index", "--add", "--cacheinfo", $"160000,{commit},{name}"], cancellationToken);
+        File.WriteAllText(Path.Combine(planted, "f.txt"), "g\n");
+        File.Delete(marker);
+
+        var own = await harness.RunGitAsync(planted, ["status", "--porcelain"], cancellationToken);
+
+        Assert.True(File.Exists(marker), $"The planted repository's own status ran no filter: {own.StandardError}");
+        File.Delete(marker);
+    }
+
+    /// <summary>The settings a git command that is no question runs with on <paramref name="system"/>.</summary>
+    private static string? GitOwnSettingsOn(PlatformId system)
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+        GitOwnSettings.Apply(environment, system, ["checkout", "main"], hooksRun: false, "/r", pins: null);
+
+        return environment[GitOwnSettings.ParametersVariable];
     }
 
     private static (GitClient Client, List<ProcessRequest> Requests) Scripted(params ProcessResult[] results)

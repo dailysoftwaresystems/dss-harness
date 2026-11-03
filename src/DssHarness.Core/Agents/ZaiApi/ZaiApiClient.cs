@@ -47,7 +47,8 @@ public sealed class ZaiApiClient(
         ReportsCost: false,
         EffortLevels: Kind.Efforts,
         ProviderType: Kind.ProviderType,
-        ToldModelBy: "the request's model");
+        ToldModelBy: "the request's model",
+        PacesRequests: true);
 
     /// <summary>The client's kind, as the tool builds it in.</summary>
     private static AgentClientKind Kind => AgentProviders.ClientKinds.First(kind => kind.Name == ClientName);

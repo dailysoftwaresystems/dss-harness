@@ -39,6 +39,57 @@ public sealed class FlowResumeTests
         => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(digest ?? FlowRunContext.DigestOf(definition));
 
     /// <summary>
+    /// The repository's bar for a recommendation is read live, each time it is given: the orchestrator's
+    /// <c>recommendations.md</c> as the workflow's file seam reads it, so a change holds from the next question on and
+    /// a run does not keep the bar it started with.
+    /// </summary>
+    [Fact]
+    public async Task TheRepositorysBarForARecommendation_IsReadLiveEachTimeItIsGiven()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: pause
+                question: '{recommendations}'
+                options: [approve, revise]
+              - name: second
+                type: pause
+                dependsOn: [first]
+                question: '{recommendations}'
+                options: [approve, revise]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var bar = Path.Combine(temp.Path, ".harness-config", "workflows", "flow", "recommendations.md");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(bar)!);
+        File.WriteAllText(bar, "Prefer the cheaper answer.\n");
+
+        string? ReadBar(string named)
+            => new WorkflowNamedFiles(harness.FileSystem, harness.Platform.PathComparison).ReadTextIfThere(new HarnessLayout(temp.Path, temp.Path), "flow", named, "a workflow file");
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFileIfThere: ReadBar);
+            _ = coordinator.RunAsync(Token);
+
+            var first = coordinator.OpenQuestions.Single();
+
+            Assert.Contains("cheaper", first.Problem, StringComparison.Ordinal);
+
+            File.WriteAllText(bar, "Prefer the safer answer.\n");
+
+            Assert.True(coordinator.TryAnswer(first.Id, "approve", null, out _));
+            _ = coordinator.RunAsync(Token);
+
+            // The change holds from the next question on: the second question reads the bar as it is now.
+            Assert.Contains("safer", coordinator.OpenQuestions.Single().Problem, StringComparison.Ordinal);
+            Assert.DoesNotContain("cheaper", coordinator.OpenQuestions.Single().Problem, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// A step of others a crash cut off goes on at the resume from its record alone: at the first target whose turn had
     /// not ended, the ones that ended never asked again, and its every target's count of attempts carried on.
     /// </summary>
@@ -251,7 +302,7 @@ public sealed class FlowResumeTests
         }
 
         var taken = TakeUp(harness, layout, definition);
-        var handoff = layout.StepHandoffFile("think");
+        var handoff = layout.HandoffFile("a1", "think");
 
         Assert.Equal(["think"], taken.File.Pause!.Handoffs);
         Assert.NotNull(taken.File.Pause.CompletedAt);
@@ -275,6 +326,63 @@ public sealed class FlowResumeTests
 
         Assert.NotNull(file);
         Assert.Null(file.Pause);
+    }
+
+    /// <summary>
+    /// The skills a reason step's agent was given are the step's own record's - each once, with the place it was found,
+    /// its file, both digests and where its folder was put, in <c>step.json</c> and <c>flow.json</c> alike - and a resume
+    /// takes them up with the record, so what the next session writes still names them.
+    /// </summary>
+    [Fact]
+    public async Task TheSkillsAStepWasGiven_AreItsRecords_AndAResumeKeepsThem()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [think]
+            """);
+        var review = new DssHarness.Core.Agents.AgentSkill("review", ".harness-config/skills", "/repo/.harness-config/skills/review/SKILL.md", "digest one", "folder one", "/work/a1/skills/review");
+        var plan = new DssHarness.Core.Agents.AgentSkill("plan", ".claude/skills", "/repo/.claude/skills/plan/SKILL.md", "digest two", "folder two", "/work/a1/skills/plan");
+        var runner = new Runner()
+            .On("think", _ => FlowStepResult.Ended(passed: true, 0) with { Skills = [review, plan, review] })
+            .Hold("after");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("after").WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal([review, plan], harness.OrchestrationStore.ReadStepRecord(layout.AgentStepRecordFile("a1", "think"))!.Skills!);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps;
+
+        Assert.Equal([review, plan], steps.Single(step => step.Instance == "think").Skills!);
+        Assert.Null(steps.Single(step => step.Instance == "after").Skills);
+        Assert.Equal([review, plan], harness.OrchestrationStore.ReadStepRecord(layout.AgentStepRecordFile("a1", "think"))!.Skills!);
     }
 
     /// <summary>What a crash cut off is taken up: it runs again as a new attempt, and the engine writes the handoff its agent never gave - for the next attempt is told what the cut-off one had done.</summary>
@@ -321,7 +429,7 @@ public sealed class FlowResumeTests
             Assert.Equal(2, coordinator.Instances["think"].Attempt);
         }
 
-        Assert.Equal("Written by the engine: the engine's process ended.\nAttempt 1 was cut off.", next.Given[2]);
+        Assert.Equal("Written by the engine: the engine's process ended.", next.Given[2]);
     }
 
     /// <summary>
@@ -454,7 +562,7 @@ public sealed class FlowResumeTests
             }
         }
 
-        Assert.Equal(account + "\n", File.ReadAllText(layout.StepHandoffFile("think")));
+        Assert.Equal(account + "\n", File.ReadAllText(layout.HandoffFile("a1", "think")));
 
         var third = new Runner();
         var (_, _, last) = Records("r1", temp.Path, definition);
@@ -716,12 +824,12 @@ public sealed class FlowResumeTests
             _ = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         }
 
-        File.Delete(layout.StepHandoffFile("think"));
+        File.Delete(layout.HandoffFile("a1", "think"));
 
         var refused = Assert.Throws<HarnessException>(() => TakeUp(harness, layout, definition));
 
         Assert.Equal(
-            $"step 'think' of run 'r1' holds a handoff written by the agent, and '{layout.StepHandoffFile("think")}' is not there. "
+            $"step 'think' of run 'r1' holds a handoff written by the agent, and '{layout.HandoffFile("a1", "think")}' is not there. "
             + "Nothing was changed: a handoff is never written again in the place of one that was lost; put the file back to go on with the run, "
             + "or delete-orchestrator r1 ends it.",
             refused.Message);
@@ -758,7 +866,7 @@ public sealed class FlowResumeTests
             // The crash, between the handoff's file and the record that would name it.
         }
 
-        File.WriteAllText(layout.StepHandoffFile("think"), text + "\n");
+        File.WriteAllText(layout.HandoffFile("a1", "think"), text + "\n");
 
         var taken = TakeUp(harness, layout, definition);
         var step = Assert.Single(taken.File.Steps);
@@ -914,7 +1022,7 @@ public sealed class FlowResumeTests
         }
 
         Assert.Equal(["after", "side", "think"], next.Started.Order(StringComparer.Ordinal));
-        Assert.Equal("Written by the engine: the run was stopped.\nAttempt 1 was cut off.", given);
+        Assert.Equal("Written by the engine: the run was stopped.", given);
     }
 
     /// <summary>
@@ -1031,6 +1139,80 @@ public sealed class FlowResumeTests
         }
 
         Assert.Equal(new FlowMadeAgent("a1", "model-one"), asked);
+    }
+
+    /// <summary>The advisor as a fake: every asking kept, each held until its token ends it.</summary>
+    private sealed class HeldAdvisor : IFlowAdvisorRunner
+    {
+        /// <summary>Every asking, in order.</summary>
+        public List<FlowAdvisorCall> Asked { get; } = [];
+
+        /// <summary>Completes once the first asking has begun.</summary>
+        public TaskCompletionSource Begun { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
+        {
+            lock (Asked)
+            {
+                Asked.Add(call);
+            }
+
+            Begun.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new FlowAdvice(null, null, null, NotObtained: "never");
+        }
+    }
+
+    /// <summary>
+    /// A resume refused - nothing can run until the open question is answered - starts no advisor, though the question
+    /// still owes its advice: the advisor is a paid run, and a refused resume writes and starts nothing of its own.
+    /// </summary>
+    [Fact]
+    public async Task ARefusedResume_StartsNoAdvisor()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: asker
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var first = new HeldAdvisor();
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner().On("asker", _ => FlowStepResult.AtLimit("turns", "12 turns")), new RunnerFacts(), records: records, advisor: first);
+            _ = coordinator.RunAsync(Token);
+            await first.Begun.Task.WaitAsync(Bound, Token);
+
+            // The crash, while the advisor runs: the question is written marked sought.
+        }
+
+        var taken = TakeUp(harness, layout, definition);
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        var resumed = new HeldAdvisor();
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again, advisor: resumed);
+
+            var raised = await Assert.ThrowsAsync<HarnessException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
+
+            Assert.Equal(
+                (HarnessExit.Refused, "nothing of this run can run until the question of step 'asker' is answered; answer-orchestrator answers it"),
+                (raised.ExitCode, raised.Message));
+        }
+
+        // An advisor started on the thread pool would be asked within moments: none is.
+        _ = await Task.WhenAny(resumed.Begun.Task, Task.Delay(TimeSpan.FromSeconds(2), Token));
+        Assert.Empty(resumed.Asked);
     }
 
     /// <summary>A resume beside an open question is not refused where something can run; it is refused only where nothing can until the question is answered, naming answer-orchestrator.</summary>
@@ -1563,6 +1745,94 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// What a run spent is written as the one fold holds it: a turn whose cost could not be counted leaves
+    /// <c>flow.json</c> holding the dollars counted and why the rest is not known, a resume reads it back so, and the
+    /// parts its session counts add to what was counted while the dollars stay not known. A run whose every part was
+    /// counted writes no such member - the shape every record written before a part could go uncounted has - and a
+    /// record without one reads as counted whole.
+    /// </summary>
+    [Fact]
+    public async Task WhatARunSpent_IsWrittenWithWhatItCouldNotCount_AndAResumeGoesOnFromIt()
+    {
+        const string Why = "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)";
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: gate
+                type: build
+              - name: after
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [think, gate]
+            """);
+        var runner = new Runner().On("think", run =>
+        {
+            run.Events.Used(tokens: 1_000, usd: 1.25);
+            run.Events.Used(tokens: 500, usd: null, uncounted: Why);
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        }).Hold("gate");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records);
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched);
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("gate").WaitAsync(Bound, Token);
+            await watched.SeenAsync(snapshot => snapshot.Spent.Tokens == 1_500 && snapshot.Steps.Any(step => step.Instance == "think" && step.State == FlowInstanceState.Done)).WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+            runner.Complete("gate");
+
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        var written = JsonNode.Parse(File.ReadAllText(layout.FlowFile))!["spent"]!;
+        Assert.Equal((1.25, 1_500L, Why), (written["usd"]!.GetValue<double>(), written["tokens"]!.GetValue<long>(), written["uncounted"]!.GetValue<string>()));
+
+        var taken = TakeUp(harness, layout, definition);
+        Assert.Equal(new FlowDollars(1.25, Why), taken.File.Spent.Dollars);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = new Runner().On("after", run =>
+            {
+                run.Events.Used(tokens: 100, usd: 0.25);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+            var end = await new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: taken, records: again).RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+        }
+
+        Assert.Equal((new FlowDollars(1.5, Why), 1_600L), (harness.OrchestrationStore.ReadFlow(layout)!.Spent.Dollars, harness.OrchestrationStore.ReadFlow(layout)!.Spent.Tokens));
+
+        // A run whose every part was counted writes no member for what it could not count, and reads back counted whole.
+        using var counted = new TempDirectory();
+        var whole = new Runner().On("think", run =>
+        {
+            run.Events.Used(tokens: 1_000, usd: 1.25);
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var (wholeHarness, wholeLayout, wholeRecords) = Records("r1", counted.Path, definition);
+
+        using (wholeRecords)
+        {
+            Assert.Equal(FlowRunStatus.Done, (await new FlowCoordinator(definition, whole, new RunnerFacts(), records: wholeRecords).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal(["usd", "tokens", "minutes"], JsonNode.Parse(File.ReadAllText(wholeLayout.FlowFile))!["spent"]!.AsObject().Select(member => member.Key));
+        Assert.Equal(new FlowDollars(1.25), wholeHarness.OrchestrationStore.ReadFlow(wholeLayout)!.Spent.Dollars);
+    }
+
+    /// <summary>
     /// The questions a run raised survive every session: a question answered, the session that answered it stopped, and
     /// a resume that asks again - the answered question is still in the run's file with who answered it and through
     /// what, and the new question takes the id after the highest any question took, never one a record already names.
@@ -1919,8 +2189,57 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
-        Assert.Equal([new FlowAnswerGiven("q1", "allow")], next.Answers["fold@2"]);
-        Assert.Equal([new FlowAnswerGiven("q1", "allow")], harness.OrchestrationStore.ReadStepRecord(Path.Combine(layout.InstanceDirectory("fold", "a1"), OrchestratorLayout.StepRecordFileName))!.Answers);
+        // The answer carries its question's kind and the attempt it was given to, so the attempt a resume runs again
+        // knows what it answers and each attempt serves only its own.
+        Assert.Equal([new FlowAnswerGiven("q1", "allow", Kind: "foldNewRows", Attempt: 1)], next.Answers["fold@2"]);
+        Assert.Equal([new FlowAnswerGiven("q1", "allow", Kind: "foldNewRows", Attempt: 1)], harness.OrchestrationStore.ReadStepRecord(Path.Combine(layout.InstanceDirectory("fold", "a1"), OrchestratorLayout.StepRecordFileName))!.Answers);
+    }
+
+    /// <summary>
+    /// The handoff a limit's question wrote survives the crash that comes while the question waits: a step paused on
+    /// its own question keeps it, and the answer <c>retry</c> begins the next attempt told why the one before it ended.
+    /// </summary>
+    [Fact]
+    public async Task TheHandoffALimitsQuestionWrote_SurvivesTheCrashWhileTheQuestionWaits()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var end = await new FlowCoordinator(
+                definition,
+                new Runner().On("think", _ => FlowStepResult.AtLimit("turns", "20 turns")),
+                new RunnerFacts(),
+                records: records).RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+        }
+
+        var next = new Runner().On("think", run => FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.True(coordinator.TryAnswer("q1", "retry", null, out _, FlowService.AnswerCommand));
+
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+
+            // The resumed attempt was told why the one before it ended: the engine's one-line handoff of the limit.
+            Assert.Contains("reached its turns", next.Given[2], StringComparison.Ordinal);
+        }
     }
 
     /// <summary>A work item that is JSON null is read back null, never Missing: the item a resume runs again is the one the run expanded.</summary>
@@ -2350,7 +2669,7 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowRunStatus.Failed, (await new FlowCoordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
         }
 
-        Assert.Equal([issue], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("think"))!.IssuesOwed);
+        Assert.Equal([issue], harness.OrchestrationStore.ReadStepRecord(layout.AgentStepRecordFile("a1", "think"))!.IssuesOwed);
 
         var held = new Runner().Hold("triage");
         var (_, _, raising) = Records("r1", temp.Path, definition);
@@ -2572,7 +2891,7 @@ public sealed class FlowResumeTests
             _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), records: new Cut(crashedRecords, triageDone)).RunAsync(Token).WaitAsync(Bound, Token);
         }
 
-        Assert.Equal(nameof(FlowInstanceState.Done), crashedHarness.OrchestrationStore.ReadStepRecord(crashedLayout.StepRecordFile("triage"))!.State);
+        Assert.Equal(nameof(FlowInstanceState.Done), crashedHarness.OrchestrationStore.ReadStepRecord(crashedLayout.AgentStepRecordFile("a2", "triage"))!.State);
         Assert.Null(crashedHarness.OrchestrationStore.ReadFlow(crashedLayout)!.Steps.FirstOrDefault(step => step.Instance == "recover"));
 
         var next = new Runner();
@@ -2848,6 +3167,90 @@ public sealed class FlowResumeTests
         }
     }
 
+    /// <summary>
+    /// A write a session's start holds says the run exactly as it stood when its change was taken: what was spent, and the
+    /// pause, held by value beside the grants of that moment, never what changed before the write was made. A run paused
+    /// on its budget's question is offered more between sessions, and a runner that outlived its attempt then reports a
+    /// turn with no cost: the next session's start holds its writes, the answer raises the grant, the late turn meets the
+    /// reserve under the new grant - and the held writes are made as they stood, the session going on to ask again, never
+    /// refused as a record whose reserve was met past the grants it holds.
+    /// </summary>
+    [Fact]
+    public async Task AWriteHeldAtASessionsStart_SaysTheRunAsItStood_NeverWhatWasSpentSince()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: orient
+                dependsOn: [think]
+            """);
+        IFlowRunEvents? kept = null;
+        var runner = new Runner().On("think", run =>
+        {
+            if (kept is null)
+            {
+                kept = run.Events;
+                run.Events.Used(tokens: 500, usd: null, uncounted: "no price for the first turn");
+            }
+
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var written = new List<FlowSnapshot>();
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: new Intercepted(records, (_, _, _, snapshot) => written.Add(snapshot)));
+            var first = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            var asked = Assert.Single(coordinator.OpenQuestions);
+
+            Assert.Equal((FlowRunStatus.Paused, "runBudget"), (first.Status, asked.Kind));
+
+            // An answer offered between sessions, then a turn a runner that outlived its attempt reports with no cost.
+            var offered = coordinator.OfferAnswerAsync(asked.Id, "more");
+            kept!.Used(10, null, "a late turn came with no cost");
+            written.Clear();
+
+            var second = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowHandedOver.Taken, await offered.WaitAsync(Bound, Token));
+            Assert.Equal(FlowRunStatus.Paused, second.Status);
+            Assert.Equal(["q1 runBudget answered more", "q2 runBudget open "], coordinator.Questions.Select(question => $"{question.Id} {question.Kind} {question.State} {string.Join("/", question.Given.Select(given => given.Answer))}"));
+        }
+
+        // The session's first write, held at its start, keeps the run as it stood then: no reserve met past the grant it holds.
+        Assert.Equal((500L, "no price for the first turn", (int?)0, 0), (written[0].Spent.Tokens, written[0].Spent.Uncounted, written[0].Spent.ReserveMetAt, written[0].BudgetGranted));
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+
+        Assert.Equal((1, 1, "no price for the first turn", 510L), (flow.Spent.ReserveMetAt, flow.BudgetGranted, flow.Spent.Uncounted, flow.Spent.Tokens));
+    }
+
+    /// <summary>
+    /// The grant a run's reserve was met under is read strictly: one below the first grant, or past the grants the run
+    /// was given, is no record; none at all is a run whose reserve nothing met past its count, as every record written
+    /// before the mark was kept is read.
+    /// </summary>
+    [Fact]
+    public void AReserveMetAtAGrantTheRunWasNeverGiven_IsNoRecord()
+    {
+        static FlowFile Holding(int? met, int granted)
+            => new(1, "r1", "flow", "digest", new Dictionary<string, string>(), "Paused", new FlowBudgetRecord(2, 0, 0, ReserveMetAt: met), granted, [], [], DateTimeOffset.UnixEpoch);
+
+        Assert.Equal<string?>(
+            [null, null, "its budget's reserve was met at a negative grant", "its budget's reserve was met at grant 2, past the 1 it was granted"],
+            new[] { Holding(null, 0), Holding(1, 1), Holding(-1, 0), Holding(2, 1) }.Select(file => file.Problem()));
+    }
+
     /// <summary>A record's state is read by the engine's one strict reader of its names: one it does not have is refused, never taken for a step that runs again.</summary>
     [Fact]
     public void AStateTheEngineDoesNotHave_IsRefused_NeverTakenForOneThatRunsAgain()
@@ -2941,7 +3344,7 @@ public sealed class FlowResumeTests
             => new Runner()
                 .On("build", run => run.Visit == 1 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "red") : FlowStepResult.Ended(passed: true, 0))
                 .On("flaky", run => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "flaked"))
-                .On("think", run => run.Answers.Count == 0 ? FlowStepResult.AtLimit("turns") : FlowStepResult.Ended(passed: true, 0));
+                .On("think", run => run.Answers.Count == 0 ? FlowStepResult.AtLimit("turns") with { StoredConversation = true } : FlowStepResult.Ended(passed: true, 0));
 
         async Task<(FlowSessionEnd End, IReadOnlyList<FlowStepRecord> Steps, IReadOnlyList<FlowQuestionEntry> Questions, int Writes)> RunCutAsync(int writes)
         {
@@ -2995,17 +3398,161 @@ public sealed class FlowResumeTests
         }
     }
 
+    /// <summary>
+    /// The reserve a run budgeted in dollars met whatever its count says - by a part whose cost could not be counted, or
+    /// by a launch the run's share ended - is kept in <c>flow.json</c> with what was spent, never in the engine's memory
+    /// alone: a crash at any write from the first that holds it - the part on disk, or the launch's end - with the
+    /// budget's check not yet made, or made and its question not yet written, is gone on from by a resume that asks once,
+    /// as the run uncut asked, before anything starts again - never by running the step past the reserve to meet it a
+    /// second time; and once a grant of more is recorded the run goes on to its end and asks nothing more.
+    /// </summary>
+    /// <param name="by">What meets the reserve: <c>uncounted</c>, a part whose cost could not be counted; <c>share</c>, a launch the run's share ended.</param>
+    [Theory]
+    [InlineData("uncounted")]
+    [InlineData("share")]
+    public async Task AReserveMetWhateverTheCountSays_IsAskedOnceAtTheResumeAfterACrash_AndAGrantGoesOn(string by)
+    {
+        const string Why = "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)";
+        const string Asked = "Paused | started none | q1 runBudget open ";
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: orient
+                dependsOn: [think]
+            """);
+
+        // The conversation reports what it spent once, and its launch meets the reserve once, in the run's first session:
+        // every later attempt - a resume's among them, for what the first spent is on disk - goes on in it, reports nothing
+        // more and ends.
+        Runner Scripted(bool first = false)
+            => new Runner().On("think", run =>
+            {
+                if (!first)
+                {
+                    return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+                }
+
+                first = false;
+
+                if (by == "share")
+                {
+                    run.Events.Used(tokens: 1_000, usd: 44.0);
+                    return FlowStepResult.AtTheRunsReserve("'think' spent what was left of the run's budget before its reserve");
+                }
+
+                run.Events.Used(tokens: 1_000, usd: 2.0);
+                run.Events.Used(tokens: 500, usd: null, uncounted: Why);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+
+        // Where the write the reserve is first met in is: the part on disk, or the write that records the launch's end.
+        bool Meets(FlowChangeKind kind, FlowSnapshot snapshot)
+            => by == "share" ? kind == FlowChangeKind.Handoff : snapshot.Spent.Uncounted is not null;
+
+        static string Standing(FlowSessionEnd end, IReadOnlyList<string> started, IReadOnlyList<FlowQuestionEntry> questions)
+            => $"{end.Status} | started {(started.Count == 0 ? "none" : string.Join(", ", started))} | "
+                + string.Join(", ", questions.Select(question => $"{question.Id} {question.Kind} {question.State} {string.Join("/", question.Answers.Select(answer => answer.Answer))}"));
+
+        async Task<(string Standing, int Writes, int Met)> RunCutAsync(TempDirectory temp, int writes)
+        {
+            var (harness, layout, records) = Records("r1", temp.Path, definition);
+            var cut = new Cut(records, writes, Meets);
+            FlowSessionEnd end;
+
+            using (records)
+            {
+                end = await new FlowCoordinator(definition, Scripted(first: true), new RunnerFacts(), records: cut).RunAsync(Token).WaitAsync(Bound, Token);
+            }
+
+            // The run uncut says what its one session started as none, for only a resume's starts are looked at.
+            IReadOnlyList<string> started = [];
+
+            if (writes != int.MaxValue)
+            {
+                var (_, _, again) = Records("r1", temp.Path, definition);
+                var resumed = Scripted();
+
+                using (again)
+                {
+                    end = await new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
+                }
+
+                started = resumed.Started;
+            }
+
+            return (Standing(end, started, harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions), cut.Made, cut.Marked ?? 0);
+        }
+
+        using var whole = new TempDirectory();
+        var uncut = await RunCutAsync(whole, int.MaxValue);
+
+        Assert.Equal(Asked, uncut.Standing);
+        Assert.InRange(uncut.Met, 1, uncut.Writes - 1);
+
+        for (var writes = uncut.Met; writes < uncut.Writes; writes++)
+        {
+            using var temp = new TempDirectory();
+            var (actual, _, _) = await RunCutAsync(temp, writes);
+
+            if (actual != Asked)
+            {
+                Assert.Fail($"a crash after write {writes} of {uncut.Writes}, the reserve met from write {uncut.Met}, was gone on from otherwise than asking once:\n{actual}");
+            }
+        }
+
+        // The reserve met on disk and nothing after it, the resume asking; then more answered and recorded: the run goes on
+        // to its end and asks nothing more.
+        using var crashed = new TempDirectory();
+
+        Assert.Equal(Asked, (await RunCutAsync(crashed, uncut.Met)).Standing);
+
+        var (harness, layout, records) = Records("r1", crashed.Path, definition);
+        var granted = Scripted();
+        FlowSessionEnd end;
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, granted, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: records);
+
+            Assert.True(coordinator.TryAnswer("q1", "more", null, out var problem, FlowService.AnswerCommand), problem);
+            end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        Assert.Equal("Done | started think, after | q1 runBudget answered more", Standing(end, granted.Started, harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions));
+    }
+
     /// <summary>The run's records, cut: the writes up to the cut reach the disk, and none after it - a process ended there.</summary>
-    private sealed class Cut(IFlowRecords inner, int writes) : IFlowRecords
+    /// <param name="inner">The records the writes up to the cut reach.</param>
+    /// <param name="writes">How many writes reach them.</param>
+    /// <param name="marks">What a change and its snapshot hold whose write's number <see cref="Marked"/> says, the first such; null where none is looked for.</param>
+    private sealed class Cut(IFlowRecords inner, int writes, Func<FlowChangeKind, FlowSnapshot, bool>? marks = null) : IFlowRecords
     {
         private int _made;
 
         /// <summary>How many writes the run handed its records, cut or not.</summary>
         public int Made => _made;
 
+        /// <summary>The number of the first write whose change and snapshot hold what <c>marks</c> looks for; null where none did.</summary>
+        public int? Marked { get; private set; }
+
         public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
         {
-            if (Interlocked.Increment(ref _made) <= writes)
+            var made = Interlocked.Increment(ref _made);
+
+            if (Marked is null && marks?.Invoke(kind, snapshot) == true)
+            {
+                Marked = made;
+            }
+
+            if (made <= writes)
             {
                 inner.Write(kind, snapshot, instance, from, to, attempt, detail);
             }
@@ -3016,6 +3563,14 @@ public sealed class FlowResumeTests
             if (Interlocked.Increment(ref _made) <= writes)
             {
                 inner.Question(questions, refused);
+            }
+        }
+
+        public void Updates(FlowUpdatesFile updates)
+        {
+            if (Interlocked.Increment(ref _made) <= writes)
+            {
+                inner.Updates(updates);
             }
         }
     }
@@ -3031,6 +3586,9 @@ public sealed class FlowResumeTests
 
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
             => inner.Question(questions, refused);
+
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
     }
 
     /// <summary>The run's records, watched: each change is written through, and a test waits on the change it times.</summary>
@@ -3076,6 +3634,9 @@ public sealed class FlowResumeTests
 
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
             => inner.Question(questions, refused);
+
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
     }
 
     /// <summary>The owner of a run is claimed at the start of a session: a live owner refuses it, a dead one is reclaimed and said, and the run is released where its session leaves it.</summary>
@@ -3257,10 +3818,22 @@ public sealed class FlowResumeTests
 
             if (_gates.TryGetValue(run.Instance, out var gate) || _gates.TryGetValue(run.Step.Name, out gate))
             {
-                return gate.Task.WaitAsync(cancellationToken);
+                return HeldAsync(gate.Task, run, cancellationToken);
             }
 
             return Task.FromResult(FlowStepResult.Ended(passed: true, 0));
+        }
+
+        /// <summary>A held step's answer: its gate's, or - for a reason step the engine asks for its handoff - the attempt ended by the turn its client answers.</summary>
+        private static async Task<FlowStepResult> HeldAsync(Task<FlowStepResult> gate, FlowStepRun run, CancellationToken cancellationToken)
+        {
+            if (run.Telling is not { } telling)
+            {
+                return await gate.WaitAsync(cancellationToken);
+            }
+
+            var first = await Task.WhenAny(gate, telling.Handoff.WhenAsked).WaitAsync(cancellationToken);
+            return first == gate ? await gate : FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "handed off");
         }
 
         public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)

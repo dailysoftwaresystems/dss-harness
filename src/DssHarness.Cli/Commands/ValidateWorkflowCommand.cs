@@ -23,7 +23,7 @@ internal static class ValidateWorkflowCommand
     {
         var command = new Command(
             Name,
-            "Check the workflows config.json declares: that each definition file reads, holds, and names files that are there. Nothing is run.");
+            "Check the workflows config.json declares: that each definition file reads, holds, and names files that are there, each step's schema one the engine reads. Nothing is run.");
 
         command.Arguments.Add(WorkflowArgument);
         command.Options.Add(JsonOption);

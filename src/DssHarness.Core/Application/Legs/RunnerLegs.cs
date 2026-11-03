@@ -271,6 +271,7 @@ public sealed class RunnerLegs(
                 Workload = workload,
                 LocalTrees = where,
                 Watch = request.Watch,
+                Isolation = request.Isolation,
             },
             (work, token) => RunLegAsync(_runners, _builds, _toolchains, runnerName, request.Inputs, request.ManualSteps, workload, work, token),
             cancellationToken).ConfigureAwait(false);

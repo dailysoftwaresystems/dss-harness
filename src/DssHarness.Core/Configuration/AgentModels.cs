@@ -83,6 +83,32 @@ public sealed class AgentClientConfig
     /// <c>server-side-fallback-</c> one, for the engine's fallback is the only one a step has.
     /// </summary>
     public List<string>? Betas { get; init; }
+
+    /// <summary>
+    /// The most runs (requests, for an API) the client has under way at once on one provider and one key (a key of
+    /// every client; the client's own where nothing is said - 3 for claude-code, 4 for claude-api, 2 for glm). The
+    /// gate holds them apart, one lane per provider and key; the orchestrator's <c>maxReasoningAgents</c> bounds
+    /// agents beside it, and both apply.
+    /// </summary>
+    public int? MaxParallel { get; init; }
+
+    /// <summary>
+    /// At most this many requests in any minute on one lane (a key of the API clients): the gate holds a request that
+    /// would pass it until the oldest of its minute is a minute old. Left out, the provider's answers pace the client.
+    /// </summary>
+    public int? RequestsPerMinute { get; init; }
+
+    /// <summary>
+    /// At most this many input tokens in any minute on one lane (a key of the API clients), a request's own counted
+    /// against it as it enters. Left out, the provider's answers pace the client.
+    /// </summary>
+    public int? InputTokensPerMinute { get; init; }
+
+    /// <summary>
+    /// At most this many output tokens in any minute on one lane (a key of the API clients), an answer's counted
+    /// against it once it is had. Left out, the provider's answers pace the client.
+    /// </summary>
+    public int? OutputTokensPerMinute { get; init; }
 }
 
 /// <summary>
@@ -143,6 +169,22 @@ public sealed class AgentPolicyConfig
     /// <see cref="Agents.AgentCommandSettings.MostTimeoutSeconds"/>, as the time without a call's is.
     /// </summary>
     public int? MaxCommandTimeoutSeconds { get; init; }
+
+    /// <summary>
+    /// Whether an agent may start where this machine has no operating-system isolation of its commands
+    /// (<see cref="Agents.Isolation.AgentIsolationMode"/>): <c>required</c> where nothing is said, so no agent that may run
+    /// a command starts without it, or <c>preferred</c>, which runs one on the words policy alone, said at every launch and
+    /// in its records.
+    /// </summary>
+    public string? Isolation { get; init; }
+
+    /// <summary>
+    /// More places the user keeps credentials in, each hidden from every isolated child and named by no command of an
+    /// agent's beside the declared ones (<see cref="Agents.Isolation.UserCredentials.Declared"/>), which it never takes
+    /// away: each a whole path or one under <c>~/</c>, a directory where it ends with a separator, else a file. Left out
+    /// where none is added, which is the default; given empty it is refused.
+    /// </summary>
+    public List<string>? HiddenPlaces { get; init; }
 }
 
 /// <summary>

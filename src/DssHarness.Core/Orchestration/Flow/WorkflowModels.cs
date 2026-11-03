@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DssHarness.Core.Configuration;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -53,6 +54,22 @@ public sealed record WorkflowDefinition(
 {
     /// <summary>The most step instances a run may have where the file says nothing (<c>maxInstances</c>).</summary>
     public const int DefaultMaxInstances = 5_000;
+
+    /// <summary>The retries a step is given where neither it nor the workflow says (<c>maxRetries</c>).</summary>
+    public const int DefaultMaxRetries = 3;
+
+    /// <summary>
+    /// The retries <paramref name="step"/> is given: its own where it says, the workflow's where it does not, and
+    /// <see cref="DefaultMaxRetries"/> where neither does - the one rule the engine's retry table and a reasoning step's
+    /// agent runner both read.
+    /// </summary>
+    /// <param name="step">The step.</param>
+    public int RetriesOf(WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+
+        return step.Retries ?? MaxRetries ?? DefaultMaxRetries;
+    }
 
     /// <summary>The inputs, by name, as a prompt or a template reads them.</summary>
     public IReadOnlyDictionary<string, FlowInput> InputsByName
@@ -134,6 +151,21 @@ public sealed record FlowRecover(int? MaxVisits, IReadOnlyList<WorkflowStep> Ste
     public const int MostVisits = 99;
 
     /// <summary>
+    /// How many visits the recovery may make for one step in one scope before the run asks: its <c>maxVisits</c>, else
+    /// <see cref="MostVisits"/> - the one bound the engine holds the recovery to and the facts of a run count by.
+    /// </summary>
+    [JsonIgnore]
+    public int VisitsAllowed => MaxVisits ?? MostVisits;
+
+    /// <summary>
+    /// The recovery as a group of the flow: its steps under the reserved name (<see cref="FlowScope.Recovery"/>), its
+    /// <c>onFailure</c> the policy of every one of them that says none - what the engine makes each visit of, and what the
+    /// definition's check and the facts of a run read its steps' policy through.
+    /// </summary>
+    [JsonIgnore]
+    public WorkflowStep Declaration => new() { Name = FlowScope.Recovery, Steps = Steps, OnFailure = OnFailure };
+
+    /// <summary>
     /// The <c>onSuccess</c> that sends the run back to the step that gave the recovery its failure, to run again from
     /// where it stopped - a build, a test, a commit, whatever failed - once what stood in its way was put right. That step
     /// is never a reasoning step, which is never recovered, so it runs again whole.
@@ -171,10 +203,10 @@ public sealed record FlowBudget(double? Usd, long? Tokens, double? Minutes, int?
 public sealed record FlowAdvisor(
     string Agent,
     string Prompt,
-    string? Tier,
-    string? Model,
-    string? Effort,
-    string? Client,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Tier,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Model,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Effort,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client,
     IReadOnlyList<string> Kinds)
 {
     /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
@@ -202,10 +234,10 @@ public sealed record FlowReporter(
     string Agent,
     string StatusPrompt,
     string AskPrompt,
-    string? Tier,
-    string? Model,
-    string? Effort,
-    string? Client)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Tier,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Model,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Effort,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Client)
 {
     /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
     public int? Retries { get; init; } = null;
@@ -230,18 +262,31 @@ public sealed record FlowReporter(
 /// <param name="WhenAddScope">The step that builds scope an update adds, by its path from the flow's root.</param>
 /// <param name="WhenChangeScope">The step that does again an item an update changes, by its path from the flow's root.</param>
 /// <param name="WhenRemoveScope">The step that takes back an item an update withdraws, by its path from the flow's root.</param>
-/// <param name="MaxAddedIterations">How many iterations a run at the end of its loop is given to carry an update.</param>
+/// <param name="MaxAddedIterations">How many iterations, or rounds of a work-item group with no loop around it, a run is given to carry updates past its own, as the file says it; null where it says none.</param>
 public sealed record FlowAmend(
-    string? Input,
-    int? ChangedAnswerMinutes,
-    string? Before,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Input,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? ChangedAnswerMinutes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Before,
     string Step,
-    string? Then,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Then,
     string Scope,
     string WhenAddScope,
     string WhenChangeScope,
     string WhenRemoveScope,
-    int? MaxAddedIterations);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxAddedIterations)
+{
+    /// <summary>What <see cref="MaxAddedIterations"/> is where the file says nothing: one iteration or round over the run.</summary>
+    public const int DefaultMaxAddedIterations = 1;
+
+    /// <summary>
+    /// How many iterations or rounds plan updates may add, over the whole run, for work an update owes: an iteration of a
+    /// loop at its bound, or a round of a work-item group with no loop around it whose round has ended. The file's
+    /// <c>maxAddedIterations</c>, or <see cref="DefaultMaxAddedIterations"/> where it says none - the one owner of the
+    /// default the gates and the engine both read.
+    /// </summary>
+    [JsonIgnore]
+    public int AddedIterationsAllowed => MaxAddedIterations ?? DefaultMaxAddedIterations;
+}
 
 /// <summary>One answer a configuration gives a question kind beforehand, and how often it holds.</summary>
 /// <param name="Answer">The answer, spelled as the question's options spell it.</param>
@@ -253,7 +298,10 @@ public sealed record FlowAmend(
 /// The answer given once <paramref name="Times"/> is spent: one of the kind's answers that ends the matter
 /// (<c>accept</c>, <c>allow</c>, <c>merge</c>, <c>stay</c>, <c>skip</c>, <c>fail</c> or <c>abort</c>).
 /// </param>
-public sealed record FlowAnswer(string Answer, int? Times, string? Then);
+public sealed record FlowAnswer(
+    string Answer,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? Times,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Then);
 
 /// <summary>One value a run of the workflow is started with.</summary>
 /// <param name="Name">The input's name, as <c>--input name=value</c> spells it.</param>
@@ -264,9 +312,9 @@ public sealed record FlowAnswer(string Answer, int? Times, string? Then);
 /// <param name="Options">The values a <c>text</c> input takes; a run started with another is refused.</param>
 public sealed record FlowInput(
     string Name,
-    string? Description,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Description,
     string Kind,
-    string? Default,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Default,
     bool Required,
     IReadOnlyList<string> Options)
 {
@@ -288,13 +336,20 @@ public sealed record FlowInput(
 /// <param name="Description">What the value is for.</param>
 /// <param name="Default">What to use where a value is neither given nor defaulted.</param>
 /// <param name="Required">Whether the run is refused when nothing supplies it and there is no default.</param>
-public sealed record FlowParam(string Name, string? Description, string? Default, bool Required);
+public sealed record FlowParam(
+    string Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Description,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Default,
+    bool Required);
 
 /// <summary>What a whole workflow declares it produces, so a later run or a person can be pointed at it.</summary>
 /// <param name="Name">The output's name, as the workflow's report names it.</param>
 /// <param name="Description">What the value holds.</param>
 /// <param name="From">An expression naming the step and the member that hold it.</param>
-public sealed record WorkflowOutput(string Name, string? Description, string From);
+public sealed record WorkflowOutput(
+    string Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Description,
+    string From);
 
 /// <summary>
 /// One step of a workflow: a definition, of one <c>type</c>, or a group holding <c>steps</c> of its own.
@@ -369,6 +424,16 @@ public sealed record WorkflowStep
 
     /// <summary>How often this handler may be raised; past it the run asks.</summary>
     public int? MaxVisits { get; init; } = null;
+
+    /// <summary>How often a handler may be raised in one scope where its file names no <c>maxVisits</c>.</summary>
+    public const int DefaultMaxVisits = 3;
+
+    /// <summary>
+    /// How often this handler may be raised in one scope before the run asks: its <c>maxVisits</c>, else
+    /// <see cref="DefaultMaxVisits"/> - the one bound the engine holds a handler to and the facts of a run count by.
+    /// </summary>
+    [JsonIgnore]
+    public int VisitsAllowed => MaxVisits ?? DefaultMaxVisits;
 
     /// <summary>
     /// The longest one attempt of a step that runs may take, in whole minutes, where the file says: counted by the engine
@@ -685,12 +750,32 @@ public sealed record FlowOn(string Step, string Outcome, IReadOnlyList<int> Code
 /// </param>
 public sealed record FlowRepeat(
     string Until,
-    int? MaxIterations,
-    int? Rounds,
-    string? Blocking,
-    int? BlockersLimitRounds,
-    string? Leftover,
-    bool BlockersUnbounded = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxIterations,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? Rounds,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Blocking,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? BlockersLimitRounds,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Leftover,
+    bool BlockersUnbounded = false)
+{
+    /// <summary>The further rounds past <see cref="Rounds"/> while blocking holds, where the file names none.</summary>
+    public const int DefaultBlockersLimitRounds = 3;
+
+    /// <summary>The further rounds past <see cref="Rounds"/> while blocking holds: the file's, else <see cref="DefaultBlockersLimitRounds"/>.</summary>
+    [JsonIgnore]
+    public int BlockersRounds => BlockersLimitRounds ?? DefaultBlockersLimitRounds;
+
+    /// <summary>
+    /// The iterations the loop's own bound allows, with <paramref name="extra"/> more its answers or a plan update gave:
+    /// its <c>maxIterations</c>, or its rounds and the further ones its blocking holds for - <see cref="int.MaxValue"/>
+    /// where <c>blockersLimitRounds</c> is <c>false</c>, which no count of iterations ever reaches. The one bound the
+    /// engine holds a loop to and the facts of a run count what is left by.
+    /// </summary>
+    /// <param name="extra">The iterations given beyond the file's bound.</param>
+    public int Bound(int extra)
+        => Rounds is { } rounds
+            ? BlockersUnbounded ? int.MaxValue : rounds + BlockersRounds + extra
+            : (MaxIterations ?? 0) + extra;
+}
 
 /// <summary>What a fold or a deletion is allowed to carry, member for member the fold command's options.</summary>
 /// <param name="Settled">Paths reconciled by hand. A person's answer, written out only.</param>
@@ -725,4 +810,4 @@ public sealed record FlowQuote(string Text, string Input);
 /// </summary>
 /// <param name="Written">The list as written out, or empty where the value is an expression.</param>
 /// <param name="Expression">The expression, where the value is one; otherwise <see langword="null"/>.</param>
-public sealed record FlowList(IReadOnlyList<string> Written, string? Expression);
+public sealed record FlowList(IReadOnlyList<string> Written, [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Expression);

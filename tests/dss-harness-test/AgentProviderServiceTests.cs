@@ -23,7 +23,7 @@ public sealed class AgentProviderServiceTests
                 "provider   type       api                           client       keys, in order              models",
                 "anthropic  anthropic  https://api.anthropic.com     claude-code  ANTHROPIC_API_KEY  missing  claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5",
                 "zai        zai        https://api.z.ai/api/paas/v4  glm          ZAI_API_KEY        present  glm-5.3",
-                "balanceKeyUsage is off: a run's steps are to take each provider's keys in order - no command runs a step in this build",
+                "balanceKeyUsage is off: a run's steps take each provider's keys in order",
                 "prices of 'anthropic' (USD, read 2026-10-12): all 4 models priced",
                 "prices of 'zai' (USD, read 2026-10-12): glm-5.3 priced",
                 "tier best:     Claude Fable 5.1 (claude-fable-5-1), GLM 5.3 (glm-5.3)",
@@ -117,7 +117,7 @@ public sealed class AgentProviderServiceTests
 
     /// <summary>
     /// A provider with two keys lists both in the order they are tried, each present or missing as the slot holds it -
-    /// and balanceKeyUsage on is said as what a run's steps are to do, no command of this build running one.
+    /// and balanceKeyUsage on is said as what a run's steps do: take the key that spent least.
     /// </summary>
     [Fact]
     public async Task AProvidersTwoKeys_AreListedInOrder_EachPresentOrMissing()
@@ -137,7 +137,7 @@ public sealed class AgentProviderServiceTests
         Assert.Equal(
             [
                 "zai        zai        https://api.z.ai/api/paas/v4  glm          ZAI_API_KEY        missing, ZAI_API_KEY_TWO    present  glm-5.3",
-                "balanceKeyUsage is on: a run's steps are to take the key that spent least - no command runs a step in this build",
+                "balanceKeyUsage is on: a run's steps take the key that spent least",
             ],
             outcome.Details!.Where(line => line.StartsWith("zai ", StringComparison.Ordinal) || line.StartsWith("balanceKeyUsage", StringComparison.Ordinal)));
     }

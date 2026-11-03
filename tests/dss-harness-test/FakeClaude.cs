@@ -37,9 +37,21 @@ namespace DssHarness.Tests;
 /// it is asked, whatever the host answered (<c>cutWhileAsked</c>: the ask withdrawn, the call stamped
 /// <c>user-rejected</c>, as 2.1.296 was seen to do). A turn can be <c>declined</c> (the category, or empty for none;
 /// said where <c>declinedBy</c> names, or everywhere), and can carry a <c>rateLimit</c> event's info first, a
-/// <c>controlRequest</c> of its own that it does not wait on, and take <c>slowMs</c> before it plays. Each answer of
-/// the host's to a call is written back, as the CLI writes it. Its <c>ignoreEof</c> keeps the process running once its
+/// <c>controlRequest</c> of its own that it does not wait on, and take <c>slowMs</c> before it plays - or, told
+/// <c>slowUntilHeld</c>, end only once the next user line was read and held as one it never takes, so no load on the
+/// machine moves the one before the other. Each answer of the host's to a call is written back, as the CLI writes it. Its
+/// <c>ignoreEof</c> keeps the process running once its
 /// input is closed, as a launch that does not end by itself.
+/// <para>
+/// Where its environment names an isolation file, an allowed <c>Bash</c> call hands the command the host gave back to the
+/// isolated shell as Claude Code's shell prefix does - its whole line prepared as the isolated shell prepares it, the
+/// receipt at its head written - before its result; its <c>handedAfterMs</c> hands it that long after its result, as a call
+/// run in the background is, and its <c>skipsPrefix</c> never hands it over, as a version that skipped the prefix would.
+/// An allowed call's <c>exitsWhileRunning</c> ends the process once it is handed over, or not, its result never written,
+/// and its <c>hangsWhileRunning</c> writes no result and plays nothing more until the process is ended; its
+/// <c>cutAfterAllowed</c> is cut before it runs, stamped not run, nothing handed over.
+/// An allowed call's <c>pauseAfterMs</c> waits that long after its result before the turn plays on.
+/// </para>
 /// <para>
 /// Where <c>--mcp-config</c> names a server of type <c>sdk</c>, it connects it before its first init as the probe saw
 /// Claude Code do - <c>initialize</c>, <c>notifications/initialized</c>, <c>tools/list</c>, each an <c>mcp_message</c> it
@@ -118,6 +130,7 @@ internal static class FakeClaude
         var turn = -1;
         var busy = false;
         JsonObject? playing = null;
+        var waitingForHeld = false;
         var callAt = 0;
         string? waitingOn = null;
         var calls = new List<JsonObject>();
@@ -529,6 +542,14 @@ internal static class FakeClaude
                 Thread.Sleep(slowTurn.GetValue<int>());
             }
 
+            if (Flag(playing, "slowUntilHeld"))
+            {
+                // A turn that ends only once the next user line was read - held, as one it never takes: whatever the
+                // machine takes to write that line, the ordering of the two is fixed.
+                waitingForHeld = true;
+                return;
+            }
+
             if (Text(playing["sessionFile"]) is { } project)
             {
                 var directory = Path.Combine(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") ?? ".", "projects", project);
@@ -657,6 +678,14 @@ internal static class FakeClaude
                     // A message it never takes: no turn begins, and the next message is the next entry's.
                     turn++;
                     held.Add(id);
+
+                    if (waitingForHeld)
+                    {
+                        // The turn that waits ends only now that this line was read and held.
+                        waitingForHeld = false;
+                        Play();
+                    }
+
                     continue;
                 }
 
@@ -726,9 +755,52 @@ internal static class FakeClaude
                     CallServer(call, tool);
                     continue;
                 }
+                else if (behavior == "allow" && Flag(call, "cutAfterAllowed"))
+                {
+                    // Allowed, and cut before it ran, as an interrupt that lands between the answer and the run cuts it:
+                    // stamped not run, nothing handed over.
+                    ToolResult(id, ok: false, "[Request interrupted by user for tool use]", Meta(id, "user-rejected", "accept", "user_temporary"));
+                }
                 else if (behavior == "allow")
                 {
+                    // A shell command of a launch that hands its commands over goes through the prefix, as Claude Code's does,
+                    // unless the call skips it: at once, or - a call run in the background - that long after its result.
+                    if (tool == "Bash" && Environment.GetEnvironmentVariable(DssHarness.Core.Processes.IsolatedShell.FileVariable) is { } handed && !Flag(call, "skipsPrefix"))
+                    {
+                        var command = Text(node["response"]?["response"]?["updatedInput"]?["command"]) ?? string.Empty;
+
+                        if (call["handedAfterMs"] is JsonValue after && after.TryGetValue<int>(out var handedAfter))
+                        {
+                            _ = Task.Run(() =>
+                            {
+                                Thread.Sleep(handedAfter);
+                                HandOver(handed, command);
+                            });
+                        }
+                        else
+                        {
+                            HandOver(handed, command);
+                        }
+                    }
+
+                    if (Flag(call, "exitsWhileRunning"))
+                    {
+                        // It ends the process while the call runs, its result never written.
+                        return 1;
+                    }
+
+                    if (Flag(call, "hangsWhileRunning"))
+                    {
+                        // The call runs on, its result never written, until the process is ended.
+                        continue;
+                    }
+
                     ToolResult(id, ok: true, Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));
+
+                    if (call["pauseAfterMs"] is JsonValue pause && pause.TryGetValue<int>(out var paused))
+                    {
+                        Thread.Sleep(paused);
+                    }
                 }
                 else if (Flag(call, "calledThoughDenied") && tool.StartsWith("mcp__", StringComparison.Ordinal))
                 {
@@ -762,6 +834,35 @@ internal static class FakeClaude
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// A shell command handed to the isolated shell as Claude Code hands it: the whole line it builds - the snapshot sourced,
+    /// the command evaluated, its last working directory written to its own temporary directory - prepared as the isolated
+    /// shell prepares it, its receipt written; then the command's own write of where it ended, where it was given the file.
+    /// </summary>
+    private static void HandOver(string file, string command)
+    {
+        var handing = JsonNode.Parse(File.ReadAllText(file))?["handing"];
+        var receipts = Text(handing?["receipts"]);
+        var temp = Text(handing?["programTemp"]);
+
+        if (receipts is null || temp is null)
+        {
+            return;
+        }
+
+        var end = temp + "/claude-1a2b-cwd";
+        var line = $"source /home/me/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval '{command.Replace("'", "'\"'\"'", StringComparison.Ordinal)}' < /dev/null && pwd -P >| {end}";
+        var (prepared, _) = DssHarness.Core.Processes.IsolatedShell.Prepared(
+            new DssHarness.Core.Processes.ProcessIsolation(new DssHarness.Core.Processes.Bubblewrap("/usr/bin/bwrap", "0.9.0", []), DssHarness.Core.Processes.IsolationProfile.Nothing),
+            new DssHarness.Core.Processes.IsolatedShellHanding(receipts, temp),
+            line);
+
+        if (prepared?.Profile.Writes.Any(write => write.Path == end) == true)
+        {
+            File.WriteAllText(end, Environment.CurrentDirectory + "\n");
+        }
     }
 
     /// <summary>The servers of type <c>sdk</c> an <c>--mcp-config</c> file names, by name; none where it names no file.</summary>

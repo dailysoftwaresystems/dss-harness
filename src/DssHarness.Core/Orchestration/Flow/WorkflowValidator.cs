@@ -155,66 +155,86 @@ public static class WorkflowValidator
     /// The configuration's web search, resolved; or <see langword="null"/> where the configuration cannot be given, which
     /// leaves V55's names unchecked, a name given twice refused all the same.
     /// </param>
+    /// <param name="skills">
+    /// The lookup of the skills a prompt names, in the three places; or <see langword="null"/> where the caller reads no
+    /// files of the repository, which leaves every <c>{skill.&lt;name&gt;}</c> unlooked-for - a check that reads no file
+    /// cannot say one is missing.
+    /// </param>
     public static IReadOnlyList<string> Validate(
         WorkflowDefinition definition,
         bool hasCommitTemplate,
         Func<string, string?>? files,
         DssHarness.Core.Agents.AgentProviders? providers = null,
         IReadOnlyList<string>? languages = null,
-        Web.Search.WebSearchSources? search = null)
+        Web.Search.WebSearchSources? search = null,
+        AgentSkills? skills = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var check = new Check(definition, hasCommitTemplate, files, providers, languages, search);
+        var check = new Check(definition, hasCommitTemplate, files, providers, languages, search, skills);
         return check.Problems;
     }
 
-    /// <summary>
-    /// What each agent of the definition runs at, one line apiece - for a definition that holds, said by
-    /// <c>validate-workflow</c>: each reason step, the advisor and the reporter, with each model it may run on and the
-    /// level it resolves to (its own default, where the step gives it none). Nothing where the caller gave no
-    /// providers, which is no configuration to resolve against.
-    /// </summary>
-    public static IReadOnlyList<string> ModelLevels(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers)
-    {
-        ArgumentNullException.ThrowIfNull(definition);
-        ArgumentNullException.ThrowIfNull(providers);
+        /// <summary>
+        /// What each agent of the definition runs at, one line apiece - for a definition that holds, said by
+        /// <c>validate-workflow</c>: each reason step, the advisor and the reporter, with each model it may run on and the
+        /// level it resolves to (its own default, where the step gives it none) - the step's keys over its agent
+        /// definition's, each resolved on its own. Nothing where the caller gave no providers, which is no configuration
+        /// to resolve against; agent definitions are read only where the caller gave files.
+        /// </summary>
+        /// <param name="definition">A workflow's parsed definition.</param>
+        /// <param name="providers">The configuration's providers and tiers, resolved.</param>
+        /// <param name="files">The named files of the workflow's directory, by the path a definition names them with; null where the caller reads none.</param>
+        public static IReadOnlyList<string> ModelLevels(
+            WorkflowDefinition definition,
+            DssHarness.Core.Agents.AgentProviders providers,
+            Func<string, string?>? files = null)
+        {
+            ArgumentNullException.ThrowIfNull(definition);
+            ArgumentNullException.ThrowIfNull(providers);
 
-        return new Check(definition, hasCommitTemplate: false, files: null, providers).Levels();
-    }
+            return new Check(definition, hasCommitTemplate: false, files, providers).Levels();
+        }
 
-    /// <summary>
-    /// Every model an agent of the definition may run on - each reason step, the advisor and the reporter, on the model
-    /// it names or every model of its tier - each once, in the order first met: what <c>validate-workflow</c> says the
-    /// prices of. Resolved as the definition's check resolves them; nothing where what an agent names resolves to none.
-    /// </summary>
-    /// <param name="definition">A workflow's parsed definition.</param>
-    /// <param name="providers">The configuration's providers and tiers, resolved.</param>
-    public static IReadOnlyList<(DssHarness.Core.Configuration.AgentProviderConfig Provider, DssHarness.Core.Configuration.AgentModelConfig Model)> ModelsRunOn(
-        WorkflowDefinition definition,
-        DssHarness.Core.Agents.AgentProviders providers)
-    {
-        ArgumentNullException.ThrowIfNull(definition);
-        ArgumentNullException.ThrowIfNull(providers);
+        /// <summary>
+        /// Every model an agent of the definition may run on - each reason step, the advisor and the reporter, on the model
+        /// it names or every model of its tier, its agent definition's below its own - each once, in the order first met:
+        /// what <c>validate-workflow</c> says the prices of. Resolved as the definition's check resolves them; nothing
+        /// where what an agent names resolves to none, and no agent definitions are read where the caller gave no files.
+        /// </summary>
+        /// <param name="definition">A workflow's parsed definition.</param>
+        /// <param name="providers">The configuration's providers and tiers, resolved.</param>
+        /// <param name="files">The named files of the workflow's directory, by the path a definition names them with; null where the caller reads none.</param>
+        public static IReadOnlyList<(DssHarness.Core.Configuration.AgentProviderConfig Provider, DssHarness.Core.Configuration.AgentModelConfig Model)> ModelsRunOn(
+            WorkflowDefinition definition,
+            DssHarness.Core.Agents.AgentProviders providers,
+            Func<string, string?>? files = null)
+        {
+            ArgumentNullException.ThrowIfNull(definition);
+            ArgumentNullException.ThrowIfNull(providers);
 
-        return new Check(definition, hasCommitTemplate: false, files: null, providers).Models();
-    }
+            return new Check(definition, hasCommitTemplate: false, files, providers).Models();
+        }
 
-    /// <summary>
-    /// The model each create-agent step makes its agent for, by the step's path: the first model of the first reason
-    /// step that works in it (<c>in</c>), as that step resolves it, or - where no reason step works in it - the first
-    /// model of the configuration's default tier (part 04, "What a create-agent step hands the service"). A step whose
-    /// model resolves to none is not among them; the definition's check refuses it.
-    /// </summary>
-    /// <param name="definition">A workflow's parsed definition.</param>
-    /// <param name="providers">The configuration's providers and tiers, resolved.</param>
-    public static IReadOnlyDictionary<string, string> AgentModels(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers)
-    {
-        ArgumentNullException.ThrowIfNull(definition);
-        ArgumentNullException.ThrowIfNull(providers);
+        /// <summary>The model each create-agent step makes its agent for, by its path: the first model of the first reason
+        /// step that works in it (<c>in</c>), as that step resolves it - its agent definition's tier or model below its
+        /// own, where files are given to read them by - or - where no reason step works in it - the first model of the
+        /// configuration's default tier (part 04, "What a create-agent step hands the service"). A step whose model
+        /// resolves to none is not among them; the definition's check refuses it.
+        /// </summary>
+        /// <param name="definition">A workflow's parsed definition.</param>
+        /// <param name="providers">The configuration's providers and tiers, resolved.</param>
+        /// <param name="files">The named files of the workflow's directory, by the path a definition names them with; null where the caller reads none.</param>
+        public static IReadOnlyDictionary<string, string> AgentModels(
+            WorkflowDefinition definition,
+            DssHarness.Core.Agents.AgentProviders providers,
+            Func<string, string?>? files = null)
+        {
+            ArgumentNullException.ThrowIfNull(definition);
+            ArgumentNullException.ThrowIfNull(providers);
 
-        return new Check(definition, hasCommitTemplate: false, files: null, providers).AgentModels();
-    }
+            return new Check(definition, hasCommitTemplate: false, files, providers).AgentModels();
+        }
 
     /// <summary>
     /// The keys of one provider a definition's steps would read and the slot does not hold, with the steps that would
@@ -228,7 +248,8 @@ public static class WorkflowValidator
     /// <summary>
     /// The keys a definition's steps would read that the slot does not hold, one need for each provider - for a
     /// definition that holds, said by <c>validate-workflow</c>, which passes: a machine that only checks a
-    /// configuration needs no key, and no command of this build refuses one. A step would read a provider's keys where
+    /// configuration needs no key, and a run refuses a step whose first model's keys the slot holds none of, never starting
+    /// its agent (<see cref="DssHarness.Core.Agents.AgentNotStartedBecause.KeyMissing"/>). A step would read a provider's keys where
     /// one of its models is the provider's and the client that reaches it signs each request with the provider's key
     /// (<see cref="DssHarness.Core.Agents.AgentProviders.KeysRead"/>, the one place that says it); the advisor and the
     /// reporter are asked the same. Every name the slot lacks is said, one beside a name it holds among them.
@@ -279,7 +300,8 @@ public static class WorkflowValidator
             Func<string, string?>? files,
             DssHarness.Core.Agents.AgentProviders? providers = null,
             IReadOnlyList<string>? languages = null,
-            Web.Search.WebSearchSources? search = null)
+            Web.Search.WebSearchSources? search = null,
+            AgentSkills? skills = null)
         {
             _definition = definition;
             _hasCommitTemplate = hasCommitTemplate;
@@ -287,6 +309,7 @@ public static class WorkflowValidator
             _providers = providers;
             _languages = languages;
             _search = search;
+            _skills = skills;
 
             DefinitionRules();
             Index(definition.Steps, parent: null);
@@ -296,6 +319,7 @@ public static class WorkflowValidator
             Cycle();
             WorkflowAnswers();
             Steps();
+            AgentBodies();
             CodebaseGraph();
             Amend();
             Checkpoints();
@@ -473,7 +497,7 @@ public static class WorkflowValidator
             // The recovery's own onFailure is what a failure of one of its steps does where the step says none, as a
             // group's is for its members. Its place is the recovery's whatever a step of the flow is named, as
             // FlowScope reads the path.
-            _recover = new Entry(new WorkflowStep { Name = FlowScope.Recovery, Steps = recover.Steps, OnFailure = recover.OnFailure }, FlowScope.Recovery, _entries.Count, null);
+            _recover = new Entry(recover.Declaration, FlowScope.Recovery, _entries.Count, null);
             _entries.Add(_recover);
             _byPath[FlowScope.Recovery] = _recover;
             Index(recover.Steps, _recover);
@@ -658,6 +682,7 @@ public static class WorkflowValidator
 
                 Templates(entry, type);
                 Prompts(entry);
+                Skills(entry);
             }
         }
 
@@ -936,14 +961,19 @@ public static class WorkflowValidator
         {
             var step = entry.Step;
             var where = $"step '{entry.Path}'";
-
-            if (step.Agent is null && step.Resume is null)
-            {
-                _problems.Add($"{where} names no agent and resumes no step; a reason step runs an agent of its own, or goes on with the agent of the step it resumes");
-            }
-
             var resumesItself = string.Equals(step.Resume, step.Name, StringComparison.Ordinal);
             var resumesAnother = step.Resume is not null && !resumesItself;
+
+            // The agent definition a reason step works by is the one at the root of its chain of work, read as its run reads
+            // it (ResumeChain.Root): its own where it begins its own work - resuming no step, or itself - and else that of
+            // the step whose work it goes on with. A root that names none is refused once, at the root, never again at
+            // each step that goes on with it; a resume that leads to no reason step is refused below for that.
+            if (!resumesAnother && ResumeChain.Root(_definition, entry.Path, step).Agent is null)
+            {
+                _problems.Add(resumesItself
+                    ? $"{where} names no agent and resumes itself; a step that goes on with its own work works by the agent definition it began it with, which it names"
+                    : $"{where} names no agent and resumes no step; a reason step runs an agent of its own, or goes on with the agent of the step it resumes");
+            }
 
             if (step.Resume is not null)
             {
@@ -1747,8 +1777,9 @@ public static class WorkflowValidator
 
                     return;
 
-                case "skill":
-                    // A reason step's prompt takes a skill's text; whether the skill is there is the check of the skills.
+                case AgentSkills.Root:
+                    // A reason step's prompt takes a skill's text; whether the skill is there and can be used is the
+                    // lookup's own check, over the prompt again with the place and line each name stands on.
                     if (readIn == ReadIn.StepPrompt)
                     {
                         return;
@@ -1863,17 +1894,9 @@ public static class WorkflowValidator
         /// writes one, with the step that writes it; <see langword="null"/> where none does.
         /// </summary>
         private (string Policy, Entry Owner)? EffectiveOnFailure(Entry entry)
-        {
-            for (var scope = entry; scope is not null; scope = scope.Parent)
-            {
-                if (scope.Step.OnFailure is { } policy)
-                {
-                    return (policy, scope);
-                }
-            }
-
-            return null;
-        }
+            => FlowScope.OnFailureOf(entry.Path, _definition) is { Step.OnFailure: { } policy } deciding && _byPath.GetValueOrDefault(deciding.Path) is { } owner
+                ? (policy, owner)
+                : null;
 
         /// <summary>The nearest group around <paramref name="entry"/> - never the step itself - that says <c>always</c>, or <see langword="null"/>.</summary>
         private Entry? AlwaysAround(Entry entry)
@@ -2383,7 +2406,12 @@ public static class WorkflowValidator
         /// V38's config half, for each agent the definition runs - a reasoning step, the advisor and the reporter:
         /// what a step names is resolved against the configuration's providers and tiers, so a model no provider
         /// lists, a tier nothing defines, an effort a model does not take and a client that does not reach the
-        /// provider are all refused with the step that names them, when the definition is checked.
+        /// provider are all refused with the step that names them, when the definition is checked. What a step's
+        /// agent definition names stands below its own: the step's model or tier wins over the definition's as one pick
+        /// (<see cref="DssHarness.Core.Agents.AgentResolution.Picked"/>), its effort and client each on their own, and
+        /// the definition's effort is read through after the step's. A step that goes on with another's work is checked
+        /// as the step at the root of its chain (<see cref="ResumeChain.Root"/>), whose definition, tier, model and client
+        /// it runs with.
         /// </summary>
         private void Agents()
         {
@@ -2396,7 +2424,8 @@ public static class WorkflowValidator
             {
                 if (entry.Step.Type == "reason")
                 {
-                    AgentRules(providers, entry, $"workflow '{_definition.Name}' step '{entry.Path}'");
+                    var (root, definition) = WorksAs(entry);
+                    AgentRules(providers, root.Tier, root.Model, entry.Step.Effort, entry.Step.EffortByModel, root.Client, definition, runBudget: true, $"workflow '{_definition.Name}' step '{entry.Path}'");
                 }
                 else if (entry.Step.Type == "create-agent" && WorkedInBy(entry) is null && DefaultTierProblem(providers) is { } problem)
                 {
@@ -2410,16 +2439,63 @@ public static class WorkflowValidator
 
             if (_definition.Advisor is { } advisor)
             {
-                AgentRules(providers, advisor.Tier, advisor.Model, advisor.Effort, advisor.EffortByModel, advisor.Client, "advisor");
+                AgentRules(providers, advisor.Tier, advisor.Model, advisor.Effort, advisor.EffortByModel, advisor.Client, DefinitionOf(advisor.Agent), runBudget: true, "advisor");
             }
 
             if (_definition.Reporter is { } reporter)
             {
-                AgentRules(providers, reporter.Tier, reporter.Model, reporter.Effort, reporter.EffortByModel, reporter.Client, "reporter");
+                AgentRules(providers, reporter.Tier, reporter.Model, reporter.Effort, reporter.EffortByModel, reporter.Client, DefinitionOf(reporter.Agent), runBudget: false, "reporter");
             }
         }
 
-        /// <summary>The model each create-agent step makes its agent for, by its path, where one resolves (<see cref="WorkflowValidator.AgentModels"/>).</summary>
+        /// <summary>
+        /// The agent definition <paramref name="agent"/> names, as its <c>agents/&lt;name&gt;.md</c> file reads it: read
+        /// once wherever it is named, its file's problems said once. Null where no files are given, the file is not there
+        /// or does not read - the service that reads files says a missing one, the parser's problems are said here.
+        /// </summary>
+        private AgentDefinition? DefinitionOf(string? agent)
+        {
+            if (agent is null || _files is null)
+            {
+                return null;
+            }
+
+            if (_agents.TryGetValue(agent, out var read))
+            {
+                return read;
+            }
+
+            if (_files($"agents/{agent}.md") is not { } text)
+            {
+                return _agents[agent] = null;
+            }
+
+            var (definition, problems) = AgentDefinitionParser.Parse(text, agent);
+
+            foreach (var problem in problems)
+            {
+                _problems.Add($"agents/{agent}.md: {problem}");
+            }
+
+            // The body is the system prompt, sent as written: a skill's text is a step's prompt's to name, and nothing
+            // fills a placeholder there. Said at the file's own line, past the frontmatter.
+            if (definition is not null && Yaml.Frontmatter.Of(text) is { Body: { } body, BodyLine: var first })
+            {
+                var lines = body.Split('\n');
+
+                for (var line = 0; line < lines.Length; line++)
+                {
+                    foreach (var named in WorkflowExpressions.TemplateReads(lines[line]).Where(named => named.Root == AgentSkills.Root))
+                    {
+                        _problems.Add($"agent '{agent}' names {{{named.Whole}}} in its body (line {first + line}): the body is the system prompt and is sent as written. Name the skill in a step's prompt");
+                    }
+                }
+            }
+
+            return _agents[agent] = definition;
+        }
+
+        /// <summary>The model each create-agent step makes its agent for, and each reason step that names no agent its own read-only one, by its path, where one resolves (<see cref="WorkflowValidator.AgentModels"/>).</summary>
         internal IReadOnlyDictionary<string, string> AgentModels()
         {
             var models = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -2431,11 +2507,27 @@ public static class WorkflowValidator
 
             foreach (var entry in _entries.Where(entry => entry.Step.Type == "create-agent"))
             {
-                var (tier, model) = WorkedInBy(entry) is { } reason ? NamedBy(reason) : (null, null);
+                (string? Tier, string? Model) picked = WorkedInBy(entry) is { } reasonStep && WorksAs(reasonStep) is var (root, definition)
+                    ? DssHarness.Core.Agents.AgentResolution.Picked(root.Tier, root.Model, definition)
+                    : (null, null);
 
-                if (providers.ModelsFor(tier, model) is [var first, ..])
+                if (providers.ModelsFor(picked.Tier, picked.Model) is [var first, ..])
                 {
                     models[entry.Path] = first.Model.Code;
+                }
+            }
+
+            // A reason step that makes an agent of its own - one that reads and begins work of its own - is given the
+            // engine's own read-only one, made for the model the step itself resolves to. A create-agent's own entry
+            // is above; this is the reason steps' alone.
+            foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason" && WorkflowStepTypes.MakesAgent(entry.Step) && entry.Step.In is null))
+            {
+                var (root, definition) = WorksAs(entry);
+                var picked = DssHarness.Core.Agents.AgentResolution.Picked(root.Tier, root.Model, definition);
+
+                if (providers.ModelsFor(picked.Tier, picked.Model) is [var own, ..])
+                {
+                    models[entry.Path] = own.Model.Code;
                 }
             }
 
@@ -2446,21 +2538,18 @@ public static class WorkflowValidator
         private Entry? WorkedInBy(Entry create)
             => _entries.FirstOrDefault(entry => entry.Step.Type == "reason" && entry.Step.In is { } name && ReferenceEquals(Scope(entry, name), create));
 
-        /// <summary>One step's config half: its model, its client and each model's effort, resolved and checked.</summary>
-        private void AgentRules(DssHarness.Core.Agents.AgentProviders providers, Entry entry, string where)
-        {
-            var step = entry.Step;
-            var (tier, model) = NamedBy(entry);
-
-            AgentRules(providers, tier, model, step.Effort, step.EffortByModel, step.Client, where);
-        }
-
         /// <summary>
-        /// The tier and the model a reason step runs on, as it names them: its own, or - where it names neither and goes
-        /// on with another's work - those it inherits (<see cref="Inherited"/>). Both null where it runs on the default tier.
+        /// What a reason step works as, as its run resolves it: the step at the root of its chain of resumes
+        /// (<see cref="ResumeChain.Root"/>) - itself where it begins its own work - whose tier, model and client it runs
+        /// on, and the agent definition that step names, which it works by. A step that goes on with another's work
+        /// names none of these itself; its effort stays its own.
         /// </summary>
-        private (string? Tier, string? Model) NamedBy(Entry reason)
-            => Inherited(reason) ?? (reason.Step.Tier, reason.Step.Model);
+        private (WorkflowStep Root, AgentDefinition? Definition) WorksAs(Entry reason)
+        {
+            var root = ResumeChain.Root(_definition, reason.Path, reason.Step);
+
+            return (root, DefinitionOf(root.Agent));
+        }
 
         /// <summary>
         /// Why the configuration's default tier gives no model, as a refusal ends: it names none, or one tierConfig does
@@ -2472,33 +2561,6 @@ public static class WorkflowValidator
                 : providers.ModelsOf(tier).Count == 0
                     ? $"defaults.agentTier names '{tier}', which tierConfig does not define. Defined: {string.Join(", ", providers.Tiers.OrderBy(name => name, StringComparer.Ordinal))}"
                     : null;
-
-        /// <summary>
-        /// The tier or model a step that goes on with another's work inherits, following the chain of resumes to the
-        /// step that names one (part 04); null where the step inherits nothing or the chain names none. A cycle in the
-        /// chain is refused elsewhere; the walk stops at one.
-        /// </summary>
-        private (string? Tier, string? Model)? Inherited(Entry entry)
-        {
-            var step = entry.Step;
-
-            if (step.Model is not null || step.Tier is not null || step.Resume is null)
-            {
-                return null;
-            }
-
-            var seen = new HashSet<string>(StringComparer.Ordinal) { entry.Path };
-
-            for (var at = entry; at.Step.Resume is { } target && Sibling(at, target) is { } resumed && seen.Add(resumed.Path); at = resumed)
-            {
-                if (resumed.Step.Model is not null || resumed.Step.Tier is not null)
-                {
-                    return (resumed.Step.Tier, resumed.Step.Model);
-                }
-            }
-
-            return null;
-        }
 
         /// <summary>
         /// One line for each agent of the definition that names a model, a tier or an effort: each model it may run on
@@ -2515,19 +2577,18 @@ public static class WorkflowValidator
 
             foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
             {
-                var step = entry.Step;
-                var (tier, model) = NamedBy(entry);
-                AddLevels($"step '{entry.Path}'", tier, model, step.Effort, step.EffortByModel, providers, lines);
+                var (root, definition) = WorksAs(entry);
+                AddLevels($"step '{entry.Path}'", root.Tier, root.Model, entry.Step.Effort, entry.Step.EffortByModel, definition, providers, lines);
             }
 
             if (_definition.Advisor is { } advisor)
             {
-                AddLevels("advisor", advisor.Tier, advisor.Model, advisor.Effort, advisor.EffortByModel, providers, lines);
+                AddLevels("advisor", advisor.Tier, advisor.Model, advisor.Effort, advisor.EffortByModel, DefinitionOf(advisor.Agent), providers, lines);
             }
 
             if (_definition.Reporter is { } reporter)
             {
-                AddLevels("reporter", reporter.Tier, reporter.Model, reporter.Effort, reporter.EffortByModel, providers, lines);
+                AddLevels("reporter", reporter.Tier, reporter.Model, reporter.Effort, reporter.EffortByModel, DefinitionOf(reporter.Agent), providers, lines);
             }
 
             return lines;
@@ -2580,20 +2641,26 @@ public static class WorkflowValidator
                 }
             }
 
+            void NeedOf(string where, string? tier, string? model, string? client, AgentDefinition? definition)
+            {
+                var picked = DssHarness.Core.Agents.AgentResolution.Picked(tier, model, definition);
+                Need(where, picked.Tier, picked.Model, client ?? definition?.Client);
+            }
+
             foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
             {
-                var (tier, model) = NamedBy(entry);
-                Need($"step '{entry.Path}'", tier, model, entry.Step.Client);
+                var (root, definition) = WorksAs(entry);
+                NeedOf($"step '{entry.Path}'", root.Tier, root.Model, root.Client, definition);
             }
 
             if (_definition.Advisor is { } advisor)
             {
-                Need("advisor", advisor.Tier, advisor.Model, advisor.Client);
+                NeedOf("advisor", advisor.Tier, advisor.Model, advisor.Client, DefinitionOf(advisor.Agent));
             }
 
             if (_definition.Reporter is { } reporter)
             {
-                Need("reporter", reporter.Tier, reporter.Model, reporter.Client);
+                NeedOf("reporter", reporter.Tier, reporter.Model, reporter.Client, DefinitionOf(reporter.Agent));
             }
 
             return [.. needed.Values.Select(entry => new KeyNeed(
@@ -2612,9 +2679,10 @@ public static class WorkflowValidator
 
             IEnumerable<(string? Tier, string? Model)> agents = _entries
                 .Where(entry => entry.Step.Type == "reason")
-                .Select(NamedBy)
-                .Concat(_definition.Advisor is { } advisor ? [(advisor.Tier, advisor.Model)] : [])
-                .Concat(_definition.Reporter is { } reporter ? [(reporter.Tier, reporter.Model)] : []);
+                .Select(WorksAs)
+                .Select(agent => DssHarness.Core.Agents.AgentResolution.Picked(agent.Root.Tier, agent.Root.Model, agent.Definition))
+                .Concat(_definition.Advisor is { } advisor ? [DssHarness.Core.Agents.AgentResolution.Picked(advisor.Tier, advisor.Model, DefinitionOf(advisor.Agent))] : [])
+                .Concat(_definition.Reporter is { } reporter ? [DssHarness.Core.Agents.AgentResolution.Picked(reporter.Tier, reporter.Model, DefinitionOf(reporter.Agent))] : []);
 
             return [.. agents
                 .SelectMany(agent => providers.ModelsFor(agent.Tier, agent.Model))
@@ -2627,23 +2695,24 @@ public static class WorkflowValidator
             string? model,
             string? effort,
             IReadOnlyDictionary<string, string>? effortByModel,
+            AgentDefinition? definition,
             DssHarness.Core.Agents.AgentProviders providers,
             List<string> lines)
         {
-            var models = providers.ModelsFor(tier, model);
+            // What the definition names stands below the step's, by the one pick the run resolves by: a model named
+            // outright, by the step or its definition, comes of no tier.
+            var picked = DssHarness.Core.Agents.AgentResolution.Picked(tier, model, definition);
+            var models = providers.ModelsFor(picked.Tier, picked.Model);
 
             if (models.Count == 0)
             {
                 return;
             }
 
-            var on = tier is null && model is null ? $" ({providers.DefaultTier})" : tier is null ? string.Empty : $" ({tier})";
+            var on = picked.Model is null ? $" ({picked.Tier ?? providers.DefaultTier})" : string.Empty;
 
-            lines.Add($"{where}{on}: {string.Join(", ", models.Select(entry => $"{entry.Model.Code} at {LevelFor(entry.Model.Code, effort, effortByModel)?.Level ?? "its own default"}"))}");
+            lines.Add($"{where}{on}: {string.Join(", ", models.Select(entry => $"{entry.Model.Code} at {DssHarness.Core.Agents.AgentResolution.LevelFor(entry.Model.Code, effort, effortByModel, definition?.Effort, definition?.EffortByModel)?.Level ?? "its own default"}"))}");
         }
-
-        /// <summary>The effort ladder by capability, lowest first: the order a refusal names the nearest level a model takes.</summary>
-        private static readonly IReadOnlyList<string> CapabilityLadder = DssHarness.Core.Agents.AgentProviders.EffortLevels;
 
         private void AgentRules(
             DssHarness.Core.Agents.AgentProviders providers,
@@ -2652,8 +2721,16 @@ public static class WorkflowValidator
             string? effort,
             IReadOnlyDictionary<string, string>? effortByModel,
             string? client,
+            AgentDefinition? definition,
+            bool runBudget,
             string where)
         {
+            // What the definition names stands below the step's, by the one pick the run resolves by: a step that names
+            // neither a tier nor a model runs on what its definition names - its model, else its tier, never a tier of
+            // one and a model of the other - and a client it does not name is the definition's.
+            (tier, model) = DssHarness.Core.Agents.AgentResolution.Picked(tier, model, definition);
+            client ??= definition?.Client;
+
             // A configuration that declares no providers has no model at all, so whatever the step names - a tier, a
             // model, or neither - it is told how to add them before anything is looked for in them.
             if (providers.HasNoProvidersAtAll)
@@ -2677,23 +2754,23 @@ public static class WorkflowValidator
                     _problems.Add($"{where} resolves to client '{client}', which does not reach provider '{named.Provider.Name}', whose model '{model}' it names");
                 }
 
-                if (effort is null && effortByModel is null && named.Model.Efforts is [])
+                if (effort is null && effortByModel is null && definition?.Effort is null && definition?.EffortByModel is null && named.Model.Efforts is [])
                 {
                     _problems.Add($"{where} names model '{model}', whose entry takes no efforts");
                 }
 
-                EffortRules([(named.Provider, named.Model)], null, effort, effortByModel, where);
+                EffortRules([(named.Provider, named.Model)], null, effort, effortByModel, definition, where);
+                BudgetPrices(providers, [(named.Provider, named.Model)], client, definition, runBudget, where);
                 return;
             }
 
             if (tier is null)
             {
-                // A step that names neither a tier nor a model runs on the configuration's default tier, which nothing
-                // builds in: where the config names none, the step is refused naming the two places this build reads
-                // one from (an agent definition's own tier is read when definitions are, a later slice's).
+                // A step that names neither a tier nor a model, on itself or in its definition, runs on the
+                // configuration's default tier, which nothing builds in.
                 if (DefaultTierProblem(providers) is { } problem)
                 {
-                    _problems.Add($"{where} names neither a tier nor a model, and {problem}{(providers.DefaultTier is null ? "; say one on the step, or under defaults.agentTier" : string.Empty)}");
+                    _problems.Add($"{where} names neither a tier nor a model, and {problem}{(providers.DefaultTier is null ? "; say one on the step, in its agent's definition, or under defaults.agentTier" : string.Empty)}");
                     return;
                 }
 
@@ -2708,7 +2785,8 @@ public static class WorkflowValidator
                     }
                 }
 
-                EffortRules(defaults, providers.DefaultTier, effort, effortByModel, where);
+                EffortRules(defaults, providers.DefaultTier, effort, effortByModel, definition, where);
+                BudgetPrices(providers, defaults, client, definition, runBudget, where);
                 return;
             }
 
@@ -2728,99 +2806,53 @@ public static class WorkflowValidator
                 }
             }
 
-            EffortRules(models, tier, effort, effortByModel, where);
+            EffortRules(models, tier, effort, effortByModel, definition, where);
+            BudgetPrices(providers, models, client, definition, runBudget, where);
         }
 
         /// <summary>
-        /// Each model's effort, resolved on its own and checked against that model's <c>efforts</c> - every model of the
-        /// tier, the ones this machine cannot use included - and a code under <c>effort</c> the step does not run on,
-        /// which would be dead: a repository that changes its tier then hears which steps still name the old model.
+        /// Each model of an agent budgeted in dollars - by its definition's <c>maxBudgetUsd</c>, or by the run's budget where
+        /// it is charged to it - checked for the prices of every kind its run is billed by, in the words of the one owner of
+        /// the rule (<see cref="DssHarness.Core.Agents.AgentPrices.BudgetRefusal"/>): a budget is charged with the cost
+        /// counted from them. Each model is checked against the client the run reaches it through
+        /// (<see cref="DssHarness.Core.Agents.AgentResolution.ClientOf"/>, each entry of the order on its own) and what that
+        /// client's kind is billed by given its entry (<see cref="DssHarness.Core.Agents.AgentProviders.BilledBy"/>) - the
+        /// one fact the run asks before any client is taken - so a model a run would refuse is refused here, before the run.
         /// </summary>
+        private void BudgetPrices(
+            DssHarness.Core.Agents.AgentProviders providers,
+            IReadOnlyList<(DssHarness.Core.Configuration.AgentProviderConfig Provider, DssHarness.Core.Configuration.AgentModelConfig Model)> models,
+            string? client,
+            AgentDefinition? definition,
+            bool runBudget,
+            string where)
+        {
+            if ((!runBudget || _definition.Budget?.Usd is null) && definition?.MaxBudgetUsd is null)
+            {
+                return;
+            }
+
+            foreach (var (provider, model) in models)
+            {
+                var through = DssHarness.Core.Agents.AgentResolution.ClientOf(client, definition, provider);
+                var billedBy = DssHarness.Core.Agents.AgentProviders.BilledBy(through, providers.ClientOf(through));
+
+                if (DssHarness.Core.Agents.AgentPrices.BudgetRefusal(provider, model, billedBy) is { } priceless)
+                {
+                    _problems.Add($"{where} runs under a budget in dollars through client '{through}', and {priceless}");
+                }
+            }
+        }
+
+        /// <summary>Each model's effort checked against what it takes, by the one owner of the check (<see cref="DssHarness.Core.Agents.AgentEffortRules"/>).</summary>
         private void EffortRules(
             IReadOnlyList<(DssHarness.Core.Configuration.AgentProviderConfig Provider, DssHarness.Core.Configuration.AgentModelConfig Model)> models,
             string? tier,
             string? effort,
             IReadOnlyDictionary<string, string>? effortByModel,
+            AgentDefinition? definition,
             string where)
-        {
-            foreach (var code in (effortByModel ?? EmptyEfforts).Keys.Where(code => !string.Equals(code, "all", StringComparison.Ordinal) && models.All(entry => !string.Equals(entry.Model.Code, code, StringComparison.Ordinal))))
-            {
-                _problems.Add($"{where} gives an effort to '{code}', which it does not run on. It runs on: {string.Join(", ", models.Select(entry => entry.Model.Code))}");
-            }
-
-            foreach (var (_, entry) in models)
-            {
-                var level = LevelFor(entry.Code, effort, effortByModel);
-
-                // A model whose entry takes no efforts is refused where the configuration is loaded; nothing is left
-                // to say of it here.
-                if (level is not { } asked || entry.Efforts is [] || entry.Efforts.Contains(asked.Level, StringComparer.Ordinal))
-                {
-                    continue;
-                }
-
-                var takes = string.Join(", ", entry.Efforts);
-                var first = tier is null
-                    ? $"{where} runs at effort '{asked.Level}', which '{entry.Code}' does not take. It takes: {takes}"
-                    : asked.FromOwnEntry || asked.FromAll
-                        ? $"{where} runs '{entry.Code}' (tier '{tier}') at effort '{asked.Level}', which it does not take. It takes: {takes}"
-                        : $"{where} runs at effort '{asked.Level}', which '{entry.Code}' (tier '{tier}') does not take. It takes: {takes}";
-
-                // Where the model's own entry gave the level, the first sentence stands alone: it already has a level of
-                // its own, and the level is what is wrong. Where the level came from 'all' or from one level for every
-                // model, the step is shown how to give this model another.
-                _problems.Add(asked.FromOwnEntry
-                    ? first
-                    : $"{first}. Give it a level of its own under effort: {entry.Code}: {Nearest(entry, asked.Level)}");
-            }
-        }
-
-        /// <summary>The levels of no map, as <see cref="EffortRules"/> reads none.</summary>
-        private static readonly IReadOnlyDictionary<string, string> EmptyEfforts = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        /// <summary>
-        /// The level one model runs at: its own entry under the step's effort map, else the map's <c>all</c>, else the
-        /// step's one level, else none (the model's own default) - and where the level came from.
-        /// </summary>
-        private static (string Level, bool FromOwnEntry, bool FromAll)? LevelFor(string code, string? effort, IReadOnlyDictionary<string, string>? effortByModel)
-        {
-            if (effortByModel is not null)
-            {
-                if (effortByModel.TryGetValue(code, out var own))
-                {
-                    return (own, FromOwnEntry: true, FromAll: false);
-                }
-
-                if (effortByModel.TryGetValue("all", out var every))
-                {
-                    return (every, FromOwnEntry: false, FromAll: true);
-                }
-
-                return null;
-            }
-
-            return effort is null ? null : (effort, FromOwnEntry: false, FromAll: false);
-        }
-
-        /// <summary>
-        /// The nearest level the model takes at or above <paramref name="asked"/>, in the capability ladder, else its
-        /// highest - the highest it takes by the ladder, whatever order its entry lists them in: what a refusal suggests
-        /// giving the model under the step's effort.
-        /// </summary>
-        private static string Nearest(DssHarness.Core.Configuration.AgentModelConfig model, string asked)
-        {
-            var at = CapabilityLadder.ToList().IndexOf(asked);
-
-            foreach (var level in CapabilityLadder.Skip(at < 0 ? CapabilityLadder.Count : at))
-            {
-                if (model.Efforts.Contains(level, StringComparer.Ordinal))
-                {
-                    return level;
-                }
-            }
-
-            return CapabilityLadder.Where(level => model.Efforts.Contains(level, StringComparer.Ordinal)).Last();
-        }
+            => _problems.AddRange(DssHarness.Core.Agents.AgentEffortRules.Problems(models, tier, effort, effortByModel, definition, where));
 
         /// <summary>Whether <paramref name="client"/> is one the tool builds in and reaches <paramref name="provider"/>'s type.</summary>
         private static bool ClientReaches(string client, DssHarness.Core.Configuration.AgentProviderConfig provider)
@@ -3136,8 +3168,20 @@ public static class WorkflowValidator
         /// <summary>The configuration's web search, where the caller gave it: V55's names are checked only under a configuration the caller chose.</summary>
         private readonly Web.Search.WebSearchSources? _search;
 
+        /// <summary>
+        /// The lookup of the skills a prompt names, in the three places; <see langword="null"/> where the caller reads
+        /// no files of the repository, which leaves every <c>{skill.&lt;name&gt;}</c> unlooked-for.
+        /// </summary>
+        private readonly AgentSkills? _skills;
+
         /// <summary>Each reason step's schema as a reading, by the path its <c>outputs</c> names; <see langword="null"/> where it types nothing.</summary>
         private readonly Dictionary<string, JsonSchemaSubset.Reading?> _schemas = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Each agent definition the definition's steps, its advisor and its reporter name, as its file read it - or
+        /// null where the file does not read or no files are given, its problems said once by the first that names it.
+        /// </summary>
+        private readonly Dictionary<string, AgentDefinition?> _agents = new(StringComparer.Ordinal);
 
         /// <summary>The expressions being typed, by the step and the key: one whose reading needs its own is read as anything.</summary>
         private readonly HashSet<(Entry Entry, string Key)> _yielding = [];
@@ -3720,6 +3764,107 @@ public static class WorkflowValidator
 
                     TemplateRead(entry, read, what, readIn);
                 });
+            }
+        }
+
+        /// <summary>
+        /// Checks every skill a reason step's <c>prompt</c> and <c>resumePrompt</c> name, each at the line it first
+        /// stands on: the lookup's answer - no such skill, with every place looked for it, or one that is there and
+        /// cannot be used, its <c>allowed-tools</c> held to the capabilities of the step's agent - and a skill named
+        /// twice in one prompt, for once is enough. Where the caller gave no lookup none is looked for, and where no
+        /// files are given no prompt is read.
+        /// </summary>
+        private void Skills(Entry entry)
+        {
+            var step = entry.Step;
+
+            if (step.Type != "reason")
+            {
+                return;
+            }
+
+            foreach (var (key, named) in new[] { ("prompt", step.Prompt), ("resumePrompt", step.ResumePrompt) })
+            {
+                if (named is null || _files?.Invoke(named) is not { } text)
+                {
+                    continue;
+                }
+
+                var lines = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+                var written = text.Split('\n');
+
+                for (var line = 0; line < written.Length; line++)
+                {
+                    // Every placeholder of the line, not the reads it yields once each: a skill named twice on one line
+                    // is named twice.
+                    foreach (var piece in FlowTemplate.Pieces(written[line]).TakeWhile(each => each.Kind != FlowTemplate.PieceKind.Unclosed))
+                    {
+                        if (piece.Kind != FlowTemplate.PieceKind.Placeholder || piece.Name.Length == 0 || !AgentSkills.Names(piece.Name))
+                        {
+                            continue;
+                        }
+
+                        if (AgentSkills.NameIn(piece.Name, out var unnamed) is not { } name)
+                        {
+                            _problems.Add($"step '{entry.Path}' {key} '{named}' line {line + 1} names {unnamed}");
+                            continue;
+                        }
+
+                        (lines.TryGetValue(name, out var at) ? at : lines[name] = []).Add(line + 1);
+                    }
+                }
+
+                foreach (var (name, at) in lines)
+                {
+                    if (_skills is { } skills)
+                    {
+                        // The capabilities of the definition the step works by: its own, or the one the work it goes on
+                        // with began with.
+                        var (root, definition) = WorksAs(entry);
+                        var may = definition?.May ?? AgentDefinition.AllCapabilities;
+
+                        foreach (var problem in skills.Find(name) is { } found
+                            ? found.ProblemsFor(entry.Path, root.Agent, may)
+                            : [$"{key} '{named}' line {at[0]} names {{skill.{name}}}, and {skills.Missing(name)}"])
+                        {
+                            _problems.Add(problem);
+                        }
+                    }
+
+                    if (at.Count > 1)
+                    {
+                        _problems.Add($"{key} '{named}' names {{skill.{name}}} {(at.Count == 2 ? "twice" : $"{at.Count} times")} (lines {Spelled(at)}): once is enough");
+                    }
+                }
+            }
+        }
+
+        /// <summary>A list of line numbers as a refusal writes it: <c>14 and 40</c>, <c>14, 40 and 51</c>.</summary>
+        private static string Spelled(IReadOnlyList<int> numbers)
+            => numbers.Count == 1
+                ? numbers[0].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : $"{string.Join(", ", numbers.Take(numbers.Count - 1).Select(number => number.ToString(System.Globalization.CultureInfo.InvariantCulture)))} and {numbers[^1]}";
+
+        /// <summary>
+        /// Reads every agent definition the flow names, whatever the configuration: a reason step's, the advisor's and
+        /// the reporter's. Its file's problems and its body's placeholders are said whatever providers were given, for
+        /// they are the definition's own and not the configuration's half.
+        /// </summary>
+        private void AgentBodies()
+        {
+            foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
+            {
+                _ = DefinitionOf(entry.Step.Agent);
+            }
+
+            if (_definition.Advisor is { } advisor)
+            {
+                _ = DefinitionOf(advisor.Agent);
+            }
+
+            if (_definition.Reporter is { } reporter)
+            {
+                _ = DefinitionOf(reporter.Agent);
             }
         }
 

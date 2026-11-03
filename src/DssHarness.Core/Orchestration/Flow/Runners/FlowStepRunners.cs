@@ -24,11 +24,11 @@ public interface IFlowStepTypeRunner
 /// refused loudly as <see cref="NoStepRunner"/> refuses it - a run that says what it cannot do, never one that passes a
 /// step over. A reason step's view of the run's codebase graph is synced where it starts, before its runner is asked.
 /// </summary>
-public sealed class FlowStepRunners : IFlowStepRunner
+public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
 {
     /// <summary>The step types this build serves, in the order help says them: the tool registers a runner for each, and none other.</summary>
     public static IReadOnlyList<string> Served { get; } =
-        ["orient", "graphify-codebase", "validate-plan", "create-agent", "build", "test", "run", "check-mutations", "anchor-balance", "anchor-citations", "ci-read", "ci-wait", "fold", "delete-agent", "refresh", "rebase", "commit", "push", "pull-request"];
+        ["orient", "graphify-codebase", "validate-plan", "create-agent", "reason", "build", "test", "run", "check-mutations", "anchor-balance", "anchor-citations", "ci-read", "ci-wait", "fold", "delete-agent", "refresh", "rebase", "commit", "push", "pull-request"];
 
     private readonly IReadOnlyDictionary<string, IFlowStepTypeRunner> _byType;
     private readonly FlowGraphSyncs _graph;
@@ -77,7 +77,15 @@ public sealed class FlowStepRunners : IFlowStepRunner
 
     /// <inheritdoc/>
     public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)
-        => _none.HandoffAsync(run, cancellationToken);
+        => run.Step.Type is { } type && _byType.TryGetValue(type, out var runner) && runner is IFlowHandoffRunner handoff
+            ? handoff.HandoffAsync(run, cancellationToken)
+            : _none.HandoffAsync(run, cancellationToken);
+
+    /// <inheritdoc/>
+    public string? Account(FlowStepRun run)
+        => run.Step.Type is { } type && _byType.TryGetValue(type, out var runner) && runner is IFlowHandoffRunner handoff
+            ? handoff.Account(run)
+            : _none.Account(run);
 
     /// <summary>
     /// The run <paramref name="run"/>'s step belongs to, and the repository's context loaded from its main checkout, as

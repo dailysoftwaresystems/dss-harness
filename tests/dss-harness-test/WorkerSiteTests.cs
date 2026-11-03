@@ -69,11 +69,44 @@ public sealed class WorkerSiteTests
         var path = temp.WriteFile(Path.Combine("src", "fixture.cpp"), "return c <= b;\n");
         var stamp = new DateTime(2031, 5, 4, 3, 2, 1, DateTimeKind.Utc);
 
-        await site.WriteAsync(path, "return c < b;\n"u8.ToArray(), stamp, TestContext.Current.CancellationToken);
+        await site.WriteAsync(temp.Path, path, "return c < b;\n"u8.ToArray(), stamp, TestContext.Current.CancellationToken);
 
-        Assert.Equal("return c < b;\n"u8.ToArray(), site.Read(path));
+        Assert.Equal("return c < b;\n"u8.ToArray(), site.Read(temp.Path, path));
         Assert.Equal(stamp, File.GetLastWriteTimeUtc(path));
-        Assert.Null(site.Read(temp.Combine("src", "gone.cpp")));
+        Assert.Null(site.Read(temp.Path, temp.Combine("src", "gone.cpp")));
+    }
+
+    /// <summary>
+    /// A site the worker's own builds turned into a link, or put a linked directory on the way to, is neither read nor
+    /// written - each refused naming the link - and what the link leads to, a file of the user's, is left as it was: the
+    /// worker is a place its builds and runs write, and the tool reads and writes it outside every isolation.
+    /// </summary>
+    [Fact]
+    public async Task ASiteReachedThroughALink_IsNeitherReadNorWritten_AndWhatTheLinkLeadsToIsUntouched()
+    {
+        using var worker = new TempDirectory();
+        using var outside = new TempDirectory();
+        var site = new WorkerSite(new HarnessFactory().FileSystem, new JumpingClock());
+        var users = outside.WriteFile("fixture.cpp", "the user's\n");
+        var linked = worker.Combine("src", "fixture.cpp");
+        var through = worker.Combine("lib", "fixture.cpp");
+        Directory.CreateDirectory(worker.Combine("src"));
+
+        if (!UnfollowedFilesTests.TryLink(linked, users, file: true) || !UnfollowedFilesTests.TryLink(worker.Combine("lib"), outside.Path))
+        {
+            Assert.Skip("This machine does not allow symbolic links to be made.");
+        }
+
+        var stamp = new DateTime(2031, 5, 4, 3, 2, 1, DateTimeKind.Utc);
+        var read = Assert.Throws<LinkOnTheWayException>(() => site.Read(worker.Path, linked));
+        var readThrough = Assert.Throws<LinkOnTheWayException>(() => site.Read(worker.Path, through));
+        var written = await Assert.ThrowsAsync<LinkOnTheWayException>(() => site.WriteAsync(worker.Path, through, "planted\n"u8.ToArray(), stamp, TestContext.Current.CancellationToken));
+
+        Assert.Equal($"'{linked}' is reached through the link '{linked}', which the tool never follows in a place an isolated process writes", read.Message);
+        Assert.Equal($"'{through}' is reached through the link '{worker.Combine("lib")}', which the tool never follows in a place an isolated process writes", readThrough.Message);
+        Assert.Equal(readThrough.Message, written.Message);
+        Assert.Equal("the user's\n", File.ReadAllText(users));
+        Assert.NotEqual(stamp, File.GetLastWriteTimeUtc(users));
     }
 
     /// <summary>

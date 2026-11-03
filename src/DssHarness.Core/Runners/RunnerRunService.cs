@@ -999,10 +999,21 @@ public sealed class RunnerRunService(
 
         // Created before the step runs, not lazily by whatever the step happens to do. A program
         // told to write into a directory that is not there fails in its own words, which is a worse
-        // message than the one this would have given.
+        // message than the one this would have given. Made from the tree's root down through no link
+        // (UnfollowedFiles): an earlier step writes the run's build directory, and the tool makes
+        // this one outside every isolation, so a link put where it goes fails the leg, nothing made.
         if (paths.StepBuild is { } stepBuild)
         {
-            _fileSystem.CreateDirectory(stepBuild);
+            if (UnfollowedFiles.LinkOnTheWay(_fileSystem, request.TreeRoot, stepBuild, itself: true) is { } link)
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"'{values.Redact(phase.Name)}' was not run: its own directory '{stepBuild}' is reached through the link '{link}', which the tool never "
+                    + "follows in a place an isolated process writes, so nothing was made through it; an earlier step put the link there - "
+                    + "write each step's work in its own {stepBuild}");
+            }
+
+            UnfollowedFiles.CreateDirectory(_fileSystem, request.TreeRoot, stepBuild);
         }
 
         var (program, arguments, working) = Starting(request, phase, paths, Supplied(values, inputs));
@@ -1380,7 +1391,22 @@ public sealed class RunnerRunService(
                 continue;
             }
 
-            _fileSystem.DeleteDirectory(path);
+            // Held from the tree, never from the directory's own place: a link the leg's isolated work put on the way to
+            // it is refused, as one resolving outside is skipped, and nothing of the tree deleted through it.
+            try
+            {
+                UnfollowedFiles.DeleteDirectory(_fileSystem, request.TreeRoot, path);
+            }
+            catch (LinkOnTheWayException link)
+            {
+                _output.Warn(
+                    CommandName,
+                    $"{request.Leg}: cleanDirectories names '{declared}', which is reached through the link '{link.Link}', "
+                    + "which the tool never follows; it was not deleted.");
+
+                continue;
+            }
+
             _output.Detail(CommandName, $"{request.Leg}: cleaned '{declared}'");
         }
     }
@@ -1527,13 +1553,26 @@ public sealed class RunnerRunService(
 
                 try
                 {
+                    // An output reached through a link - the step's directory, or the output itself, put in place as one
+                    // by an earlier step - is kept from nowhere and listed nowhere: what it leads to may be anything of the
+                    // machine's, which the step's work could not read, and whose names alone would carry it out.
+                    if (UnfollowedFiles.LinkOnTheWay(_fileSystem, scratch.Root, source, itself: true) is { } link)
+                    {
+                        _output.Warn(
+                            CommandName,
+                            $"'{phase.StepName}' asked to keep '{output}', which is reached through the link '{link}', which the tool never "
+                            + "follows in a place an isolated process writes, so nothing of it was kept");
+
+                        continue;
+                    }
+
                     if (_fileSystem.DirectoryExists(source))
                     {
                         // A directory is as ordinary an output as a file: a step that emits a run of
                         // samples emits a directory of them. Skipped here — which is what this did —
                         // it passed the witness, was never copied, and went with the build directory,
                         // leaving a passed run and no measurements.
-                        var unfollowed = KeepDirectory(source, destination);
+                        var unfollowed = KeepDirectory(scratch.Root, source, destination);
 
                         if (unfollowed.Count > 0)
                         {
@@ -1541,7 +1580,7 @@ public sealed class RunnerRunService(
                             // a later sync carries to every host as though it were the whole output.
                             _output.Warn(
                                 CommandName,
-                                $"'{phase.StepName}' asked to keep '{output}', which holds {ReportText.Counted(unfollowed.Count, "directory link")} "
+                                $"'{phase.StepName}' asked to keep '{output}', which holds {ReportText.Counted(unfollowed.Count, "link")} "
                                 + "that were not followed, so what they lead to is not in "
                                 + $"the kept copy: {string.Join(", ", unfollowed.Select(link => $"'{link}'"))}");
                         }
@@ -1554,8 +1593,10 @@ public sealed class RunnerRunService(
                         continue;
                     }
 
-                    _fileSystem.CreateDirectory(Path.GetDirectoryName(destination) ?? into);
-                    _fileSystem.CopyFile(source, destination, overwrite: true);
+                    // What the step's work wrote is read, and the copy written, from the tree's root down, never through a
+                    // link the work put on the way (UnfollowedFiles): the tool copies outside every isolation.
+                    UnfollowedFiles.CreateDirectory(_fileSystem, scratch.Root, Path.GetDirectoryName(destination) ?? into);
+                    UnfollowedFiles.Copy(_fileSystem, scratch.Root, source, scratch.Root, destination);
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
@@ -1609,32 +1650,42 @@ public sealed class RunnerRunService(
     }
 
     /// <summary>Copies a directory output, with everything under it.</summary>
+    /// <param name="root">The tree the action's directories are in, which the step's work writes.</param>
     /// <param name="source">The directory the step produced.</param>
     /// <param name="destination">Where it is kept.</param>
     /// <returns>
-    /// The directory links under it, relative to it, which were not followed: a link can lead out of
-    /// the output, or back into it and round again, so what it leads to is not copied - and is named
-    /// rather than left out without a word.
+    /// The links under it, relative to it, which were not followed: a link can lead out of the output - to a place the
+    /// step's work may not read - or back into it and round again, so what it leads to is not copied, and is named
+    /// rather than left out without a word. An output reached through a link is never handed here.
     /// </returns>
-    private IReadOnlyList<string> KeepDirectory(string source, string destination)
+    private List<string> KeepDirectory(string root, string source, string destination)
     {
-        _fileSystem.CreateDirectory(destination);
+        UnfollowedFiles.CreateDirectory(_fileSystem, root, destination);
+        var unfollowed = new List<string>();
 
         foreach (var file in _fileSystem.EnumerateFiles(source, recursive: true))
         {
             var relative = Path.GetRelativePath(source, file);
             var into = Path.Combine(destination, relative);
 
-            _fileSystem.CreateDirectory(Path.GetDirectoryName(into) ?? destination);
-            _fileSystem.CopyFile(file, into, overwrite: true);
+            if (UnfollowedFiles.LinkOnTheWay(_fileSystem, root, file, itself: true) is not null)
+            {
+                unfollowed.Add(relative.Replace('\\', '/'));
+                continue;
+            }
+
+            UnfollowedFiles.CreateDirectory(_fileSystem, root, Path.GetDirectoryName(into) ?? destination);
+            UnfollowedFiles.Copy(_fileSystem, root, file, root, into);
         }
 
-        return [.. _fileSystem.EnumerateDirectoryLinks(source).Select(link => Path.GetRelativePath(source, link).Replace('\\', '/'))];
+        unfollowed.AddRange(_fileSystem.EnumerateDirectoryLinks(source).Select(link => Path.GetRelativePath(source, link).Replace('\\', '/')));
+        return unfollowed;
     }
 
     /// <summary>
     /// The two run-keyed directories an action owns: where its steps write, and what survives.
     /// </summary>
+    /// <param name="Root">The tree both are in, which the steps' work writes: what is copied between them is read and written from it down.</param>
     /// <param name="Build">Where this run's steps write. Emptied when the action finishes.</param>
     /// <param name="Artifacts">Where this run's persisted outputs are kept.</param>
     /// <remarks>
@@ -1643,7 +1694,7 @@ public sealed class RunnerRunService(
     /// the roots would have two runs of itself sharing one directory, and the second would measure
     /// what the first left behind.
     /// </remarks>
-    private sealed record ActionScratch(string Build, string Artifacts);
+    private sealed record ActionScratch(string Root, string Build, string Artifacts);
 
     private sealed record RunnerSteps(
         IReadOnlyList<RunnerPhase> Phases,
@@ -1702,6 +1753,7 @@ public sealed class RunnerRunService(
     private static ActionScratch? ScratchFor(RunnerRunRequest request, string? actionDirectory)
         => actionDirectory is { Length: > 0 } owned
             ? new ActionScratch(
+                request.TreeRoot,
                 Path.Combine(request.TreeRoot, HarnessLayout.ActionBuildRelative(owned, request.RunId, request.Leg)),
                 Path.Combine(request.TreeRoot, HarnessLayout.ActionArtifactsRelative(owned, request.RunId, request.Leg)))
             : null;

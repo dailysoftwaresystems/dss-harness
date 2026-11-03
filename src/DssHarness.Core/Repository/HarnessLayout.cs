@@ -183,28 +183,40 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     public const string MutationsDirectoryName = ".mutations";
 
     /// <summary>
-    /// The directory at the root of a tree where the copies of it its legs work in are kept,
-    /// <c>&lt;tree&gt;/.legs/&lt;key&gt;</c>, which go with the tree.
+    /// The directory at the root of a tree where the tree's own copies are kept,
+    /// <c>&lt;tree&gt;/.legs/&lt;key&gt;</c>, which goes with the tree.
     /// </summary>
     public const string LegsDirectoryName = ".legs";
 
     /// <summary>
+    /// The directory at the root of a tree where its side-tasks are kept, one directory each: an agent outside every
+    /// workflow, a conversation between a person and one agent over the main tree (<c>&lt;tree&gt;/.side-tasks/&lt;task&gt;</c>),
+    /// which goes with the tree.
+    /// </summary>
+    public const string SideTasksDirectoryName = ".side-tasks";
+
+    /// <summary>
     /// The directories at the root of a tree whose contents git ignores while a <see cref="GitKeepFileName"/> keeps
     /// each in git, relative to the root with forward separators: where worktrees are made, where orchestrators keep
-    /// what they hold, and where the tree's own copies are kept - its mutation workers, and the copies its legs work in.
-    /// A clone then arrives with each in place, and nothing made in them is ever committed.
+    /// what they hold, where its side-tasks keep their records, and where the tree's own copies are kept - its mutation
+    /// workers, and the copies its legs work in. A clone then arrives with each in place, and nothing made in them is
+    /// ever committed.
     /// </summary>
     /// <param name="worktreesRoot">The configured worktrees root.</param>
     public static IReadOnlyList<string> RootSlots(string worktreesRoot)
     {
         ArgumentNullException.ThrowIfNull(worktreesRoot);
 
-        return
-        [
-            .. new[] { PathPatterns.Normalize(worktreesRoot), OrchestratorsDirectoryName, MutationsDirectoryName, LegsDirectoryName }
-                .Distinct(StringComparer.Ordinal),
-        ];
+        return [.. new[] { PathPatterns.Normalize(worktreesRoot) }.Concat(NamedRootSlots).Distinct(StringComparer.Ordinal)];
     }
+
+    /// <summary>
+    /// The root slots (<see cref="RootSlots"/>) the layout names itself - every one but the worktrees root, which the
+    /// configuration places: what orchestrators and side-tasks keep, and the tree's own copies. The one list each reader
+    /// of them is made from, so a slot the layout gains joins every one of them - the never-transfer floor among them -
+    /// the day it is added.
+    /// </summary>
+    public static IReadOnlyList<string> NamedRootSlots { get; } = [OrchestratorsDirectoryName, MutationsDirectoryName, LegsDirectoryName, SideTasksDirectoryName];
 
     /// <summary>
     /// The credential slots that hold connection data, relative to the harness directory: one
@@ -236,6 +248,19 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
         [.. ConnectionDataSlots.Concat(ValueSlots).Select(slot => DirectoryName + "/" + slot)];
 
     /// <summary>
+    /// Every credential slot (<see cref="SecretSlots"/>) as an absolute directory of <paramref name="mainCheckout"/>, where
+    /// what each holds is read from whichever tree asks: the places no action of any agent reaches. The one list an
+    /// agent's ground is given, so a slot the layout gains is guarded the day it is added.
+    /// </summary>
+    /// <param name="mainCheckout">The main checkout's root.</param>
+    public static IReadOnlyList<string> SecretSlotDirectoriesUnder(string mainCheckout)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckout);
+
+        return [.. SecretSlots.Select(slot => Path.Combine(mainCheckout, slot.Replace('/', Path.DirectorySeparatorChar)))];
+    }
+
+    /// <summary>
     /// Where the tool's own state is, relative to a tree's root with forward separators: the root
     /// slots (<see cref="RootSlots"/>) and what it keeps under the harness directory - its runs,
     /// its hosts' copies record, its mutation record, a worker's dependency sources, the run lock
@@ -244,6 +269,7 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// the layout gains joins this the day it is added.
     /// </summary>
     /// <param name="worktreesRoot">The configured worktrees root.</param>
+    /// <seealso cref="StatePathsUnder"/>
     public static IReadOnlyList<string> StatePaths(string worktreesRoot)
     {
         ArgumentNullException.ThrowIfNull(worktreesRoot);
@@ -258,6 +284,26 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
             DirectoryName + "/" + LockFileName,
             DirectoryName + "/" + SyncedCopyMarkerName,
         ];
+    }
+
+    /// <summary>
+    /// The state paths (<see cref="StatePaths"/>) that are files, by their names: the run lock and a synced copy's
+    /// marker. Every other state path is a directory.
+    /// </summary>
+    public static IReadOnlyList<string> StateFileNames { get; } = [LockFileName, SyncedCopyMarkerName];
+
+    /// <summary>
+    /// The tool's own state (<see cref="StatePaths"/>) under one tree an agent works over: each place joined to
+    /// <paramref name="tree"/> - a worktrees root configured outside it standing as configured - each once. The one list a
+    /// step's ground and a side-task's guard, so neither reads the tree itself as state.
+    /// </summary>
+    /// <param name="tree">The tree's root.</param>
+    /// <param name="worktreesRoot">The configured worktrees root.</param>
+    public static IReadOnlyList<string> StatePathsUnder(string tree, string worktreesRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        return [.. StatePaths(worktreesRoot).Select(path => Path.Combine(tree, path)).Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
     /// <summary>
@@ -342,6 +388,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// agents work in belong to the main checkout.
     /// </summary>
     public string OrchestratorsDirectory => Path.Combine(MainCheckoutRoot, OrchestratorsDirectoryName);
+
+    /// <summary>
+    /// Where the repository's side-tasks keep their records: in the main checkout, whichever tree asks, as a side-task
+    /// works over the main tree itself.
+    /// </summary>
+    public string SideTasksDirectory => Path.Combine(MainCheckoutRoot, SideTasksDirectoryName);
 
     /// <summary>
     /// Worktrees live under the main checkout, never under another worktree, so

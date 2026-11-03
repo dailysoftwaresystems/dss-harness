@@ -121,6 +121,10 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// Every Claude Code directory a client of this run uses, and the tool's own process's: no command of
 /// an agent names one.
 /// </param>
+/// <param name="CredentialPlaces">
+/// Every place the user keeps credentials in on this machine (<c>Isolation.UserCredentials</c>): no file tool of an
+/// agent reads or writes one, no command names one, and no isolated command reads one but the files each leaves read.
+/// </param>
 /// <param name="Restrictions">
 /// Every restriction that applies to this agent, all applied together: the configuration's, the
 /// definition's and the step's. A restriction only ever refuses.
@@ -151,7 +155,8 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// <param name="WorktreeRules">
 /// Whether the worktree rules are on (<c>agentPolicy.worktreeRules</c>, which the configuration
 /// holds on where nothing is said). The tool's own verbs and <c>run-side-task</c> are refused
-/// whatever this says.
+/// whatever this says - to a step's agent; a side-task's ground (<see cref="SideTask"/>) holds the
+/// verbs open to it as the person's own session's are, <c>run-side-task</c> excepted.
 /// </param>
 /// <param name="ProtectedPaths">
 /// Whether Claude Code's protected paths are refused on every client
@@ -162,12 +167,19 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// <c>HarnessLayout.StatePaths</c>: written by the tool's verbs alone, never by an agent's - the
 /// agent's own work directory excepted, for it is a writable root.
 /// </param>
+/// <param name="SideTask">
+/// Whether this agent is a side-task's, outside every workflow: the main checkout is its writable root, every limit of
+/// a run's is dropped but the built-in refusals, and this tool's own verbs are open to it as the person's own session's
+/// are - <c>run-side-task</c> alone stays refused, for an agent does not start another agent. False for every step of
+/// every run, whose agent does not move its own run.
+/// </param>
 public sealed record AgentPolicyGround(
     string WorkingDirectory,
     IReadOnlyList<string> ReadRoots,
     IReadOnlyList<string> WritableRoots,
     IReadOnlyList<string> SlotDirectories,
     IReadOnlyList<string> ClaudeCodeDirectories,
+    IReadOnlyList<Isolation.HiddenPlace> CredentialPlaces,
     IReadOnlyList<AgentRestriction> Restrictions,
     IReadOnlyList<AgentCapability> Capabilities,
     IReadOnlyList<string>? WebDomains,
@@ -175,13 +187,29 @@ public sealed record AgentPolicyGround(
     string? ReporterRoot,
     bool WorktreeRules,
     bool ProtectedPaths,
-    IReadOnlyList<string> StateDirectories)
+    IReadOnlyList<string> StateDirectories,
+    bool SideTask = false)
 {
     /// <inheritdoc cref="AgentPolicyGround" path="/param[@name='WebDomains']"/>
     public IReadOnlyList<string>? WebDomains { get; init => field = Listed(value, nameof(WebDomains)); } = Listed(WebDomains, nameof(WebDomains));
 
     /// <inheritdoc cref="AgentPolicyGround" path="/param[@name='Writes']"/>
     public IReadOnlyList<string>? Writes { get; init => field = Listed(value, nameof(Writes)); } = Listed(Writes, nameof(Writes));
+
+    /// <summary>
+    /// The PATH the agent's commands find their programs on, which the policy looks a program up on where what it decides
+    /// rests on the program itself - a git command that is a program of git's own rather than an alias, a Windows program
+    /// that expands its own words; null where it is this process's own, which every agent's child inherits.
+    /// </summary>
+    public string? ProgramPath { get; init; }
+
+    /// <summary>
+    /// Every tree the agent touches - its worktree and the main checkout it was made from, or the main checkout alone -
+    /// whose git's own files no write of an agent's reaches under the worktree rules, wherever the agent's own roots stand:
+    /// a worktree's own <c>.git</c> is a file, and the hooks every worktree runs are the main checkout's. Null where they
+    /// are the agent's roots alone.
+    /// </summary>
+    public IReadOnlyList<string>? Trees { get; init; }
 
     /// <summary>Every capability, in the order a definition names them.</summary>
     public static IReadOnlyList<AgentCapability> EveryCapability { get; } = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web];

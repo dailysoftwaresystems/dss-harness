@@ -513,7 +513,7 @@ public sealed class MutationLegRunnerTests
     public async Task AWorkerRetiredForASite_LeavesTheOtherWorkersToDriveTheRest()
     {
         using var sweep = new Sweep();
-        sweep.SiteFiles = new FailingRestore(sweep.Harness.FileSystem, "budget.hpp", TreeFiles["src/budget.hpp"]);
+        sweep.Sites = site => new FailingRestore(site, "budget.hpp", TreeFiles["src/budget.hpp"]);
 
         var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]);
 
@@ -535,7 +535,7 @@ public sealed class MutationLegRunnerTests
     public async Task ASiteThatCannotBePutBack_KeepsNoOtherSiteOfItsArmFromBeingPutBack(bool denied)
     {
         using var sweep = new Sweep { Workers = 1 };
-        sweep.SiteFiles = new FailingRestore(sweep.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"], denied);
+        sweep.Sites = site => new FailingRestore(site, "fixture.cpp", TreeFiles["src/fixture.cpp"], denied);
 
         var coupled = ChargeBound with { Coupled = [new MutationSite("src/budget.hpp", "texts/depth.control-before", "texts/depth.control-after", 2)] };
 
@@ -555,7 +555,7 @@ public sealed class MutationLegRunnerTests
     public async Task ASiteGone_PoisonsItsArm()
     {
         using var gone = new Sweep { Workers = 1 };
-        gone.SiteFiles = new FailingRestore(gone.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"]);
+        gone.Sites = site => new FailingRestore(site, "fixture.cpp", TreeFiles["src/fixture.cpp"]);
         gone.Tests.Answer = request => Tests.Ran(request.Bound is null ? [] : ["Fixture.Charge"]);
         gone.Tests.Before = (request, _) =>
         {
@@ -583,8 +583,8 @@ public sealed class MutationLegRunnerTests
     public async Task ASiteSpeltInAnotherCase_IsViolatedBeforeItIsWritten()
     {
         using var sweep = new Sweep { Workers = 1 };
-        var writes = new RecordingWrites(sweep.Harness.FileSystem);
-        sweep.SiteFiles = writes;
+        RecordingWrites writes = null!;
+        sweep.Sites = site => writes = new RecordingWrites(site);
 
         var shouted = ChargeBound with { Id = "charge-shouted", Own = ChargeBound.Own with { Site = "src/Fixture.cpp" } };
         var coupled = ChargeBound with { Id = "charge-coupled", Line = 2, Coupled = [new MutationSite("SRC/budget.hpp", "texts/depth.control-before", "texts/depth.control-after", 3)] };
@@ -613,8 +613,8 @@ public sealed class MutationLegRunnerTests
     public async Task ASiteTheReadingNeverHeld_IsViolatedBeforeItIsWritten()
     {
         using var sweep = new Sweep { Workers = 1 };
-        var writes = new RecordingWrites(sweep.Harness.FileSystem);
-        sweep.SiteFiles = writes;
+        RecordingWrites writes = null!;
+        sweep.Sites = site => writes = new RecordingWrites(site);
         sweep.Copies.AfterSync = worker =>
         {
             Directory.CreateDirectory(Path.Combine(worker, "src", "gen"));
@@ -643,8 +643,8 @@ public sealed class MutationLegRunnerTests
     public async Task AMutationThatChangesNothing_IsViolated_BeforeAnythingIsBuilt()
     {
         using var sweep = new Sweep { Workers = 1 };
-        var writes = new RecordingWrites(sweep.Harness.FileSystem);
-        sweep.SiteFiles = writes;
+        RecordingWrites writes = null!;
+        sweep.Sites = site => writes = new RecordingWrites(site);
 
         var same = ChargeBound with { Id = "charge-same", Own = ChargeBound.Own with { After = "texts/charge.same" } };
         var idle = DepthType with { Id = "depth-idle", Line = 9, Control = new PairedControl("texts/depth.control-before", "texts/depth.control-same", 10) };
@@ -675,8 +675,8 @@ public sealed class MutationLegRunnerTests
     public async Task ABeforeTextNotThereExactlyOnce_IsViolated_SayingHowOften()
     {
         using var sweep = new Sweep { Workers = 1 };
-        var writes = new RecordingWrites(sweep.Harness.FileSystem);
-        sweep.SiteFiles = writes;
+        RecordingWrites writes = null!;
+        sweep.Sites = site => writes = new RecordingWrites(site);
 
         var moved = DepthType with { Id = "depth-moved", Own = DepthType.Own with { Before = "texts/depth.after", After = "texts/depth.before" } };
         var twice = ChargeBound with { Id = "charge-twice", Line = 6, Own = ChargeBound.Own with { Before = "texts/twice.before" } };
@@ -992,7 +992,7 @@ public sealed class MutationLegRunnerTests
     {
         using var sweep = new Sweep { Workers = 1 };
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        sweep.SiteFiles = new FailingRestore(sweep.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"]);
+        sweep.Sites = site => new FailingRestore(site, "fixture.cpp", TreeFiles["src/fixture.cpp"]);
         sweep.Tests.Before = async (request, token) =>
         {
             if (request.Bound is not null)
@@ -1301,7 +1301,7 @@ public sealed class MutationLegRunnerTests
     public async Task ASiteThatCannotBePutBack_AsARefusalEndsTheSweep_StillPoisonsItsArm_AndTheRefusalStillEndsTheRun()
     {
         using var sweep = new Sweep { Workers = 1 };
-        sweep.SiteFiles = new FailingRestore(sweep.Harness.FileSystem, "budget.hpp", TreeFiles["src/budget.hpp"]);
+        sweep.Sites = site => new FailingRestore(site, "budget.hpp", TreeFiles["src/budget.hpp"]);
         sweep.Builder.Throws = request => request.Leg == "native/arms/depth-type" ? new HarnessException(HarnessExit.ConfigInvalid, "a setting is wrong") : null;
 
         var entry = await sweep.RunAsync([DepthType]);
@@ -1402,7 +1402,7 @@ public sealed class MutationLegRunnerTests
     public async Task ASiteThatCannotBeReadBack_PoisonsItsArm_AndTheOtherWorkersGoOn(bool denied)
     {
         using var sweep = new Sweep();
-        sweep.SiteFiles = new UnreadableOncePutBack(sweep.Harness.FileSystem, "budget.hpp", TreeFiles["src/budget.hpp"], denied);
+        sweep.Sites = site => new UnreadableOncePutBack(site, "budget.hpp", TreeFiles["src/budget.hpp"], denied);
 
         var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
@@ -1424,8 +1424,8 @@ public sealed class MutationLegRunnerTests
     public async Task AFileAPreflightCannotRead_PoisonsItsArm_AndItsWorkerDrivesTheNext(bool denied)
     {
         using var sweep = new Sweep { Workers = 1 };
-        var writes = new RecordingWrites(new Unreadable(sweep.Harness.FileSystem, denied, "budget.hpp", "floor.after"));
-        sweep.SiteFiles = writes;
+        RecordingWrites writes = null!;
+        sweep.Sites = site => writes = new RecordingWrites(new Unreadable(site, denied, "budget.hpp", "floor.after"));
 
         var entry = await sweep.RunAsync([DepthType, ChargeFloor, ChargeBound]);
 
@@ -3305,7 +3305,7 @@ public sealed class MutationLegRunnerTests
         sweep.AssertEverySiteAsTheTreeHoldsIt();
 
         using var lost = new Sweep { Workers = 1 };
-        lost.SiteFiles = new FailingRestore(lost.Harness.FileSystem, "budget.hpp", TreeFiles["src/budget.hpp"]);
+        lost.Sites = site => new FailingRestore(site, "budget.hpp", TreeFiles["src/budget.hpp"]);
 
         var poisoned = await lost.RunAsync([coupled]);
 
@@ -3337,8 +3337,8 @@ public sealed class MutationLegRunnerTests
         };
 
         using var sweep = new Sweep { Workers = 1 };
-        var writes = new RecordingWrites(sweep.Harness.FileSystem);
-        sweep.SiteFiles = writes;
+        RecordingWrites writes = null!;
+        sweep.Sites = site => writes = new RecordingWrites(site);
         string? built = null;
 
         sweep.Builder.Before = (request, _) =>
@@ -3374,8 +3374,8 @@ public sealed class MutationLegRunnerTests
     public async Task AFurtherTextOfAFile_IsHeldAsTheFirstIs_AndTwoThatOverlapAreViolated()
     {
         using var sweep = new Sweep { Workers = 1 };
-        var writes = new RecordingWrites(sweep.Harness.FileSystem);
-        sweep.SiteFiles = writes;
+        RecordingWrites writes = null!;
+        sweep.Sites = site => writes = new RecordingWrites(site);
 
         MutationArm With(string id, int line, string before, string after)
             => ChargeBound with { Id = id, Line = line, Own = ChargeBound.Own with { Line = line, Further = [new SiteText(before, after, line + 1)] } };
@@ -3428,8 +3428,8 @@ public sealed class MutationLegRunnerTests
                 },
                 token),
         };
-        sweep.SiteFiles = new WhenPutBack(
-            sweep.Harness.FileSystem,
+        sweep.Sites = site => new WhenPutBack(
+            site,
             site => whilePutBack.Enqueue((site, Held())),
             ("fixture.cpp", TreeFiles["src/fixture.cpp"]),
             ("budget.hpp", TreeFiles["src/budget.hpp"]));
@@ -3706,8 +3706,8 @@ public sealed class MutationLegRunnerTests
     public async Task AMutationThatCannotBeWritten_IsPutBackAsOneThatWas()
     {
         using var sweep = new Sweep { Workers = 1 };
-        var writes = new RecordingWrites(new FailingMutation(sweep.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"]));
-        sweep.SiteFiles = writes;
+        RecordingWrites writes = null!;
+        sweep.Sites = site => writes = new RecordingWrites(new FailingMutation(site, "fixture.cpp", TreeFiles["src/fixture.cpp"]));
 
         var entry = await sweep.RunAsync([ChargeBound]);
 
@@ -3833,6 +3833,12 @@ public sealed class MutationLegRunnerTests
 
         /// <summary>What the sites are read and written through, where not the real file system.</summary>
         public IFileSystem? SiteFiles { get; set; }
+
+        /// <summary>
+        /// What the runner reads, dates, writes and waits the worker's sites through, where not the real ones: given the
+        /// real <see cref="WorkerSite"/>, answering every question as it does save what the double stands for.
+        /// </summary>
+        public Func<WorkerSite, IWorkerSite>? Sites { get; set; }
 
         /// <summary>What the runner measures room and writes records through, where not the real file system.</summary>
         public IFileSystem? Files { get; set; }
@@ -4001,10 +4007,11 @@ public sealed class MutationLegRunnerTests
                 DeveloperEnvironment = DeveloperEnvironment,
             };
 
+            var plainSites = new WorkerSite(SiteFiles ?? Harness.FileSystem, _clock);
             var runner = new MutationLegRunner(
                 Reader,
                 Copies,
-                new WorkerSite(SiteFiles ?? Harness.FileSystem, _clock),
+                Sites is { } wrap ? wrap(plainSites) : plainSites,
                 Builder,
                 Tests,
                 Ctests,
@@ -4570,14 +4577,14 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>A file system, recording each file written through it.</summary>
-    private sealed class RecordingWrites(IFileSystem inner) : PassThroughFileSystem(inner)
+    private sealed class RecordingWrites(IWorkerSite inner) : WorkerSites(inner)
     {
         public ConcurrentQueue<string> Written { get; } = new();
 
-        public override Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        public override Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
         {
             Written.Enqueue(path);
-            return base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+            return base.WriteAsync(worker, path, contents, stamp, cancellationToken);
         }
     }
 
@@ -4589,37 +4596,53 @@ public sealed class MutationLegRunnerTests
     private static Exception Raised(bool denied, string message) => denied ? new UnauthorizedAccessException(message) : new IOException(message);
 
     /// <summary>
-    /// A file system, save that no file named as one of <paramref name="names"/> can be read, as one another process holds
-    /// cannot - or, where <paramref name="denied"/>, as one this user may not read cannot.
+    /// The worker's sites as they are, for a double to answer one question otherwise: every question passed to the
+    /// <paramref name="inner"/> sites the runner was given.
     /// </summary>
-    private sealed class Unreadable(IFileSystem inner, bool denied, params string[] names) : PassThroughFileSystem(inner)
+    private abstract class WorkerSites(IWorkerSite inner) : IWorkerSite
     {
-        public override Stream OpenRead(string path)
-            => names.Contains(Path.GetFileName(path), StringComparer.Ordinal)
-                ? throw Raised(denied, $"'{Path.GetFileName(path)}' is held by another process.")
-                : base.OpenRead(path);
+        public virtual byte[]? Read(string worker, string path) => inner.Read(worker, path);
+
+        public virtual DateTime Stamp(string buildDirectory) => inner.Stamp(buildDirectory);
+
+        public virtual Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
+            => inner.WriteAsync(worker, path, contents, stamp, cancellationToken);
+
+        public virtual Task UntilPastAsync(DateTime stamp, CancellationToken cancellationToken) => inner.UntilPastAsync(stamp, cancellationToken);
     }
 
     /// <summary>
-    /// The real file system, save that a file named <paramref name="name"/> cannot be read once <paramref name="pristine"/>
-    /// was written back to it, as a disk that went away once the write returned cannot.
+    /// The worker's sites, save that no file named as one of <paramref name="names"/> can be read, as one another process
+    /// holds cannot - or, where <paramref name="denied"/>, as one this user may not read cannot.
     /// </summary>
-    private sealed class UnreadableOncePutBack(IFileSystem inner, string name, string pristine, bool denied = false) : PassThroughFileSystem(inner)
+    private sealed class Unreadable(IWorkerSite inner, bool denied, params string[] names) : WorkerSites(inner)
     {
-        private readonly ConcurrentDictionary<string, bool> _putBack = new(StringComparer.Ordinal);
+        public override byte[]? Read(string worker, string path)
+            => names.Contains(Path.GetFileName(path), StringComparer.Ordinal)
+                ? throw Raised(denied, $"'{Path.GetFileName(path)}' is held by another process.")
+                : base.Read(worker, path);
+    }
 
-        public override async Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// The worker's real sites, save that a file named <paramref name="name"/> cannot be read once
+    /// <paramref name="pristine"/> was written back to it, as a disk that went away once the write returned cannot.
+    /// </summary>
+    private sealed class UnreadableOncePutBack(IWorkerSite inner, string name, string pristine, bool denied = false) : WorkerSites(inner)
+    {
+        private bool _putBack;
+
+        public override Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
         {
-            await base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
-
             if (Path.GetFileName(path) == name && System.Text.Encoding.UTF8.GetString(contents) == pristine)
             {
-                _putBack[path] = true;
+                _putBack = true;
             }
+
+            return base.WriteAsync(worker, path, contents, stamp, cancellationToken);
         }
 
-        public override Stream OpenRead(string path)
-            => _putBack.ContainsKey(path) ? throw Raised(denied, "the disk went away.") : base.OpenRead(path);
+        public override byte[]? Read(string worker, string path)
+            => _putBack && Path.GetFileName(path) == name ? throw Raised(denied, "the disk went away.") : base.Read(worker, path);
     }
 
     /// <summary>A file system, recording each date a file was given through it, with what the file held then.</summary>
@@ -4635,46 +4658,46 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
-    /// The real file system, saying each file among <paramref name="sites"/> as its pristine text is about to be written
-    /// back to it.
+    /// The worker's real sites, saying each file among <paramref name="sites"/> as its pristine text is about to be
+    /// written back to it.
     /// </summary>
-    private sealed class WhenPutBack(IFileSystem inner, Action<string> putBack, params (string Name, string Pristine)[] sites) : PassThroughFileSystem(inner)
+    private sealed class WhenPutBack(IWorkerSite inner, Action<string> putBack, params (string Name, string Pristine)[] sites) : WorkerSites(inner)
     {
-        public override Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        public override Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
         {
             if (sites.Any(site => site.Name == Path.GetFileName(path) && site.Pristine == System.Text.Encoding.UTF8.GetString(contents)))
             {
                 putBack(Path.GetFileName(path));
             }
 
-            return base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+            return base.WriteAsync(worker, path, contents, stamp, cancellationToken);
         }
     }
 
-    /// <summary>The real file system, save that writing <paramref name="name"/> back as <paramref name="pristine"/> fails, as a disk that went away fails.</summary>
-    private sealed class FailingRestore(IFileSystem inner, string name, string pristine, bool denied = false) : PassThroughFileSystem(inner)
+    /// <summary>The worker's real sites, save that writing <paramref name="name"/> back as <paramref name="pristine"/> fails, as a disk that went away fails.</summary>
+    private sealed class FailingRestore(IWorkerSite inner, string name, string pristine, bool denied = false) : WorkerSites(inner)
     {
-        public override Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        public override Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
             => Path.GetFileName(path) == name && System.Text.Encoding.UTF8.GetString(contents) == pristine
                 ? throw Raised(denied, "the disk went away.")
-                : base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+                : base.WriteAsync(worker, path, contents, stamp, cancellationToken);
     }
 
     /// <summary>
-    /// The real file system, save that writing <paramref name="name"/> as anything but <paramref name="pristine"/> fails
-    /// with half of it written: a mutation the disk filled under.
+    /// The worker's real sites, save that writing <paramref name="name"/> as anything but <paramref name="pristine"/>
+    /// fails with half of it written: a mutation the disk filled under.
     /// </summary>
-    private sealed class FailingMutation(IFileSystem inner, string name, string pristine) : PassThroughFileSystem(inner)
+    private sealed class FailingMutation(IWorkerSite inner, string name, string pristine) : WorkerSites(inner)
     {
-        public override async Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        public override async Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
         {
             if (Path.GetFileName(path) != name || System.Text.Encoding.UTF8.GetString(contents) == pristine)
             {
-                await base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+                await base.WriteAsync(worker, path, contents, stamp, cancellationToken);
                 return;
             }
 
-            await base.WriteAllBytesAtomicAsync(path, contents[..(contents.Length / 2)], cancellationToken);
+            await base.WriteAsync(worker, path, contents[..(contents.Length / 2)], stamp, cancellationToken);
 
             throw new IOException("the disk is full.");
         }

@@ -495,9 +495,10 @@ public static class WorkflowFileParser
     /// <summary>
     /// One effort, as the file writes it: a single level, for every model the owner may run on, or a map whose keys are
     /// <c>all</c> and models' codes, giving each model its own - <c>effort: high</c> reads as <c>{all: high}</c>. A map
-    /// with no entry is refused, as a key given nothing.
+    /// with no entry is refused, as a key given nothing. The one reader of an effort, for a step and for an agent
+    /// definition alike.
     /// </summary>
-    private static (string? Effort, IReadOnlyDictionary<string, string>? ByModel) ReadEffort(YamlNode node, string what, List<string> problems)
+    internal static (string? Effort, IReadOnlyDictionary<string, string>? ByModel) ReadEffort(YamlNode node, string what, List<string> problems)
     {
         if (node is not YamlMappingNode map)
         {
@@ -807,9 +808,10 @@ public static class WorkflowFileParser
 
     /// <summary>
     /// The agent keys a step, the advisor and the reporter took before the configuration owned them: each is refused
-    /// naming what replaced it, so a reader moves the key's meaning instead of deleting its line.
+    /// naming what replaced it, so a reader moves the key's meaning instead of deleting its line. An agent definition's
+    /// reader refuses them the same way (<see cref="AgentDefinitionParser"/>).
     /// </summary>
-    private static string? RetiredAgentKey(string key)
+    internal static string? RetiredAgentKey(string key)
         => key switch
         {
             "fallback" => "a fallback is the order of the tier's models in tierConfig",
@@ -1440,7 +1442,7 @@ public static class WorkflowFileParser
     /// otherwise be read in place of nothing. A key <paramref name="belongsElsewhere"/> places is refused saying where it
     /// goes, in place of every key the mapping takes.
     /// </summary>
-    private static List<(string Key, YamlNode Value)> CollectKeys(
+    internal static List<(string Key, YamlNode Value)> CollectKeys(
         YamlMappingNode mapping,
         string what,
         IReadOnlyList<string> known,
@@ -1501,7 +1503,14 @@ public static class WorkflowFileParser
     private static bool? BooleanIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
         => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).Select(entry => YamlReading.RequireBoolean(entry.Value, what, problems)).FirstOrDefault();
 
-    private static int? RequireInt(YamlNode node, string what, List<string> problems)
+    /// <summary>
+    /// A whole number, read with the invariant culture whatever the machine's: null where the value is not one scalar -
+    /// said once, by the scalar's own reading - or is not a whole number, said with what it holds.
+    /// </summary>
+    /// <param name="node">The value.</param>
+    /// <param name="what">The key, as a problem names it.</param>
+    /// <param name="problems">Where a problem is said.</param>
+    internal static int? RequireInt(YamlNode node, string what, List<string> problems)
     {
         var text = YamlReading.RequireScalar(node, what, problems);
 

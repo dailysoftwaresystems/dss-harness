@@ -71,6 +71,7 @@ internal static class TestChild
             "write-file" => WriteFile(arguments),
             "watch-process" => WatchProcess(arguments),
             "link-directory" => LinkDirectory(arguments),
+            "link-itself" => LinkItself(arguments),
             "claude-code" => ClaudeCode(standardOutput, arguments),
             "flow-interrupted" => FlowServiceTests.InterruptedChild(standardOutput, arguments),
             StructuralScannerTests.AssertionsChild => StructuralScannerTests.AssertionsOnASmallStack(standardOutput, arguments),
@@ -103,13 +104,28 @@ internal static class TestChild
     /// <summary>
     /// Makes <c>arguments[0]</c> a directory holding one file and a link, <c>latest</c>, to the
     /// directory <c>arguments[1]</c>: what a step that keeps a directory of runs with a pointer to the
-    /// newest one produces.
+    /// newest one produces; and, where <c>arguments[2]</c> names a file, a link to it, <c>pointer.txt</c>.
     /// </summary>
     private static int LinkDirectory(string[] arguments)
     {
         Directory.CreateDirectory(arguments[0]);
         File.WriteAllText(Path.Combine(arguments[0], "kept.txt"), "kept");
         Directory.CreateSymbolicLink(Path.Combine(arguments[0], "latest"), arguments[1]);
+
+        if (arguments.Length > 2)
+        {
+            File.CreateSymbolicLink(Path.Combine(arguments[0], "pointer.txt"), arguments[2]);
+        }
+
+        return 0;
+    }
+
+    /// <summary>Makes <c>arguments[0]</c> itself a link to the directory <c>arguments[1]</c>, its own directory made first.</summary>
+    private static int LinkItself(string[] arguments)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(arguments[0]) ?? ".");
+        Directory.CreateSymbolicLink(arguments[0], arguments[1]);
+
         return 0;
     }
 

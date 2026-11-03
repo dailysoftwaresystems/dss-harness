@@ -61,13 +61,14 @@ internal sealed class FakeChat : IChatProvider
     /// <summary>Answers the next request with <paramref name="written"/>, then nothing more until the request is left.</summary>
     public FakeChat Hang(string? written = null, Action? whenHanging = null) => Reply((_, cancellationToken) => Hanging(written, whenHanging, cancellationToken));
 
-    /// <summary>What every request is billed by; what every provider's requests are, where a test names none.</summary>
-    public AgentUsage Uses { get; init; } = AgentPrices.EveryRequestUses;
-
     public string Tools(IReadOnlyList<AgentToolDefinition> tools)
         => new JsonArray([.. tools.Select(tool => (JsonNode)new JsonObject { ["name"] = tool.Name })]).ToJsonString();
 
     public string UserMessage(string text) => User(text);
+
+    /// <summary>An effort change told in the conversation, in the claude-api form a test can read.</summary>
+    public string EffortMessage(string effort)
+        => new JsonObject { ["role"] = "system", ["content"] = new JsonArray(), ["output_config"] = new JsonObject { ["effort"] = effort } }.ToJsonString();
 
     public IReadOnlyList<string> Answers(ChatTurn turn, IReadOnlyList<ChatAnswer> answers, IReadOnlyList<string> messages)
         => [.. answers.Select(answer => new JsonObject { ["role"] = "tool", ["id"] = answer.Id, ["ok"] = answer.Ok, ["content"] = answer.Text }.ToJsonString()), .. messages.Select(User)];

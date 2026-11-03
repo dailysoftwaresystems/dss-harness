@@ -23,24 +23,46 @@ public static partial class CommandAnalysis
     /// <c>gh api</c>, which is <c>api.github.com</c>'s unless a <c>--hostname</c> or the
     /// environment's <c>GH_HOST</c> names another. Empty where the command's program is none of
     /// them. A word of an option this does not know is read as the address it may be, never
-    /// passed over.
+    /// passed over. A host named in quotes is a host of that name: read as one only where the
+    /// shell would expand it, by the word the address stands in - never by another word that
+    /// spells it alike.
     /// </summary>
     /// <param name="words">One command's words, its environment first where it has one, as <see cref="AnalyzedCommand.Words"/> holds them.</param>
+    /// <param name="quoted">How each word's characters stand to the shell, kept in step with <paramref name="words"/>, or null where none was kept.</param>
     /// <exception cref="NotSupportedException">An address's host is named by an expansion, which this does not read.</exception>
-    public static IReadOnlyList<string> WebAddresses(IReadOnlyList<string> words)
+    public static IReadOnlyList<string> WebAddresses(IReadOnlyList<string> words, IReadOnlyList<string>? quoted = null)
     {
         ArgumentNullException.ThrowIfNull(words);
+        quoted ??= [];
 
         // A file URL reads the machine's own files, no network: it is a path, as the policy reads it.
-        var addresses = Fetched(words).Addresses.Where(address => !address.StartsWith("file:", StringComparison.OrdinalIgnoreCase)).ToList();
+        var reached = Fetched(words, quoted).Addresses.Where(each => !each.Address.StartsWith("file:", StringComparison.OrdinalIgnoreCase)).ToList();
 
-        if (addresses.FirstOrDefault(address => Expansion(Authority(address)) is not null) is { } expanded)
+        // The host an address reaches, read where the shell would expand it: an address named in quotes is an address
+        // of that name, its host included.
+        static string? HostExpansion(Reach each)
+            => AuthorityOf(each.Address) is var (start, length)
+                && Expansion(each.Address.Substring(start, length), each.Quoted is { } mask && start + length <= mask.Length ? mask.Substring(start, length) : null) is { } expansion
+                ? expansion
+                : null;
+
+        if (reached.FirstOrDefault(each => HostExpansion(each) is not null) is { Address: { } expanded } named)
         {
-            throw new NotSupportedException($"'{expanded}' names the host it reaches by {Expansion(Authority(expanded))}, which this does not read");
+            throw new NotSupportedException($"'{expanded}' names the host it reaches by {HostExpansion(named)}, which this does not read");
         }
 
-        return addresses;
+        return [.. reached.Select(each => each.Address)];
     }
+
+    /// <summary>
+    /// An address a fetcher command reaches, and how its characters stand to the shell where the word it stands in kept
+    /// its spelling: the word's mask cut to the address. Null where the spelling was not kept, or the address is made
+    /// rather than spelled - a <c>--connect-to</c>'s target, an <c>http</c>'s <c>localhost</c> - which reads as wholly
+    /// open.
+    /// </summary>
+    /// <param name="Address">The address.</param>
+    /// <param name="Quoted">How each of its characters stands to the shell, or null.</param>
+    private readonly record struct Reach(string Address, string? Quoted);
 
     /// <summary>
     /// The option of a fetcher command that reads its addresses or its settings from a file this
@@ -53,17 +75,17 @@ public static partial class CommandAnalysis
     {
         ArgumentNullException.ThrowIfNull(words);
 
-        return Fetched(words).Unread;
+        return Fetched(words, []).Unread;
     }
 
     /// <summary>The environment names a fetcher reaches the network through: a proxy any of them names is a host the request reaches.</summary>
     private static readonly string[] ProxyNames = ["http_proxy", "https_proxy", "all_proxy", "ftp_proxy"];
 
     /// <summary>
-    /// What one fetcher command reaches: its addresses, and the option that reads them from a file
-    /// this does not read, where one does.
+    /// What one fetcher command reaches: its addresses, each with how it stands to the shell, and the option that reads
+    /// them from a file this does not read, where one does.
     /// </summary>
-    private static (IReadOnlyList<string> Addresses, string? Unread) Fetched(IReadOnlyList<string> words)
+    private static (IReadOnlyList<Reach> Addresses, string? Unread) Fetched(IReadOnlyList<string> words, IReadOnlyList<string> quoted)
     {
         var environment = EnvironmentOf(words);
 
@@ -74,36 +96,41 @@ public static partial class CommandAnalysis
 
         var program = Name(words[environment]);
         var arguments = words.Skip(environment + 1).ToList();
-        var assigned = words.Take(environment).Select(assignment => new[] { AssignedName(assignment), assignment.Split('=', 2)[1] }).ToList();
+        var argumentQuoted = quoted.Skip(environment + 1).ToList();
+
+        // Each assignment's name and value, the value's mask cut from its word's where the word kept its spelling.
+        var assigned = words.Take(environment)
+            .Select((assignment, at) => (Name: AssignedName(assignment), Value: new Reach(assignment.Split('=', 2)[1], Cut(quoted, at, assignment.IndexOf('=', StringComparison.Ordinal) + 1, assignment.Split('=', 2)[1].Length))))
+            .ToList();
         var proxies = assigned
-            .Where(pair => ProxyNames.Contains(pair[0], StringComparer.OrdinalIgnoreCase) && pair[1].Length > 0)
-            .Select(pair => pair[1])
+            .Where(pair => ProxyNames.Contains(pair.Name, StringComparer.OrdinalIgnoreCase) && pair.Value.Address.Length > 0)
+            .Select(pair => pair.Value)
             .ToList();
 
         if (program.Equals("gh", StringComparison.OrdinalIgnoreCase))
         {
-            var host = assigned.LastOrDefault(pair => pair[0] == "GH_HOST" && pair[1].Length > 0)?[1];
-            return (GhApi(arguments, host ?? "api.github.com") is { } endpoint ? [.. proxies, endpoint] : [], null);
+            var host = assigned.LastOrDefault(pair => pair.Name == "GH_HOST" && pair.Value.Address.Length > 0) is { Name: not null } given ? given.Value : new Reach("api.github.com", null);
+            return (GhApi(arguments, host, argumentQuoted) is { } endpoint ? [.. proxies, endpoint] : [], null);
         }
 
         if (program.Equals("curl", StringComparison.OrdinalIgnoreCase))
         {
-            return Options(arguments, proxies, Curl);
+            return Options(arguments, argumentQuoted, proxies, Curl);
         }
 
         if (program.Equals("wget", StringComparison.OrdinalIgnoreCase))
         {
-            return Options(arguments, proxies, Wget);
+            return Options(arguments, argumentQuoted, proxies, Wget);
         }
 
         if (Is(program, "Invoke-WebRequest", "Invoke-RestMethod", "iwr", "irm"))
         {
-            return (PowerShellFetch(arguments, proxies), null);
+            return (PowerShellFetch(arguments, argumentQuoted, proxies), null);
         }
 
         if (Is(program, "http", "https"))
         {
-            return (Httpie(arguments, proxies), null);
+            return (Httpie(arguments, argumentQuoted, proxies), null);
         }
 
         return ([], null);
@@ -165,9 +192,9 @@ public static partial class CommandAnalysis
     /// a short option's letters one by one, the first that takes a value taking the rest of its
     /// word or the next one; a long option's value glued after an <c>=</c> or the next word.
     /// </summary>
-    private static (IReadOnlyList<string> Addresses, string? Unread) Options(IReadOnlyList<string> arguments, IReadOnlyList<string> proxies, FetcherOptions options)
+    private static (IReadOnlyList<Reach> Addresses, string? Unread) Options(IReadOnlyList<string> arguments, IReadOnlyList<string> quoted, IReadOnlyList<Reach> proxies, FetcherOptions options)
     {
-        var addresses = new List<string>(proxies);
+        var addresses = new List<Reach>(proxies);
         string? unread = null;
 
         for (var at = 0; at < arguments.Count; at++)
@@ -176,14 +203,13 @@ public static partial class CommandAnalysis
 
             if (word == "--")
             {
-                addresses.AddRange(arguments.Skip(at + 1));
+                addresses.AddRange(arguments.Skip(at + 1).Select((rest, after) => new Reach(rest, At(quoted, at + 1 + after))));
                 break;
             }
 
             if (word.StartsWith("--", StringComparison.Ordinal))
             {
                 var name = word.Split('=', 2)[0];
-                var glued = word.Length > name.Length ? word[(name.Length + 1)..] : null;
                 var valued = options.LongValued.Contains(name, StringComparer.Ordinal) || options.LongAddress.Contains(name, StringComparer.Ordinal) || options.LongUnread.Contains(name, StringComparer.Ordinal);
 
                 if (!valued)
@@ -191,15 +217,17 @@ public static partial class CommandAnalysis
                     continue;
                 }
 
-                var value = glued ?? (at + 1 < arguments.Count ? arguments[++at] : null);
+                var value = word.Length > name.Length ? new Reach(word[(name.Length + 1)..], Cut(quoted, at, name.Length + 1, word.Length - name.Length - 1))
+                    : at + 1 < arguments.Count ? new Reach(arguments[++at], At(quoted, at))
+                    : (Reach?)null;
 
                 if (options.LongUnread.Contains(name, StringComparer.Ordinal))
                 {
                     unread ??= word;
                 }
-                else if (value is not null && options.LongAddress.Contains(name, StringComparer.Ordinal))
+                else if (value is { } given && options.LongAddress.Contains(name, StringComparer.Ordinal))
                 {
-                    addresses.AddRange(Reached(name, value));
+                    addresses.AddRange(Reached(name, given));
                 }
 
                 continue;
@@ -214,15 +242,17 @@ public static partial class CommandAnalysis
                         continue;
                     }
 
-                    var value = letter + 1 < word.Length ? word[(letter + 1)..] : at + 1 < arguments.Count ? arguments[++at] : null;
+                    var value = letter + 1 < word.Length ? new Reach(word[(letter + 1)..], Cut(quoted, at, letter + 1, word.Length - letter - 1))
+                        : at + 1 < arguments.Count ? new Reach(arguments[++at], At(quoted, at))
+                        : (Reach?)null;
 
                     if (options.ShortUnread.Contains(word[letter], StringComparison.Ordinal))
                     {
                         unread ??= word;
                     }
-                    else if (value is not null && options.ShortAddress.Contains(word[letter], StringComparison.Ordinal))
+                    else if (value is { } given && options.ShortAddress.Contains(word[letter], StringComparison.Ordinal))
                     {
-                        addresses.Add(value);
+                        addresses.Add(given);
                     }
 
                     break;
@@ -231,7 +261,7 @@ public static partial class CommandAnalysis
                 continue;
             }
 
-            addresses.Add(word);
+            addresses.Add(new Reach(word, At(quoted, at)));
         }
 
         return (addresses, unread);
@@ -240,13 +270,16 @@ public static partial class CommandAnalysis
     /// <summary>
     /// The hosts an address-valued long option reaches: <c>--connect-to</c>'s
     /// <c>HOST1:PORT1:HOST2:PORT2</c> reaches HOST2, <c>--resolve</c>'s
-    /// <c>[+]HOST:PORT:ADDRESS[,ADDRESS]...</c> each address, any other its value.
+    /// <c>[+]HOST:PORT:ADDRESS[,ADDRESS]...</c> each address - each made from the value, so read as wholly open - any
+    /// other its value as it was spelled.
     /// </summary>
-    private static IEnumerable<string> Reached(string option, string value)
+    private static IEnumerable<Reach> Reached(string option, Reach value)
         => option switch
         {
-            "--connect-to" => value.Split(':') is { Length: >= 3 } parts && parts[2].Length > 0 ? [parts[2].Trim('[', ']')] : [],
-            "--resolve" => value.Split(':', 3) is { Length: 3 } parts ? parts[2].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(address => address.Trim('[', ']')) : [],
+            "--connect-to" => value.Address.Split(':') is { Length: >= 3 } parts && parts[2].Length > 0 ? [new Reach(parts[2].Trim('[', ']'), null)] : [],
+            "--resolve" => value.Address.Split(':', 3) is { Length: 3 } parts
+                ? parts[2].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(address => new Reach(address.Trim('[', ']'), null))
+                : [],
             _ => [value],
         };
 
@@ -274,9 +307,9 @@ public static partial class CommandAnalysis
     ];
 
     /// <summary>The addresses a PowerShell fetcher reaches: <c>-Uri</c>'s, <c>-Proxy</c>'s, and every word it takes by position.</summary>
-    private static IReadOnlyList<string> PowerShellFetch(IReadOnlyList<string> arguments, IReadOnlyList<string> proxies)
+    private static IReadOnlyList<Reach> PowerShellFetch(IReadOnlyList<string> arguments, IReadOnlyList<string> quoted, IReadOnlyList<Reach> proxies)
     {
-        var addresses = new List<string>(proxies);
+        var addresses = new List<Reach>(proxies);
 
         for (var at = 0; at < arguments.Count; at++)
         {
@@ -284,7 +317,7 @@ public static partial class CommandAnalysis
 
             if (!word.StartsWith('-') || word.Length < 2)
             {
-                addresses.Add(word);
+                addresses.Add(new Reach(word, At(quoted, at)));
                 continue;
             }
 
@@ -298,11 +331,13 @@ public static partial class CommandAnalysis
                 continue;
             }
 
-            var value = spelled.Length == 2 ? spelled[1] : at + 1 < arguments.Count ? arguments[++at] : null;
+            var value = spelled.Length == 2 ? new Reach(spelled[1], Cut(quoted, at, spelled[0].Length + 2, spelled[1].Length))
+                : at + 1 < arguments.Count ? new Reach(arguments[++at], At(quoted, at))
+                : (Reach?)null;
 
-            if (value is { Length: > 0 } && parameter is "uri" or "proxy")
+            if (value is { Address.Length: > 0 } given && parameter is "uri" or "proxy")
             {
-                addresses.Add(value);
+                addresses.Add(given);
             }
         }
 
@@ -323,10 +358,10 @@ public static partial class CommandAnalysis
     /// word that is no option, or the second where the first is the method - <c>:3000/x</c> being
     /// the machine's own.
     /// </summary>
-    private static IReadOnlyList<string> Httpie(IReadOnlyList<string> arguments, IReadOnlyList<string> proxies)
+    private static IReadOnlyList<Reach> Httpie(IReadOnlyList<string> arguments, IReadOnlyList<string> quoted, IReadOnlyList<Reach> proxies)
     {
-        var addresses = new List<string>(proxies);
-        var positional = new List<string>();
+        var addresses = new List<Reach>(proxies);
+        var positional = new List<Reach>();
 
         for (var at = 0; at < arguments.Count; at++)
         {
@@ -335,7 +370,7 @@ public static partial class CommandAnalysis
 
             if (!word.StartsWith('-'))
             {
-                positional.Add(word);
+                positional.Add(new Reach(word, At(quoted, at)));
                 continue;
             }
 
@@ -346,17 +381,18 @@ public static partial class CommandAnalysis
 
             var value = word.Length > name.Length ? word[(name.Length + 1)..] : at + 1 < arguments.Count ? arguments[++at] : null;
 
+            // The proxy's URL is made from its value, after its scheme's name: read as wholly open.
             if (name == "--proxy" && value?.Split(':', 2) is [_, { Length: > 0 } proxy])
             {
-                addresses.Add(proxy);
+                addresses.Add(new Reach(proxy, null));
             }
         }
 
-        var url = positional.Count > 1 && HttpMethods.Contains(positional[0], StringComparer.OrdinalIgnoreCase) ? positional[1] : positional.FirstOrDefault();
+        var url = positional.Count > 1 && HttpMethods.Contains(positional[0].Address, StringComparer.OrdinalIgnoreCase) ? positional[1] : positional.FirstOrDefault();
 
-        if (url is not null)
+        if (url.Address is not null)
         {
-            addresses.Add(url.StartsWith(':') ? "localhost" + url : url);
+            addresses.Add(url.Address.StartsWith(':') ? new Reach("localhost" + url.Address, null) : url);
         }
 
         return addresses;
@@ -384,10 +420,13 @@ public static partial class CommandAnalysis
     /// (<c>-iXDELETE</c>, <c>-iX DELETE</c>, <c>-if a=b</c>) read letter by letter, the first that takes a value taking
     /// the rest of the word or the next; and each word that is no option, nor an option's value, with no name. A
     /// short letter that takes no value - gh's -i, or one gh does not have - is read by itself, so the letters after it are
-    /// read all the same.
+    /// read all the same. Each value carries how it stands to the shell, cut from the word it stands in by where it
+    /// stands there (<paramref name="quoted"/>): never from another word that spells it alike, an option's value that
+    /// would lend its quotes to the endpoint or the field it copies.
     /// </summary>
     /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
-    private static IEnumerable<(string? Name, string Value)> GhApiWords(IReadOnlyList<string> arguments)
+    /// <param name="quoted">How each argument's characters stand to the shell, kept in step with <paramref name="arguments"/>; empty where none was kept.</param>
+    private static IEnumerable<GhApiWord> GhApiWords(IReadOnlyList<string> arguments, IReadOnlyList<string> quoted)
     {
         for (var at = 1; at < arguments.Count; at++)
         {
@@ -395,9 +434,9 @@ public static partial class CommandAnalysis
 
             if (word == "--")
             {
-                foreach (var rest in arguments.Skip(at + 1))
+                for (var rest = at + 1; rest < arguments.Count; rest++)
                 {
-                    yield return (null, rest);
+                    yield return new(null, arguments[rest], At(quoted, rest));
                 }
 
                 yield break;
@@ -407,15 +446,15 @@ public static partial class CommandAnalysis
             {
                 var name = word[2..].Split('=', 2);
 
-                yield return name.Length == 2 ? (name[0], name[1])
-                    : GhApiValueTaking.Contains(name[0], StringComparer.Ordinal) && at + 1 < arguments.Count ? (name[0], arguments[++at])
-                    : (name[0], string.Empty);
+                yield return name.Length == 2 ? new(name[0], name[1], Cut(quoted, at, name[0].Length + 3, name[1].Length))
+                    : GhApiValueTaking.Contains(name[0], StringComparer.Ordinal) && at + 1 < arguments.Count ? new(name[0], arguments[++at], At(quoted, at))
+                    : new(name[0], string.Empty, null);
                 continue;
             }
 
             if (word.Length < 2 || word[0] != '-')
             {
-                yield return (null, word);
+                yield return new(null, word, At(quoted, at));
                 continue;
             }
 
@@ -423,54 +462,71 @@ public static partial class CommandAnalysis
             {
                 if (!GhApiShorts.TryGetValue(word[letter], out var named))
                 {
-                    yield return (word[letter].ToString(), string.Empty);
+                    yield return new(word[letter].ToString(), string.Empty, null);
                     continue;
                 }
 
-                var glued = word[(letter + 1)..];
+                // Its value glued after it, past an '=' where one stands first, or the next word.
+                var from = letter + 1 < word.Length && word[letter + 1] == '=' ? letter + 2 : letter + 1;
 
-                yield return glued.Length > 0 ? (named, glued.StartsWith('=') ? glued[1..] : glued)
-                    : at + 1 < arguments.Count ? (named, arguments[++at])
-                    : (named, string.Empty);
+                yield return letter + 1 < word.Length ? new(named, word[from..], Cut(quoted, at, from, word.Length - from))
+                    : at + 1 < arguments.Count ? new(named, arguments[++at], At(quoted, at))
+                    : new(named, string.Empty, null);
                 break;
             }
         }
     }
 
     /// <summary>
+    /// One word of <c>gh api</c>'s, as <see cref="GhApiWords"/> reads it: the option's long name, or null for a word that
+    /// is no option and no option's value; its value; and how the value stands to the shell, null where its spelling was
+    /// not kept, which reads as wholly open.
+    /// </summary>
+    /// <param name="Name">The option's long name, or null.</param>
+    /// <param name="Value">Its value, or the word itself.</param>
+    /// <param name="Quoted">How each of the value's characters stands to the shell, or null.</param>
+    private readonly record struct GhApiWord(string? Name, string Value, string? Quoted);
+
+    /// <summary>
     /// The address <c>gh api</c> reaches: its endpoint where that is a whole URL, else
     /// <paramref name="host"/> - unless a <c>--hostname</c> names another; null where the command
-    /// is no <c>gh api</c>. An option's value is never its endpoint.
+    /// is no <c>gh api</c>. An option's value is never its endpoint. An endpoint the shell expands
+    /// may be a whole URL of any host - read so only where the shell would expand it.
     /// </summary>
-    private static string? GhApi(IReadOnlyList<string> arguments, string host)
+    private static Reach? GhApi(IReadOnlyList<string> arguments, Reach host, IReadOnlyList<string> quoted)
     {
         if (arguments.Count == 0 || !arguments[0].Equals("api", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
-        foreach (var (name, value) in GhApiWords(arguments))
+        var words = GhApiWords(arguments, quoted).ToList();
+
+        foreach (var word in words.Where(word => word.Name == "hostname" && word.Value.Length > 0))
         {
-            if (name == "hostname" && value.Length > 0)
-            {
-                host = value;
-            }
+            host = new Reach(word.Value, word.Quoted);
         }
 
         // An endpoint named by an expansion may be a whole URL of any host.
-        return GhApiEndpoint(arguments) is { } path && (path.Contains("://", StringComparison.Ordinal) || Expansion(path) is not null) ? path : host;
+        return words.FirstOrDefault(word => word.Name is null) is { Value: { } path } endpoint
+            && (path.Contains("://", StringComparison.Ordinal) || Expansion(path, endpoint.Quoted) is not null)
+            ? new Reach(path, endpoint.Quoted)
+            : host;
     }
 
     /// <summary>
-    /// The endpoint of <c>gh api</c> - its first word that is no option and no option's value - given
-    /// the words after <c>gh</c>; null where it names none.
+    /// The endpoint of <c>gh api</c> - its first word that is no option and no option's value - given the words after
+    /// <c>gh</c>, with how it stands to the shell where the command's own spelling was kept (null where it was not,
+    /// which reads as wholly open); null where it names none.
     /// </summary>
     /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
-    internal static string? GhApiEndpoint(IReadOnlyList<string> arguments)
+    /// <param name="quoted">How each argument's characters stand to the shell, kept in step with <paramref name="arguments"/>; empty where none was kept.</param>
+    internal static (string Endpoint, string? Quoted)? GhApiEndpoint(IReadOnlyList<string> arguments, IReadOnlyList<string> quoted)
     {
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(quoted);
 
-        return GhApiWords(arguments).FirstOrDefault(word => word.Name is null).Value;
+        return GhApiWords(arguments, quoted).FirstOrDefault(word => word.Name is null) is { Value: { } endpoint } found ? (endpoint, found.Quoted) : null;
     }
 
     /// <summary>
@@ -483,7 +539,7 @@ public static partial class CommandAnalysis
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        var words = GhApiWords(arguments).ToList();
+        var words = GhApiWords(arguments, []).ToList();
 
         return words.LastOrDefault(word => word.Name == "method") is { Name: not null } method
             ? !(method.Value.Equals("GET", StringComparison.OrdinalIgnoreCase) || method.Value.Equals("HEAD", StringComparison.OrdinalIgnoreCase))
@@ -492,28 +548,39 @@ public static partial class CommandAnalysis
 
     /// <summary>
     /// The values <c>gh api</c>'s fields give, by their names: <c>-f</c>, <c>-F</c>, <c>--raw-field</c> and
-    /// <c>--field</c>, each <c>name=value</c>, in any form pflag reads (<see cref="GhApiWords"/>).
+    /// <c>--field</c>, each <c>name=value</c>, in any form pflag reads (<see cref="GhApiWords"/>) - each with how it
+    /// stands to the shell, taken from the word it stands in, null where that word's spelling was not kept.
     /// </summary>
     /// <param name="arguments">The words after <c>gh</c>, <c>api</c> first.</param>
-    internal static IEnumerable<string> GhApiFields(IReadOnlyList<string> arguments)
+    /// <param name="quoted">How each argument's characters stand to the shell, kept in step with <paramref name="arguments"/>; empty where none was kept.</param>
+    internal static IEnumerable<(string Field, string? Quoted)> GhApiFields(IReadOnlyList<string> arguments, IReadOnlyList<string> quoted)
     {
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(quoted);
 
-        return GhApiWords(arguments).Where(word => word.Name is "raw-field" or "field").Select(word => word.Value);
+        return GhApiWords(arguments, quoted).Where(word => word.Name is "raw-field" or "field").Select(word => (word.Value, word.Quoted));
     }
 
     /// <summary>
-    /// The host and port of an address, as written - its scheme, its user and its path left out,
-    /// and an IPv6 literal's brackets with what they hold - where an expansion would name the host
-    /// the address reaches.
+    /// Where the host and port of an address stand in it, as written - its scheme, its user and its path left out, and
+    /// an IPv6 literal's brackets with what they hold - where an expansion would name the host the address reaches: its
+    /// start and its length, so how they stand to the shell is cut from the address's own place.
     /// </summary>
-    private static string Authority(string address)
+    private static (int Start, int Length) AuthorityOf(string address)
     {
-        var rest = address.IndexOf("://", StringComparison.Ordinal) is var scheme and >= 0 ? address[(scheme + 3)..] : address;
-        var end = rest.IndexOfAny(['/', '?', '#']);
-        var authority = end < 0 ? rest : rest[..end];
-        var host = authority[(authority.LastIndexOf('@') + 1)..];
+        var start = address.IndexOf("://", StringComparison.Ordinal) is var scheme and >= 0 ? scheme + 3 : 0;
+        var end = address.IndexOfAny(['/', '?', '#'], start);
+        var authority = end < 0 ? address[start..] : address[start..end];
+        var user = authority.LastIndexOf('@') + 1;
+        var host = authority[user..];
 
-        return host.StartsWith('[') && host.IndexOf(']', StringComparison.Ordinal) is var closing and > 0 ? host[(closing + 1)..] : host;
+        start += user;
+
+        if (host.StartsWith('[') && host.IndexOf(']', StringComparison.Ordinal) is var closing and > 0)
+        {
+            return (start + closing + 1, host.Length - closing - 1);
+        }
+
+        return (start, host.Length);
     }
 }

@@ -195,12 +195,15 @@ public sealed class AgentRule
     /// <c>/usr/bin/gh</c> and <c>gh.exe</c> are the <c>gh</c> a rule names - and a trailing
     /// <c>*</c> the rest of the command, the empty rest included. Where a word the pattern reads is
     /// one the shell expands (<c>git $X</c>, <c>gh $(cat cmd)</c>), each word from it on may be any
-    /// words at all: the rule may be what the command is, and that is said, not decided.
+    /// words at all: the rule may be what the command is, and that is said, not decided. The
+    /// expansion is read only where the shell would make it: a word in quotes is that word, not one
+    /// a pattern or a variable may have given.
     /// </summary>
     /// <param name="words">The command's words, as <see cref="CommandAnalysis"/> flattened them.</param>
     /// <param name="comparison">How a word of the pattern and a word of the command compare: names compare as this platform compares paths.</param>
+    /// <param name="quoted">How each word's characters stand to the shell (<see cref="WordQuoting"/>), kept in step with <paramref name="words"/>, or null where none was kept.</param>
     /// <exception cref="InvalidOperationException">The rule is not a <see cref="AgentRuleVerb.Run"/> rule.</exception>
-    public AgentRuleMatch Match(IReadOnlyList<string> words, StringComparison comparison)
+    public AgentRuleMatch Match(IReadOnlyList<string> words, StringComparison comparison, IReadOnlyList<string>? quoted = null)
     {
         if (Verb is not AgentRuleVerb.Run)
         {
@@ -223,7 +226,7 @@ public sealed class AgentRule
             // A word the shell expands may be one word, many or none: from here the command may be
             // anything the rule names. The program itself is never one here - the reader refuses a
             // program an expansion names - so an expansion where a program would stand is an argument.
-            if (CommandAnalysis.Expansion(words[at]) is not null)
+            if (CommandAnalysis.Expansion(words[at], quoted is not null && at < quoted.Count ? quoted[at] : null) is not null)
             {
                 return at == 0 ? AgentRuleMatch.No : AgentRuleMatch.Expanded;
             }
@@ -245,7 +248,15 @@ public sealed class AgentRule
         }
 
         // An exact rule meets a command with words past its own only where one of them may expand to none.
-        return words.Skip(taken).Any(word => CommandAnalysis.Expansion(word) is not null) ? AgentRuleMatch.Expanded : AgentRuleMatch.No;
+        for (var at = taken; at < words.Count; at++)
+        {
+            if (CommandAnalysis.Expansion(words[at], quoted is not null && at < quoted.Count ? quoted[at] : null) is not null)
+            {
+                return AgentRuleMatch.Expanded;
+            }
+        }
+
+        return AgentRuleMatch.No;
     }
 
     /// <summary>

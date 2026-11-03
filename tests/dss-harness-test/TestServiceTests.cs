@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
@@ -123,7 +124,7 @@ public sealed class TestServiceTests
     }
 
     /// <summary>
-    /// The test's log is among the leg's records as their one owner names a phase's log, so what lists a leg's logs
+    /// The tests' log is among the leg's records as their one owner names a phase's log, so what lists a leg's logs
     /// finds it, with its phase.
     /// </summary>
     [Fact]
@@ -141,6 +142,479 @@ public sealed class TestServiceTests
         Assert.Equal(
             [new PhaseLogFile(TestService.DefaultPhaseName, result.LogFile)],
             new LegRecords(RunDirectory(temp), Leg).Logs(factory.FileSystem));
+    }
+
+    /// <summary>
+    /// What a failed invocation's <c>keepOnFailure</c> names is copied into <c>kept-on-failure/</c> beside the leg's
+    /// log, each file's tree as it stood under the build directory - the build directory is where a failing suite
+    /// leaves what says why, and the next run overwrites it there.
+    /// </summary>
+    [Fact]
+    public async Task AFailedInvocation_KeepsTheFilesItNames_AsEvidenceBesideItsLog()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        var build = temp.Combine("build", "x86_64-msvc-release");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "corpus-out", "report-N2-r0.json"), "{}");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "corpus-out", "sub", "stdout.txt"), "arm failed");
+
+        var runner = new ScriptedRunner(() => Task.CompletedTask, 1, "boom");
+        var result = await Service(factory, runner).RunAsync(
+            Config(),
+            Request(temp, new TestInvocation { Runner = "tools/run-tests", Args = [], SuccessPattern = "tests passed" }, keepOnFailure: ["{buildDir}/corpus-out"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+
+        // The literal name: the evidence sits beside the leg's log, under the run's own directory.
+        var evidence = Path.Combine(RunDirectory(temp), Leg, "kept-on-failure");
+
+        Assert.NotNull(result.Entry.KeptOnFailure);
+        Assert.Equal(evidence, result.Entry.KeptOnFailure.Directory);
+        Assert.Equal(["corpus-out/report-N2-r0.json", "corpus-out/sub/stdout.txt"], result.Entry.KeptOnFailure.Kept);
+        Assert.Empty(result.Entry.KeptOnFailure.RefusedOverCap);
+        Assert.Empty(result.Entry.KeptOnFailure.Unreadable);
+        Assert.Empty(result.Entry.KeptOnFailure.NamedNothing);
+        Assert.Equal(
+            "arm failed",
+            await File.ReadAllTextAsync(Path.Combine(evidence, "corpus-out", "sub", "stdout.txt"), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// Any verdict but a pass keeps - unwitnessed included, for a suite whose evidence nobody can read is exactly the
+    /// one whose files say why.
+    /// </summary>
+    [Fact]
+    public async Task AnUnwitnessedInvocation_KeepsWhatItNamesToo()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "corpus-out", "report.json"), "{}");
+
+        // The child prints nothing, so a zero exit code is no witness and the leg is unwitnessed.
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, Child(), keepOnFailure: ["corpus-out"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Unwitnessed, result.Verdict.Verdict);
+        Assert.Equal(["corpus-out/report.json"], result.Entry.KeptOnFailure?.Kept);
+    }
+
+    /// <summary>A pass keeps nothing: no directory, no line, for there is no evidence to keep.</summary>
+    [Fact]
+    public async Task APassedInvocation_KeepsNothing()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "corpus-out", "report.json"), "{}");
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, Child("tests passed"), keepOnFailure: ["corpus-out"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Null(result.Entry.KeptOnFailure);
+        Assert.False(Directory.Exists(new LegRecords(RunDirectory(temp), Leg).Under(KeptOnFailure.DirectoryName)));
+    }
+
+    /// <summary>
+    /// Files past the cap are not copied and are named, in the order the cap spends itself: file by file, in the
+    /// order of their paths, so the same configuration keeps the same files on every machine.
+    /// </summary>
+    [Fact]
+    public async Task FilesPastTheCap_AreRefusedAndNamed()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "a.txt"), "ab");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "b.txt"), "c");
+
+        var result = await Service(factory, new ScriptedRunner(() => Task.CompletedTask, 1, "boom")).RunAsync(
+            Config(),
+            Request(
+                temp,
+                new TestInvocation { Runner = "tools/run-tests", Args = [], SuccessPattern = "tests passed" },
+                keepOnFailure: ["*.txt"],
+                keepOnFailureCapBytes: 1),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+        Assert.Equal(["b.txt"], result.Entry.KeptOnFailure?.Kept);
+        Assert.Equal(["a.txt"], result.Entry.KeptOnFailure?.RefusedOverCap);
+    }
+
+    /// <summary>
+    /// A path naming nothing is said, not refused: the failure may have been before it was written, and the verdict is
+    /// already reached.
+    /// </summary>
+    [Fact]
+    public async Task APathThatNamesNothing_IsSaidNotRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+
+        var result = await Service(factory, new ScriptedRunner(() => Task.CompletedTask, 1, "boom")).RunAsync(
+            Config(),
+            Request(
+                temp,
+                new TestInvocation { Runner = "tools/run-tests", Args = [], SuccessPattern = "tests passed" },
+                keepOnFailure: ["absent"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+        Assert.NotNull(result.Entry.KeptOnFailure);
+        Assert.Equal(["absent"], result.Entry.KeptOnFailure.NamedNothing);
+        Assert.Empty(result.Entry.KeptOnFailure.Kept);
+    }
+
+    /// <summary>
+    /// A file that cannot be read is named unreadable, and the rest kept: evidence is best effort beside a verdict
+    /// that is already reached, never a second failure stacked on the first.
+    /// </summary>
+    [Fact]
+    public async Task AFileThatCannotBeRead_IsNamedUnreadable_AndTheRestKept()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "held.txt"), "held");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "readable.txt"), "read");
+
+        var held = temp.Combine("build", "x86_64-msvc-release", "held.txt");
+        var refusing = new RefusingReads(factory.FileSystem, held);
+
+        var result = await Service(factory, new ScriptedRunner(() => Task.CompletedTask, 1, "boom"), fileSystem: refusing).RunAsync(
+            Config(),
+            Request(
+                temp,
+                new TestInvocation { Runner = "tools/run-tests", Args = [], SuccessPattern = "tests passed" },
+                keepOnFailure: ["*.txt"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+        Assert.Equal(["readable.txt"], result.Entry.KeptOnFailure?.Kept);
+        Assert.Equal(["held.txt"], result.Entry.KeptOnFailure?.Unreadable);
+    }
+
+    /// <summary>A pattern entry keeps every file it matches, and only those, from the root of the build directory.</summary>
+    [Fact]
+    public async Task APatternEntry_KeepsEveryFileItMatches()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "corpus-out", "a.json"), "{}");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "corpus-out", "b.log"), "log");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "other", "c.json"), "{}");
+
+        var result = await Service(factory, new ScriptedRunner(() => Task.CompletedTask, 1, "boom")).RunAsync(
+            Config(),
+            Request(
+                temp,
+                new TestInvocation { Runner = "tools/run-tests", Args = [], SuccessPattern = "tests passed" },
+                keepOnFailure: ["corpus-out/*.json"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["corpus-out/a.json"], result.Entry.KeptOnFailure?.Kept);
+    }
+
+    /// <summary>
+    /// An absolute path on another root - another drive, or a device-prefixed one, which no path of ".." segments
+    /// reaches - taken for relative would be copied over itself: named as nothing instead, and nothing written.
+    /// Only Windows has a second root.
+    /// </summary>
+    [Fact]
+    public async Task AnAbsoluteEntryOnAnotherRoot_IsNamedAsNothing_AndNothingWritten()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows has a second root a path can sit on.");
+
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+
+        // A file that is there, named through the device prefix: the keep would find it, and - taken for
+        // relative - write it over itself.
+        var existing = temp.WriteFile("evidence/report.json", "{}");
+        var onAnotherRoot = $@"\\?\{existing}";
+        var destination = temp.Combine("kept");
+
+        var kept = await KeptOnFailure.KeepAsync(
+            factory.FileSystem,
+            [onAnotherRoot],
+            KeptOnFailure.DefaultCapBytes,
+            new LegPaths(temp.Path, temp.Combine("build", "x86_64-msvc-release")),
+            temp.Combine("build", "x86_64-msvc-release"),
+            destination,
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(kept);
+        Assert.Equal([onAnotherRoot], kept.NamedNothing);
+        Assert.Empty(kept.Kept);
+        Assert.False(Directory.Exists(destination));
+    }
+
+    /// <summary>
+    /// A link is never kept through: a build tree holds them (libfoo.so leading to libfoo.so.1.2.3), and what one leads
+    /// to may lie outside the build directory or be of any size. It is named as a link, and the file it leads to is kept
+    /// where an entry names that.
+    /// </summary>
+    [Fact]
+    public async Task ALinkAnEntryNames_IsNamedAsALink_AndNeverCopiedThrough()
+    {
+        using var temp = new TempDirectory();
+        var build = temp.Combine("build");
+        var outside = temp.WriteFile("outside/huge.bin", "far outside the build directory");
+        temp.WriteFile("build/lib/libfoo.so.1", "elf");
+
+        TestLinks.OrSkip(() =>
+        {
+            File.CreateSymbolicLink(Path.Combine(build, "lib", "libfoo.so"), "libfoo.so.1");
+            File.CreateSymbolicLink(Path.Combine(build, "lib", "far.bin"), outside);
+        });
+
+        var kept = await Keep(new HarnessFactory().FileSystem, temp, ["lib/*"], capBytes: 1024);
+
+        Assert.Equal(["lib/libfoo.so.1"], kept.Kept);
+        Assert.Equal(["lib/far.bin", "lib/libfoo.so"], kept.Links);
+        Assert.Equal(3, kept.Bytes);
+        Assert.Empty(kept.RefusedOverCap);
+        Assert.Empty(kept.Unreadable);
+        Assert.Equal(["libfoo.so.1"], Directory.EnumerateFileSystemEntries(Path.Combine(temp.Combine("kept"), "lib")).Select(Path.GetFileName));
+    }
+
+    /// <summary>
+    /// The cap is measured on what a file holds as it is read, never on what its directory entry says: an entry that
+    /// says less than the file holds - a link's own size, a file still growing - would let more than the cap through.
+    /// </summary>
+    [Fact]
+    public async Task AFileHoldingMoreThanItsEntrySays_IsRefusedOverTheCap()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.WriteFile("build/core.dump", "0123456789");
+
+        var kept = await Keep(new UnderstatedEntry(new HarnessFactory().FileSystem, file), temp, ["core.dump"], capBytes: 5);
+
+        Assert.Empty(kept.Kept);
+        Assert.Equal(["core.dump"], kept.RefusedOverCap);
+        Assert.Equal(0, kept.Bytes);
+        Assert.False(Directory.Exists(temp.Combine("kept")));
+    }
+
+    /// <summary>
+    /// A file that grows as it is read is copied no further than the cap has left: past it, the part copied is gone and
+    /// the file named over the cap, for evidence cut short is not the evidence.
+    /// </summary>
+    [Fact]
+    public async Task AFileThatGrowsAsItIsRead_IsCopiedNoFurtherThanTheCap()
+    {
+        using var temp = new TempDirectory();
+        var growing = temp.WriteFile("build/growing.log", "abc");
+        temp.WriteFile("build/small.log", "ab");
+
+        var kept = await Keep(new GrowingRead(new HarnessFactory().FileSystem, growing, 10_000), temp, ["*.log"], capBytes: 100);
+
+        Assert.Equal(["small.log"], kept.Kept);
+        Assert.Equal(["growing.log"], kept.RefusedOverCap);
+        Assert.Equal(2, kept.Bytes);
+        Assert.Equal(["small.log"], Directory.EnumerateFiles(temp.Combine("kept")).Select(Path.GetFileName));
+    }
+
+    /// <summary>
+    /// A directory beneath what an entry names that cannot be read is passed by and named as a directory, and every file
+    /// beside it kept: a directory entry is not lost whole for one subdirectory, and a pattern's walk says what it passed
+    /// by where the pattern could have named what it holds - never a directory no entry reaches - rather than that its
+    /// entry named nothing.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryThatCannotBeRead_IsNamedWhereAnEntryReachesIt_AndEverythingBesideItKept()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("build/out/a.txt", "a");
+        temp.WriteFile("build/out/locked/b.txt", "b");
+        temp.WriteFile("build/logs/c.log", "c");
+        temp.WriteFile("build/logs/locked/d.log", "d");
+        temp.WriteFile("build/other/locked/e.log", "e");
+        var fileSystem = new PassedBy(
+            new HarnessFactory().FileSystem,
+            [temp.Combine("build", "out", "locked"), temp.Combine("build", "logs", "locked"), temp.Combine("build", "other", "locked")]);
+
+        var kept = await Keep(fileSystem, temp, ["out", "logs/**/*.log", "nothing/**/*.json"], capBytes: 1024);
+
+        Assert.Equal(["logs/c.log", "out/a.txt"], kept.Kept);
+        Assert.Equal(["out/locked", "logs/locked"], kept.UnreadableDirectories);
+        Assert.Empty(kept.Unreadable);
+        Assert.Equal(["nothing/**/*.json"], kept.NamedNothing);
+    }
+
+    /// <summary>
+    /// Nothing is kept through a directory link, wherever on the way from the build directory it stands: an entry that is
+    /// one, a file named beneath one, and a pattern's match beneath one - its walk never follows one - are each named as a
+    /// link or left, and what the link leads to is never copied.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryLinkOnTheWay_IsNeverKeptThrough()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("outside/secret.txt", "far outside the build directory");
+        temp.WriteFile("build/own/a.txt", "a");
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("build", "linked"), temp.Combine("outside")));
+
+        var kept = await Keep(new HarnessFactory().FileSystem, temp, ["linked", "linked/secret.txt", "**/*.txt"], capBytes: 1024);
+
+        Assert.Equal(["own/a.txt"], kept.Kept);
+        Assert.Equal(["linked", "linked/secret.txt"], kept.Links);
+        Assert.Empty(kept.Unreadable);
+        Assert.False(Directory.Exists(temp.Combine("kept", "linked")));
+    }
+
+    /// <summary>
+    /// A build directory the test's work turned into a link inside the leg's tree - to a place that work may not read - keeps
+    /// nothing: every file is read from the tree's root down, so each is named a link and none of what it leads to is copied.
+    /// </summary>
+    [Fact]
+    public async Task ABuildDirectoryTurnedIntoALink_KeepsNothingOfWhereItLeads()
+    {
+        using var temp = new TempDirectory();
+        using var hidden = new TempDirectory();
+        hidden.WriteFile("credential.log", "a credential");
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("build"), hidden.Path));
+
+        var kept = await Keep(new HarnessFactory().FileSystem, temp, ["*.log"], capBytes: 1024);
+
+        Assert.Empty(kept.Kept);
+        Assert.Equal(["credential.log"], kept.Links);
+        Assert.False(Directory.Exists(temp.Combine("kept")) && Directory.EnumerateFileSystemEntries(temp.Combine("kept")).Any());
+    }
+
+    /// <summary>
+    /// A stop that comes while the evidence crosses keeps what is already kept whole, ends the file it stopped in, and
+    /// names every file it left - that one among them - rather than dropping them from every list.
+    /// </summary>
+    [Fact]
+    public async Task AStopMidKeep_NamesWhatItLeft()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("build/a.txt", "a");
+        var stopping = temp.WriteFile("build/b.txt", new string('b', 200_000));
+        temp.WriteFile("build/c.txt", "c");
+        using var stop = new CancellationTokenSource();
+
+        var kept = await Keep(new StopsOnOpen(new HarnessFactory().FileSystem, stopping, stop), temp, ["*.txt"], capBytes: 1_000_000, stop.Token);
+
+        Assert.Equal(["a.txt"], kept.Kept);
+        Assert.Equal(["b.txt", "c.txt"], kept.LeftAtStop);
+        Assert.Equal(["a.txt"], Directory.EnumerateFiles(temp.Combine("kept")).Select(Path.GetFileName));
+    }
+
+    /// <summary>Keeps what <paramref name="declared"/> names under the temporary directory's <c>build</c>, into its <c>kept</c>.</summary>
+    private static async Task<KeptOnFailure> Keep(IFileSystem fileSystem, TempDirectory temp, List<string> declared, long capBytes, CancellationToken? cancellationToken = null)
+    {
+        var kept = await KeptOnFailure.KeepAsync(
+            fileSystem,
+            declared,
+            capBytes,
+            new LegPaths(temp.Path, temp.Combine("build")),
+            temp.Combine("build"),
+            temp.Combine("kept"),
+            cancellationToken ?? TestContext.Current.CancellationToken);
+
+        Assert.NotNull(kept);
+        return kept;
+    }
+
+    /// <summary>A file system whose entry for one file says it holds one byte, whatever it holds: as a link's own entry, or a file still growing, says.</summary>
+    private sealed class UnderstatedEntry(IFileSystem inner, string understated) : PassThroughFileSystem(inner)
+    {
+        public override FileStanding? StandingOf(string path)
+            => Path.GetFullPath(path) == Path.GetFullPath(understated) && base.StandingOf(path) is { } standing ? standing with { Length = 1 } : base.StandingOf(path);
+    }
+
+    /// <summary>
+    /// A file system whose read of one file gives more than its entry said when the read was planned: a log still written
+    /// as the keep reads it, grown the moment the keep reaches for it relative to a directory held.
+    /// </summary>
+    private sealed class GrowingRead(IFileSystem inner, string growing, int bytes) : PassThroughFileSystem(inner)
+    {
+        private bool _grown;
+
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            if (asked is not null && !_grown && Path.GetFullPath(asked) == Path.GetFullPath(growing))
+            {
+                _grown = true;
+                using (File.Open(growing, FileMode.Append, FileAccess.Write))
+                {
+                }
+
+                File.WriteAllText(growing, new string('g', bytes));
+            }
+
+            return base.Hold(anchor, directory, make, asked);
+        }
+    }
+
+    /// <summary>
+    /// A file system that cannot read some directories, as a walk meets a directory this user may not read: a whole
+    /// recursive listing over one fails at it, and a walk that passes such a directory by passes it and says so.
+    /// </summary>
+    private sealed class PassedBy(IFileSystem inner, IReadOnlyList<string> unreadable) : PassThroughFileSystem(inner)
+    {
+        public override IEnumerable<string> EnumerateFiles(string path, bool recursive)
+            => recursive && unreadable.Any(directory => directory.StartsWith(path, StringComparison.OrdinalIgnoreCase))
+                ? throw new UnauthorizedAccessException($"Access to the path '{unreadable[0]}' is denied.")
+                : base.EnumerateFiles(path, recursive);
+
+        public override IEnumerable<string> EnumerateReachableFiles(string path, Action<string, Exception> unread)
+        {
+            foreach (var directory in unreadable.Where(directory => directory.StartsWith(path, StringComparison.OrdinalIgnoreCase)))
+            {
+                unread(directory, new UnauthorizedAccessException($"Access to the path '{directory}' is denied."));
+            }
+
+            return base.EnumerateReachableFiles(path, unread)
+                .Where(file => !unreadable.Any(directory => file.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+        }
+    }
+
+    /// <summary>A file system that stops the run as one file is reached for its read: a stop that comes while the evidence crosses.</summary>
+    private sealed class StopsOnOpen(IFileSystem inner, string stopping, CancellationTokenSource stop) : PassThroughFileSystem(inner)
+    {
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            if (asked is not null && Path.GetFullPath(asked) == Path.GetFullPath(stopping))
+            {
+                stop.Cancel();
+            }
+
+            return base.Hold(anchor, directory, make, asked);
+        }
+    }
+
+    /// <summary>
+    /// A file system that refuses one file's read, keeping everything else as it is: the smallest double that makes
+    /// a keep name a file it could not read.
+    /// </summary>
+    private sealed class RefusingReads(IFileSystem inner, string refused) : PassThroughFileSystem(inner)
+    {
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            if (asked is not null && Path.GetFullPath(asked) == Path.GetFullPath(refused))
+            {
+                throw new UnauthorizedAccessException($"'{asked}' is held");
+            }
+
+            return base.Hold(anchor, directory, make, asked);
+        }
     }
 
     [Fact]
@@ -675,21 +1149,22 @@ public sealed class TestServiceTests
         HarnessFactory factory,
         IProcessRunner? phaseRunner = null,
         IProcessTable? processTable = null,
-        IWatchKind? watch = null)
+        IWatchKind? watch = null,
+        IFileSystem? fileSystem = null)
         => new(
-            new PhaseRunner(phaseRunner ?? factory.ProcessRunner, factory.FileSystem, factory.Output),
+            new PhaseRunner(phaseRunner ?? factory.ProcessRunner, fileSystem ?? factory.FileSystem, factory.Output),
 
             // This machine's own watcher, unless a test says what watches: one that will not start, say.
             watch is null
-                ? new InputFingerprint(factory.FileSystem, factory.Platform, factory.Output)
-                : new InputFingerprint(factory.FileSystem, factory.Platform, watch),
+                ? new InputFingerprint(fileSystem ?? factory.FileSystem, factory.Platform, factory.Output)
+                : new InputFingerprint(fileSystem ?? factory.FileSystem, factory.Platform, watch),
 
             // A table that answers, rather than the platform's own source: that one is a program on
             // Windows, and these tests are about the verdict rather than about a WMI query. It has
             // to answer, though — a reading that failed is reported as unmeasured, so a double that
             // quietly failed would make every one of these legs unmeasured and hide what they pin.
             new ProcessSampler(processTable ?? new QuietProcessTable(), factory.Platform, factory.Output),
-            factory.FileSystem,
+            fileSystem ?? factory.FileSystem,
             factory.GitClient,
             factory.Output);
 
@@ -731,7 +1206,9 @@ public sealed class TestServiceTests
         string? excludeArg = null,
         TestInvocation? windows = null,
         string? labelArg = null,
-        List<string>? remoteExcludes = null)
+        List<string>? remoteExcludes = null,
+        List<string>? keepOnFailure = null,
+        long? keepOnFailureCapBytes = null)
     {
         var all = new TestInvocation
         {
@@ -745,6 +1222,8 @@ public sealed class TestServiceTests
             ExcludeArg = excludeArg,
             LabelArg = labelArg,
             RemoteExcludes = remoteExcludes,
+            KeepOnFailure = keepOnFailure,
+            KeepOnFailureCapBytes = keepOnFailureCapBytes,
         };
 
         return new TestRequest

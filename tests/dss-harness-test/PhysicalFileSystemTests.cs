@@ -45,6 +45,48 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
+    /// An open file is named where it stands, every link on its way followed as they stood at its open: a file opened
+    /// through a directory link is named under the link's target, one written by an atomic write is named in its own
+    /// directory, and one moved while open is named where it went, never by the path another file now holds. A stream on
+    /// no file names nothing.
+    /// </summary>
+    [Fact]
+    public void FinalPathOf_NamesWhereTheOpenFileStands()
+    {
+        using var temp = new TempDirectory();
+        var files = Create();
+        var real = files.ResolveLinks(temp.Path);
+        temp.WriteFile(Path.Combine("target", "a.txt"), "a");
+        temp.WriteFile(Path.Combine("plain", "b.txt"), "b");
+        TestLinks.DirectoryLink(temp.Combine("linked"), temp.Combine("target"));
+
+        using (var opened = files.OpenRead(temp.Combine("linked", "a.txt")))
+        {
+            Assert.Equal(Path.Combine(real, "target", "a.txt"), files.FinalPathOf(opened));
+        }
+
+        using (var opened = files.OpenRead(temp.Combine("plain", "b.txt")))
+        {
+            // The open file moved, and another put at its name: the open file is named where it is, never by its old path.
+            File.Move(temp.Combine("plain", "b.txt"), temp.Combine("plain", "moved.txt"));
+            File.WriteAllText(temp.Combine("plain", "b.txt"), "another");
+
+            Assert.Equal(Path.Combine(real, "plain", "moved.txt"), files.FinalPathOf(opened));
+        }
+
+        string? begun = null;
+        files.WriteAtomic(temp.Combine("target", "c.txt"), stream => begun = files.FinalPathOf(stream));
+
+        Assert.Equal(Path.Combine(real, "target"), Path.GetDirectoryName(begun));
+        Assert.StartsWith("c.txt.tmp-", Path.GetFileName(begun), StringComparison.Ordinal);
+
+        using var memory = new MemoryStream();
+        Assert.Equal(
+            "a MemoryStream is open on no file this file system opened, so where it stands cannot be named",
+            Assert.Throws<NotSupportedException>(() => files.FinalPathOf(memory)).Message);
+    }
+
+    /// <summary>
     /// A file read whole - as bytes or as text - is read while another program holds it open for writing, as a stream read
     /// of it is: a log being appended to among them.
     /// </summary>
@@ -538,6 +580,60 @@ public sealed class PhysicalFileSystemTests
 
         Assert.False(Directory.Exists(tree));
         Assert.True(File.Exists(outside));
+    }
+
+    /// <summary>
+    /// A directory of the tree swapped for a link to a place outside, back and forth, while the tree is removed, leads
+    /// the removal nowhere outside: each entry is removed relative to the directory it is in, held, so a link put where
+    /// a directory was is removed as the link and the files outside stay.
+    /// </summary>
+    [Fact]
+    public async Task DeleteDirectory_WhileADirectoryIsSwappedForALink_DeletesNothingOutside()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var files = Create();
+        var tree = temp.Combine("tree");
+        var x = Path.Combine(tree, "x");
+        var real = temp.Combine("x-dir");
+        var link = temp.Combine("x-link");
+        var victim = outside.WriteFile("victim.txt", "the user's own file");
+        Directory.CreateDirectory(real);
+
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(link, outside.Path));
+
+        using var stop = new CancellationTokenSource();
+        var swapper = Task.Run(() => UnfollowedFilesTests.Swap(x, real, link, stop.Token), TestContext.Current.CancellationToken);
+
+        try
+        {
+            for (var until = Environment.TickCount64 + 3000; Environment.TickCount64 < until && File.Exists(victim);)
+            {
+                Directory.CreateDirectory(tree);
+                Quietly(() => File.WriteAllText(Path.Combine(real, "victim.txt"), "the remover's own"));
+                Quietly(() => files.DeleteDirectory(tree));
+            }
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await swapper;
+        }
+
+        Assert.Equal("the user's own file", File.ReadAllText(victim));
+        Assert.Single(Directory.GetFiles(outside.Path));
+    }
+
+    /// <summary>Does what <paramref name="act"/> does; a refusal or a file held at that instant passes, as the swap makes them.</summary>
+    private static void Quietly(Action act)
+    {
+        try
+        {
+            act();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     /// <summary>A tree that is itself a junction is not walked, so nothing behind it is looked at or removed.</summary>

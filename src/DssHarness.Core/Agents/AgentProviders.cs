@@ -22,13 +22,28 @@ namespace DssHarness.Core.Agents;
 /// value and where it is - for an API client, which writes each request itself and takes the API clients' keys; null for
 /// a client that writes none (claude-code), which takes none of them.
 /// </param>
+/// <param name="Billed">
+/// What a run of it is billed by beyond what every request of every provider is, given its <c>agentClients</c> entry
+/// (<see cref="BilledBy"/>); null where it bills by nothing more.
+/// </param>
 public sealed record AgentClientKind(
     string Name,
     string ProviderType,
     IReadOnlyList<string> Efforts,
     bool SignsIn,
     IReadOnlyList<AgentClientSetting> Settings,
-    Func<JsonElement, string, IEnumerable<string>>? ExtrasProblems = null);
+    Func<JsonElement, string, IEnumerable<string>>? ExtrasProblems = null,
+    Func<AgentClientConfig?, AgentUsage>? Billed = null)
+{
+    /// <summary>
+    /// A token of each kind a run of this client is billed by, given its <c>agentClients</c> entry: the prices a step
+    /// budgeted in dollars needs before it starts (<see cref="AgentPrices.BudgetRefusal"/>). Known from the configuration
+    /// alone, so the definition's check and the run ask the same of it - the check before the run, the run before its
+    /// client is taken.
+    /// </summary>
+    /// <param name="entry">The client's entry under <c>agentClients</c>; null where the configuration declares none.</param>
+    public AgentUsage BilledBy(AgentClientConfig? entry) => Billed?.Invoke(entry) ?? AgentPrices.EveryRequestUses;
+}
 
 /// <summary>
 /// A setting a client reads from the slot - a value that is no key, such as the program it starts - under the name its
@@ -121,7 +136,12 @@ public sealed partial class AgentProviders
     /// </summary>
     public static readonly IReadOnlyList<string> EffortLevels = ["low", "medium", "high", "xhigh", "max"];
 
-    /// <summary>The client kinds the tool builds in, each naming no model.</summary>
+    /// <summary>
+    /// The client kinds the tool builds in, each naming no model. What each is billed by: a Claude Code launch both cache
+    /// writes - it reports the hour's apart from the five minutes', and which it writes is its own to choose; a request of
+    /// the Claude API the write of the cache lifetime its entry says, for every request marks what it sends to be cached;
+    /// a request of GLM what every request of every provider is.
+    /// </summary>
     public static readonly IReadOnlyList<AgentClientKind> ClientKinds =
     [
         new(
@@ -132,10 +152,27 @@ public sealed partial class AgentProviders
             [
                 new(AgentClientSetting.ExecutableKey, ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable, "the program the claude-code client starts in place of npm's Claude Code"),
                 new(AgentClientSetting.ConfigDirKey, Orchestration.ClaudeTranscripts.ConfigDirectoryVariable, "the Claude Code directory the claude-code client signs in from and reads the user's settings in"),
-            ]),
-        new(ClaudeApi.ClaudeApiClient.ClientName, "anthropic", EffortLevels, SignsIn: false, [], ClaudeApi.ClaudeApiRequest.ExtrasProblems),
+            ],
+            Billed: _ => AgentPrices.EveryRequestUses with { CacheWriteTokens = 1, CacheWrite1hTokens = 1 }),
+        new(
+            ClaudeApi.ClaudeApiClient.ClientName,
+            "anthropic",
+            EffortLevels,
+            SignsIn: false,
+            [],
+            ClaudeApi.ClaudeApiRequest.ExtrasProblems,
+            Billed: entry => ClaudeApi.ClaudeApiProvider.UsesOf(ClaudeApi.ClaudeApiSettings.Of(entry))),
         new(ZaiApi.ZaiApiClient.ClientName, "zai", EffortLevels, SignsIn: false, [], ZaiApi.ZaiApiRequest.ExtrasProblems),
     ];
+
+    /// <summary>
+    /// A token of each kind a run through <paramref name="client"/> is billed by, given its <c>agentClients</c> entry: its
+    /// kind's (<see cref="AgentClientKind.BilledBy"/>), and what every request of every provider is for a client the tool
+    /// builds in none of - the definition's check refuses that client on its own.
+    /// </summary>
+    /// <param name="client">The client's name.</param>
+    /// <param name="entry">The client's entry under <c>agentClients</c>; null where the configuration declares none.</param>
+    public static AgentUsage BilledBy(string client, AgentClientConfig? entry) => KindOf(client)?.BilledBy(entry) ?? AgentPrices.EveryRequestUses;
 
     /// <summary>The API clients, by name: the client kinds that write each request themselves, and take the API clients' keys.</summary>
     public static IEnumerable<string> ApiClients => ClientKinds.Where(kind => kind.ExtrasProblems is not null).Select(kind => kind.Name);
@@ -419,6 +456,9 @@ public sealed partial class AgentProviders
                 ("maxRetries", entry.MaxRetries is not null, "how many times a failed request is asked again", apis),
                 ("maxRetryWaitSeconds", entry.MaxRetryWaitSeconds is not null, "the longest wait before a failed request is asked again", apis),
                 ("requestExtras", entry.RequestExtras is not null, "the fields merged into every request's body", apis),
+                ("requestsPerMinute", entry.RequestsPerMinute is not null, "at most this many requests in any minute on one provider and key", apis),
+                ("inputTokensPerMinute", entry.InputTokensPerMinute is not null, "at most this many input tokens in any minute on one provider and key", apis),
+                ("outputTokensPerMinute", entry.OutputTokensPerMinute is not null, "at most this many output tokens in any minute on one provider and key", apis),
                 ("cacheTtl", entry.CacheTtl is not null, "how long what a request caches is kept", [Claude]),
                 ("betas", entry.Betas is not null, "the beta headers sent beside the tool's own", [Claude]),
                 ("preserveThinking", entry.PreserveThinking is not null, "whether Z.AI keeps the model's reasoning across turns", [Glm]),
@@ -429,6 +469,21 @@ public sealed partial class AgentProviders
                 problems.Add(of is [var alone]
                     ? $"{where} names {key}, a key of the {alone} client alone: {what}"
                     : $"{where} names {key}, a key of the API clients alone ({string.Join(", ", of)}): {what}");
+            }
+
+            if (entry.MaxParallel is < 1)
+            {
+                problems.Add($"{where} maxParallel is {entry.MaxParallel.Value.ToString(CultureInfo.InvariantCulture)}; the runs of one provider and key under way at once is one or more");
+            }
+
+            foreach (var (key, given) in new (string Key, int? Given)[]
+            {
+                ("requestsPerMinute", entry.RequestsPerMinute),
+                ("inputTokensPerMinute", entry.InputTokensPerMinute),
+                ("outputTokensPerMinute", entry.OutputTokensPerMinute),
+            }.Where(bucket => bucket.Given is < 1))
+            {
+                problems.Add($"{where} {key} is {given!.Value.ToString(CultureInfo.InvariantCulture)}; a minute's bucket is one or more, or left out");
             }
 
             if (KindOf(client) is not { ExtrasProblems: { } extrasProblems })
@@ -586,6 +641,11 @@ public sealed partial class AgentProviders
     /// <summary>The provider that lists <paramref name="code"/>, with the model's entry; null where no provider lists it.</summary>
     public (AgentProviderConfig Provider, AgentModelConfig Model)? Of(string code)
         => _models.TryGetValue(code, out var entry) ? entry : null;
+
+    /// <summary>The entry <c>agentClients</c> holds for <paramref name="client"/>; null where it holds none, and the client's own defaults hold.</summary>
+    /// <param name="client">The client's name.</param>
+    public Configuration.AgentClientConfig? ClientOf(string client)
+        => Config.AgentClients.TryGetValue(client, out var entry) ? entry : null;
 
     /// <summary>
     /// How <paramref name="client"/> signs in, where it is a client that signs in: its entry's <c>auth</c>, the machine's

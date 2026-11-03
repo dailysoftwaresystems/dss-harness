@@ -64,6 +64,9 @@ public interface IWorktreeService : IUseCase
     /// no .git of its own that holds worktrees below it - the directory named for an orchestrator, holding its agents' -
     /// is refused even with <paramref name="force"/>, since deleting it would delete each of them; one whose worktrees
     /// git cannot list is not deleted either. A worktree's own submodules and nested repositories never count.
+    /// An agent's repository of its own is weighed the same way but for its commits - those made in it that no ref of the
+    /// main checkout's reaches - and has no lock or record of git's; it is deleted as a directory. The records of the
+    /// commit a worktree stood on (<see cref="WorktreeKeepalive"/>) are forgotten once its directory is gone.
     /// </remarks>
     /// <exception cref="HarnessException">
     /// As for <see cref="CreateAsync"/>, or the path resolved outside the worktrees directory.
@@ -110,8 +113,17 @@ public interface IWorktreeService : IUseCase
 /// </param>
 public sealed record WorktreeListing(string Name, string? BaseCommit)
 {
+    /// <summary>What <see cref="Kind"/> holds for one of git's linked worktrees, which git records in the main checkout.</summary>
+    public const string WorktreeKind = "worktree";
+
+    /// <summary>What <see cref="Kind"/> holds for an agent's repository, a repository of its own that git records nowhere.</summary>
+    public const string RepositoryKind = "repository";
+
     /// <summary>Where it is, links resolved, as git records it and as a sync records the tree a host's copy is of.</summary>
     public string Path { get; init; } = string.Empty;
+
+    /// <summary>What kind of tree it is: <see cref="WorktreeKind"/> or <see cref="RepositoryKind"/>.</summary>
+    public string Kind { get; init; } = WorktreeKind;
 
     /// <summary>The line <c>list-worktree</c> prints for this worktree.</summary>
     public override string ToString()
@@ -162,12 +174,6 @@ public sealed class WorktreeService(
 
     /// <summary>The command a listing reports under, and the one spelling of its name.</summary>
     public const string ListCommand = "list-worktree";
-
-    /// <summary>
-    /// Where the commit a worktree was made from is recorded. Under <c>refs/harness/</c> rather than
-    /// under heads, tags or remotes, so the record can never be mistaken for somewhere work is kept.
-    /// </summary>
-    internal const string BaseCommitRefPrefix = "refs/harness/worktree-base/";
 
     private const int GenerateAttempts = 10;
 
@@ -343,35 +349,56 @@ public sealed class WorktreeService(
 
         _fileSystem.CreateDirectory(parent);
 
-        // Worktrees are always created from the main checkout, so running this from
-        // inside a worktree adds a sibling rather than nesting one.
-        string[] arguments = settings.Detach
-            ? ["worktree", "add", "--detach", path]
-            : ["worktree", "add", path];
+        string? baseCommit;
 
-        var result = await _gitClient
-            .RunAsync(layout.MainCheckoutRoot, arguments, cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!result.Succeeded)
+        if (address.IsNested)
         {
-            return WorktreeOutcome.Failed(CommandOutcome.Failed(
-                HarnessExit.CommandFailed,
-                $"git refused to create the worktree: {result.FailureMessage}"));
-        }
+            // An orchestrator's agent's worktree is a repository of its own (AgentRepositories), never one of git's linked
+            // worktrees, which share the main checkout's refs and objects with whatever runs in them. Its making keeps the
+            // commit it is made at alive first, and takes back whatever it made where it fails.
+            var made = await new AgentRepositories(_gitClient, _fileSystem, _platform)
+                .MakeAsync(layout.MainCheckoutRoot, address, path, cancellationToken)
+                .ConfigureAwait(false);
 
-        // git's exit code is not taken as proof the tree exists. A hook, a filter
-        // driver or a scanner can remove it between git's success and this line, and
-        // reporting a path that is not there sends the user somewhere unrelated.
-        if (!_fileSystem.DirectoryExists(path))
+            if (made.Failure is { } failure)
+            {
+                return WorktreeOutcome.Failed(failure);
+            }
+
+            baseCommit = made.BaseCommit;
+        }
+        else
         {
-            return WorktreeOutcome.Failed(CommandOutcome.Failed(
-                HarnessExit.CommandFailed,
-                $"git reported success but '{path}' does not exist."));
-        }
+            // Worktrees are always created from the main checkout, so running this from
+            // inside a worktree adds a sibling rather than nesting one.
+            string[] arguments = settings.Detach
+                ? ["worktree", "add", "--detach", path]
+                : ["worktree", "add", path];
 
-        var baseCommit = await RecordBaseCommitAsync(layout, worktreeName, path, cancellationToken)
-            .ConfigureAwait(false);
+            var result = await _gitClient
+                .RunAsync(layout.MainCheckoutRoot, arguments, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!result.Succeeded)
+            {
+                return WorktreeOutcome.Failed(CommandOutcome.Failed(
+                    HarnessExit.CommandFailed,
+                    $"git refused to create the worktree: {result.FailureMessage}"));
+            }
+
+            // git's exit code is not taken as proof the tree exists. A hook, a filter
+            // driver or a scanner can remove it between git's success and this line, and
+            // reporting a path that is not there sends the user somewhere unrelated.
+            if (!_fileSystem.DirectoryExists(path))
+            {
+                return WorktreeOutcome.Failed(CommandOutcome.Failed(
+                    HarnessExit.CommandFailed,
+                    $"git reported success but '{path}' does not exist."));
+            }
+
+            baseCommit = await RecordBaseCommitAsync(layout, worktreeName, path, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var details = baseCommit is null ? new List<string> { path } : [path, $"base {ReportText.Commit(baseCommit)}"];
 
@@ -385,18 +412,14 @@ public sealed class WorktreeService(
     }
 
     /// <summary>
-    /// Records the commit a worktree was made from, under <c>refs/harness/worktree-base/</c>, and
-    /// returns it.
+    /// Records the commit a worktree was made from (<see cref="WorktreeKeepalive"/>), and returns it.
     /// </summary>
     /// <remarks>
     /// A worktree's HEAD moves as work is committed in it, so after the first commit nothing says
     /// what tree it started from any more, and it can only be reproduced from the moment it
-    /// happened to be made. A ref is the record because git keeps it, it survives a clone of the
-    /// repository, and it is not one of the refs a deletion counts as keeping a commit alive: the
-    /// deletion check reads branches, tags, remote-tracking refs, the newest stash and other
-    /// worktrees' HEADs, so this record cannot quietly make lost work look safe.
-    /// A failure to record is reported and not fatal: the worktree exists, and refusing here would
-    /// leave one behind that the caller was not told about.
+    /// happened to be made. For a linked worktree a failure to record is reported and not fatal: the
+    /// worktree exists, its own HEAD keeps its commit alive, and refusing here would leave one behind
+    /// that the caller was not told about.
     /// </remarks>
     private async Task<string?> RecordBaseCommitAsync(
         HarnessLayout layout,
@@ -422,7 +445,7 @@ public sealed class WorktreeService(
         }
 
         // The commit is what the worktree was made from whether or not the record took: said, and still returned.
-        if (await WriteBaseCommitAsync(_gitClient, layout.MainCheckoutRoot, worktreeName, commit, cancellationToken).ConfigureAwait(false) is { } failure)
+        if (await WorktreeKeepalive.WriteBaseAsync(_gitClient, layout.MainCheckoutRoot, worktreeName, commit, cancellationToken).ConfigureAwait(false) is { } failure)
         {
             _output.Detail(CreateCommand, $"could not record the base commit: {failure}");
         }
@@ -430,72 +453,25 @@ public sealed class WorktreeService(
         return commit;
     }
 
-    /// <summary>
-    /// Records <paramref name="commit"/> as the commit the worktree named <paramref name="worktreeName"/> stands on, under
-    /// <c>refs/harness/worktree-base/</c>: once when it is made, and again each time an agent's base is moved.
-    /// </summary>
-    /// <param name="gitClient">Writes the ref.</param>
-    /// <param name="mainCheckoutRoot">The main checkout's root.</param>
-    /// <param name="worktreeName">The worktree's name under the worktrees root.</param>
-    /// <param name="commit">The commit.</param>
-    /// <param name="cancellationToken">Cancels the git process.</param>
-    /// <returns>Why the record could not be written; null where it was.</returns>
-    internal static async Task<string?> WriteBaseCommitAsync(
-        IGitClient gitClient,
-        string mainCheckoutRoot,
-        string worktreeName,
-        string commit,
-        CancellationToken cancellationToken)
-    {
-        var recorded = await gitClient
-            .RunAsync(mainCheckoutRoot, ["update-ref", BaseCommitRef(worktreeName), commit], cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
-        return recorded.Succeeded ? null : recorded.FailureMessage;
-    }
-
-    /// <summary>Reads the recorded base commit of one worktree, or null when none was recorded.</summary>
-    /// <exception cref="HarnessException">
-    /// git could not be asked. Distinguished from "no such ref" on purpose: null here is reported as
-    /// a worktree made before the record existed, and a reader who sees that stops looking — when
-    /// what may have happened is that the record is there and git could not read it.
-    /// </exception>
-    private Task<string?> ReadBaseCommitAsync(
-        HarnessLayout layout,
-        string worktreeName,
-        CancellationToken cancellationToken)
-        => _gitClient.ResolveCommitAsync(layout.MainCheckoutRoot, BaseCommitRef(worktreeName), cancellationToken);
-
-    /// <summary>Removes the base commit record of a worktree that no longer exists.</summary>
+    /// <summary>Removes the records of the commit a worktree that no longer exists stood on (<see cref="WorktreeKeepalive.ForgetAsync"/>).</summary>
     private async Task ForgetBaseCommitAsync(
         HarnessLayout layout,
         string worktreeName,
         CancellationToken cancellationToken)
     {
-        // Left behind, the record would answer for a later worktree of the same name with the
-        // commit an earlier one started from.
-        var removed = await _gitClient
-            .RunAsync(
-                layout.MainCheckoutRoot,
-                ["update-ref", "-d", BaseCommitRef(worktreeName)],
-                cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!removed.Succeeded)
+        foreach (var (reference, why) in await WorktreeKeepalive.ForgetAsync(_gitClient, layout.MainCheckoutRoot, worktreeName, cancellationToken).ConfigureAwait(false))
         {
             // Said rather than swallowed. The deletion itself succeeded, so this is not a failure of
             // the command; what is left is a stale record that will answer for the next worktree of
             // this name, and nobody would otherwise know to remove it.
             _output.Warn(
                 DeleteCommand,
-                $"'{worktreeName}' was deleted, and the commit it was made from is still recorded at "
-                + $"'{BaseCommitRef(worktreeName)}': {removed.FailureMessage.TrimEnd('.')}. Remove it with "
-                + $"'git update-ref -d {BaseCommitRef(worktreeName)}', or the next worktree of this name "
+                $"'{worktreeName}' was deleted, and the commit it stood on is still recorded at "
+                + $"'{reference}': {why.TrimEnd('.')}. Remove it with "
+                + $"'git update-ref -d {reference}', or the next worktree of this name "
                 + "inherits it.");
         }
     }
-
-    private static string BaseCommitRef(string worktreeName) => BaseCommitRefPrefix + worktreeName;
 
     public async Task<WorktreeOutcome> DeleteAsync(
         string startDirectory,
@@ -575,10 +551,9 @@ public sealed class WorktreeService(
                 return cleared;
             }
 
-            if (cleared is not null)
-            {
-                await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
-            }
+            // Nothing of the worktree is left for its keepalive to keep - an agent's repository deleted by hand leaves no
+            // record of git's at all - so the commit it stood on is forgotten either way.
+            await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
 
             // Nothing here, and nothing in git's record any more: deleted already, cleared just now, or never made. Copies
             // of it on hosts that could not be asked to remove them when it was deleted can still be there, and dealing
@@ -601,7 +576,7 @@ public sealed class WorktreeService(
 
         try
         {
-            identity = await inspector.IdentifyAsync(layout.MainCheckoutRoot, path, cancellationToken).ConfigureAwait(false);
+            identity = await inspector.IdentifyAsync(layout.MainCheckoutRoot, address, path, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed && force)
         {
@@ -643,7 +618,7 @@ public sealed class WorktreeService(
             try
             {
                 findings = await inspector
-                    .FindAsync(layout.MainCheckoutRoot, path, identity.AdministrativeDirectory!, cancellationToken)
+                    .FindAsync(layout.MainCheckoutRoot, path, identity, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
@@ -753,7 +728,9 @@ public sealed class WorktreeService(
         {
             try
             {
-                outcome = force
+                outcome = identity.Membership == WorktreeMembership.AgentRepository
+                    ? RemoveRepository(worktreeName, path, checksRan: !force)
+                    : force
                     ? await RemoveForcedAsync(layout, worktreeName, path, identity.AdministrativeDirectory, inspector, stopping.Token).ConfigureAwait(false)
                     : await RemoveCheckedAsync(layout, worktreeName, path, identity.AdministrativeDirectory!, holdsSubmodules, discarded.Count > 0, stopping.Token).ConfigureAwait(false);
             }
@@ -999,14 +976,15 @@ public sealed class WorktreeService(
             .Where(worktree => !worktree.IsMain)
             .ToList();
 
-        var names = new List<(string Name, string Path)>();
+        var names = new List<(string Name, string Path, string Kind)>();
         var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
+        var repositories = new AgentRepositories(_gitClient, _fileSystem, _platform);
 
         foreach (var directory in Directories(worktreesDirectory, "the worktrees root"))
         {
             var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
 
-            if (string.IsNullOrEmpty(name) || TakeListed(directory, name, orchestrator: null))
+            if (string.IsNullOrEmpty(name) || await TakeListedAsync(directory, name, orchestrator: null).ConfigureAwait(false))
             {
                 continue;
             }
@@ -1031,7 +1009,7 @@ public sealed class WorktreeService(
             {
                 var agent = Path.GetFileName(Path.TrimEndingDirectorySeparator(child));
 
-                if (!string.IsNullOrEmpty(agent) && TakeListed(child, agent, orchestrator: name))
+                if (!string.IsNullOrEmpty(agent) && await TakeListedAsync(child, agent, orchestrator: name).ConfigureAwait(false))
                 {
                     agents++;
                 }
@@ -1045,16 +1023,22 @@ public sealed class WorktreeService(
             }
         }
 
-        // Whether the directory is a worktree git records, listed under its address; one holding a .git entry git does
-        // not record is said, and taken as dealt with, since it is nobody's orchestrator.
-        bool TakeListed(string directory, string name, string? orchestrator)
+        // Whether the directory is a worktree git records, or an agent's repository, listed under its address; one holding
+        // a .git entry that is neither is said, and taken as dealt with, since it is nobody's orchestrator.
+        async Task<bool> TakeListedAsync(string directory, string name, string? orchestrator)
         {
-            var address = orchestrator is null ? name : WorktreeAddress.Nested(orchestrator, name).Name;
+            var address = orchestrator is null ? WorktreeAddress.Plain(name) : WorktreeAddress.Nested(orchestrator, name);
             var resolved = _fileSystem.ResolveLinks(directory);
 
             if (inspector.RecordAt(registered, resolved) is not null)
             {
-                names.Add((address, resolved));
+                names.Add((address.Name, resolved, WorktreeListing.WorktreeKind));
+                return true;
+            }
+
+            if (await repositories.IsAtAsync(context.Layout.MainCheckoutRoot, address, directory, cancellationToken).ConfigureAwait(false))
+            {
+                names.Add((address.Name, resolved, WorktreeListing.RepositoryKind));
                 return true;
             }
 
@@ -1065,7 +1049,7 @@ public sealed class WorktreeService(
                 // and its name stays taken: dropped from the listing silently, it looks free.
                 _output.Warn(
                     ListCommand,
-                    $"'{address}' holds a .git entry, and git records no worktree there: {WorktreeInspector.UnrecordedWhy}. "
+                    $"'{address.Name}' holds a .git entry, and git records no worktree there: {WorktreeInspector.UnrecordedWhy}. "
                     + "It is not listed, and no worktree can be made at its path until it is gone; look inside for "
                     + $"anything wanted, then delete '{directory}'.");
                 return true;
@@ -1076,13 +1060,14 @@ public sealed class WorktreeService(
 
         var listings = new List<WorktreeListing>();
 
-        foreach (var (name, path) in names.OrderBy(worktree => worktree.Name, StringComparer.Ordinal))
+        foreach (var (name, path, kind) in names.OrderBy(worktree => worktree.Name, StringComparer.Ordinal))
         {
             listings.Add(new WorktreeListing(
                 name,
-                await ReadBaseCommitAsync(context.Layout, name, cancellationToken).ConfigureAwait(false))
+                await WorktreeKeepalive.ReadBaseAsync(_gitClient, context.Layout.MainCheckoutRoot, name, cancellationToken).ConfigureAwait(false))
             {
                 Path = path,
+                Kind = kind,
             });
         }
 
@@ -1233,6 +1218,35 @@ public sealed class WorktreeService(
             HarnessExit.Cancelled,
             $"Clearing git's record of worktree '{name}', whose directory was already gone, was stopped before the interruption "
             + $"ended the command; run '{ToolPackage.Command} {DeleteCommand} {name}' again to finish clearing it."));
+
+    /// <summary>
+    /// Removes an agent's repository: its directory and everything in it, its own git directory and the objects only it
+    /// holds among them, which no record of git's in the main checkout names. git has no removal of its own for one, so the
+    /// directory is deleted as a whole - its read-only object files with it, a link or junction in it as the link it is,
+    /// never what it leads to - and then looked for. Once begun it is never stopped part way by an interruption.
+    /// </summary>
+    /// <param name="name">The worktree's address.</param>
+    /// <param name="path">Its directory.</param>
+    /// <param name="checksRan">Whether every check passed before it began, which makes finishing it with --force safe.</param>
+    private WorktreeOutcome RemoveRepository(string name, string path, bool checksRan)
+    {
+        var finish = $"{(checksRan ? "Every check passed before removal began, so run" : "Run")} '{ToolPackage.Command} {DeleteCommand} {name} --force' to finish deleting it";
+
+        try
+        {
+            _fileSystem.DeleteDirectory(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Failed(
+                $"Worktree '{name}', an agent's repository, was not deleted whole: {ex.Message.TrimEnd('.')}. Part of it may already be gone. "
+                + $"Close whatever holds its files open, then {char.ToLowerInvariant(finish[0])}{finish[1..]}.");
+        }
+
+        return _fileSystem.DirectoryExists(path)
+            ? Failed($"Worktree '{name}', an agent's repository, was deleted, but '{ReportText.Printable(path)}' still exists. {finish}.")
+            : Removed(name, path);
+    }
 
     /// <summary>
     /// Removes a worktree whose checks passed. Plain removal runs git's own check as well, which still
@@ -1616,20 +1630,26 @@ public sealed class WorktreeService(
     {
         var reasons = new List<string>();
 
+        // An agent's repository is deleted with its own store: a branch or a stash made in it goes with it, so what keeps its
+        // work is the main tree, by a fold, or a fetch into the main checkout.
         if (findings.Changes.Count > 0)
         {
             reasons.Add(
                 $"it has {ReportText.Counted(findings.Changes.Count, "uncommitted change")} that would be lost: {ReportText.Listed(findings.Changes)} "
-                + "(commit them to a branch, run 'git stash -u', or pass --discard-uncommitted to delete them with the worktree)");
+                + (findings.OwnRepository
+                    ? "(fold-agent brings them into the main tree, or pass --discard-uncommitted to delete them with the worktree)"
+                    : "(commit them to a branch, run 'git stash -u', or pass --discard-uncommitted to delete them with the worktree)"));
         }
 
         if (findings.Commits > 0 && findings.Head is { } head)
         {
             var shortHead = ReportText.Commit(head);
 
-            reasons.Add(
-                $"{ReportText.Counted(findings.Commits, "commit")} up to {shortHead} are on no branch, tag, remote-tracking ref, newest stash or other worktree's HEAD "
-                + $"(run 'git branch <name> {shortHead}', or push them)");
+            reasons.Add(findings.OwnRepository
+                ? $"{ReportText.Counted(findings.Commits, "commit")} up to {shortHead} were made in its own repository, and no ref of the main checkout's reaches them "
+                    + $"(run 'git -C {ReportText.Printable(mainCheckoutRoot)} fetch {ReportText.Printable(path)} HEAD' and branch FETCH_HEAD there, or push them)"
+                : $"{ReportText.Counted(findings.Commits, "commit")} up to {shortHead} are on no branch, tag, remote-tracking ref, newest stash or other worktree's HEAD "
+                    + $"(run 'git branch <name> {shortHead}', or push them)");
         }
 
         foreach (var submodule in findings.Submodules)

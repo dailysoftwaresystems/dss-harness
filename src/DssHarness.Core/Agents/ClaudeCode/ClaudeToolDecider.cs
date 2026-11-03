@@ -56,6 +56,7 @@ public static class ClaudeToolDecider
             AgentCapability.Read => row.Tool.Searches ? policy.Search(subject) : policy.Read(subject),
             AgentCapability.Write => policy.Write(subject),
             AgentCapability.Run => policy.Run(subject),
+            AgentCapability.Web => policy.Web(subject),
             _ => Refused($"'{tool}' is a tool whose calls this tool cannot read, so none of them runs"),
         };
     }

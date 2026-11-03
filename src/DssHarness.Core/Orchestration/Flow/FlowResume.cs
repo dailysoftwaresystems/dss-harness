@@ -179,13 +179,14 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
     /// <summary>
     /// A step's record with the handoff its directory holds taken back where the record does not name it yet: a handoff's
     /// file is written before the record that names it, so a crash between the two leaves the file beside a record still
-    /// <c>Running</c> or <c>Stopped</c>. Who wrote it is read from its first line, as the engine marks its own
+    /// <c>Running</c>, <c>Stopped</c> or <c>Paused</c> - a step paused on a question holds one for the attempt its
+    /// answer goes on with. Who wrote it is read from its first line, as the engine marks its own
     /// (<see cref="FlowHandoffRecord.EngineMark"/>).
     /// </summary>
     private FlowStepRecord WithHandoffTakenBack(FlowStepRecord record, string handoffFile)
     {
         if (record.Handoff is not null
-            || record.State is not (nameof(FlowInstanceState.Running) or nameof(FlowInstanceState.Stopped))
+            || record.State is not (nameof(FlowInstanceState.Running) or nameof(FlowInstanceState.Stopped) or nameof(FlowInstanceState.Paused))
             || _fileSystem.KindOf(handoffFile) != PathKind.File)
         {
             return record;
@@ -195,7 +196,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
     }
 
     /// <summary>
-    /// Each stopped or cut-off step's handoff, read from its own directory: every one whose record names one. A record
+    /// Each stopped, cut-off or paused step's handoff, read from its own directory: every one whose record names one. A record
     /// that names a handoff its directory does not hold is refused, naming the file - the file is written before the
     /// record that names it, so something removed it, and the engine would otherwise write one of its own in the place
     /// of the agent's account.
@@ -204,7 +205,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
     {
         var handoffs = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        foreach (var step in file.Steps.Where(step => step.State is nameof(FlowInstanceState.Stopped) or nameof(FlowInstanceState.Running) && step.Handoff is not null))
+        foreach (var step in file.Steps.Where(step => step.State is nameof(FlowInstanceState.Stopped) or nameof(FlowInstanceState.Running) or nameof(FlowInstanceState.Paused) && step.Handoff is not null))
         {
             var handoffFile = _layout.InstanceHandoffFile(step.Instance, step.Agent);
 
@@ -285,9 +286,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
 /// <param name="clock">When the owner took the run.</param>
 public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity identity, TimeProvider? clock = null)
 {
-    private readonly OrchestrationStore _store = store ?? throw new ArgumentNullException(nameof(store));
-    private readonly IProcessIdentity _identity = identity ?? throw new ArgumentNullException(nameof(identity));
-    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+    private readonly ProcessOwner _owner = new(store ?? throw new ArgumentNullException(nameof(store)), identity ?? throw new ArgumentNullException(nameof(identity)), clock);
 
     /// <summary>
     /// The engine that holds the run, where one is live: on this machine while its process runs, and on another until
@@ -298,32 +297,20 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     public RunOwner? Live(OrchestratorLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
-        return _store.ReadOwner(layout) is { } held && Stands(held) ? held : null;
+        return _owner.Live(layout.OwnerFile, OrchestrationStore.OwnerKind);
     }
 
     /// <summary>Whether the engine <paramref name="held"/> names still holds the run.</summary>
     /// <param name="held">The owner recorded.</param>
-    public bool Stands(RunOwner held)
-    {
-        ArgumentNullException.ThrowIfNull(held);
-        return _identity.Stands(held.Machine, held.ProcessId, held.Stamp);
-    }
+    public bool Stands(RunOwner held) => _owner.Stands(held);
 
     /// <summary>Whether the engine <paramref name="held"/> names runs on this machine.</summary>
     /// <param name="held">The owner recorded.</param>
-    public bool IsHere(RunOwner held)
-    {
-        ArgumentNullException.ThrowIfNull(held);
-        return _identity.IsHere(held.Machine);
-    }
+    public bool IsHere(RunOwner held) => _owner.IsHere(held);
 
     /// <summary>The engine <paramref name="held"/> names, as a line names it: its process, and that it runs on another machine where it does - never that machine's name.</summary>
     /// <param name="held">The owner recorded.</param>
-    public string Named(RunOwner held)
-    {
-        ArgumentNullException.ThrowIfNull(held);
-        return $"process {held.ProcessId.ToString(CultureInfo.InvariantCulture)}{_identity.Elsewhere(held.Machine)}";
-    }
+    public string Named(RunOwner held) => _owner.Named(held);
 
     /// <summary>
     /// Claims the run for this process: refused (13) where a live owner holds it - an engine that paused its run and
@@ -337,20 +324,11 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        var held = _store.ReadOwner(layout);
-
-        if (held is not null && Stands(held))
-        {
-            throw new HarnessException(
-                HarnessExit.Refused,
-                $"run '{layout.Name}' is owned by a live engine ({Named(held)}); stop-orchestrator {layout.Name} ends it, or wait for the engine to leave it. Nothing was changed.");
-        }
-
-        _store.WriteOwner(layout, new RunOwner(_identity.CurrentMachine, _identity.CurrentId, _clock.GetUtcNow(), _identity.Current));
-
-        return held is null
-            ? null
-            : $"the owner recorded for run '{layout.Name}' ({Named(held)}) has gone; it was reclaimed";
+        return _owner.Claim(
+            layout.OwnerFile,
+            OrchestrationStore.OwnerKind,
+            $"run '{layout.Name}'",
+            held => $"run '{layout.Name}' is owned by a live engine ({held}); stop-orchestrator {layout.Name} ends it, or wait for the engine to leave it. Nothing was changed.");
     }
 
     /// <summary>
@@ -361,11 +339,7 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     public void Release(OrchestratorLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
-
-        if (_store.ReadOwner(layout) is { } held && IsHere(held) && held.ProcessId == _identity.CurrentId)
-        {
-            _store.RemoveOwner(layout);
-        }
+        _owner.Release(layout.OwnerFile, OrchestrationStore.OwnerKind);
     }
 
     /// <summary>Removes an owner record whose engine has gone, or was ended: what the deletion of a run and <c>stop-orchestrator --now</c> leave of it.</summary>
@@ -373,10 +347,6 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     public void RemoveGone(OrchestratorLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
-
-        if (_store.ReadOwner(layout) is { } held && !Stands(held))
-        {
-            _store.RemoveOwner(layout);
-        }
+        _owner.RemoveGone(layout.OwnerFile, OrchestrationStore.OwnerKind);
     }
 }

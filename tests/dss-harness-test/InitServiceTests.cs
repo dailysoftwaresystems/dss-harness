@@ -72,6 +72,7 @@ public sealed class InitServiceTests
                 "/.orchestrators/*", "!/.orchestrators/.gitkeep",
                 "/.mutations/*", "!/.mutations/.gitkeep",
                 "/.legs/*", "!/.legs/.gitkeep",
+                "/.side-tasks/*", "!/.side-tasks/.gitkeep",
                 "/.harness-config/sshItems/*", "!/.harness-config/sshItems/.gitkeep",
                 "/.harness-config/wslDistros/*", "!/.harness-config/wslDistros/.gitkeep",
                 "/.harness-config/runner/.env/*", "!/.harness-config/runner/.env/.gitkeep",

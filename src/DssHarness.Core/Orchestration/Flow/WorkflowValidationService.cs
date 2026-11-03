@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
@@ -19,7 +18,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// The pure rules live in <see cref="WorkflowValidator"/>, the file's shape in
 /// <see cref="WorkflowFileParser"/>; this adds what only the repository can answer: that the file
 /// is where the configuration says it is, that the workflow's directory, its definition and the
-/// files the definition names are the repository's own, inside the workflow's directory, and that
+/// files the definition names are the repository's own, inside the workflow's directory, that each
+/// schema a step names is one the engine reads, and that
 /// what the definition asks of the configuration holds: the legs and runners it names are
 /// declared, a runner that writes the tree works in an agent's worktree, a commit step fills the
 /// commit template, and the agents a run makes are named within the worktrees' bound.
@@ -167,7 +167,8 @@ public sealed class WorkflowValidationService(
             named => Text(named, directory, name),
             resolved.Providers,
             _extractors.Languages,
-            Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild)));
+            Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild),
+            new AgentSkills(_fileSystem, _platform, context.Layout.RepositoryRoot)));
         problems.AddRange(Files(definition, directory, name, context.Config));
 
         // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,
@@ -183,15 +184,19 @@ public sealed class WorkflowValidationService(
         }
 
         // The recovery is counted apart: its steps run only where something failed. Under the one line that says the
-        // definition holds, each agent's models and the level each runs at, resolved the same check resolved them, the
-        // prices of the models a step may run on, and the keys a step's model would read that no file of the slot
-        // declares, with the steps that would read them.
+        // definition holds, each agent's models and the level each runs at, resolved the same check resolved them - a
+        // step's keys over its agent definition's - the prices of the models a step may run on, and the keys a step's
+        // model would read that no file of the slot declares, with the steps that would read them.
         var steps = Count(definition.Steps);
         var recovering = definition.Recover is { } recover ? Count(recover.Steps) : 0;
         var reasons = Count([.. definition.Steps, .. definition.Recover?.Steps ?? []], "reason");
         var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
         IReadOnlyList<string> agents = resolved.Providers is { } providers
-            ? [.. WorkflowValidator.ModelLevels(definition, providers), .. Prices(definition, providers), .. MissingKeys(definition, providers, slot)]
+            ? [
+                .. WorkflowValidator.ModelLevels(definition, providers, named => Text(named, directory, name)),
+                .. Prices(definition, providers, named => Text(named, directory, name)),
+                .. MissingKeys(definition, providers, slot),
+            ]
             : [];
         return new WorkflowCheck(
             name,
@@ -209,9 +214,9 @@ public sealed class WorkflowValidationService(
     /// One line for each provider whose models a step of the definition may run on: whether each of those models has a
     /// price, and when the provider's numbers were read - by the one line the listing says it in.
     /// </summary>
-    private static IEnumerable<string> Prices(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers)
+    private static IEnumerable<string> Prices(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers, Func<string, string?>? files)
     {
-        var models = WorkflowValidator.ModelsRunOn(definition, providers);
+        var models = WorkflowValidator.ModelsRunOn(definition, providers, files);
 
         foreach (var provider in providers.Providers)
         {
@@ -449,7 +454,7 @@ public sealed class WorkflowValidationService(
     {
         if (named.IsSchema)
         {
-            return Schema(named.File, directory, name, named.What);
+            return Schema(named, directory, name);
         }
 
         var problems = new List<string>();
@@ -479,30 +484,30 @@ public sealed class WorkflowValidationService(
         }
     }
 
-    /// <summary>That a schema file is there, can be read, and holds a JSON object.</summary>
-    private IReadOnlyList<string> Schema(string named, string directory, string name, string what)
+    /// <summary>
+    /// That a schema file is there, can be read, and is a schema the engine reads (<see cref="WorkflowFiles.SchemaProblems"/>):
+    /// the check a step's schema is held to again before its client is taken, made here so that no run starts over a
+    /// schema no answer could be held to.
+    /// </summary>
+    private IReadOnlyList<string> Schema(WorkflowFiles.Named named, string directory, string name)
     {
-        if (_named.Problem(named, directory, name, what, out var path) is { } problem)
+        if (_named.Problem(named.File, directory, name, named.What, out var path) is { } problem)
         {
             return [problem];
         }
 
+        string text;
+
         try
         {
-            using var document = JsonDocument.Parse(_fileSystem.ReadAllText(path));
-
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                ? []
-                : [$"'{named}', {what}, holds no JSON object; a schema is a mapping of properties"];
-        }
-        catch (JsonException exception)
-        {
-            return [$"'{named}', {what}, is not valid JSON ({exception.Message})"];
+            text = _fileSystem.ReadAllText(path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return [$"'{named}', {what}, could not be read: {exception.Message}"];
+            return [$"'{named.File}', {named.What}, could not be read: {exception.Message}"];
         }
+
+        return WorkflowFiles.SchemaProblems(named, text);
     }
 
     private static string Shown(string name)

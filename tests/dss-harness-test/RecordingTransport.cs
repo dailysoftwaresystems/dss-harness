@@ -1,5 +1,6 @@
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Sync;
 
@@ -235,13 +236,24 @@ internal sealed class RecordingTransport(
             ? throw new HarnessException(HarnessExit.HostUnavailable, $"the link dropped reading '{relativePath}'")
             : inner.ReadFileAsync(root, relativePath, cancellationToken);
 
+    /// <summary>The hidden places each pull's read was given, in order.</summary>
+    public List<IReadOnlyList<IsolatedPath>> PulledHidden { get; } = [];
+
+    public Task<byte[]> PullFileAsync(string root, string relativePath, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default)
+    {
+        PulledHidden.Add(hidden);
+        return ++_reads == FailsRead
+            ? throw new HarnessException(HarnessExit.HostUnavailable, $"the link dropped reading '{relativePath}'")
+            : inner.PullFileAsync(root, relativePath, hidden, cancellationToken);
+    }
+
     /// <summary>Every directory the copy was asked to list, as it was asked.</summary>
     public List<string> Listed { get; } = [];
 
-    public Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
+    public Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, IReadOnlyList<IsolatedPath>? hidden, CancellationToken cancellationToken = default)
     {
         Listed.Add(relativeDirectory);
-        return inner.ListFilesAsync(root, relativeDirectory, cancellationToken);
+        return inner.ListFilesAsync(root, relativeDirectory, hidden, cancellationToken);
     }
 
     public Task<CopyRemoval> RemoveCopyAsync(string root, CancellationToken cancellationToken = default)

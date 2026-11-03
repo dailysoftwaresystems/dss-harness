@@ -9,7 +9,9 @@ namespace DssHarness.Core.Repository;
 /// <c>lineEndings.exclude</c> and the roots an anchor cites. The question is asked on both sides of
 /// a sync as well — here to build the plan, and on the host where the walk is told what not to list
 /// — and two implementations of it are how a file ends up transferred by one side and protected by
-/// the other, or covered by one setting and not by another that is written the same way.
+/// the other, or covered by one setting and not by another that is written the same way. A list of
+/// patterns rather than paths - a test invocation's <c>keepOnFailure</c> - is <see cref="GlobPattern"/>'s,
+/// whose grammar can say a name at any depth and a run beneath a directory in one entry.
 /// <para>
 /// An entry is rooted unless it says otherwise. <c>build</c> is the <c>build</c> beside the
 /// repository and nothing else, which is what it has always meant and what a configuration written

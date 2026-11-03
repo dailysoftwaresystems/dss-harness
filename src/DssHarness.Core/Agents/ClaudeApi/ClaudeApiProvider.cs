@@ -33,13 +33,18 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
     public bool SendsSchema => ClaudeApiRequest.HoldsToSchema;
 
     /// <summary>
-    /// What every request is billed by: input, cache read and output, and the cache write of the client's lifetime, for
-    /// every request marks what it sends to be cached.
+    /// What every request on <paramref name="settings"/> is billed by: input, cache read and output, and the cache write of
+    /// the client's lifetime, for every request marks what it sends to be cached.
     /// </summary>
-    public AgentUsage Uses
-        => _settings.CacheTtl == ClaudeApiRequest.AnHour
+    /// <param name="settings">The client's settings, whose cache lifetime says which write is billed.</param>
+    public static AgentUsage UsesOf(ClaudeApiSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        return settings.CacheTtl == ClaudeApiRequest.AnHour
             ? AgentPrices.EveryRequestUses with { CacheWrite1hTokens = 1 }
             : AgentPrices.EveryRequestUses with { CacheWriteTokens = 1 };
+    }
 
     /// <inheritdoc/>
     public string Tools(IReadOnlyList<AgentToolDefinition> tools)
@@ -64,6 +69,21 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
         ArgumentNullException.ThrowIfNull(text);
 
         return new JsonObject { ["role"] = "user", ["content"] = new JsonArray(TextBlock(text)) }.ToJsonString(ApiBody.Json);
+    }
+
+    /// <inheritdoc/>
+    public string EffortMessage(string effort)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(effort);
+
+        // The one form a mid-conversation effort change takes on this API: a message of no content that names the
+        // level, sent under ClaudeApiRequest.MidConversationEffortBeta, which changing the top-level effort would not.
+        return new JsonObject
+        {
+            ["role"] = "system",
+            ["content"] = new JsonArray(),
+            ["output_config"] = new JsonObject { ["effort"] = effort },
+        }.ToJsonString(ApiBody.Json);
     }
 
     /// <inheritdoc/>
@@ -126,13 +146,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
         private string? _model;
         private string? _stopReason;
         private JsonElement? _stopDetails;
-        private long _input;
-        private long _output;
-        private long _cacheRead;
-        private long _cacheWrite;
-        private long? _cacheWrite5m;
-        private long? _cacheWrite1h;
-        private long _searches;
+        private readonly ClaudeApiUsage _used = new(settings.CacheTtl);
 
         /// <summary>The parts an event of the answer comes to; one that ends it - a turn or a failure - last.</summary>
         public IEnumerable<ChatPart> Read(ApiEvent happened) => ApiAnswers.Parts(happened, Item, refused => ClaudeApiFailures.Of(refused, _first, request.Model));
@@ -332,43 +346,11 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
                 ? new AgentFallbackCredit(token, details.TryGetProperty("fallback_has_prefill_claim", out var claim) && claim.ValueKind == JsonValueKind.True)
                 : null;
 
-        /// <summary>Takes what a usage says, each count it holds standing for the request whole: the last said of each holds.</summary>
-        private void Used(JsonElement usage)
-        {
-            if (usage.ValueKind != JsonValueKind.Object)
-            {
-                return;
-            }
+        /// <summary>Takes what a usage says, by the one reader of the API's usage.</summary>
+        private void Used(JsonElement usage) => _used.Take(usage);
 
-            _input = ApiAnswers.Count(usage, "input_tokens") ?? _input;
-            _output = ApiAnswers.Count(usage, "output_tokens") ?? _output;
-            _cacheRead = ApiAnswers.Count(usage, "cache_read_input_tokens") ?? _cacheRead;
-            _cacheWrite = ApiAnswers.Count(usage, "cache_creation_input_tokens") ?? _cacheWrite;
-
-            if (usage.TryGetProperty("cache_creation", out var written) && written.ValueKind == JsonValueKind.Object)
-            {
-                _cacheWrite5m = ApiAnswers.Count(written, "ephemeral_5m_input_tokens") ?? _cacheWrite5m;
-                _cacheWrite1h = ApiAnswers.Count(written, "ephemeral_1h_input_tokens") ?? _cacheWrite1h;
-            }
-
-            if (usage.TryGetProperty("server_tool_use", out var server) && server.ValueKind == JsonValueKind.Object)
-            {
-                _searches = ApiAnswers.Count(server, "web_search_requests") ?? _searches;
-            }
-        }
-
-        /// <summary>
-        /// What the request used: the cache it wrote by how long it is kept, as the API says it - or, where it says the
-        /// whole alone, by the lifetime the request asked for.
-        /// </summary>
-        private AgentUsage Usage()
-        {
-            var (fiveMinutes, anHour) = _cacheWrite5m is not null || _cacheWrite1h is not null
-                ? (_cacheWrite5m ?? 0, _cacheWrite1h ?? 0)
-                : settings.CacheTtl == ClaudeApiRequest.AnHour ? (0L, _cacheWrite) : (_cacheWrite, 0L);
-
-            return new AgentUsage(_input, _output, _cacheRead, fiveMinutes, anHour, _searches);
-        }
+        /// <summary>What the request used, as the one reader of the API's usage says it.</summary>
+        private AgentUsage Usage() => _used.Used();
 
         /// <summary>The place of the block an event is of; null where it names none.</summary>
         private static int? Index(JsonElement data)

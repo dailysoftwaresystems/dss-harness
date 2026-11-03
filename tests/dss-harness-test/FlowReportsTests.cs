@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Repository;
@@ -78,5 +79,37 @@ public sealed class FlowReportsTests
                 "loop loop left: one test",
             ],
             FlowReports.LeftForAPerson(layout, file, questions: null));
+    }
+
+    /// <summary>
+    /// What a run spent, a part of whose cost could not be counted, is said in the report, in <c>report.json</c> and in a
+    /// command's <c>--json</c> as the dollars counted and why the rest is not known - never the counted sum as though it
+    /// were the whole - and a run whose every part was counted holds no such member.
+    /// </summary>
+    [Fact]
+    public void WhatARunSpent_APartOfWhichWasNotCounted_IsSaidAsAtLeastWhatWas()
+    {
+        const string Why = "no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)";
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var spent = new FlowBudgetRecord(1.25, 1500, 2.5, Why);
+        var file = new FlowFile(1, "r1", "flow", "digest", new Dictionary<string, string>(), "Done", spent, 0, [], [], DateTimeOffset.UnixEpoch);
+
+        _ = FlowReports.Write(harness.FileSystem, layout, file, null, "done", 0, DateTimeOffset.UnixEpoch);
+
+        var report = harness.FileSystem.ReadAllText(layout.ReportFile).Split('\n');
+        Assert.Equal(
+            "- at least 1.25 USD (the rest is not known: no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)), 1500 tokens, 2.5 minutes of reasoning",
+            report[Array.IndexOf(report, "## Spent") + 1]);
+
+        var written = JsonNode.Parse(harness.FileSystem.ReadAllText(layout.ReportJsonFile))!["spent"]!;
+        var answered = JsonNode.Parse(FlowReports.Document(new FlowRunResult("Done", "r1", "done", [], [], [], [], [], spent, 0, [])))!["spent"]!;
+        var counted = JsonNode.Parse(FlowReports.Document(new FlowRunResult("Done", "r1", "done", [], [], [], [], [], spent with { Uncounted = null }, 0, [])))!["spent"]!;
+
+        Assert.Equal(["usd", "tokens", "minutes", "uncounted"], written.AsObject().Select(member => member.Key));
+        Assert.Equal((1.25, 1500L, 2.5, Why), (written["usd"]!.GetValue<double>(), written["tokens"]!.GetValue<long>(), written["minutes"]!.GetValue<double>(), written["uncounted"]!.GetValue<string>()));
+        Assert.True(JsonNode.DeepEquals(written, answered));
+        Assert.Equal(["usd", "tokens", "minutes"], counted.AsObject().Select(member => member.Key));
     }
 }

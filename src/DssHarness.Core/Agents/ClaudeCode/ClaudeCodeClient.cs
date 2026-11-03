@@ -44,6 +44,10 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// <param name="clock">When each thing happened, and the bounds of a handoff.</param>
 /// <param name="environment">The tool's own environment, which a launch would otherwise inherit; the process's where none is given.</param>
 /// <param name="tools">The host of the tool runtime the engine's tool server answers from; none for a client whose steps have no web.</param>
+/// <param name="self">
+/// This tool's own program and what it is given before its command line, which a launch's shell prefix names to hand each
+/// command to the isolation (<see cref="ClaudeShell.PrefixOf"/>); the running process's own where none is given.
+/// </param>
 public sealed class ClaudeCodeClient(
     IProcessRunner processes,
     IFileSystem fileSystem,
@@ -51,8 +55,10 @@ public sealed class ClaudeCodeClient(
     ChildSessions sessions,
     TimeProvider clock,
     Func<IReadOnlyDictionary<string, string>>? environment = null,
-    AgentToolHost? tools = null) : IAgentClient
+    AgentToolHost? tools = null,
+    Func<(string Program, IReadOnlyList<string> Leading)>? self = null) : IAgentClient
 {
+    private readonly Func<(string Program, IReadOnlyList<string> Leading)> _self = self ?? DetachedProcessLauncher.Self;
     /// <summary>The client's key under <c>agentClients</c>.</summary>
     public const string ClientName = "claude-code";
 
@@ -67,6 +73,25 @@ public sealed class ClaudeCodeClient(
 
     /// <summary>The id of the host's <c>initialize</c> request, which its answer names.</summary>
     public const string InitializeId = "initialize";
+
+    /// <summary>
+    /// How long the receipt of a shell call's command is awaited where it is not there yet - a call run in the background,
+    /// once its result came back before its command was handed over; at a launch's end, a call whose result never came -
+    /// before the launch is ended for a command that was not handed over.
+    /// </summary>
+    public static readonly TimeSpan ReceiptBound = TimeSpan.FromSeconds(20);
+
+    /// <summary>How often a launch at its end looks again for the receipts it awaits.</summary>
+    private static readonly TimeSpan ReceiptLookAgain = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>The member of a shell call's input that runs its command in the background.</summary>
+    private const string BackgroundMember = "run_in_background";
+
+    /// <summary>What a run that is no chat's - a one shot - ends with where its interrupt cut its turn: every client's words for it.</summary>
+    public const string TurnCut = AgentTurnInterrupt.Cut;
+
+    /// <summary>The id of the interrupt a launch asks of itself where the person left the chat while a turn ran or a line waited.</summary>
+    private const string LeaveInterruptId = "chat-leave";
 
     /// <summary>The stop reason of a message the model declined to write.</summary>
     private const string Declined = "refusal";
@@ -149,16 +174,28 @@ public sealed class ClaudeCodeClient(
             return NotStarted(AgentNotStartedBecause.ConfigurationWrong, refusal, run);
         }
 
+        // A launch whose commands are handed to the isolation one by one goes through Claude Code's shell prefix, which names
+        // this tool's own executable: where it cannot, no launch runs a command outside.
+        if (HandedTo(run) is not null && ClaudeShell.PrefixOf(_self().Program, _self().Leading).Problem is { } unprefixed)
+        {
+            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"Claude Code's commands could not be handed to the isolation: {unprefixed}", run);
+        }
+
+        // Where Claude Code's own process runs apart from the isolation it hands its commands to - outside, or in an outer
+        // layer that writes its own directories - it opens no agent's file itself: the engine's tool server serves the
+        // runtime's file tools in place of its own.
+        var ownFiles = HandedTo(run) is null;
         var totals = new Totals();
-        var tools = ClaudeCodeTools.Of(ground.Given);
+        var tools = ClaudeCodeTools.Of(ground.Given, ground.SideTask, ownFiles);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
 
-        // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web.
-        var served = ClaudeCodeTools.Served(AgentTools.Offered(ground, run.Commands, run.WebSearch));
+        // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web, and the
+        // file tools where Claude Code's own are not given.
+        var served = ClaudeCodeTools.Served(AgentTools.Offered(ground, run.Commands, run.WebSearch), ownFiles);
 
         if (served.Count > 0 && _tools is null)
         {
-            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"the step has the web, which this client serves through the engine's tool server ({string.Join(", ", served)}), and it was given no tool runtime to serve it with", run);
+            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"the launch takes {string.Join(", ", served)} from the engine's tool server, and this client was given no tool runtime to serve them with", run);
         }
 
         for (var entry = 0; ; entry++)
@@ -170,7 +207,9 @@ public sealed class ClaudeCodeClient(
             {
                 totals.Refused.Add(refused.Name);
 
-                if (entry + 1 < keys.Count && !totals.Worked)
+                // A chat's run is one launch: a second would answer the chat's first message again, on the channel the
+                // first had read the person's lines from. The refused key ends it, and the walk moves the chat on.
+                if (entry + 1 < keys.Count && !totals.Worked && !run.Chat)
                 {
                     await events.EmitAsync(FallbackStarted.KeyRefused(
                         model, run.Provider ?? string.Empty, ClientName, refused.Name, keys[entry + 1]!.Name,
@@ -182,6 +221,33 @@ public sealed class ClaudeCodeClient(
 
             return Finished(outcome.Result, run, totals, _clock.GetElapsedTime(began));
         }
+    }
+
+    /// <summary>
+    /// The isolation a launch hands each of its shell commands to, Claude Code's own process apart from it - in an outer layer
+    /// of its own, or outside (<see cref="Isolation.LaunchIsolation.ForClaudeCode"/>) - where its mechanism takes commands
+    /// handed to it (<see cref="IIsolationMechanism.TakesHandedCommands"/>); null where the launch has none, or runs whole
+    /// inside it.
+    /// </summary>
+    private static ProcessIsolation? HandedTo(AgentRun run)
+        => run.Isolation?.Commands is { Mechanism.TakesHandedCommands: true } isolation ? isolation : null;
+
+    /// <summary>The launch's environment, with the variables that hand its shell commands to the isolation set after it, where it has one.</summary>
+    private static IReadOnlyDictionary<string, string?> Handed(IReadOnlyDictionary<string, string?> environment, IReadOnlyList<KeyValuePair<string, string>>? shell)
+    {
+        if (shell is null)
+        {
+            return environment;
+        }
+
+        var handed = new Dictionary<string, string?>(environment, StringComparer.Ordinal);
+
+        foreach (var (name, value) in shell)
+        {
+            handed[name] = value;
+        }
+
+        return handed;
     }
 
     /// <summary>A run that never began, and why.</summary>
@@ -197,9 +263,10 @@ public sealed class ClaudeCodeClient(
             ToolCalls = totals.Calls,
             Denials = totals.Denials,
             WebRequests = totals.WebRequests,
+            FilesWritten = totals.FilesWritten,
             Duration = duration,
             Session = totals.Session,
-            Usage = totals.Used.Report(new AgentCost(Reported: totals.Cost)),
+            Usage = totals.Used.Report(totals.Cost is { } reported ? new AgentCost(Reported: reported) : null),
             Served = [.. totals.Used.Served],
             KeysRefused = [.. totals.Refused],
             SessionFilesRemoved = [.. totals.Removed],
@@ -225,6 +292,8 @@ public sealed class ClaudeCodeClient(
         public int Denials { get; set; }
 
         public int WebRequests { get; set; }
+
+        public int FilesWritten { get; set; }
 
         public bool Worked { get; set; }
 
@@ -275,6 +344,24 @@ public sealed class ClaudeCodeClient(
 
         /// <summary>The stall bound of a message the launch had not taken, counted from when <paramref name="Taken"/> messages were taken.</summary>
         public sealed record Untaken(int Taken) : Arrival;
+
+        /// <summary>
+        /// The messages of a chat ended: the person left, and a launch that was held open between their messages ends
+        /// with its last text.
+        /// </summary>
+        public sealed record ChatEnded : Arrival;
+
+        /// <summary>The engine interrupted the agent's current turn alone, the launch left open for the chat's next message.</summary>
+        public sealed record TurnInterrupted : Arrival;
+
+        /// <summary>The bound a launch the person left reads on to its cut turn's result in passed.</summary>
+        public sealed record LeaveBound : Arrival;
+
+        /// <summary>The bound a shell call's receipt is awaited in passed.</summary>
+        public sealed record ReceiptDue(string CallId) : Arrival;
+
+        /// <summary>The time to look again for the receipts a launch at its end awaits came.</summary>
+        public sealed record ReceiptsLookedFor : Arrival;
     }
 
     /// <summary>Where a launch stands with the handoff.</summary>
@@ -324,10 +411,19 @@ public sealed class ClaudeCodeClient(
         // Every call of the engine's tool server run, by its id: each runs once.
         private readonly HashSet<string> _served = new(StringComparer.Ordinal);
 
+        // Where the launch hands its commands to the isolation: the directory each command's receipt is written in, Claude
+        // Code's own temporary directory, each shell call the engine allowed whose result has not come, with the receipt at
+        // its command's head and whether it runs in the background, and each call whose receipt is awaited - whether its
+        // result came, which says it ran.
+        private string? _receipts;
+        private string? _claudeTemp;
+        private readonly Dictionary<string, (string Tool, string Receipt, bool Background)> _receipted = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string Tool, string Receipt, bool Ran)> _awaited = new(StringComparer.Ordinal);
+
         // Every call Claude Code refused by itself, by its id: each is told once, by its permission_denied line, its
         // result, or both.
         private readonly HashSet<string> _refused = new(StringComparer.Ordinal);
-        private readonly string _session = Guid.NewGuid().ToString("D");
+        private readonly string _session = run.SessionId ?? Guid.NewGuid().ToString("D");
         private readonly string _auth = run.Credential?.Auth ?? AgentAuth.Login;
 
         private AppendLog? _control;
@@ -340,6 +436,12 @@ public sealed class ClaudeCodeClient(
         // The ids of the messages written that no turn has taken yet, in the order they were written.
         private readonly List<string> _pending = [];
         private int _taken;
+
+        // How many of the messages taken a turn answered - every one taken before a turn that ended well, or that a chat's
+        // interrupt cut - and how many a chat's interrupts dropped, which the person was told to send again, whenever the
+        // receipt that says so arrives: together, in order, the messages a chat's run settled, the rest its to send again.
+        private int _answeredTaken;
+        private int _dropped;
         private string? _declined;
         private AgentAccountLimit? _limit;
         private DateTimeOffset? _resets;
@@ -351,7 +453,23 @@ public sealed class ClaudeCodeClient(
         private bool _keyRefused;
         private string? _lastText;
         private string? _lead;
+        private string? _chatText;
+        private string? _chatInterruptId;
+
+        // Whether a chat's interrupt was sent and the result it cuts has not come yet: that result is the cut turn's end,
+        // never the launch's - an interrupted turn ends on an error of its own, and the chat goes on.
+        private bool _chatCut;
         private decimal _cost;
+
+        // Whether the person left the chat - its messages ended - while a turn ran or a line waited: the launch interrupts
+        // the turn, drops the lines, reads on to the cut turn's result within the interrupt's bound, and ends there; and
+        // whether its own interrupt for that is still unanswered.
+        private bool _leaving;
+        private bool _leaveAsked;
+
+        // Whether the launch ended at its last turn's own end: its ending read from that turn's result, or nothing after
+        // that turn but the messages ending.
+        private bool _withItsLastTurn;
 
         public async Task<LaunchOutcome> RunAsync(CancellationToken cancellationToken)
         {
@@ -361,7 +479,50 @@ public sealed class ClaudeCodeClient(
 
             var settings = Path.Combine(directory, ClaudeLaunch.SettingsFileName);
             var system = Path.Combine(directory, ClaudeLaunch.SystemFileName);
-            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, run.Commands, client._platform.PathComparison));
+
+            // Claude Code's own process apart from its commands - in the outer layer it hands each in from where the mechanism
+            // starts again inside one, else outside - every shell command it starts handed to the isolation through its shell
+            // prefix, the launch's isolation written where the handed command reads it; or, where the mechanism takes no
+            // command handed to it, the whole process inside.
+            IReadOnlyList<KeyValuePair<string, string>>? shell = null;
+            var whole = run.Isolation?.ClaudeCode;
+
+            if (HandedTo(run) is { } isolation)
+            {
+                var (self, leading) = client._self();
+                var prefix = ClaudeShell.PrefixOf(self, leading).Prefix!;
+                var isolationFile = Path.Combine(directory, ClaudeShell.FileName);
+
+                // The receipts and Claude Code's own temporary directory stand in the step's directory, which no command
+                // writes: each command's receipt is written there before it is handed in, and Claude Code's own files kept
+                // from them.
+                _receipts = Path.Combine(directory, ClaudeShell.ReceiptsDirectoryName);
+                _claudeTemp = Path.Combine(directory, ClaudeShell.TempDirectoryName);
+                files.CreateDirectory(_receipts);
+                files.CreateDirectory(_claudeTemp);
+                shell = ClaudeShell.Variables(prefix, isolationFile, _claudeTemp);
+                files.WriteAllTextAtomic(isolationFile, IsolatedShell.Written(isolation, new IsolatedShellHanding(_receipts, _claudeTemp) { Variables = [.. shell.Select(variable => variable.Key)] }));
+
+                if (whole is { Profile.Outer: true })
+                {
+                    // Inside its outer layer Claude Code can make neither its own directory nor the file it keeps its state
+                    // in, and it ends at once without them: where it has never run here, each is made as it would make it -
+                    // the file holding no state yet.
+                    var own = client.Transcripts(run);
+                    files.CreateDirectory(own.ConfigDirectory);
+
+                    if (!files.FileExists(own.StateFile) && !files.DirectoryExists(own.StateFile))
+                    {
+                        files.WriteAllTextAtomic(own.StateFile, "{}\n");
+                    }
+                }
+                else if (run.Isolation?.ClaudeCodeOutside is { } outside)
+                {
+                    await Emit(new Notice($"Claude Code's own process runs outside the isolation, for {outside}: each shell command it starts is handed into the isolation through its shell prefix, and one it ran without would run outside with the user's rights, its missing receipt showing it only once it had run")).ConfigureAwait(false);
+                }
+            }
+
+            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, run.Commands, client._platform.PathComparison, isolated: shell is not null || whole is not null, shell));
             files.WriteAllTextAtomic(system, run.Mask.Redact(run.SystemPrompt));
 
             // The engine's tool server, named where the launch takes its tools and nowhere else.
@@ -391,7 +552,7 @@ public sealed class ClaudeCodeClient(
                 FileName = program,
                 Arguments = ClaudeLaunch.Arguments(run, model, _session, tools, roots, settings, system, mcp),
                 WorkingDirectory = working,
-                Environment = ClaudeLaunch.Environment(run, key, client._environment().Keys),
+                Environment = Handed(ClaudeLaunch.Environment(run, key, client._environment().Keys), shell),
                 StandardInput = ChildInput.WrittenBy((stream, exited) => Pump(_input.Reader, stream, exited)),
                 OnOutputLine = line => _arrivals.Writer.TryWrite(new Arrival.Line(line)),
                 OutputKept = StreamKept.TailOfWholeLines,
@@ -399,6 +560,7 @@ public sealed class ClaudeCodeClient(
                 ErrorKept = StreamKept.Tail,
                 CutLine = run.Mask.Cut,
                 Contained = true,
+                Isolation = whole,
                 SessionRecord = client._sessions.For(directory),
                 Timeout = run.Limits.MaxDuration,
             };
@@ -426,12 +588,17 @@ public sealed class ClaudeCodeClient(
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
+            _ = run.Interrupt?.Asked.ContinueWith(
+                _ => _arrivals.Writer.TryWrite(new Arrival.TurnInterrupted()),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
             var posting = PostAsync(ending.Token);
             After(InitializeBound, new Arrival.Uninitialized());
 
             try
             {
-                var outcome = await LoopAsync(ending.Token).ConfigureAwait(false);
+                var outcome = await HeldToTheirReceiptsAsync(await LoopAsync(ending.Token).ConfigureAwait(false), ending.Token).ConfigureAwait(false);
 
                 if (outcome.Result.Handoff is { } handoff)
                 {
@@ -450,7 +617,17 @@ public sealed class ClaudeCodeClient(
 
                 await EndAsync(process).ConfigureAwait(false);
 
-                return outcome;
+                // A chat's run says how many of the messages it was given are settled, from its own count of what each
+                // turn took and what each interrupt dropped, so the chat sends again what no turn answered; and every run
+                // whether it ended at its last turn's own end.
+                return outcome with
+                {
+                    Result = outcome.Result with
+                    {
+                        MessagesAnswered = run.Chat ? _answeredTaken + _dropped : outcome.Result.MessagesAnswered,
+                        EndedWithItsLastTurn = _withItsLastTurn,
+                    },
+                };
             }
             finally
             {
@@ -468,13 +645,16 @@ public sealed class ClaudeCodeClient(
                 {
                     totals.Denials += runtime.Tally.Denials;
                     totals.WebRequests += runtime.Tally.WebRequests;
+                    totals.FilesWritten += runtime.Tally.FilesWritten;
                 }
 
                 try
                 {
                     // However the launch ended - its outcome, a fault of the loop's, the hard stop - what its end left is
-                    // said once it has gone: what its container could not reach, and a session file it kept all the same.
+                    // said once it has gone: what its container could not reach, a shell call it ended at once with no
+                    // receipt of, and a session file it kept all the same.
                     await EndedAsync(process).ConfigureAwait(false);
+                    await SayUnreceiptedAsync().ConfigureAwait(false);
                     await RemoveSessionFileAsync().ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
@@ -482,11 +662,25 @@ public sealed class ClaudeCodeClient(
                     // The run stopped with no room left in its record: what is left to say reaches nothing, and how the
                     // launch ended stands as it is.
                 }
+
+                // Claude Code's own temporary directory goes once the launch has gone: nothing in it is a record.
+                if (_claudeTemp is not null)
+                {
+                    try
+                    {
+                        files.DeleteDirectory(_claudeTemp);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // Left in the step's directory, which no command writes.
+                    }
+                }
             }
         }
 
         /// <summary>The step's prompt, as the first message of a launch.</summary>
-        private string UserPrompt() => run.UserPrompt;
+        private string UserPrompt()
+            => run.Compaction is { Length: > 0 } compacted ? compacted : AgentPromptParts.FirstMessage(run, newConversation: true);
 
         /// <summary>Reads what reaches the launch, one thing at a time, until it has ended one way or another.</summary>
         private async Task<LaunchOutcome> LoopAsync(CancellationToken cancellationToken)
@@ -510,6 +704,10 @@ public sealed class ClaudeCodeClient(
                         : null,
                     Arrival.Served answered => OnServed(answered),
                     Arrival.ServeFailed failed => OnServeFailed(failed),
+                    Arrival.ChatEnded => ChatEnded(),
+                    Arrival.TurnInterrupted => await OnTurnInterruptedAsync().ConfigureAwait(false),
+                    Arrival.LeaveBound => _leaving ? Left(withItsLastTurn: false) : null,
+                    Arrival.ReceiptDue due => OnReceiptDue(due),
                     _ => null,
                 };
 
@@ -603,7 +801,7 @@ public sealed class ClaudeCodeClient(
             }
 
             // No MCP server but the engine's own, and that one only where the launch takes its tools: connected, every tool
-            // of it taken - a launch that did not take it has not the web it was given.
+            // of it taken - a launch that did not take it has not the web, or the file tools, it was given.
             if (init.McpServers.Select(server => server.Name).FirstOrDefault(name => name != ClaudeCodeTools.Server || _server is null) is { } other)
             {
                 return NotHost($"{Claude} connected the MCP server '{other}', which this launch was not given: --strict-mcp-config names none but the engine's own");
@@ -615,7 +813,7 @@ public sealed class ClaudeCodeClient(
 
                 if (status != "connected")
                 {
-                    return NotHost($"{Claude} did not connect the engine's tool server ({(status is null ? "its init names none" : $"it says '{status}'")}), which serves this step's {string.Join(" and ", served)}: this tool serves the web to Claude Code through it alone");
+                    return NotHost($"{Claude} did not connect the engine's tool server ({(status is null ? "its init names none" : $"it says '{status}'")}), which serves this launch {string.Join(", ", served)}, given to Claude Code through it alone");
                 }
 
                 if (served.Select(ClaudeCodeTools.ServedName).FirstOrDefault(name => !init.Tools.Contains(name, StringComparer.Ordinal)) is { } untaken)
@@ -644,7 +842,7 @@ public sealed class ClaudeCodeClient(
                     named,
                     FileContentHash.Of(Encoding.UTF8.GetBytes(Masked(run.SystemPrompt))),
                     init.Tools,
-                    [.. run.Skills.Select(skill => skill.Name)],
+                    run.Skills,
                     HandedConversation: false,
                     run.Provider,
                     Effort: run.Effort,
@@ -678,6 +876,12 @@ public sealed class ClaudeCodeClient(
                     _limit = null;
                     totals.Turns++;
                     await Emit(new TurnStarted(totals.Turns)).ConfigureAwait(false);
+
+                    // A turn that began after the person left - a line taken before the interrupt dropped it - is cut too.
+                    if (_leaving && !_leaveAsked)
+                    {
+                        AskToLeave();
+                    }
                 }
 
                 return null;
@@ -708,13 +912,15 @@ public sealed class ClaudeCodeClient(
                 }
 
                 // Every call that ran is one the engine was asked about and allowed: one that was not ends the launch at
-                // once, its result told above, since the launch has done what nothing decided.
+                // once, its result told above, since the launch has done what nothing decided. One Claude Code says did not
+                // run is held to no receipt.
                 if (!result.Ran)
                 {
+                    _receipted.Remove(result.CallId);
                     continue;
                 }
 
-                totals.Acted = true;
+                await ActedAsync().ConfigureAwait(false);
 
                 if (!_decided.TryGetValue(result.CallId, out var decided))
                 {
@@ -724,6 +930,11 @@ public sealed class ClaudeCodeClient(
                 if (!decided.Allowed)
                 {
                     return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code ran '{call.Tool}' though the engine refused it ({Claude})"), KillNow: true);
+                }
+
+                if (HeldToItsReceipt(result.CallId, call.Tool) is { } unreceipted)
+                {
+                    return unreceipted;
                 }
             }
 
@@ -858,8 +1069,157 @@ public sealed class ClaudeCodeClient(
                 return null;
             }
 
-            Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = asked.Input?.DeepClone() ?? new JsonObject() }));
+            Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = Receipted(asked.CallId, tool, asked.Input) }));
             return null;
+        }
+
+        /// <summary>
+        /// The input an allowed call is given back to run with: as asked, but a shell command of a launch that hands its
+        /// commands to the isolation, which is given back with a new receipt at its head (<see cref="IsolatedShell.Marked"/>)
+        /// - the receipt the isolated shell writes before it runs the command, and the call's result is held to.
+        /// </summary>
+        private JsonNode Receipted(string? callId, string tool, JsonNode? input)
+        {
+            var given = input?.DeepClone() ?? new JsonObject();
+
+            if (_receipts is not null
+                && callId is not null
+                && ClaudeCodeTools.Find(tool) is { Capability: AgentCapability.Run } row
+                && given is JsonObject holding
+                && holding[row.Tool.Subject] is JsonValue value
+                && value.TryGetValue<string>(out var command))
+            {
+                var receipt = IsolatedShell.NewReceipt();
+                holding[row.Tool.Subject] = IsolatedShell.Marked(command, receipt);
+                _receipted[callId] = (tool, receipt, holding[BackgroundMember] is JsonValue background && background.TryGetValue<bool>(out var behind) && behind);
+            }
+
+            return given;
+        }
+
+        /// <summary>
+        /// Holds a shell call that ran to the receipt of its command: none written means the command ran without being handed
+        /// to the isolation - a Claude Code that skips its shell prefix - and ends the launch at once. A call run in the
+        /// background comes back before its command is handed over, so its receipt is awaited for <see cref="ReceiptBound"/>,
+        /// however the launch goes on meanwhile (<see cref="HeldToTheirReceiptsAsync"/>).
+        /// </summary>
+        private LaunchOutcome? HeldToItsReceipt(string callId, string tool)
+        {
+            if (!_receipted.Remove(callId, out var receipted) || Receipted(receipted.Receipt))
+            {
+                return null;
+            }
+
+            if (!receipted.Background)
+            {
+                return Unreceipted(tool, callId, ran: true);
+            }
+
+            _awaited[callId] = (tool, receipted.Receipt, Ran: true);
+            After(ReceiptBound, new Arrival.ReceiptDue(callId));
+
+            return null;
+        }
+
+        /// <summary>A call's receipt awaited past its bound: there by now, or the launch ends.</summary>
+        private LaunchOutcome? OnReceiptDue(Arrival.ReceiptDue due)
+            => _awaited.Remove(due.CallId, out var awaited) && !Receipted(awaited.Receipt)
+                ? Unreceipted(awaited.Tool, due.CallId, awaited.Ran)
+                : null;
+
+        /// <summary>Whether the receipt <paramref name="receipt"/> was written in the launch's receipts' directory.</summary>
+        private bool Receipted(string receipt) => client._fileSystem.FileExists(Path.Combine(_receipts!, receipt));
+
+        /// <summary>
+        /// A shell call whose command left no receipt: the launch ends at once, failed, saying so - a call whose result came
+        /// back ran unhanded; one whose result never came, if it ran.
+        /// </summary>
+        private LaunchOutcome Unreceipted(string tool, string callId, bool ran)
+            => new(
+                Failed(
+                    AgentRunStatus.Failed,
+                    ran
+                        ? $"Claude Code ran the command of its '{tool}' call {callId} with no receipt of it in '{_receipts}': it was not handed to the isolation through Claude Code's shell prefix, so it ran outside its commands' isolation, where Claude Code's own process runs ({Claude})"
+                        : $"Claude Code was allowed its '{tool}' call {callId}, and the launch ended with no result of it and no receipt of its command in '{_receipts}': if it ran, it was not handed to the isolation through Claude Code's shell prefix, so it ran outside its commands' isolation, where Claude Code's own process runs ({Claude})"),
+                KillNow: true);
+
+        /// <summary>
+        /// Holds a launch at its end to the receipt of every shell call the engine allowed that has none yet - one run in the
+        /// background whose command was still being handed over, and one whose result never came - however the loop ended (a
+        /// turn's result, Claude Code gone, its output cut), before anything of the launch is ended, so a command still being
+        /// handed over writes its receipt: each is looked for again until it is there or its bound has passed
+        /// (<see cref="ReceiptBound"/>), and one missing then ends the launch failed in place of the ending it had. An ending
+        /// that ends the launch at once leaves nothing to wait for: what is missing then is said once the launch has
+        /// gone (<see cref="SayUnreceiptedAsync"/>).
+        /// </summary>
+        private async Task<LaunchOutcome> HeldToTheirReceiptsAsync(LaunchOutcome outcome, CancellationToken cancellationToken)
+        {
+            if (outcome.KillNow || _receipts is null)
+            {
+                return outcome;
+            }
+
+            foreach (var (callId, receipted) in _receipted)
+            {
+                _awaited[callId] = (receipted.Tool, receipted.Receipt, Ran: false);
+                After(ReceiptBound, new Arrival.ReceiptDue(callId));
+            }
+
+            _receipted.Clear();
+            var looking = false;
+
+            while (true)
+            {
+                foreach (var callId in _awaited.Where(entry => Receipted(entry.Value.Receipt)).Select(entry => entry.Key).ToList())
+                {
+                    _awaited.Remove(callId);
+                }
+
+                if (_awaited.Count == 0)
+                {
+                    return outcome;
+                }
+
+                if (!looking)
+                {
+                    looking = true;
+                    After(ReceiptLookAgain, new Arrival.ReceiptsLookedFor());
+                }
+
+                switch (await _arrivals.Reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    case Arrival.ReceiptDue due when OnReceiptDue(due) is { } unreceipted:
+                        _withItsLastTurn = false;
+                        return unreceipted;
+
+                    case Arrival.ReceiptsLookedFor:
+                        looking = false;
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Says, once the launch has gone, each shell call the engine allowed whose command left no receipt and that nothing
+        /// waited for - the launch was ended at once, or stopped: how it ended stands, and whether the command ran outside its
+        /// commands' isolation cannot be told.
+        /// </summary>
+        private async Task SayUnreceiptedAsync()
+        {
+            if (_receipts is null)
+            {
+                return;
+            }
+
+            var unreceipted = _receipted.Select(entry => (CallId: entry.Key, entry.Value.Tool, entry.Value.Receipt))
+                .Concat(_awaited.Select(entry => (CallId: entry.Key, entry.Value.Tool, entry.Value.Receipt)))
+                .Where(call => !Receipted(call.Receipt))
+                .ToList();
+
+            foreach (var (callId, tool, _) in unreceipted)
+            {
+                await Emit(new Notice($"The launch ended at once with no receipt in '{_receipts}' of the command of Claude Code's '{tool}' call {callId}: if it ran, it was not handed to the isolation through Claude Code's shell prefix, and ran outside its commands' isolation")).ConfigureAwait(false);
+            }
         }
 
         /// <summary>
@@ -1094,6 +1454,57 @@ public sealed class ClaudeCodeClient(
                 return null;
             }
 
+            if (answered.RequestId == _chatInterruptId)
+            {
+                _chatInterruptId = null;
+
+                if (!answered.Succeeded)
+                {
+                    _chatCut = false;
+                    await Emit(new Notice($"Claude Code refused the turn's interrupt: {Masked(answered.Error ?? "no reason given")}")).ConfigureAwait(false);
+                    return null;
+                }
+
+                // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn
+                // takes them, and the person is told, for each was theirs. The turn it cuts ends by itself, and the
+                // launch stays open for the chat's next message.
+                var dropped = _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+                _dropped += dropped;
+
+                if (dropped > 0)
+                {
+                    await Emit(new MessagesDropped(dropped, _pending.Count)).ConfigureAwait(false);
+                }
+
+                // An interrupt that found no turn to cut - it dropped the lines waiting - leaves no result to come for it.
+                if (!_inTurn)
+                {
+                    _chatCut = false;
+
+                    // A run that is no chat's - a one shot - ends where its interrupt left nothing to come.
+                    if (!run.Chat && _pending.Count == 0)
+                    {
+                        return new LaunchOutcome(Failed(AgentRunStatus.Cancelled, TurnCut));
+                    }
+                }
+
+                return Leaving() ?? Watch(null);
+            }
+
+            if (answered.RequestId == LeaveInterruptId)
+            {
+                _leaveAsked = false;
+
+                // The lines it dropped were never taken: no turn answers them, so they are the run's unsettled, which the
+                // chat sends on to its next launch - never said to the person as dropped.
+                if (answered.Succeeded)
+                {
+                    _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+                }
+
+                return Leaving();
+            }
+
             if (answered.RequestId == _interruptId && !answered.Succeeded)
             {
                 return HandedOff(null, $"Claude Code refused the interrupt: {Masked(answered.Error ?? "no reason given")}");
@@ -1108,26 +1519,43 @@ public sealed class ClaudeCodeClient(
 
             // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn takes
             // them. One Claude Code had taken for its next turn already is not named, and that turn runs - cut - first.
-            _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+            if (_pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true) is > 0 and var cancelled)
+            {
+                await Emit(new MessagesDropped(cancelled, _pending.Count)).ConfigureAwait(false);
+            }
 
             return await AskWhenCutAsync().ConfigureAwait(false);
         }
 
+        /// <summary>A turn's result, and where the launch ends at it, the launch's ending its own.</summary>
         private async Task<LaunchOutcome?> OnResultAsync(ClaudeLine.Result result)
         {
+            var outcome = await OnTurnEndedAsync(result).ConfigureAwait(false);
+            _withItsLastTurn |= outcome is not null;
+
+            return outcome;
+        }
+
+        private async Task<LaunchOutcome?> OnTurnEndedAsync(ClaudeLine.Result result)
+        {
             _inTurn = false;
-            totals.Acted = true;
+            await ActedAsync().ConfigureAwait(false);
             var served = _held ?? model;
 
-            // The first model to serve the run serves it from its first turn: a launch's turns are all of one model.
-            totals.Used.Add(served, result.Usage, 1);
+            AgentCost? part = null;
 
             if (result.CostUsd is { } cost)
             {
-                // The launch's running total, never another launch's: what the run cost is each launch's last.
+                // The launch's running total, never another launch's: what the run cost is each launch's last, and what
+                // this result added to it is the part's of the key the launch signed in with.
+                part = new AgentCost(Reported: cost - _cost);
                 totals.Cost = (totals.Cost ?? 0) - _cost + cost;
                 _cost = cost;
             }
+
+            // The first model to serve the run serves it from its first turn: a launch's turns are all of one model, on
+            // the one key it signed in with.
+            totals.Used.Add(served, result.Usage, 1, key?.Name, part);
 
             await Emit(new TurnFinished(totals.Turns, served, result.Usage, result.StopReason)).ConfigureAwait(false);
             await Emit(new UsageReported(result.Usage, totals.Used.Total)).ConfigureAwait(false);
@@ -1140,6 +1568,24 @@ public sealed class ClaudeCodeClient(
                     return await HandoffAnsweredAsync(result).ConfigureAwait(false);
             }
 
+            // The first result after a chat's interrupt is the turn it cut - or one that ended before the interrupt
+            // reached it - however it ended.
+            var cut = _chatCut;
+            _chatCut = false;
+
+            // Every message a turn took is answered by its end - a turn that ended well, or one the chat's interrupt cut;
+            // one taken by a turn that ended on an error is not, and a chat sends it again.
+            if (cut || Ending(result) is null)
+            {
+                _answeredTaken = _taken;
+            }
+
+            // A run that is no chat's - a one shot - ends at the turn its interrupt cut, with what it said and used.
+            if (cut && !run.Chat)
+            {
+                return new LaunchOutcome(Failed(AgentRunStatus.Cancelled, TurnCut));
+            }
+
             // A message the launch has not taken yet begins a turn of its own: this result is not the step's answer.
             if (_pending.Count > 0)
             {
@@ -1150,6 +1596,18 @@ public sealed class ClaudeCodeClient(
             if (_keyRefused)
             {
                 return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code reported the key {key?.Name ?? "it signed in with"} invalid: {result.Text ?? "no text"}"), KeyRefused: true);
+            }
+
+            // A chat's launch stays open between the person's messages: this turn's end is not the run's. The run ends
+            // when the engine ends the messages - the chat's exit, answered with the last text - or where the launch
+            // itself fails. A turn the chat's interrupt cut ends on an error of its own, and is no failure of the
+            // launch's: it stays open, unless the account met its limit or the model declined on the way.
+            if (run.Chat && (Ending(result) is null || (cut && _limit is null && _declined is null)))
+            {
+                _chatText = Masked(result.Text ?? _lastText ?? _chatText ?? string.Empty);
+
+                // The person left while this turn ran: the launch ends at its result, what it used counted.
+                return Leaving() ?? Watch(null);
             }
 
             if (Ending(result) is { } ended)
@@ -1288,7 +1746,8 @@ public sealed class ClaudeCodeClient(
                 return null;
             }
 
-            await SayAsync(text, AgentMessageKind.PlanUpdate).ConfigureAwait(false);
+            // A chat's posted message is the person's next line; any other run's is what a plan update changes for it.
+            await SayAsync(text, run.Chat ? AgentMessageKind.ChatMessage : AgentMessageKind.PlanUpdate).ConfigureAwait(false);
 
             return null;
         }
@@ -1372,6 +1831,13 @@ public sealed class ClaudeCodeClient(
             }
         }
 
+        /// <summary>Starts the stall bound as <see cref="Watch()"/> does, answering <paramref name="outcome"/>: the launch goes on.</summary>
+        private LaunchOutcome? Watch(LaunchOutcome? outcome)
+        {
+            Watch();
+            return outcome;
+        }
+
         /// <summary>
         /// Writes a user message, as the event that says so first - masked, as the system prompt is: the agent is never told
         /// a secret of the run's, and nothing Claude Code keeps of what it was told holds one the engine wrote.
@@ -1410,6 +1876,21 @@ public sealed class ClaudeCodeClient(
 
         private ValueTask Emit(AgentEvent @event) => events.EmitAsync(@event);
 
+        /// <summary>
+        /// The run did something that stands - a call ran, or a turn ended - so it never ends NotStarted from here
+        /// (<see cref="NotHost"/>): the sink is told the conversation began, once.
+        /// </summary>
+        private async ValueTask ActedAsync()
+        {
+            if (totals.Acted)
+            {
+                return;
+            }
+
+            totals.Acted = true;
+            await events.ConversationBegunAsync().ConfigureAwait(false);
+        }
+
         private string Masked(string text) => run.Mask.Redact(text);
 
         /// <summary>Starts the bound <paramref name="span"/>, which hands the loop <paramref name="passed"/> once it passes.</summary>
@@ -1420,13 +1901,100 @@ public sealed class ClaudeCodeClient(
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
 
-        /// <summary>Hands each message the engine posts to the loop, until the launch ends.</summary>
+        /// <summary>Hands each message the engine posts to the loop, until the launch ends; the end of the messages is the end of a chat's launch.</summary>
         private async Task PostAsync(CancellationToken cancellationToken)
         {
             await foreach (var message in run.Messages.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
                 _arrivals.Writer.TryWrite(new Arrival.Posted(message));
             }
+
+            _arrivals.Writer.TryWrite(new Arrival.ChatEnded());
+        }
+
+        /// <summary>
+        /// The chat's messages ended - the person left - and the launch that was held open for them ends with its last
+        /// text: at once where no turn runs and no line waits, its last turn's end its own; else the turn under way is
+        /// interrupted and the lines waiting dropped, as the person's interrupt does, and the launch reads on to that
+        /// turn's result - what it used counted - within the interrupt's bound, ending there. Null where the run was no
+        /// chat, for the end of any run's messages reaches here too.
+        /// </summary>
+        private LaunchOutcome? ChatEnded()
+        {
+            if (!run.Chat)
+            {
+                return null;
+            }
+
+            if (!_inTurn && _pending.Count == 0)
+            {
+                return Left(withItsLastTurn: true);
+            }
+
+            _leaving = true;
+
+            // The person's own interrupt, still unanswered, cuts the turn already; otherwise the launch asks its own.
+            if (_chatInterruptId is null)
+            {
+                AskToLeave();
+            }
+
+            After(InterruptBound, new Arrival.LeaveBound());
+
+            return null;
+        }
+
+        /// <summary>
+        /// Interrupts the turn under way, and drops the lines waiting, for the person left: the result that follows is the
+        /// cut turn's.
+        /// </summary>
+        private void AskToLeave()
+        {
+            _leaveAsked = true;
+            _chatCut = true;
+            Control(new JsonObject
+            {
+                ["type"] = "control_request",
+                ["request_id"] = LeaveInterruptId,
+                ["request"] = new JsonObject { ["subtype"] = "interrupt", ["cancel_queued"] = true },
+            });
+        }
+
+        /// <summary>The launch's end, where the person left and nothing is to come: no turn runs and no line waits.</summary>
+        private LaunchOutcome? Leaving()
+            => _leaving && !_inTurn && _pending.Count == 0 ? Left(withItsLastTurn: true) : null;
+
+        /// <summary>The chat's launch ended for the person left, with its last text.</summary>
+        /// <param name="withItsLastTurn">Whether it ends at its last turn's own end - false where a bound ended it while a turn ran.</param>
+        private LaunchOutcome Left(bool withItsLastTurn)
+        {
+            _withItsLastTurn = withItsLastTurn;
+            return new LaunchOutcome(new AgentRunResult(AgentRunStatus.Completed, FinalText: _chatText ?? _lastText ?? string.Empty));
+        }
+
+        /// <summary>
+        /// The engine interrupted the agent's current turn alone: the interrupt control request is sent, the launch
+        /// left open for the chat's next message - the turn it cuts ends by itself, and what it had said stands.
+        /// Between turns there is nothing to cut.
+        /// </summary>
+        private Task<LaunchOutcome?> OnTurnInterruptedAsync()
+        {
+            if ((!_inTurn && _pending.Count == 0) || _chatInterruptId is not null || _leaving)
+            {
+                return Task.FromResult<LaunchOutcome?>(null);
+            }
+
+            _chatInterruptId = "chat-interrupt";
+            _chatCut = true;
+            _ = Emit(new Notice("the turn was interrupted where it stands; the conversation keeps what was said")).ConfigureAwait(false);
+            Control(new JsonObject
+            {
+                ["type"] = "control_request",
+                ["request_id"] = _chatInterruptId,
+                ["request"] = new JsonObject { ["subtype"] = "interrupt", ["cancel_queued"] = true },
+            });
+
+            return Task.FromResult<LaunchOutcome?>(null);
         }
 
         /// <summary>

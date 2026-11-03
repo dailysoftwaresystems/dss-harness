@@ -403,6 +403,54 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// What a host's test invocation kept as failure evidence travels on its leg's line, read from the very document
+    /// the host writes: its directory spelled as that host spells it, and each file it names - kept, refused over the
+    /// cap, unreadable, or a path that named nothing. The evidence itself stays beside that host's own log, and
+    /// crosses back over the host's transport.
+    /// </summary>
+    [Fact]
+    public async Task WhatALegKeptOnFailureOnAHost_IsCarriedOnItsLine()
+    {
+        var written = LedgerReport
+            .From(
+                [
+                    new LegEntry
+                    {
+                        Leg = "wsl-debug",
+                        Verdict = LegVerdict.Failed,
+                        KeptOnFailure = new DssHarness.Core.Testing.KeptOnFailure(
+                            "~/.harness-config/runs/r1/wsl-debug/kept-on-failure",
+                            Bytes: 2048,
+                            Kept: ["corpus-out/report-N2-r0.json"],
+                            RefusedOverCap: ["corpus-out/huge.bin"],
+                            Unreadable: [],
+                            NamedNothing: ["absent"]),
+                    },
+                ],
+                durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var entry = await Runner(hosts).RunAsync("test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
+
+        var carried = entry.KeptOnFailure;
+
+        Assert.NotNull(carried);
+        Assert.Equal("~/.harness-config/runs/r1/wsl-debug/kept-on-failure", carried.Directory);
+        Assert.Equal(2048, carried.Bytes);
+        Assert.Equal(["corpus-out/report-N2-r0.json"], carried.Kept);
+        Assert.Equal(["corpus-out/huge.bin"], carried.RefusedOverCap);
+        Assert.Empty(carried.Unreadable);
+        Assert.Equal(["absent"], carried.NamedNothing);
+    }
+
+    /// <summary>
     /// Each arm a host's sweep was asked about travels on its leg's line as the host judged it, read from the very
     /// document the host writes: what its run measured beside what it declares, the key of what it was judged on, why
     /// --pending swept it or which passed held it, and its records as the host names them, which stay on that host - its

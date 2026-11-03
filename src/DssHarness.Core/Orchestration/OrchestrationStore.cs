@@ -56,6 +56,9 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// <summary>What a run's questions and answers are, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string QuestionsKind = "the run's questions and answers";
 
+    /// <summary>What a run's plan updates are, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string UpdatesKind = "the run's plan updates";
+
     /// <summary>What another process asked of the running engine is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string StopFileKind = "what another process asked of the running engine";
 
@@ -379,7 +382,21 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     public RunOwner? ReadOwner(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
-        return Read<RunOwner>(orchestrator.OwnerFile, OwnerKind, owner => owner.Problem());
+        return ReadOwner(orchestrator.OwnerFile, OwnerKind);
+    }
+
+    /// <summary>
+    /// The owner one owner file records - a run's engine, a side-task's chat - or null where none is recorded: strictly,
+    /// a file that cannot be read, holds null or does not hold together refused, never read as no owner.
+    /// </summary>
+    /// <param name="ownerFile">The owner file.</param>
+    /// <param name="what">What the file is, as a refusal names it: <see cref="OwnerKind"/> for a run's.</param>
+    /// <exception cref="HarnessException">The owner cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public RunOwner? ReadOwner(string ownerFile, string what)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerFile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(what);
+        return Read<RunOwner>(ownerFile, what, owner => owner.Problem());
     }
 
     /// <summary>Writes the run's owner.</summary>
@@ -388,8 +405,19 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     public void WriteOwner(OrchestratorLayout orchestrator, RunOwner owner)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
+        WriteOwner(orchestrator.OwnerFile, OwnerKind, owner);
+    }
+
+    /// <summary>Writes the owner of one owner file.</summary>
+    /// <param name="ownerFile">The owner file.</param>
+    /// <param name="what">What the file is, as the front end is told it was written: <see cref="OwnerKind"/> for a run's.</param>
+    /// <param name="owner">The owner, which must be one.</param>
+    public void WriteOwner(string ownerFile, string what, RunOwner owner)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerFile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(what);
         ArgumentNullException.ThrowIfNull(owner);
-        Write(orchestrator.OwnerFile, OwnerKind, owner, owner.Problem());
+        Write(ownerFile, what, owner, owner.Problem());
     }
 
     /// <summary>Removes the run's owner, where the run holds one.</summary>
@@ -397,10 +425,18 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     public void RemoveOwner(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
+        RemoveOwner(orchestrator.OwnerFile);
+    }
 
-        if (_fileSystem.KindOf(orchestrator.OwnerFile) == PathKind.File)
+    /// <summary>Removes the owner one owner file records, where it records one.</summary>
+    /// <param name="ownerFile">The owner file.</param>
+    public void RemoveOwner(string ownerFile)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerFile);
+
+        if (_fileSystem.KindOf(ownerFile) == PathKind.File)
         {
-            _fileSystem.DeleteFile(orchestrator.OwnerFile);
+            _fileSystem.DeleteFile(ownerFile);
         }
     }
 
@@ -440,6 +476,58 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(file);
         Write(orchestrator.QuestionsFile, QuestionsKind, file, file.Problem());
+    }
+
+    /// <summary>Every plan update the run has taken, or null where the run holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public FlowUpdatesFile? ReadFlowUpdates(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<FlowUpdatesFile>(orchestrator.UpdatesFile, UpdatesKind, file => file.Problem());
+    }
+
+    /// <summary>Writes the run's plan updates, whole.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="file">The plan updates, which must be one.</param>
+    public void WriteFlowUpdates(OrchestratorLayout orchestrator, FlowUpdatesFile file)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(file);
+        Write(orchestrator.UpdatesFile, UpdatesKind, file, file.Problem());
+    }
+
+    /// <summary>
+    /// Takes one plan update into the run's record, whole: read and written inside the run's own section, so two writers
+    /// of the file never lose an entry each other wrote, and the id - <c>u&lt;n&gt;</c>, over every update the file holds -
+    /// is given under the same lock, so two can never take one id. Whether a change is handed to a live engine or
+    /// recorded here queued is decided by its caller in the repository's one section every session claims its run in,
+    /// never by this lock.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="run">The run's name, as the file holds it.</param>
+    /// <param name="at">When the update was taken.</param>
+    /// <param name="make">The entry, given the count of updates the file holds and the id the next one takes.</param>
+    /// <returns>The entry as it was written.</returns>
+    public FlowUpdateEntry AddUpdate(OrchestratorLayout orchestrator, string run, DateTimeOffset at, Func<string, FlowUpdateEntry> make)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentException.ThrowIfNullOrWhiteSpace(run);
+        ArgumentNullException.ThrowIfNull(make);
+
+        return Exclusively(orchestrator, () =>
+        {
+            var file = ReadFlowUpdates(orchestrator) ?? new FlowUpdatesFile(1, run, at, []);
+            var entry = make(file.NextId());
+
+            if (entry.Problem() is { } problem)
+            {
+                throw new HarnessException(HarnessExit.Refused, $"{UpdatesKind} cannot hold the update: {problem}");
+            }
+
+            WriteFlowUpdates(orchestrator, file with { UpdatedAt = at, Updates = [.. file.Updates, entry] });
+            return entry;
+        });
     }
 
     /// <summary>What another process asked of the running engine, or null where nothing waits to be taken.</summary>
@@ -528,13 +616,32 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     }
 
     /// <summary>
-    /// Removes one answer from the run's inbox by its id, once the engine has written it where it belongs - read and
-    /// written inside the run's own section, so an answer added meanwhile is kept - and the file itself where the inbox
-    /// empties.
+    /// Adds an amendment of the request to the run's inbox, keeping what is there, whole: read and written inside the
+    /// run's own section, so an amendment and an answer handed over at once are both kept.
     /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
-    /// <param name="id">The answer's id, as its entry names it.</param>
-    /// <returns>Whether the inbox held the answer.</returns>
+    /// <param name="amendment">The amendment on its way to the engine, under an id of its own.</param>
+    public void AddAmendmentToInbox(OrchestratorLayout orchestrator, FlowInboxAmendment amendment)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(amendment);
+
+        _ = Exclusively(orchestrator, () =>
+        {
+            var inbox = ReadInbox(orchestrator) ?? new FlowInboxFile(1, []);
+            WriteInbox(orchestrator, inbox with { Amendments = [.. inbox.Amendments ?? [], amendment] });
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// Removes one thing a person handed over - an answer, or an amendment of the request - from the run's inbox by
+    /// its id, once the engine has written it where it belongs - read and written inside the run's own section, so
+    /// what was added meanwhile is kept - and the file itself where the inbox empties.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="id">The entry's id, as its entry names it.</param>
+    /// <returns>Whether the inbox held the entry.</returns>
     public bool RemoveFromInbox(OrchestratorLayout orchestrator, string id)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
@@ -542,20 +649,23 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
 
         return Exclusively(orchestrator, () =>
         {
-            if (ReadInbox(orchestrator) is not { } inbox || inbox.Answers.All(answer => !string.Equals(answer.Id, id, StringComparison.Ordinal)))
+            if (ReadInbox(orchestrator) is not { } inbox
+                || (inbox.Answers.All(answer => !string.Equals(answer.Id, id, StringComparison.Ordinal))
+                    && (inbox.Amendments ?? []).All(amendment => !string.Equals(amendment.Id, id, StringComparison.Ordinal))))
             {
                 return false;
             }
 
-            List<FlowInboxAnswer> left = [.. inbox.Answers.Where(answer => !string.Equals(answer.Id, id, StringComparison.Ordinal))];
+            List<FlowInboxAnswer> answers = [.. inbox.Answers.Where(answer => !string.Equals(answer.Id, id, StringComparison.Ordinal))];
+            List<FlowInboxAmendment> amendments = [.. (inbox.Amendments ?? []).Where(amendment => !string.Equals(amendment.Id, id, StringComparison.Ordinal))];
 
-            if (left.Count == 0)
+            if (answers.Count == 0 && amendments.Count == 0)
             {
                 _fileSystem.DeleteFile(orchestrator.InboxFile);
             }
             else
             {
-                WriteInbox(orchestrator, inbox with { Answers = left });
+                WriteInbox(orchestrator, inbox with { Answers = answers, Amendments = amendments });
             }
 
             return true;

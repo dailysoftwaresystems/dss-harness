@@ -738,7 +738,7 @@ public sealed class WorktreeServiceTests
         Assert.True(string.IsNullOrWhiteSpace((await BaseCommitAsync()).StandardOutput), "The base commit record outlived its worktree.");
 
         Task<DssHarness.Core.Git.GitCommandResult> BaseCommitAsync()
-            => harness.GitClient.RunAsync(temp.Path, ["rev-parse", "--verify", "--quiet", WorktreeService.BaseCommitRefPrefix + "wt"], cancellationToken: cancellationToken);
+            => harness.GitClient.RunAsync(temp.Path, ["rev-parse", "--verify", "--quiet", WorktreeKeepalive.BasePrefix + "wt"], cancellationToken: cancellationToken);
     }
 
     /// <summary>

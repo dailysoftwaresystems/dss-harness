@@ -10,6 +10,7 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Web;
+using DssHarness.Core.Web.Search;
 
 namespace DssHarness.Tests;
 
@@ -205,22 +206,79 @@ public sealed class ClaudeApiClientTests : IDisposable
 
     /// <summary>
     /// A first request the API refuses as a model the key's organization is not given means the step never began, saying
-    /// what to do; a declined request ends the step refused with its category and the credit it left the next model.
+    /// what to do; a declined request moves the step to its next model of the same provider and client - the same
+    /// request sent again with the model changed and the credit the decline left sent back - and where the step names
+    /// no later model the ending stands with the category and the credit.
     /// </summary>
     [Fact]
-    public async Task AModelTheOrganizationIsNotGiven_NeverBegins_AndADeclineLeavesItsCredit()
+    public async Task AModelTheOrganizationIsNotGiven_NeverBegins_AndADeclineMovesToItsNextModel()
     {
         _endpoint
             .Then(ApiReply.Error(400, "invalid_request_error", "In order to access this model, your organization must have data retention enabled."))
-            .Then(ApiReply.Fixture("refusal.sse"));
+            .Then(ApiReply.Fixture("refusal.sse"))
+            .Then(ApiReply.Stream(ClaudeApiFixtures.Read("answer.sse").Replace("claude-opus-5-5", "claude-opus-5", StringComparison.Ordinal)));
 
         var unserved = await Ran(Run());
-        var declined = await Ran(Run() with { Fallback = [new AgentFallbackModel("claude-opus-5", "anthropic", ClaudeApiClient.ClientName, null, UsableHere: true)] });
+        var moved = await Ran(Run() with { Fallback = [Entry("claude-opus-5", "anthropic", ClaudeApiClient.ClientName)] });
 
         Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (unserved.Status, unserved.NotStartedBecause));
         Assert.Contains("is not given 'claude-opus-5-5'", unserved.Error, StringComparison.Ordinal);
-        Assert.Equal((AgentRunStatus.Refused, "cyber", new AgentFallbackCredit("fct_000000000000000000000001", false)), (declined.Status, declined.DeclinedFor, declined.Credit));
-        Assert.Equal("context-management-2025-06-27,fallback-credit-2026-07-01", _endpoint.Asked[1].Headers["anthropic-beta"]);
+
+        // The retry is the declined request with the model changed and nothing else, the credit sent back with it, and
+        // the decline's turn thrown away: none of it in the messages the retry sends.
+        Assert.Equal(AgentRunStatus.Completed, moved.Status);
+        Assert.Equal(["claude-opus-5-5", "claude-opus-5"], _endpoint.Asked.Skip(1).Select(sent => JsonNode.Parse(sent.Body)!["model"]!.GetValue<string>()));
+
+        var movedOn = Assert.Single(_events.All.OfType<FallbackStarted>());
+
+        Assert.Equal(("claude-opus-5-5", "claude-opus-5", "declined (cyber)", "the request sent again", true), (movedOn.FromModel, movedOn.ToModel, movedOn.Why, movedOn.How, movedOn.CreditAsked));
+
+        var (declined, retry) = (JsonNode.Parse(_endpoint.Asked[1].Body)!.AsObject(), JsonNode.Parse(_endpoint.Asked[2].Body)!.AsObject());
+
+        Assert.Null(declined["fallback_credit_token"]);
+        Assert.Equal("fct_000000000000000000000001", retry["fallback_credit_token"]!.GetValue<string>());
+        retry.Remove("fallback_credit_token");
+        retry["model"] = declined["model"]!.DeepClone();
+        Assert.Equal(declined.ToJsonString(), retry.ToJsonString());
+        Assert.Equal("context-management-2025-06-27,fallback-credit-2026-07-01", _endpoint.Asked[2].Headers["anthropic-beta"]);
+        Assert.Equal(["claude-opus-5-5", "claude-opus-5"], moved.Served.Select(served => served.Model));
+
+        var alone = new ApiEndpoint().Then(ApiReply.Fixture("refusal.sse"));
+        var ended = await Client(alone).RunAsync(Run() with { Fallback = [] }, _events, TestContext.Current.CancellationToken);
+
+        Assert.Equal((AgentRunStatus.Refused, "cyber", new AgentFallbackCredit("fct_000000000000000000000001", false)), (ended.Status, ended.DeclinedFor, ended.Credit));
+    }
+
+    /// <summary>
+    /// A move to a model the step gives another effort is told on the wire as the API takes it: the change appended to
+    /// the conversation under the mid-conversation beta, the request's top-level effort staying the conversation's
+    /// first, and no credit token.
+    /// </summary>
+    [Fact]
+    public async Task AMoveToAnotherEffort_IsToldInTheConversation_AndTheTopEffortStaysTheFirsts()
+    {
+        _endpoint
+            .Then(ApiReply.Fixture("refusal.sse"))
+            .Then(ApiReply.Stream(ClaudeApiFixtures.Read("answer.sse").Replace("claude-opus-5-5", "claude-opus-5", StringComparison.Ordinal)));
+
+        var run = Run() with
+        {
+            Effort = "low",
+            Fallback = [Entry("claude-opus-5", "anthropic", ClaudeApiClient.ClientName, effort: "high")],
+        };
+
+        var result = await Ran(run);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+
+        var (declined, retry) = (JsonNode.Parse(_endpoint.Asked[0].Body)!, JsonNode.Parse(_endpoint.Asked[1].Body)!);
+
+        Assert.Equal("low", declined["output_config"]!["effort"]!.GetValue<string>());
+        Assert.Equal("low", retry["output_config"]!["effort"]!.GetValue<string>());
+        Assert.Null(retry["fallback_credit_token"]);
+
+        Assert.Equal("context-management-2025-06-27,fallback-credit-2026-07-01,mid-conversation-output-config-2026-07-01", _endpoint.Asked[1].Headers["anthropic-beta"]);
+        Assert.Contains(Messages(_endpoint.Asked[1]), message => JsonNode.Parse(message) is { } told && told["role"]!.GetValue<string>() == "system" && told["output_config"]!["effort"]!.GetValue<string>() == "high");
     }
 
     /// <summary>A step with no entries, or entries of another provider's type, never begins: every request is built from them.</summary>
@@ -263,11 +321,13 @@ public sealed class ClaudeApiClientTests : IDisposable
             (body["cache_control"]!["ttl"]!.GetValue<string>(), body["system"]![0]!["cache_control"]!["ttl"]!.GetValue<string>(), body["metadata"]!["user_id"]!.GetValue<string>()));
         Assert.Equal("context-management-2025-06-27,b-2026-01-01", _endpoint.Asked[0].Headers["anthropic-beta"]);
 
-        var budgeted = await Client().RunAsync(Run(entry) with { Limits = new AgentLimits(null, 5m, null, null) }, _events, TestContext.Current.CancellationToken);
+        // What the client is billed by on an hour-long cache is that cache's writes: the runner's one rule asks their
+        // price of a step budgeted in dollars before any client is taken.
+        var entries = Run(entry).Entries!;
 
         Assert.Equal(
-            (AgentRunStatus.NotStarted, "client 'claude-api' was not started: no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite1h), and a budget is charged with the cost counted from them"),
-            (budgeted.Status, budgeted.Error));
+            "no price for 'claude-opus-5-5' (providers 'anthropic', model 'claude-opus-5-5': priceCacheWrite1h), and a budget is charged with the cost counted from them",
+            AgentPrices.BudgetRefusal(entries.Provider, entries.Model, ((IAgentClient)Client()).BilledBy(entries)));
         Assert.Single(_endpoint.Asked);
     }
 
@@ -348,10 +408,10 @@ public sealed class ClaudeApiClientTests : IDisposable
         }
     }
 
-    private ClaudeApiClient Client()
+    private ClaudeApiClient Client(ApiEndpoint? endpoint = null)
     {
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
-        var connection = new ApiConnection(TimeProvider.System, _endpoint);
+        var connection = new ApiConnection(TimeProvider.System, endpoint ?? _endpoint);
         var host = new AgentToolHost(_harness.FileSystem, _harness.Platform, _harness.GitClient, new PhaseRunner(_harness.ProcessRunner, _harness.FileSystem, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System);
         _opened.Add(fetch);
 
@@ -372,6 +432,113 @@ public sealed class ClaudeApiClientTests : IDisposable
             () => 0);
     }
 
+    /// <summary>
+    /// A side-task's native search is one request of the harness's own: the provider's web search server tool declared
+    /// alone, the request signed with the side-task's key, its results read from the answer's
+    /// <c>web_search_tool_result</c> blocks and all it used - its tokens, the results billed as input among them, and its
+    /// searches - from the answer's usage, for the run to price - and no conversation of the run's touched.
+    /// </summary>
+    [Fact]
+    public async Task ANativeSearch_AsksTheProvidersOwn_ReadingItsResultsAndAllItUsed()
+    {
+        _endpoint.Then(ApiReply.Stream(
+            "event: message_start\n"
+            + "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1200,\"output_tokens\":1}}}\n\n"
+            + "event: content_block_start\n"
+            + "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"web_search_tool_result\",\"content\":"
+            + "[{\"type\":\"web_search_result\",\"title\":\"One\",\"url\":\"https://example.org/1\"},"
+            + "{\"type\":\"web_search_result\",\"title\":\"Two\",\"url\":\"https://example.org/2\"}]}}\n\n"
+            + "event: message_delta\n"
+            + "data: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"input_tokens\":3400,\"output_tokens\":30,\"server_tool_use\":{\"web_search_requests\":2}}}\n\n"
+            + "event: message_stop\n"
+            + "data: {\"type\":\"message_stop\"}\n\n"));
+
+        var connection = new ApiConnection(TimeProvider.System, _endpoint);
+        _opened.Add(connection);
+        var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com");
+
+        var (part, used, failure) = await search.SearchAsync("polymorphism in System.Text.Json", "claude-sonnet-5-5", new AgentKey("SPARE_KEY", "sk-2"), TestContext.Current.CancellationToken);
+
+        Assert.Equal((new AgentUsage(3400, 30, 0, 0, 0, 2), (ChatFailure?)null), (used, failure));
+        Assert.Equal("native", part.Source);
+        Assert.Equal(WebSearchOutcome.Ok, part.Answer.Outcome);
+        Assert.Equal(["One", "Two"], part.Answer.Results.Select(result => result.Title));
+        Assert.All(part.Answer.Results, result => Assert.StartsWith("https://example.org/", result.Link, StringComparison.Ordinal));
+
+        // Asked of the model and signed with the key it was given: the ones serving the run when the agent asked.
+        var asked = _endpoint.Asked.Single();
+        var body = JsonNode.Parse(asked.Body!)!;
+
+        Assert.Equal([ClaudeApiNativeSearch.ToolType], body["tools"]!.AsArray().Select(tool => tool!["type"]!.GetValue<string>()));
+        Assert.Equal(("claude-sonnet-5-5", "sk-2"), (body["model"]!.GetValue<string>(), asked.Headers.Single(header => header.Key == "x-api-key").Value));
+        Assert.Equal(DssHarness.Core.Codebase.EstimatedTokens.Of(asked.Body!), search.InputTokens("polymorphism in System.Text.Json", "claude-sonnet-5-5"));
+    }
+
+    /// <summary>
+    /// A native search the provider fails is a part that says so, never one with no results: an error the stream sends,
+    /// a request the API refuses, one that never reaches it, a stream cut short, and a search the tool itself says
+    /// failed - each a failed part saying why, the configured sources' answers standing beside it.
+    /// </summary>
+    [Fact]
+    public async Task ANativeSearchTheProviderFails_IsAFailedPartSayingWhy_NeverOneWithNoResults()
+    {
+        var replies = new (ApiReply Reply, string Why)[]
+        {
+            (ApiReply.Stream("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"), "the API's stream failed: overloaded_error: Overloaded"),
+            (
+                ApiReply.Error(400, "invalid_request_error", "web search is not enabled for this organization"),
+                $"the API answered 400 invalid_request_error: web search is not enabled for this organization (request req_000000000000000000000009); if the request itself is not at fault, the organization this key belongs to is not given '{Model}' - a model that needs 30-day data retention is refused this way where the organization keeps less - and another model can be put first under its tier in tierConfig, or named on the step"),
+            (ApiReply.Unreachable("no route to host"), "the API could not be reached: no route to host"),
+            (ApiReply.Cut("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"), "the answer's stream was cut: the connection was reset"),
+            (ApiReply.Stream(
+                "event: content_block_start\n"
+                + "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"web_search_tool_result\",\"content\":{\"type\":\"web_search_tool_result_error\",\"error_code\":\"max_uses_exceeded\"}}}\n\n"
+                + "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"), "the provider's own search failed: max_uses_exceeded"),
+        };
+
+        var said = new List<string?>();
+
+        foreach (var (reply, _) in replies)
+        {
+            var endpoint = new ApiEndpoint();
+            endpoint.Then(reply);
+            var connection = new ApiConnection(TimeProvider.System, endpoint);
+            _opened.Add(connection);
+            var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com");
+
+            var (part, _, _) = await search.SearchAsync("anything", Model, new AgentKey("WORK_KEY", "sk-1"), TestContext.Current.CancellationToken);
+
+            Assert.Equal(("native", WebSearchOutcome.Failed), (part.Source, part.Answer.Outcome));
+            Assert.Empty(part.Answer.Results);
+            said.Add(part.Answer.Why);
+        }
+
+        Assert.Equal(replies.Select(reply => reply.Why), said);
+    }
+
+    /// <summary>
+    /// A side-task's run is handed the provider's own search and a step's is not; a 429 the search meets is given back
+    /// as the failure it is, read as every failure of the API's, for the gate of the loop that asked it to hold the lane
+    /// by.
+    /// </summary>
+    [Fact]
+    public async Task ANativeSearch_IsASideTasksAlone_AndGivesBackThe429ItMet()
+    {
+        _endpoint.Then(ApiReply.Error(429, "rate_limit_error", "slow down", TimeSpan.FromSeconds(30)));
+        var connection = new ApiConnection(TimeProvider.System, _endpoint);
+        _opened.Add(connection);
+        var step = Run() with { WebSearch = new AgentWebSearch([], 3, 4, new Dictionary<string, WebSearchKey>()) };
+        var sideTask = step with { Ground = step.Ground! with { SideTask = true } };
+
+        Assert.Null(ClaudeApiClient.WithNativeSearch(connection, step, step.Entries!).NativeSearch);
+
+        var search = ClaudeApiClient.WithNativeSearch(connection, sideTask, sideTask.Entries!).NativeSearch!;
+        var (part, _, failure) = await search.SearchAsync("anything", Model, new AgentKey("WORK_KEY", "sk-1"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(WebSearchOutcome.Failed, part.Answer.Outcome);
+        Assert.Equal((ChatFailureKind.RateLimited, TimeSpan.FromSeconds(30)), (failure!.Kind, failure.RetryAfter));
+    }
+
     private async Task<AgentRunResult> Ran(AgentRun run)
     {
         var result = await Client().RunAsync(run, _events, TestContext.Current.CancellationToken);
@@ -385,6 +552,25 @@ public sealed class ClaudeApiClientTests : IDisposable
             new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", Currency = "USD" },
             new AgentModelConfig { Code = Model, MaxOutputTokens = 64000, ContextTokens = 1000000, PriceInputMiss = 4, PriceInputHit = 0.2, PriceOutput = 20, PriceCacheWrite = 5 },
             client);
+
+    /// <summary>One entry of the run's order, of this client's provider, for a fallback a test names.</summary>
+    private static AgentRunEntry Entry(string model, string provider = "anthropic", string? client = null, string? effort = null, bool usable = true)
+        => new(
+            model,
+            provider,
+            client ?? ClaudeApiClient.ClientName,
+            "WORK_KEY",
+            effort,
+            usable,
+            usable ? null : "no file under '.harness-config/workflows/.env/' declares 'WORK_KEY'")
+        {
+            Entries = usable
+                ? new AgentEntries(
+                    Entries().Provider,
+                    new AgentModelConfig { Code = model, MaxOutputTokens = 64000, ContextTokens = 1000000, PriceInputMiss = 4, PriceInputHit = 0.2, PriceOutput = 20, PriceCacheWrite = 5 },
+                    Entries().Client)
+                : null,
+        };
 
     private AgentRun Run(AgentClientConfig? client = null)
         => AgentRuns.Of(_step, _worktree, null, PolicyGrounds.Of(_worktree, [_worktree], [_worktree], [], [], [], null)) with

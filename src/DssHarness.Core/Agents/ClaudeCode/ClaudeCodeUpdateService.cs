@@ -20,15 +20,34 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// <param name="ExitCode">The code a run refused by it exits with; 0 where it is ready.</param>
 /// <param name="Message">The one line: what it is and where, or the refusal.</param>
 /// <param name="Details">The lines under it: what npm holds since a change that failed, npm's own last lines.</param>
-public sealed record ClaudeCodeAnswer(bool Ready, int ExitCode, string Message, IReadOnlyList<string> Details)
+/// <param name="Program">The program a run starts, where one is ready; null where none is.</param>
+/// <param name="Version">The version that program answered, where one is ready; null where it was not asked.</param>
+public sealed record ClaudeCodeAnswer(bool Ready, int ExitCode, string Message, IReadOnlyList<string> Details, string? Program = null, string? Version = null)
 {
     /// <summary>One Claude Code a run may start, said in the line a run says when it starts: the version its program answered.</summary>
     public static ClaudeCodeAnswer ReadyAt(SemanticVersion version, string program)
     {
         ArgumentNullException.ThrowIfNull(version);
 
-        return new(true, 0, $"claude {version}, installed with npm: '{program}'", []);
+        return new(true, 0, $"claude {version}, installed with npm: '{program}'", [], program, version.ToString());
     }
+}
+
+/// <summary>
+/// What asks for Claude Code, as a refusal names it: what a person starts again once the cause is gone - a run, whose
+/// step, advisor or reporter needs it, or a side-task - and which of its parts needs the client.
+/// </summary>
+/// <param name="Noun">What is started again: <c>run</c> or <c>side-task</c>.</param>
+/// <param name="Needing">Which of it needs the client, as a refusal says it after the client's name: <c> (step 'plan')</c>; empty where the asker names none.</param>
+public sealed record ClaudeCodeAsker(string Noun, string Needing)
+{
+    /// <summary>A run, <paramref name="needing"/> saying which of its parts needs the client.</summary>
+    /// <param name="needing">Which of the run needs the client: <c> (step 'plan')</c>, <c> (the run's reporter)</c>; empty where none is named.</param>
+    public static ClaudeCodeAsker Run(string needing = "") => new("run", needing);
+
+    /// <summary>The side-task <paramref name="task"/>.</summary>
+    /// <param name="task">The side-task's name.</param>
+    public static ClaudeCodeAsker SideTask(string task) => new("side-task", $" (side-task '{task}')");
 }
 
 /// <summary>
@@ -114,23 +133,53 @@ public sealed class ClaudeCodeUpdateService(
         => BatchFiles.Is(program) || Path.GetExtension(program.TrimEnd('.', ' ')).Equals(".ps1", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Makes the Claude Code a run needs ready, or the refusal that says why it cannot be: a program a person named
+    /// Makes the Claude Code a run's step or a side-task needs ready, or the refusal that says why it cannot be, in the
+    /// asker's own words of what to start again: a program a person named
     /// is only read, never moved; where installing and updating are turned off, what is installed is only said; where
     /// they are on, npm is asked what it holds and the change is run where it must be - never beside a session.
     /// </summary>
     /// <param name="layout">The repository's layout, where the slot is; null where no slot is to be asked.</param>
     /// <param name="appointed">Every name the configuration appoints, of providers, clients and web-search sources.</param>
     /// <param name="client">The configuration's entry for the client being made ready; null where it declares none (<see cref="UpdatesOn"/>).</param>
-    /// <param name="steps">The steps that need the client, as a refusal names them; empty where the asker names none.</param>
+    /// <param name="asker">What needs the client - a run's step, a side-task - as a refusal names it and says what to start again.</param>
     /// <param name="cancellationToken">Stops everything before the change; the change itself, once begun, is never stopped.</param>
-    public async Task<ClaudeCodeAnswer> ReadyAsync(
+    public Task<ClaudeCodeAnswer> ReadyAsync(
         HarnessLayout? layout,
         IReadOnlyList<AppointedKey> appointed,
         AgentClientConfig? client,
-        string steps,
+        ClaudeCodeAsker asker,
         CancellationToken cancellationToken = default)
+        => AnswerAsync(layout, appointed, client, asker, mayChange: true, cancellationToken);
+
+    /// <summary>
+    /// The Claude Code a run that only reads would start, found as <see cref="ReadyAsync"/> finds it and never changed:
+    /// where npm holds none, or one older than this tool needs, it is refused (14), for installing and updating are a
+    /// run's step's or a side-task's to do - the run's advisor and its reporter find the program and move nothing.
+    /// </summary>
+    /// <param name="layout">The repository's layout, where the slot is; null where no slot is to be asked.</param>
+    /// <param name="appointed">Every name the configuration appoints, of providers, clients and web-search sources.</param>
+    /// <param name="client">The configuration's entry for the client; null where it declares none.</param>
+    /// <param name="asker">What needs the client - a run's advisor or reporter - as a refusal names it.</param>
+    /// <param name="cancellationToken">Stops the asking.</param>
+    public Task<ClaudeCodeAnswer> FoundAsync(
+        HarnessLayout? layout,
+        IReadOnlyList<AppointedKey> appointed,
+        AgentClientConfig? client,
+        ClaudeCodeAsker asker,
+        CancellationToken cancellationToken = default)
+        => AnswerAsync(layout, appointed, client, asker, mayChange: false, cancellationToken);
+
+    /// <summary>The Claude Code <paramref name="asker"/> needs, made ready where <paramref name="mayChange"/> lets a change run, else only found.</summary>
+    private async Task<ClaudeCodeAnswer> AnswerAsync(
+        HarnessLayout? layout,
+        IReadOnlyList<AppointedKey> appointed,
+        AgentClientConfig? client,
+        ClaudeCodeAsker asker,
+        bool mayChange,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(appointed);
+        ArgumentNullException.ThrowIfNull(asker);
 
         // A program a person named is that person's own choice: started as named, asked nothing of npm, and neither
         // installed, nor updated, nor second-guessed by this tool. The slot need hold no such name; where its files do
@@ -163,8 +212,11 @@ public sealed class ClaudeCodeUpdateService(
         {
             return Refused(
                 HarnessExit.ToolMissing,
-                $"this run needs a Claude model through the client 'claude-code'{steps}, and {found.Missing}. "
-                + "This tool installs Claude Code and brings it up to date with npm. Install Node.js 22 or later, which brings npm, and start the run again");
+                mayChange
+                    ? $"this {asker.Noun} needs a Claude model through the client 'claude-code'{asker.Needing}, and {found.Missing}. "
+                        + $"This tool installs Claude Code and brings it up to date with npm. Install Node.js 22 or later, which brings npm, and start the {asker.Noun} again"
+                    : $"this needs a Claude model through the client 'claude-code'{asker.Needing}, and {found.Missing}; this only finds Claude Code - "
+                        + $"installing it and bringing it up to date are a run's step's or a side-task's to do. Install Node.js 22 or later, which brings npm, and then run it by hand: {InstallCommand()}");
         }
 
         var asked = await _npm.RootAsync(npm, cancellationToken).ConfigureAwait(false);
@@ -211,6 +263,15 @@ public sealed class ClaudeCodeUpdateService(
                     + "(npm install --ignore-scripts) is the usual cause.");
         }
 
+        if (!mayChange)
+        {
+            return Refused(
+                HarnessExit.ToolMissing,
+                $"this needs a Claude model through the client 'claude-code'{asker.Needing}, "
+                    + (held.Version is { } installed ? $"npm holds claude {installed}" : "npm holds no Claude Code")
+                    + $", and this tool needs {Needed}; this only finds Claude Code - installing it and bringing it up to date are a run's step's or a side-task's to do. Run it by hand: {InstallCommand()}");
+        }
+
         if (!UpdatesOn(client) || _environment(UpdatesVariable) is { Length: > 0 })
         {
             var turnedOff = !UpdatesOn(client)
@@ -254,7 +315,7 @@ public sealed class ClaudeCodeUpdateService(
                 return Refused(
                     HarnessExit.Refused,
                     $"a session of Claude Code is running on this machine ({string.Join(", ", running.Select(sessions.Said))}); "
-                    + "start the run again when they have ended.");
+                    + $"start the {asker.Noun} again when they have ended.");
             }
         }
 
@@ -379,7 +440,7 @@ public sealed class ClaudeCodeUpdateService(
         }
 
         return AtLeast(version, NeededVersion)
-            ? new ClaudeCodeAnswer(true, 0, $"claude {version}, named by the slot: '{program}'", [])
+            ? new ClaudeCodeAnswer(true, 0, $"claude {version}, named by the slot: '{program}'", [], program, version.ToString())
             : Refused(
                 HarnessExit.ToolMissing,
                 $"'{program}' is claude {version}, older than this tool needs ({Needed}), and a program a person named is never updated. "

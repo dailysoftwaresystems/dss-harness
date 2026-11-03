@@ -34,8 +34,10 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name, which names its agents' worktrees' directory.</param>
     /// <param name="definition">The workflow, whose leg steps say which copies a worktree keeps.</param>
+    /// <param name="mostItems">Whether the list is held to the bound of <see cref="MostItems"/>: a plan's list and a round's own are; what updates place in a round may come to hold more.</param>
+    /// <param name="noItems">Whether a list of no work item is a problem: one that carries only what updates placed is not.</param>
     /// <returns>Every problem of the plan, in the order of its items; none where it passes.</returns>
-    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition)
+    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, bool mostItems = true, bool noItems = true)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(context);
@@ -44,14 +46,14 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
         if (items.Count == 0)
         {
-            return [NoItems];
+            return noItems ? [NoItems] : [];
         }
 
         var problems = new List<string>();
 
-        if (items.Count > MostItems)
+        if (mostItems && items.Count > MostItems)
         {
-            problems.Add($"the plan holds {items.Count.ToString(CultureInfo.InvariantCulture)} work items, and a plan holds at most {MostItems.ToString(CultureInfo.InvariantCulture)}, each one builder's cycle: merge the smallest, or leave some to a later run");
+            problems.Add(MostItemsProblem(items.Count));
         }
 
         var read = new List<Item>();
@@ -101,6 +103,104 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         return problems;
     }
 
+    /// <summary>What says a list of work items holds more than a plan may: <paramref name="count"/> is how many it holds.</summary>
+    public static string MostItemsProblem(int count)
+        => $"the plan holds {count.ToString(CultureInfo.InvariantCulture)} work items, and a plan holds at most {MostItems.ToString(CultureInfo.InvariantCulture)}, each one builder's cycle: merge the smallest, or leave some to a later run";
+
+    /// <summary>
+    /// Checks the pieces of a plan update, as the plan's scope concluded them, with the items the plan holds: each
+    /// piece of the shape the engine takes - by the one rule of a piece's shape the engine reads it by
+    /// (<see cref="FlowUpdatePiece.Read"/>), its first breach said; an <c>added</c> or a <c>changed</c> piece's item
+    /// an item of the list, by name and member for member; a <c>removed</c> piece's of a work item's shape; no two
+    /// pieces naming one work item; a <c>changed</c> or a <c>removed</c> piece naming a work item the plan had before
+    /// the update; and the items the update places checked with those of the round it joins, as one list - where the
+    /// run has one; among themselves where it does not.
+    /// </summary>
+    /// <param name="pieces">The pieces, as the plan's scope yielded them.</param>
+    /// <param name="items">The plan's items, as its <c>items</c> yielded them.</param>
+    /// <param name="round">The items of the round the pieces would join, every one it holds; null where the run has no round yet.</param>
+    /// <param name="known">The names of the work items the plan had before the update.</param>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="run">The run's name.</param>
+    /// <param name="definition">The workflow.</param>
+    /// <returns>Every problem of the pieces, in their order; none where they pass.</returns>
+    public IReadOnlyList<string> CheckPieces(
+        IReadOnlyList<JsonNode?> pieces,
+        IReadOnlyList<JsonNode?> items,
+        IReadOnlyList<JsonNode?>? round,
+        IReadOnlyList<string> known,
+        HarnessContext context,
+        string run,
+        WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(pieces);
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(known);
+
+        var problems = new List<string>();
+
+        // Each piece read by the one rule of a piece's shape the engine reads it by, its first breach said of it.
+        var held = new List<FlowUpdatePiece>();
+
+        foreach (var (node, at) in pieces.Select((node, at) => (node, at)))
+        {
+            if (FlowUpdatePiece.Read(node, out var wrong) is not { } piece)
+            {
+                problems.Add($"piece {(at + 1).ToString(CultureInfo.InvariantCulture)} of the plan's scope {wrong}");
+                continue;
+            }
+
+            if (piece.Kind == FlowUpdatePieceKinds.Told)
+            {
+                continue;
+            }
+
+            var name = piece.ItemName()!;
+
+            if (piece.Kind == FlowUpdatePieceKinds.Removed)
+            {
+                // The item under the name it had, written for the step that takes it back: of a work item's shape,
+                // so the step that takes back owns the paths it may write.
+                _ = ItemOf(piece.Item, 0, problems);
+            }
+            else if (!items.Any(other => string.Equals(FlowWorkItems.NameOf(other), name, StringComparison.Ordinal) && JsonNode.DeepEquals(other, piece.Item)))
+            {
+                problems.Add($"the piece for '{name}' is not an item of the plan's list, by name and member for member: an item the update adds or changes is an item of the updated plan");
+            }
+
+            held.Add(piece);
+        }
+
+        if (FlowUpdatePiece.NamedTwice(held) is { } twice)
+        {
+            problems.Add($"the pieces of the plan's scope {twice}");
+        }
+
+        foreach (var piece in held.Where(piece => piece.Kind is FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed))
+        {
+            if (!known.Contains(piece.ItemName()!, StringComparer.Ordinal))
+            {
+                problems.Add($"the piece for '{piece.ItemName()}' is '{piece.Kind}', and no work item the plan had is named so: one an instance of the work-item group carries, or an item of the list this check checked on its visit before");
+            }
+        }
+
+        // The items the update places, checked with those of the round it joins as one list - its own less the work
+        // items a changed or a removed piece names, for their item replaces them - or, where the run has no round,
+        // among themselves.
+        var namedByPieces = held.Where(piece => piece.Kind is FlowUpdatePieceKinds.Changed or FlowUpdatePieceKinds.Removed)
+            .Select(piece => piece.ItemName()!)
+            .ToList();
+
+        var joined = (round ?? [])
+            .Where(other => FlowWorkItems.NameOf(other) is not { } named || !namedByPieces.Contains(named, StringComparer.Ordinal))
+            .Concat(held.Select(piece => piece.Item))
+            .ToList();
+
+        problems.AddRange(Check(joined, context, run, definition, mostItems: false, noItems: false));
+
+        return problems;
+    }
+
     /// <summary>A work item read whole: its name, the paths it owns and must not touch, and its three lists.</summary>
     private sealed record Item(string Name, IReadOnlyList<(string Text, GlobPattern Pattern)> Owned, IReadOnlyList<(string Text, GlobPattern Pattern)> Forbidden, JsonObject Node);
 
@@ -118,7 +218,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             return null;
         }
 
-        if (Text(item["name"]) is not { } name)
+        if (FlowWorkItems.NameOf(item) is not { } name)
         {
             problems.Add($"{place} is of the wrong shape: it has no name, and a work item is known by its name");
             return null;

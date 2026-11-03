@@ -88,12 +88,16 @@ public sealed record AgentServedModel(string Model, int FromTurn);
 /// <summary>
 /// What a run's usage cost, in United States dollars, with where each number is from, kept side by side as
 /// <c>cost.reported</c> and <c>cost.counted</c>: what the client said the launch cost, where it says (Claude Code's
-/// <c>total_cost_usd</c>), and what this tool counted at the configuration's prices - or, where a price was missing,
-/// which one, for a cost no price was there for is unknown and never zero.
+/// <c>total_cost_usd</c>), and what this tool counted at the configuration's prices - or, where it could not count it,
+/// why: the price that was missing, or a request left before its provider said what it used, for a cost nothing counted
+/// is unknown and never zero.
 /// </summary>
 /// <param name="Reported">What the client said the run cost; null where the client says nothing of it, as the two APIs do.</param>
 /// <param name="Counted">What this tool counted at the configuration's prices; null where a price it needed was missing.</param>
-/// <param name="MissingPrice">The price that was missing, where the cost could not be counted: the model and the key to fill; null where it was counted.</param>
+/// <param name="MissingPrice">
+/// Why the cost could not be counted: the price that was missing - the model and the key to fill - or a request left
+/// before its provider said what it used; null where it was counted.
+/// </param>
 public sealed record AgentCost(decimal? Reported = null, decimal? Counted = null, string? MissingPrice = null)
 {
     /// <summary>
@@ -102,18 +106,76 @@ public sealed record AgentCost(decimal? Reported = null, decimal? Counted = null
     /// </summary>
     [JsonIgnore]
     public decimal? Usd => Reported ?? Counted;
+
+    /// <summary>
+    /// What two parts of a run cost together - two entries of a step's walk, two turns of a side-task, two requests of one
+    /// key and model: the counted cost summed where both parts were counted, else unknown, for a part this tool could not
+    /// count leaves the whole uncounted - a missed price or a client that only reports alike; the reported one summed
+    /// where either part reports, a part that reports none adding what this tool counted of it, and unknown where a
+    /// part's own is known by neither; the first reason a cost could not be counted kept. Null where neither part says or
+    /// counts anything.
+    /// </summary>
+    /// <param name="first">The first part's cost; null where nothing said or counted it.</param>
+    /// <param name="second">The second part's cost; null where nothing said or counted it.</param>
+    public static AgentCost? Sum(AgentCost? first, AgentCost? second)
+    {
+        if (first is null || second is null)
+        {
+            return first ?? second;
+        }
+
+        var counted = first.Counted is { } one && second.Counted is { } other ? one + other : (decimal?)null;
+        var reported = first.Reported is null && second.Reported is null
+            ? null
+            : first.Usd is { } said && second.Usd is { } more ? said + more : (decimal?)null;
+
+        return new AgentCost(reported, counted, first.MissingPrice ?? second.MissingPrice);
+    }
+
+    /// <summary>The cost of a part that used something nothing said or counted: unknown by both, never zero.</summary>
+    public static AgentCost Unknown { get; } = new();
 }
 
-/// <summary>One model's part of what a run used.</summary>
+/// <summary>
+/// One part of what a run used: a model's, on the key it was signed with - the parts a run moves through inside its
+/// client, a model's next key after a refused or limited one among them - with what that part cost.
+/// </summary>
 /// <param name="Model">The model.</param>
 /// <param name="Usage">What it used.</param>
-public sealed record AgentModelUsage(string Model, AgentUsage Usage);
+/// <param name="Key">The key its requests were signed with, by its name and never its value; null for a login, or where the client names none.</param>
+/// <param name="Cost">What the part cost, and where each number is from; null where nothing said or counted it.</param>
+public sealed record AgentModelUsage(string Model, AgentUsage Usage, string? Key = null, AgentCost? Cost = null);
 
 /// <summary>What a run used: in all, and for each model that served it.</summary>
 /// <param name="Total">The whole of it.</param>
-/// <param name="PerModel">Each model's part, in the order they served.</param>
+/// <param name="PerModel">Each model's part, on its key, in the order they served.</param>
 /// <param name="Cost">What it cost, and where each number is from; null where nothing has said or counted it.</param>
-public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModelUsage> PerModel, AgentCost? Cost = null);
+public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModelUsage> PerModel, AgentCost? Cost = null)
+{
+    /// <summary>
+    /// What two parts of a run used together - the one fold of usage over parts, every walk of a step's entries and every
+    /// side-task's turns folded by it: the totals added, each model's part kept in the order the parts served, and what
+    /// they cost by <see cref="AgentCost.Sum"/> - a part that used something with no cost said or counted of it leaving
+    /// the whole's unknown (<see cref="AgentCost.Unknown"/>), never left out of it. Null where neither part says anything.
+    /// </summary>
+    /// <param name="first">What the first part used; null where nothing said it.</param>
+    /// <param name="second">What the second part used; null where nothing said it.</param>
+    public static AgentUsageReport? Sum(AgentUsageReport? first, AgentUsageReport? second)
+        => first is null || second is null
+            ? first ?? second
+            : new(first.Total.Plus(second.Total), [.. first.PerModel, .. second.PerModel], AgentCost.Sum(CostOf(first), CostOf(second)));
+
+    /// <summary>
+    /// A part's cost as the fold reads it: its own, unknown where it used something and nothing said or counted it, and
+    /// nothing where it used nothing and no number was said or counted of it - a launch that never began its work leaves
+    /// no cost to know, so it never makes the whole's unknown. A part that says why its cost could not be counted - a
+    /// price missing, a request left before its provider said what it used - is unknown, whatever it was seen to use.
+    /// </summary>
+    private static AgentCost? CostOf(AgentUsageReport part)
+        => part.Total == AgentUsage.None && part.Cost is not { Reported: not null } and not { Counted: not null } and not { MissingPrice: not null }
+            ? null
+            : part.Cost ?? AgentCost.Unknown;
+}
 
 /// <summary>
 /// An account at its limit: what a request is billed to - a provider's key, or a client's login - has no more to give
@@ -215,6 +277,36 @@ public sealed record AgentRunResult(
     public IReadOnlyList<string> SessionFilesRemoved { get; init; } = [];
 
     /// <summary>
+    /// How many of the messages a chat's run was given - its prompt first, then each posted to it, in order - are settled:
+    /// answered by a turn of the agent's, taken by a turn the chat's interrupt cut, or dropped by that interrupt, which the
+    /// person is told to send again. A message written and never taken, or taken by a turn that ended without answering,
+    /// is not among them, and is the chat's to send again. Null for every run but a chat's, and where the client does not
+    /// count them.
+    /// </summary>
+    public int? MessagesAnswered { get; init; }
+
+    /// <summary>
+    /// The order a chat goes on by, where its run ended on what moves a step on to its next entry - a decline, a limit, a
+    /// refused key, a failure, or a first entry a move had brought it to that could not be started: the entry the walk
+    /// would have moved to first, each entry after it marked as the walk would pass it over, its key refused or a limit
+    /// the run met covering it, and the move that brought the chat there. A chat's run is never moved inside the runner,
+    /// for a launch begun there would answer the run's first message again and lose every line its channel had given the
+    /// one before; the chat goes on there itself, from the conversation so far with the lines no turn answered. Null for
+    /// every other run, and where no entry is left. Never written to a record: its entries hold their keys.
+    /// </summary>
+    [JsonIgnore]
+    public AgentGoingOn? GoesOnBy { get; init; }
+
+    /// <summary>
+    /// Whether the run ended at its last turn's own end: its ending was read from that turn's result, or nothing happened
+    /// after that turn but the run's messages ending. False where it ended anywhere else - its program gone between two
+    /// turns or in the middle of one, a bound passed, a stop - so the turn before keeps its own ending, never the run's.
+    /// Said by a client that holds a launch open (Claude Code); false for every other.
+    /// </summary>
+    [JsonIgnore]
+    public bool EndedWithItsLastTurn { get; init; }
+
+    /// <summary>
     /// The account's limit, where the run ended on one (<see cref="AgentRunStatus.RateLimited"/>): whether its balance or
     /// included usage is spent, and when it lifts where the provider says. Null for every other ending.
     /// </summary>
@@ -235,6 +327,22 @@ public sealed record AgentRunResult(
     /// every child was ended whole.
     /// </summary>
     public IReadOnlyList<string> Uncontained { get; init; } = [];
+
+    /// <summary>
+    /// The operating system's isolation the launch's agent ran under, as the engine decided it: the mode, and the mechanism
+    /// and its version, or why there was none. Null where none was decided, and not written then.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Isolation.AgentIsolationRecord? Isolation { get; init; }
+
+    /// <summary>
+    /// The provider's service failed past the client's own tries - unreachable, down, or refusing the account - which is
+    /// the provider's state and no model's answer: the run is neither retried on its model nor moved to another, for
+    /// every model of the step is reached through the same service. False for every other failure, and written only
+    /// where it is true.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ServiceFailed { get; init; }
 
     /// <summary>
     /// What is wrong with this result, as its own fields say it; null when nothing is. Each field that only one ending
@@ -286,6 +394,7 @@ public sealed record AgentRunResult(
             : AgentAssumption.ProblemIn(Assumptions) is { } assumed ? $"its {assumed}"
             : AgentQuestion.ProblemIn(Questions) is { } asked ? $"its {asked}"
             : Status == AgentRunStatus.Completed && Error is not null ? "it completed, and says why it failed"
+            : Status is not (AgentRunStatus.Failed or AgentRunStatus.Stalled) && ServiceFailed ? $"it ended {Status}, and says the provider's service failed, which only a run that ended Failed or Stalled does"
             : Served.FirstOrDefault(served => served.FromTurn < 1) is { } early ? $"it names '{early.Model}' as serving from turn {early.FromTurn.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and turns are counted from one"
             : null;
     }
@@ -351,3 +460,17 @@ public sealed record AgentRunResult(
         };
     }
 }
+
+/// <summary>A move of a walk's: the entry it moved from and why, as its record says it.</summary>
+/// <param name="From">The entry it moved from: the one that served last.</param>
+/// <param name="Why">Why it moved.</param>
+public sealed record AgentMove(AgentRunEntry From, string Why);
+
+/// <summary>
+/// The order a chat goes on by, handed back by the run that ended it (<see cref="AgentRunResult.GoesOnBy"/>): the entry
+/// to go on from first, and the entries after it; and the move that brought it there, which the next run's walk goes on
+/// from (<see cref="AgentStepRequest.Moved"/>).
+/// </summary>
+/// <param name="Order">The order, the entry to go on from first.</param>
+/// <param name="Moved">The move that brought the chat to its first entry.</param>
+public sealed record AgentGoingOn(IReadOnlyList<AgentRunEntry> Order, AgentMove Moved);

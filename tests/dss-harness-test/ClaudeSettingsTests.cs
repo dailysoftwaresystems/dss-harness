@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Repository;
 using Xunit;
@@ -84,6 +85,61 @@ public sealed class ClaudeSettingsTests
     }
 
     /// <summary>
+    /// A launch whose shell commands run inside this tool's isolation turns Claude Code's own sandbox off, written after the
+    /// output style and before the environment, so the user's own settings cannot start one that no command inside could
+    /// run in; and writes the variables that hand each command over after the engine's own, so the user's settings cannot
+    /// turn them back. A launch whole inside the isolation turns the sandbox off and hands nothing over.
+    /// </summary>
+    [Fact]
+    public void AnIsolatedLaunch_TurnsClaudeCodesOwnSandboxOff_AndHandsItsCommandsOver()
+    {
+        var rendered = ClaudeSettings.Render(
+            ["Bash"],
+            SettingsGround(Posix, []),
+            AgentCommandSettings.Default,
+            StringComparison.Ordinal,
+            isolated: true,
+            ClaudeShell.Variables("/opt/dssharness --isolated-shell", "/r/steps/s1/claude-isolation.json", "/t/abc"));
+        var whole = JsonNode.Parse(ClaudeSettings.Render(["Bash"], SettingsGround(Posix, []), AgentCommandSettings.Default, StringComparison.Ordinal, isolated: true))!;
+
+        Assert.False(whole["sandbox"]!["enabled"]!.GetValue<bool>());
+        Assert.Equal(ClaudeSettings.Launched(AgentCommandSettings.Default).Select(variable => variable.Key), whole["env"]!.AsObject().Select(variable => variable.Key));
+
+        Assert.Equal(
+            """
+            {
+              "disableAllHooks": true,
+              "fallbackModel": [],
+              "switchModelsOnFlag": false,
+              "outputStyle": "default",
+              "sandbox": {
+                "enabled": false
+              },
+              "env": {
+                "DISABLE_COMPACT": "1",
+                "DISABLE_AUTOUPDATER": "1",
+                "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
+                "CLAUDE_CODE_RETRY_WATCHDOG": "0",
+                "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
+                "BASH_DEFAULT_TIMEOUT_MS": "120000",
+                "BASH_MAX_TIMEOUT_MS": "3600000",
+                "CLAUDE_CODE_SHELL_PREFIX": "/opt/dssharness --isolated-shell",
+                "DSSHARNESS_ISOLATED_SHELL": "/r/steps/s1/claude-isolation.json",
+                "CLAUDE_CODE_SHELL": "/bin/bash",
+                "CLAUDE_CODE_TMPDIR": "/t/abc"
+              },
+              "permissions": {
+                "ask": [
+                  "Bash"
+                ],
+                "deny": []
+              }
+            }
+            """.ReplaceLineEndings().TrimEnd(),
+            rendered.ReplaceLineEndings().TrimEnd());
+    }
+
+    /// <summary>
     /// Every shell command of a launch starts in the launch's own directory, never where an earlier one's cd left it: the
     /// policy reads a command's relative paths against that directory, so a cd in one call and a relative path in the
     /// next would reach a place it never decided. Set in the settings' env and the child's environment alike.
@@ -109,6 +165,27 @@ public sealed class ClaudeSettingsTests
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal([slotRule, claudeRule], Deny(rendered));
+    }
+
+    /// <summary>
+    /// Each place the user keeps credentials in is a read deny rule after the slots' and the Claude Code directories': a
+    /// directory for all it holds, a file for itself.
+    /// </summary>
+    [Theory]
+    [InlineData("windows", @"C:\Users\dev", "Read(//c/Users/dev/.ssh/**)", "Read(//c/Users/dev/.netrc)")]
+    [InlineData("posix", "/home/dev", "Read(//home/dev/.ssh/**)", "Read(//home/dev/.netrc)")]
+    public void EachPlaceTheUserKeepsCredentialsIn_IsAReadDenyRule_ADirectoryForAllItHolds(string system, string home, string directoryRule, string fileRule)
+    {
+        var (main, worktree, work) = Ground(system);
+        var separator = system == "windows" ? @"\" : "/";
+
+        var rendered = ClaudeSettings.Render(
+            ["Read", "Grep"],
+            PolicyGrounds.Of(worktree, [main], [worktree, work], [], [], [], credentialPlaces: [new(home + separator + ".ssh", Directory: true), new(home + separator + ".netrc", Directory: false)]),
+            AgentCommandSettings.Default,
+            StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal([directoryRule, fileRule], Deny(rendered));
     }
 
     /// <summary>

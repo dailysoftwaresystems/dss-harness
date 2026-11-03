@@ -11,12 +11,13 @@ namespace DssHarness.Core.Agents.Policy;
 /// <para>
 /// An ask rule for every tool the launch has, so no call is allowed by a rule or a mode before the
 /// engine has seen it; the restriction rules as Claude Code's own deny rules, and a read of every
-/// credential slot and Claude Code directory of the run's beside them - which Claude Code applies to
+/// credential slot, Claude Code directory and place the user keeps credentials in of the run's beside them - which Claude Code applies to
 /// its searches too - a second layer behind the engine's answers, never the one relied on; <c>"fallbackModel": []</c> and
 /// <c>"switchModelsOnFlag": false</c>, for the engine's fallback is the only one; Claude Code's own
 /// output style, because its prompt is kept; an <c>env</c> holding every name the engine controls,
-/// so the user's own <c>env</c> cannot turn one back; and the user's hooks off in every launch.
-/// No key is ever in it.
+/// so the user's own <c>env</c> cannot turn one back; the user's hooks off in every launch; and, where the launch's shell
+/// commands run inside this tool's isolation, the variables that hand each to it and Claude Code's own sandbox off, for no
+/// sandbox nests in this one. No key is ever in it.
 /// </para>
 /// <para>
 /// Every path in a deny rule is written as an absolute path, once for each root the launch has, so
@@ -81,7 +82,19 @@ public static class ClaudeSettings
     /// <param name="ground">The launch's ground: its restrictions and the roots it reads and writes.</param>
     /// <param name="commands">What the configuration says of an agent's commands, whose times the settings' <c>env</c> holds.</param>
     /// <param name="comparison">How a name in a pattern and a name in a path compare: the case rule of the tree the path is in.</param>
-    public static string Render(IReadOnlyList<string> tools, AgentPolicyGround ground, AgentCommandSettings commands, StringComparison comparison)
+    /// <param name="isolated">
+    /// Whether the launch's commands run inside the operating system's isolation of this tool's - handed over one by one, or
+    /// the launch whole inside it: Claude Code's own sandbox is then turned off (<c>"sandbox": {"enabled": false}</c>), over
+    /// any the user's settings ask for - no mechanism of this tool's starts another inside it (macOS no sandbox inside a
+    /// sandbox, bubblewrap no namespace inside its own), so a sandbox of Claude Code's would fail each command; on Windows
+    /// Claude Code has none of its own.
+    /// </param>
+    /// <param name="isolatedShell">
+    /// Where the launch's shell commands are handed to the isolation one by one, the variables that hand each over
+    /// (<see cref="ClaudeCode.ClaudeShell.Variables"/>), written in the settings' <c>env</c> after the engine's own so the
+    /// user's settings cannot turn them back; none where they are not handed over.
+    /// </param>
+    public static string Render(IReadOnlyList<string> tools, AgentPolicyGround ground, AgentCommandSettings commands, StringComparison comparison, bool isolated = false, IReadOnlyList<KeyValuePair<string, string>>? isolatedShell = null)
     {
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentNullException.ThrowIfNull(ground);
@@ -99,9 +112,16 @@ public static class ClaudeSettings
             writer.WriteBoolean("switchModelsOnFlag", false);
             writer.WriteString("outputStyle", "default");
 
+            if (isolated)
+            {
+                writer.WriteStartObject("sandbox");
+                writer.WriteBoolean("enabled", false);
+                writer.WriteEndObject();
+            }
+
             writer.WriteStartObject("env");
 
-            foreach (var (name, value) in Launched(commands))
+            foreach (var (name, value) in Launched(commands).Concat(isolatedShell ?? []))
             {
                 writer.WriteString(name, value);
             }
@@ -134,7 +154,8 @@ public static class ClaudeSettings
     }
 
     /// <summary>
-    /// The deny rules of one ground: a read of each credential slot and Claude Code directory, and
+    /// The deny rules of one ground: a read of each credential slot and Claude Code directory, and of
+    /// each place the user keeps credentials in - all a directory holds, a file itself - and
     /// each restriction as Claude Code spells its own - a <c>Run</c> rule a <c>Bash</c> prefix rule,
     /// a path rule absolute once for each root of the launch, but where its pattern there would
     /// cover a root the launch writes, a <c>Write</c> rule as an <c>Edit</c> rule, a <c>Web</c> rule a <c>WebFetch</c> domain rule and, where it
@@ -157,6 +178,11 @@ public static class ClaudeSettings
         foreach (var place in ground.SlotDirectories.Concat(ground.ClaudeCodeDirectories).Select(place => place.Replace('\\', '/')).Distinct(StringComparer.FromComparison(comparison)))
         {
             yield return $"Read({Absolute(place)}/**)";
+        }
+
+        foreach (var place in ground.CredentialPlaces.DistinctBy(place => place.Path, StringComparer.FromComparison(comparison)))
+        {
+            yield return place.Directory ? $"Read({Absolute(place.Path.Replace('\\', '/'))}/**)" : $"Read({Absolute(place.Path.Replace('\\', '/'))})";
         }
 
         foreach (var declared in ground.Restrictions)

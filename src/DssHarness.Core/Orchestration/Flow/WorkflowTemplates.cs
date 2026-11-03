@@ -96,8 +96,8 @@ public static class WorkflowTemplates
 
     /// <summary>
     /// The implementation workflow's definition, read back from this build's own embedded set, parsed and held to
-    /// <see cref="WorkflowValidator"/>'s rules as for a configuration with no <c>commit.template</c>, its paths typed by
-    /// the embedded schemas and its prompts' placeholders checked. What only a repository can answer - that its files
+    /// <see cref="WorkflowValidator"/>'s rules as for a configuration with no <c>commit.template</c>, each embedded schema
+    /// held to the subset the engine reads, its paths typed by those schemas and its prompts' placeholders checked. What only a repository can answer - that its files
     /// are there, its legs and runners - is <c>validate-workflow</c>'s to check there.
     /// </summary>
     /// <exception cref="HarnessException">
@@ -135,8 +135,18 @@ public static class WorkflowTemplates
         }
 
         // As for a config with no commit.template: each commit step writes its message. The files are the build's own, so
-        // every path is typed by the schema that holds it and every prompt's placeholder is checked.
-        if (WorkflowValidator.Validate(parsed, hasCommitTemplate: false, TextOf) is [_, ..] problems)
+        // every schema is held to the subset, every path is typed by the schema that holds it and every prompt's
+        // placeholder is checked.
+        IReadOnlyList<string> problems =
+        [
+            .. WorkflowFiles.Steps(parsed)
+                .SelectMany(entry => WorkflowFiles.OfStep(entry.Step, $"step '{entry.Path}'"))
+                .Where(named => named.IsSchema && TextOf(named.File) is not null)
+                .SelectMany(named => WorkflowFiles.SchemaProblems(named, TextOf(named.File)!)),
+            .. WorkflowValidator.Validate(parsed, hasCommitTemplate: false, TextOf),
+        ];
+
+        if (problems.Count > 0)
         {
             var detail = string.Join(Environment.NewLine, problems.Select(problem => "  - " + problem));
 

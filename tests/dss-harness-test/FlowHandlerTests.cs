@@ -1423,6 +1423,9 @@ public sealed class FlowHandlerRecordsTests
         /// <inheritdoc/>
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
             => inner.Question(questions, refused);
+
+        public void Updates(FlowUpdatesFile updates)
+            => inner.Updates(updates);
     }
 
     /// <summary>A runner that answers each step as its test scripted it, holding open the steps the test wants to time.</summary>

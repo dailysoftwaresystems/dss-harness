@@ -13,7 +13,8 @@ public sealed class AgentChildEnvironmentTests
 {
     /// <summary>
     /// A child of an agent loses every appointed name and every secret-shaped name, in any case, but those given back; an
-    /// appointed name is never given back, and a name of no secret's shape is kept.
+    /// appointed name is never given back, and a name of no secret's shape is kept. Every child is marked as an agent's,
+    /// which <c>run-side-task</c> refuses itself by however it is named.
     /// </summary>
     [Fact]
     public void AChild_LosesTheAppointedAndTheSecretShapedNames_ButThoseGivenBack()
@@ -33,6 +34,7 @@ public sealed class AgentChildEnvironmentTests
                 ["MY_SECRET"] = null,
                 ["OPENAI_API_KEY"] = null,
                 ["ZAI_KEY"] = null,
+                [AgentChildEnvironment.AgentMarker] = "1",
             },
             environment);
     }

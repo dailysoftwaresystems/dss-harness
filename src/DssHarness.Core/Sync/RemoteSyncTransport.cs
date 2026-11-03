@@ -294,19 +294,32 @@ public sealed class RemoteSyncTransport(
 
     /// <inheritdoc/>
     /// <remarks>
+    /// The host reads its own copy (<see cref="SyncServe.Pull"/>), the links along the path followed and none into a place
+    /// its own isolation hides - the places <paramref name="hidden"/> names are this machine's, not the host's - and the
+    /// file comes as <see cref="ReadFileAsync"/>'s does.
+    /// </remarks>
+    public Task<byte[]> PullFileAsync(string root, string relativePath, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default)
+        => ReadAsync(SyncServe.Pull, root, relativePath, cancellationToken);
+
+    /// <inheritdoc/>
+    /// <remarks>
     /// Decoded a line at a time as it arrives, into the bytes the answer said the file holds, so it is never held here as
     /// text.
     /// </remarks>
-    public async Task<byte[]> ReadFileAsync(
+    public Task<byte[]> ReadFileAsync(
         string root,
         string relativePath,
         CancellationToken cancellationToken = default)
+        => ReadAsync(SyncServe.Read, root, relativePath, cancellationToken);
+
+    /// <summary>One file read out of the host's copy by <paramref name="operation"/>, checked against the hash the host took of it.</summary>
+    private async Task<byte[]> ReadAsync(string operation, string root, string relativePath, CancellationToken cancellationToken)
     {
         byte[]? contents = null;
         var filled = 0;
 
         var answer = await AskAsync<SyncFileAnswer>(
-                SyncServe.Read,
+                operation,
                 root,
                 [relativePath],
                 cancellationToken,
@@ -349,7 +362,11 @@ public sealed class RemoteSyncTransport(
     }
 
     /// <inheritdoc/>
-    public async Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// The host lists its own copy (<see cref="SyncServe.List"/>), the links along the path followed and none into a place
+    /// its own isolation hides: the places <paramref name="hidden"/> names are this machine's, not the host's.
+    /// </remarks>
+    public async Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, IReadOnlyList<IsolatedPath>? hidden, CancellationToken cancellationToken = default)
         => await AskAsync<SyncDirectoryListing>(SyncServe.List, root, [relativeDirectory], cancellationToken).ConfigureAwait(false)
             ?? throw new HarnessException(
                 HarnessExit.CommandFailed,

@@ -24,12 +24,19 @@ namespace DssHarness.Core.Git;
 /// Says whether a tree's file system finds a name in any case, which git status is told; this platform's own where none is
 /// given.
 /// </param>
+/// <param name="platform">Says which system git runs on, for the place that holds no hook (<see cref="GitHooks"/>); this machine where none is given.</param>
+/// <param name="pins">
+/// The git directories of each tree an isolated agent works over, as git named them before its launch, which every git of
+/// this tool's in that tree's root is given; none where left out.
+/// </param>
 public sealed partial class GitClient(
     IProcessRunner processRunner,
     IHarnessOutput output,
     IFilePermissions? filePermissions = null,
     GitLocalVariables? localVariables = null,
-    IFileSystem? fileSystem = null) : IGitClient
+    IFileSystem? fileSystem = null,
+    IHostPlatform? platform = null,
+    GitDirectoryPins? pins = null) : IGitClient
 {
     private const string GitExecutable = "git";
 
@@ -50,6 +57,7 @@ public sealed partial class GitClient(
     private readonly IFilePermissions _filePermissions = filePermissions ?? FilePermissionsFactory.Create();
     private readonly GitLocalVariables _localVariables = localVariables ?? new GitLocalVariables(processRunner);
     private readonly IFileSystem _fileSystem = fileSystem ?? new PhysicalFileSystem(filePermissions ?? FilePermissionsFactory.Create());
+    private readonly PlatformId _system = (platform ?? new HostPlatform()).Current;
 
     /// <summary>The version the git this client runs names itself by, once read (<see cref="InstalledVersionAsync"/>).</summary>
     private string? _installed;
@@ -234,13 +242,14 @@ public sealed partial class GitClient(
     /// <summary>
     /// The names <c>git diff --name-only</c> gives against <paramref name="commits"/> - the work tree against one, or two
     /// commits against each other - each as git holds it: a rename as its two names, as configuration may otherwise pair
-    /// them, and a submodule whose commit moved whatever configuration hides.
+    /// them, and a submodule whose commit moved whatever configuration hides, told by its commit alone
+    /// (<see cref="GitOwnSettings.SubmoduleCommits"/>).
     /// </summary>
     private async Task<IReadOnlyList<GitName>> ChangedNamesAsync(string directory, IReadOnlyList<string> commits, string doing, CancellationToken cancellationToken)
     {
         var result = await RunForBytesAsync(
             directory,
-            ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", .. commits, "--"],
+            ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", GitOwnSettings.SubmoduleCommits, .. commits, "--"],
             cancellationToken).ConfigureAwait(false);
 
         Ensure(result, doing);
@@ -257,7 +266,9 @@ public sealed partial class GitClient(
     /// Asked with <c>-z</c> and read as bytes, so no path is quoted or mangled and a name that is not UTF-8 is kept as git
     /// holds it. Untracked files and submodules are asked for explicitly, because configuration can hide both: under
     /// status.showUntrackedFiles=no a new file is not listed at all, and the tree reads as clean to a caller about to
-    /// discard it. <c>--no-optional-locks</c> keeps the question from writing anything: status otherwise refreshes the
+    /// discard it. A submodule is told by its commit alone (<see cref="GitOwnSettings.SubmoduleCommits"/>): one added,
+    /// removed or moved to another commit is listed, and its own work tree is never asked about, which would run its own
+    /// configuration. <c>--no-optional-locks</c> keeps the question from writing anything: status otherwise refreshes the
     /// index and writes it back whenever it can take the lock.
     /// <para>
     /// An untracked file that is a tracked one the disk spells otherwise is not listed, save the names
@@ -272,7 +283,7 @@ public sealed partial class GitClient(
     {
         var result = await RunForBytesAsync(
             directory,
-            ["--no-optional-locks", "status", "--porcelain", "-z", $"--untracked-files={untracked}", "--ignore-submodules=none"],
+            ["--no-optional-locks", "status", "--porcelain", "-z", $"--untracked-files={untracked}", GitOwnSettings.SubmoduleCommits],
             cancellationToken).ConfigureAwait(false);
 
         // An empty list must mean "nothing changed", never "the question failed": a caller reads it as a clean tree and
@@ -743,7 +754,7 @@ public sealed partial class GitClient(
             // compared, through the clean filters and the line-ending rules, and never listed for its stat alone.
             var differing = await RunCoreAsync(
                     directory,
-                    ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", "--"],
+                    ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", GitOwnSettings.SubmoduleCommits, "--"],
                     echoOutput: false,
                     untranslated: false,
                     index,
@@ -1331,6 +1342,28 @@ public sealed partial class GitClient(
             $"Could not resolve '{reference}': {result.FailureMessage}");
     }
 
+    public async Task<IReadOnlyList<string>> ParentsOfAsync(
+        string directory,
+        string commit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+
+        // The object itself, read raw: its header's parent lines, up to the blank line that ends it. rev-list and rev-parse
+        // read a graft or a shallow boundary in its place, and both are files a git directory written whole could hold.
+        var result = await RunAsync(directory, ["cat-file", "commit", "--end-of-options", commit], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (!result.Succeeded)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"git could not read the commit {commit}: {result.FailureMessage}");
+        }
+
+        return [.. result.StandardOutput.Split('\n')
+            .TakeWhile(line => line.Length > 0)
+            .Where(line => line.StartsWith("parent ", StringComparison.Ordinal))
+            .Select(line => line["parent ".Length..].Trim())];
+    }
+
     public async Task<string?> MergeBaseAsync(
         string directory,
         string first,
@@ -1852,6 +1885,51 @@ public sealed partial class GitClient(
         CancellationToken cancellationToken = default)
         => RunCoreAsync(directory, arguments, echoOutput: false, untranslated: false, indexFile: null, standardInput: null, cancellationToken, limit: limit);
 
+    /// <inheritdoc/>
+    public Task<GitCommandResult> RunWithHooksAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        TimeSpan limit,
+        ProcessIsolation? isolation,
+        IReadOnlyDictionary<string, string>? values,
+        CancellationToken cancellationToken = default)
+        => RunCoreAsync(
+            directory,
+            arguments,
+            echoOutput: false,
+            untranslated: false,
+            indexFile: null,
+            standardInput: null,
+            cancellationToken,
+            limit: limit,
+            hooks: new HookRun(isolation, values ?? new Dictionary<string, string>(StringComparer.Ordinal)));
+
+    /// <inheritdoc/>
+    public async Task<GitCredential?> CredentialAsync(string directory, string url, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+
+        // Asked as git asks it before it connects, of the helpers the configuration names: one that has none to give
+        // answers nothing, for nobody is there to type one.
+        var result = await RunCoreAsync(directory, ["credential", "fill"], echoOutput: false, untranslated: true, indexFile: null, ChildInput.Of($"url={url}\n\n"), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!result.Succeeded)
+        {
+            return null;
+        }
+
+        var said = result.OutputLines
+            .Select(line => line.Split('=', 2))
+            .Where(pair => pair.Length == 2)
+            .GroupBy(pair => pair[0], StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last()[1], StringComparer.Ordinal);
+
+        return said.TryGetValue("username", out var username) && said.TryGetValue("password", out var password) && password.Length > 0
+            ? new GitCredential(username, password)
+            : null;
+    }
+
     /// <summary>
     /// Runs a read-only query whose failure message is inspected, with git's messages
     /// untranslated.
@@ -1899,7 +1977,8 @@ public sealed partial class GitClient(
         CancellationToken cancellationToken,
         Encoding? outputEncoding = null,
         ObjectStore? objects = null,
-        TimeSpan? limit = null)
+        TimeSpan? limit = null,
+        HookRun? hooks = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
@@ -1915,6 +1994,15 @@ public sealed partial class GitClient(
         // read one tree's status and act on another's. A caller that genuinely wants a different index
         // passes it below, after the inherited one is gone.
         await _localVariables.ClearAsync(environment, cancellationToken).ConfigureAwait(false);
+
+        // Set once the inherited ones are gone, by their one owner (GitOwnSettings): no file-system monitor; none of the
+        // repository's hooks but where a command runs them on purpose - a hook is the repository's code, which every other
+        // command would run outside the isolation as a side effect (GitHooks); no recursion into a submodule, and no
+        // comparison that asks a submodule's own git about its work tree - a repository an agent made in its tree is
+        // configuration of its own, its filters among it; and a tree an isolated agent works over read through the git
+        // directories git named before its launch, whatever its own files say now.
+        arguments = GitOwnSettings.Arguments(arguments);
+        GitOwnSettings.Apply(environment, _system, arguments, hooksRun: hooks is not null, directory, pins);
 
         if (untranslated)
         {
@@ -1937,6 +2025,13 @@ public sealed partial class GitClient(
             environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = objects.AlternateList;
         }
 
+        // What a command that runs the hooks is handed as values - a push's credential - set last, so nothing above
+        // clears it.
+        foreach (var (name, value) in hooks?.Values ?? new Dictionary<string, string>())
+        {
+            environment[name] = value;
+        }
+
         var request = new ProcessRequest
         {
             FileName = GitExecutable,
@@ -1948,6 +2043,7 @@ public sealed partial class GitClient(
             StandardInput = standardInput,
             StandardOutputEncoding = outputEncoding,
             Timeout = limit,
+            Isolation = hooks?.Isolation,
         };
 
         var result = await _processRunner.RunAsync(request, cancellationToken).ConfigureAwait(false);
@@ -2171,4 +2267,9 @@ public sealed partial class GitClient(
     /// </summary>
     private static string NormalizeDirectory(string path)
         => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    /// <summary>How a command that runs the repository's hooks on purpose runs: inside an isolation or none, and the values its environment is given.</summary>
+    /// <param name="Isolation">The operating system's isolation it runs inside; null for none.</param>
+    /// <param name="Values">Variables set in its environment, by name.</param>
+    private sealed record HookRun(ProcessIsolation? Isolation, IReadOnlyDictionary<string, string> Values);
 }

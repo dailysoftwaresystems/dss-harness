@@ -136,7 +136,6 @@ public sealed class ClaudeCodeClientLiveTests
             null,
             "You are a careful agent. Do exactly what you are asked, and nothing more.",
             prompt,
-            new Dictionary<string, string>(),
             null,
             new AgentWorkspace(tree, work, root, [], tree, Path.Combine(root, ".orchestrators", "r1")),
             new AgentOutput("o", Schema),

@@ -178,6 +178,44 @@ public interface IFileSystem
     Stream OpenRead(string path);
 
     /// <summary>
+    /// Where the file <paramref name="opened"/> is open on stands, as the system names the open file itself: its whole path,
+    /// every link on its way followed as they stood when it was opened - whatever was put in place of the file, or of a
+    /// directory above it, after its path was looked at. The one way a caller that decided a path before opening it decides
+    /// again what it holds, before a byte passes. A file the system marks as removed since its open is named where it was
+    /// opened, the mark taken off.
+    /// </summary>
+    /// <param name="opened">A stream this file system opened on a file: one <see cref="OpenRead"/> gave, or the one <see cref="WriteAtomic"/> hands its writer.</param>
+    /// <exception cref="IOException">The system would not name it, or named no file.</exception>
+    /// <exception cref="NotSupportedException">The stream is open on no file this file system opened.</exception>
+    string FinalPathOf(Stream opened);
+
+    /// <summary>
+    /// Where the directory <paramref name="directory"/> stands, as the system names it opened - the form
+    /// <see cref="FinalPathOf"/> names an open file in: on Windows by its handle, every link, substituted drive and short
+    /// name followed and a mapped drive named by its share; elsewhere every link followed. The one way a place an open file
+    /// is named by is held to a directory spelled otherwise.
+    /// </summary>
+    /// <param name="directory">The directory, absolute.</param>
+    /// <exception cref="IOException">The directory could not be opened, or the system would not name it.</exception>
+    string FinalPathOfDirectory(string directory);
+
+    /// <summary>
+    /// Holds <paramref name="directory"/> open by its handle, reached from <paramref name="anchor"/> with no link below it
+    /// (<see cref="HeldDirectory"/>): the one way the tool opens, makes, removes or renames anything in a place an isolated
+    /// process writes, each relative to a directory held, so a link put on the way - or swapped in while it acts - reaches
+    /// nothing.
+    /// </summary>
+    /// <param name="anchor">The place's root, absolute, taken as it is: a writable root of the isolation, or a place above every one.</param>
+    /// <param name="directory">The directory, absolute: the anchor or below it.</param>
+    /// <param name="make">Whether a directory missing on the way is made.</param>
+    /// <param name="asked">The path the caller asked about, as a refusal names it; <paramref name="directory"/> where none is given.</param>
+    /// <exception cref="LinkOnTheWayException">A link stands on the way, or at the directory.</exception>
+    /// <exception cref="DirectoryNotFoundException">A directory on the way is not there, and was not to be made, or a file stands there.</exception>
+    /// <exception cref="IOException">A directory could not be opened or made.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not open or make one.</exception>
+    HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null);
+
+    /// <summary>
     /// Opens a file of lines that only grows, made where it is not there: read back from any place and cut to a length
     /// while its writer recovers it, and appended to with each write on the disk before the next is taken. Others may
     /// read it while it is open, and no one else may write it, on every system: a second writer, in this process or

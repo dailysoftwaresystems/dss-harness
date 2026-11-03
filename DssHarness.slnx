@@ -8,6 +8,7 @@
     <File Path="LICENSE" />
     <File Path="NOTICE" />
     <File Path="README.md" />
+    <File Path="THIRD-PARTY-NOTICES" />
   </Folder>
   <Folder Name="/Solution Items/Files/">
     <File Path=".github/actions/verify-tool-package/action.yml" />

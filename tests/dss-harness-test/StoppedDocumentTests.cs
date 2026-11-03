@@ -24,6 +24,12 @@ public sealed class StoppedDocumentTests
     /// <summary>The flow document's members, in its order: the session a run verb would have run, empty.</summary>
     private static readonly string[] FlowDocument = ["exitCode", "summary", "run", "status", "questions", "answered", "passedOver", "handoffs", "leftForAPerson", "spent", "records"];
 
+    /// <summary>The ask document's members, in its order: the facts and the answer apart, both empty where the command stops before a run.</summary>
+    private static readonly string[] AskDocument = ["exitCode", "summary", "facts", "worded", "answer", "whyNot", "cost", "record"];
+
+    /// <summary>The side-task document's members, in its order: the one document of a one-shot side-task, stopped before its turn.</summary>
+    private static readonly string[] SideTaskDocument = ["exitCode", "summary", "task", "records", "status", "client", "provider", "model", "served", "usage", "cost", "turns", "toolCalls", "filesWritten", "webRequests", "denials", "finalText"];
+
     /// <summary>
     /// Every command that takes --json, with the members of the document it answers with where it stops before its body
     /// has an outcome, in their order - an empty list where its document is an array, which it answers with empty.
@@ -36,8 +42,13 @@ public sealed class StoppedDocumentTests
         ["run-orchestrator"] = FlowDocument,
         ["resume-orchestrator"] = FlowDocument,
         ["answer-orchestrator"] = FlowDocument,
+        ["amend-orchestrator-request"] = FlowDocument,
         ["pause-orchestrator"] = FlowDocument,
         ["stop-orchestrator"] = FlowDocument,
+        ["ask-orchestrator-status"] = AskDocument,
+        ["ask-orchestrator"] = AskDocument,
+        ["run-side-task"] = SideTaskDocument,
+        ["list-side-tasks"] = ["exitCode", "summary", "sideTasks"],
         ["refresh-agent"] = AgentDocument,
         ["rebase-agent"] = AgentDocument,
         ["fold-agent"] = AgentDocument,
