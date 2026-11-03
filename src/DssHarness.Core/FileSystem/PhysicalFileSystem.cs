@@ -9,10 +9,12 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 {
     /// <summary>
     /// Attempts at the final rename before a transient refusal is reported. A virus scanner on a busy machine held a
-    /// just-written file past the half second ten attempts once gave, and past the three seconds twenty-five gave under
-    /// a full test suite, so the whole bound is about five and a half seconds (<see cref="ReplaceWait"/>) - a holder
-    /// past that is outside this process, and its refusal is reported rather than outwaited at the cost of everything
-    /// that waits on the write.
+    /// just-written file past the half second ten attempts once gave, past the three seconds twenty-five gave under a
+    /// full test suite, and past the five and a half seconds thirty-five gave under the suite the tree has grown to - so
+    /// a bound of about thirty seconds was tried, and the scanner's hold outlasted that too, while the wait starved the
+    /// very pool whose load had queued the scanner: more tests stalled longer, not fewer. A holder past five and a half
+    /// seconds is a queue this machine is feeding faster than it drains, and no bound this process picks empties it; the
+    /// refusal is reported rather than outwaited at the cost of everything that waits on the write.
     /// </summary>
     private const int ReplaceAttempts = 35;
 
@@ -662,8 +664,8 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     /// the caller does.
     /// </summary>
     /// <remarks>
-    /// The synchronous form blocks a thread-pool thread for up to three seconds per file while it waits.
-    /// A tree sync writes thousands of files, and the parallel legs above it are sharing that pool:
+    /// The synchronous form blocks a thread-pool thread for the rename's whole bound (<see cref="ReplaceAttempts"/>)
+    /// while it waits. A tree sync writes thousands of files, and the parallel legs above it are sharing that pool:
     /// sleeping in it makes a transient lock on one file look like a stall in every other leg.
     /// </remarks>
     private static async Task ReplaceWithAsync(string source, string destination, CancellationToken cancellationToken)
