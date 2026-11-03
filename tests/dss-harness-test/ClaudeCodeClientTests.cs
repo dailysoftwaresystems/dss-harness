@@ -380,10 +380,25 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var running = Task.Run(() => kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token));
 
-        await Task.Delay(TimeSpan.FromSeconds(2), Token);
+        // The launch's ask is what the whole suite's load can hold back a while: wait for it - told by the control
+        // log, written as each request arrives - and not a fixed span, for only then is the permission's being
+        // unanswered the lock's wait.
+        var control = Path.Combine(kit.StepDirectory, "claude-control.jsonl");
 
-        Assert.False(running.IsCompleted, "the launch answered a write's permission and went on while the engine held the main tree's lock");
-        Assert.Empty(sink.Of<PermissionDenied>());
+        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(60); ; await Task.Delay(50, Token))
+        {
+            Assert.True(DateTime.UtcNow < till, "the launch never asked about its write's permission");
+            Assert.False(running.IsCompleted, "the launch answered a write's permission and went on while the engine held the main tree's lock");
+            Assert.Empty(sink.Of<PermissionDenied>());
+
+            if (Asked(control))
+            {
+                // A span the launch's take is sure to be waiting through, so what it reports is a wait and not the
+                // moment between the ask and the take's first look.
+                await Task.Delay(300, Token);
+                break;
+            }
+        }
 
         engine!.Dispose();
 
@@ -400,6 +415,30 @@ public sealed class ClaudeCodeClientTests : IDisposable
             "a test as the engine");
 
         Assert.NotNull(taken);
+    }
+
+    /// <summary>Whether the launch's control log holds a permission ask, read past the writer that holds it open.</summary>
+    /// <param name="control">The control log's path.</param>
+    private static bool Asked(string control)
+    {
+        if (!File.Exists(control))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var read = new FileStream(control, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+            using var text = new StreamReader(read);
+
+            return (text.ReadToEnd() ?? string.Empty).Contains("\"can_use_tool\"", StringComparison.Ordinal);
+        }
+        catch (IOException)
+        {
+            // The log is being made: the next look will find it.
+            return false;
+        }
     }
 
     /// <summary>
