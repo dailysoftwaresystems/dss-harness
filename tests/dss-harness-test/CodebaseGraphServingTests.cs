@@ -50,8 +50,9 @@ public sealed class CodebaseGraphServingTests
                 Assert.True(missed.Count == 0, $"{language} '{task.Task}': the pack held {needed.Count - missed.Count} of {needed.Count} needed declarations ({string.Join(", ", missed)})");
 
                 // The bytes served: the pack, then the bodies of the needed declarations, as the tool's description leads
-                // an agent to read them.
-                var served = Encoding.UTF8.GetByteCount(pack.Text);
+                // an agent to read them. Bytes are counted as the text reads on either platform, its line endings
+                // normalized, so a checkout's own way of writing them moves no pin.
+                var served = Bytes(pack.Text);
 
                 foreach (var card in needed)
                 {
@@ -59,11 +60,11 @@ public sealed class CodebaseGraphServingTests
                         new JsonObject { ["op"] = "body", ["symbols"] = new JsonArray([card.Handle]) },
                         CodebaseGraphTool.Operations(write: false, narrow: false),
                         Token);
-                    served += Encoding.UTF8.GetByteCount(answer.Text);
+                    served += Bytes(answer.Text);
                 }
 
                 // The bytes of the whole files that hold what the task needs.
-                var whole = needed.Select(card => card.Path).Distinct(StringComparer.Ordinal).Sum(path => Encoding.UTF8.GetByteCount(files[path]));
+                var whole = needed.Select(card => card.Path).Distinct(StringComparer.Ordinal).Sum(path => Bytes(files[path]));
 
                 Assert.True(served < whole, $"{language} '{task.Task}': served {served} of {whole} whole bytes");
                 ratios.Add((language, task.Task, Math.Round(served * 100.0 / whole, 1)));
@@ -72,7 +73,7 @@ public sealed class CodebaseGraphServingTests
 
         Assert.Equal(
             [
-                ("csharp", "Sum the areas of every shape in an order and report the largest of them", 94.9),
+                ("csharp", "Sum the areas of every shape in an order and report the largest of them", 95.0),
                 ("csharp", "Describe each shape for the report table", 99.3),
                 ("c", "Compute the total and the largest of the shapes' areas", 70.8),
                 ("c", "Describe each circle for the report table", 99.0),
@@ -121,6 +122,10 @@ public sealed class CodebaseGraphServingTests
         var read = JsonSerializer.Deserialize<List<FixtureTask>>(tasks, Json) ?? [];
         return (queries, CodebaseGraphToolTests.Tool(tree, queries, sync: false), read, files);
     }
+
+    /// <summary>The UTF-8 bytes of <paramref name="text"/> as it reads on either platform, its line endings normalized.</summary>
+    /// <param name="text">A text the graph serves or a file holds.</param>
+    private static int Bytes(string text) => Encoding.UTF8.GetByteCount(text.Replace("\r\n", "\n"));
 
     /// <summary>The tasks are read as they are written, their names never renamed.</summary>
     private static JsonSerializerOptions Json { get; } = new() { PropertyNameCaseInsensitive = true };
