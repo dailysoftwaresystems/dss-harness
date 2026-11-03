@@ -1026,6 +1026,13 @@ public static class WorkflowValidator
                 }
             }
 
+            // V53: the graph a step asks is the run's own, made by a graphify-codebase step upstream of the step that
+            // asks it - or, in the recovery, ended before it - and a step that goes on with another's work asks the
+            // graph that step's conversation holds, saying none of its own. V54: each graph key only where it does
+            // something - the cap and the pack's seed only where a pack is given, the narrowing of reads only under the
+            // tool, and the tool only where the step's agent reads.
+            GraphRules(entry, where, resumesAnother);
+
             if (step.Independent is true && step.Resume is not null)
             {
                 _problems.Add($"{where} is independent and resumes '{step.Resume}'; independence is never being given the author's work, and resuming is going on with exactly that");
@@ -1097,10 +1104,146 @@ public static class WorkflowValidator
         }
 
         /// <summary>
+        /// V53 and V54 over a reason step's four graph keys: the graph a step asks is the run's own, made by a
+        /// graphify-codebase step upstream of it - or, in the recovery, ended before it - and a step that goes on with
+        /// another's work asks the graph that step's conversation holds, saying none of its own while it may say
+        /// <c>graphFrom</c> and <c>graphPromptTokens</c> for its own pack; each key only where it does something, the
+        /// pack's cap and seed only where a pack is given, the narrowing of reads only under the tool, and the tool only
+        /// where the step's agent reads.
+        /// </summary>
+        /// <param name="entry">The reason step.</param>
+        /// <param name="where">The step's path, as its problems name it.</param>
+        /// <param name="resumesAnother">Whether the step goes on with another step's work.</param>
+        private void GraphRules(Entry entry, string where, bool resumesAnother)
+        {
+            var step = entry.Step;
+            var upstream = GraphifyUpstream(entry);
+            var mode = GraphModeOf(entry);
+
+            if (step.Graph is "map" or "tools" && !upstream)
+            {
+                _problems.Add($"{where} says graph: {step.Graph}, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery, ended before it");
+            }
+
+            if (resumesAnother && step.Graph is not null)
+            {
+                _problems.Add($"{where} resumes '{step.Resume}' and says graph; a step that goes on with another's work asks the graph that step's conversation holds, and may say graphFrom and graphPromptTokens for its own pack");
+            }
+
+            if (resumesAnother && step.GraphReads is not null)
+            {
+                _problems.Add($"{where} resumes '{step.Resume}' and says graphReads; the narrowing of a step's reads is its conversation's own, begun where the step it goes on with began");
+            }
+
+            if (step.GraphReads is not null && mode != "tools")
+            {
+                _problems.Add($"{where} says graphReads and its graph is {mode}; the narrowing of reads holds a step's whole-file reads to the graph only where it is given the tool (graph: tools)");
+            }
+
+            if (step.Graph == "tools" && WorksAs(entry).Definition is { } definition && !definition.May.Contains("read"))
+            {
+                _problems.Add($"{where} says graph: tools and its agent does not read; the graph tool is an agent's read turned to the graph, and an agent that cannot read is given the map alone");
+            }
+
+            var pack = mode != "off" || (resumesAnother && ChainOf(entry).Any(link => GraphModeOf(link) != "off"));
+
+            if (step.GraphPromptTokens is not null && !pack)
+            {
+                _problems.Add($"{where} says graphPromptTokens and no pack is given it; the cap does nothing where a step asks no graph");
+            }
+
+            if (step.GraphFrom is { } from)
+            {
+                if (!pack)
+                {
+                    _problems.Add($"{where} says graphFrom and no pack is given it; where a pack starts from does nothing where a step asks no graph");
+                }
+                else if (!string.Equals(from, WorkflowStep.GraphFromChanges, StringComparison.Ordinal))
+                {
+                    if (Scope(entry, from) is not { } seeded)
+                    {
+                        _problems.Add($"{where} says graphFrom: '{from}', which is no step an enclosing group declares");
+                    }
+                    else if (seeded.Step.Type != "reason")
+                    {
+                        _problems.Add($"{where} says graphFrom: '{from}', which is a {seeded.Step.Type ?? "group"} step; a working set is what a reason step's own work leaves");
+                    }
+                }
+            }
+
+            Within(step.GraphPromptTokens, 0, WorkflowStep.MostGraphPromptTokens, $"{where}: graphPromptTokens");
+        }
+
+        /// <summary>
+        /// The step's use of the run's graph with its default resolved, as <see cref="WorkflowStep.GraphOf"/> resolves
+        /// it, by the step's own agent and its own upstream graphify step.
+        /// </summary>
+        /// <param name="entry">The reason step.</param>
+        private string GraphModeOf(Entry entry)
+            => WorkflowStep.GraphOf(entry.Step, WorksAs(entry).Definition, GraphifyUpstream(entry));
+
+        /// <summary>
+        /// Whether a <c>graphify-codebase</c> step is upstream of <paramref name="entry"/> - a step its
+        /// <c>dependsOn</c> closure reaches - or, where the step is the recovery's own, one is declared, for a graph
+        /// made anywhere has ended by the time the recovery runs.
+        /// </summary>
+        /// <param name="entry">The step.</param>
+        private bool GraphifyUpstream(Entry entry)
+        {
+            if (InRecovery(entry))
+            {
+                return _entries.Any(other => other.Step.Type == "graphify-codebase");
+            }
+
+            var seen = new HashSet<Entry> { entry };
+            var waiting = new Queue<Entry>([entry]);
+
+            while (waiting.Count > 0)
+            {
+                var current = waiting.Dequeue();
+
+                foreach (var name in current.Step.DependsOn)
+                {
+                    if (Sibling(current, name) is not { } dependency || !seen.Add(dependency))
+                    {
+                        continue;
+                    }
+
+                    if (dependency.Step.Type == "graphify-codebase")
+                    {
+                        return true;
+                    }
+
+                    waiting.Enqueue(dependency);
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// The chain of reason steps a step that goes on with another's work is part of, its root first and itself
+        /// last: every step whose <c>resume</c> the walk follows, each as the entry the definition declares.
+        /// </summary>
+        /// <param name="entry">A reason step that goes on with another's work.</param>
+        private IReadOnlyList<Entry> ChainOf(Entry entry)
+        {
+            var chain = new List<Entry>();
+
+            for (var walk = entry; walk is not null; walk = walk.Step.Resume is { } resumed && !string.Equals(resumed, walk.Step.Name, StringComparison.Ordinal) ? Scope(walk, resumed) : null)
+            {
+                chain.Insert(0, walk);
+            }
+
+            return chain;
+        }
+
+        /// <summary>
         /// The keys <paramref name="step"/> names that a step going on with another's work takes from that step - its
         /// agent and how the agent's model is chosen, its access, its worktree and what it writes - in the order the
         /// refusal lists them.
         /// </summary>
+        /// <param name="step">The step.</param>
         private static IReadOnlyList<string> ResumedKeys(WorkflowStep step)
             => [.. new (string Key, bool Named)[]
                 {

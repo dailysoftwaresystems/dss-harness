@@ -556,6 +556,52 @@ public sealed record WorkflowStep
     /// <summary>The longest a reasoning step ever waits before it is tried again, however the waits have doubled.</summary>
     public const int MostBackoffSeconds = 900;
 
+    /// <summary>
+    /// The step's use of the run's codebase graph: <c>off</c> (none), <c>map</c> (its context pack alone) or <c>tools</c>
+    /// (the pack and the one tool <c>graph</c>). Absent, <see cref="GraphOf"/> decides - <c>tools</c> where a graph is
+    /// made upstream and the step's agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is.
+    /// </summary>
+    public string? Graph { get; init; } = null;
+
+    /// <summary>Every <c>graph</c> a reason step may say, in the order a refusal lists them.</summary>
+    public static readonly IReadOnlyList<string> GraphModes = ["off", "map", "tools"];
+
+    /// <summary>
+    /// Where the step's context pack starts from: <see cref="GraphFromChanges"/>, or the reason step whose working set
+    /// seeds it in place of the work the run holds - a step that goes on with another's work may say it, for its pack
+    /// is its own.
+    /// </summary>
+    public string? GraphFrom { get; init; } = null;
+
+    /// <summary>The change-first value of <see cref="GraphFrom"/>: the pack starts from what the step's tree holds differently from its base.</summary>
+    public const string GraphFromChanges = "changes";
+
+    /// <summary>The cap of the step's context pack, in estimated tokens, from 0 to <see cref="MostGraphPromptTokens"/>; absent, <see cref="DefaultGraphPromptTokens"/>.</summary>
+    public int? GraphPromptTokens { get; init; } = null;
+
+    /// <summary>The cap of a step's context pack where neither the step nor anything else says one.</summary>
+    public const int DefaultGraphPromptTokens = 3_000;
+
+    /// <summary>The most tokens a step may cap its context pack at.</summary>
+    public const int MostGraphPromptTokens = 20_000;
+
+    /// <summary>Whether the step's reads are narrowed to the graph: <c>narrow</c> (the default) or <c>guide</c>.</summary>
+    public string? GraphReads { get; init; } = null;
+
+    /// <summary>Every <c>graphReads</c> a reason step may say, in the order a refusal lists them.</summary>
+    public static readonly IReadOnlyList<string> GraphReadsModes = ["narrow", "guide"];
+
+    /// <summary>
+    /// The step's use of the run's graph, its default resolved: its own <c>graph</c>; else <c>tools</c> where one is made
+    /// upstream and its agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is - an agent
+    /// the definition does not name is read as one that reads, its file's own problems said where it is read.
+    /// </summary>
+    /// <param name="step">The reason step.</param>
+    /// <param name="agent">The agent the step works as, where its definition was read.</param>
+    /// <param name="graphUpstream">Whether a graphify step is upstream of the step - or, in the recovery, has ended.</param>
+    public static string GraphOf(WorkflowStep step, AgentDefinition? agent, bool graphUpstream)
+        => step.Graph ?? (graphUpstream ? agent?.May.Contains("read") == false ? "map" : "tools" : "off");
+
     /// <summary>The legs a leg step runs, by name; every declared leg where the file says nothing.</summary>
     public IReadOnlyList<string> Legs { get; init; } = [];
 
