@@ -1068,6 +1068,12 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
+            // The tree's lock for the refresh's apply too, as the plan names it: the hand-over reads what a side-task
+            // writes, and the merge writes what it writes, so neither meets the other part way.
+            using var tree = await MainTreeWriteLock.HoldAsync(main, CancellationToken.None).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("the wait for the main tree's lock was ended, and nothing ended it");
+
+            met.Waited = tree.Waited;
             int handed;
             var merged = 0;
             string? stopped;
@@ -1246,6 +1252,12 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
+            // The tree's lock for the move of the base: what it keeps alive in the main checkout and what it settles there
+            // are the main tree's git's own, taken apart from a side-task's writes and commands as every engine write is.
+            using var tree = await MainTreeWriteLock.HoldAsync(main, CancellationToken.None).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("the wait for the main tree's lock was ended, and nothing ended it");
+
+            met.Waited = tree.Waited;
             (plan, stop) = await MeasuredAsync(cancellationToken).ConfigureAwait(false);
 
             // What is written is what was weighed under the hold, and what its answer names.
@@ -1678,7 +1690,7 @@ public sealed class AgentService(
                 return unexpected;
             }
 
-            var written = await WriteAsync(context, layout, record, path, seed!, measured).ConfigureAwait(false);
+            var written = await WriteAsync(context, layout, record, path, seed!, measured, met).ConfigureAwait(false);
 
             // What the fold wrote rides the answer as its facts, whatever form the answer is asked in - as far as it went,
             // where it stopped part way, since that much is in the main tree now.
@@ -2001,7 +2013,7 @@ public sealed class AgentService(
             if (!discard)
             {
                 var fold = measured.Fold!;
-                var written = await WriteAsync(context, layout, record, path, seed!, fold).ConfigureAwait(false);
+                var written = await WriteAsync(context, layout, record, path, seed!, fold, met).ConfigureAwait(false);
 
                 // The work the delete folded back rides the answer as its facts, whatever form the answer is asked in - as
                 // far as it went, where it stopped part way, since that much is in the main tree now.
@@ -3075,10 +3087,19 @@ public sealed class AgentService(
     /// anew and records them as applied, never interrupted: the rows as written and the seed as recorded, or - once anything
     /// is written - what stopped it, as a change begun and not finished.
     /// </summary>
-    private async Task<Written> WriteAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string path, SeedRecord seed, Measured measured)
+    private async Task<Written> WriteAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string path, SeedRecord seed, Measured measured, HoldersMet met)
     {
         var main = context.Layout.MainCheckoutRoot;
         var plan = measured.Plan!;
+
+        // The tree's lock, taken by every engine write to the main tree and by a side-task's writes and commands alike:
+        // the fold waits out a side-task's command, as a side-task's write waits out the fold, and how long it waited is
+        // what the step's record says of it. Held to the method's end, for the rows it applies write the registries the
+        // repository keeps in its tree.
+        using var tree = await MainTreeWriteLock.HoldAsync(main, CancellationToken.None).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("the wait for the main tree's lock was ended, and nothing ended it");
+
+        met.Waited = tree.Waited;
         var applied = await _fold.ApplyAsync(main, path, plan).ConfigureAwait(false);
         var progress = $"after writing {applied.Written.Count} of {ReportText.Counted(plan.Written.Count, "path")}"
             + (plan.Merged.Count == 0 ? string.Empty : $", merging {applied.Merged.Count} of {plan.Merged.Count}")
@@ -3624,7 +3645,8 @@ public sealed class AgentService(
             had?.Needs ?? [],
             had?.Refusals ?? Reasons(standing, met.Reasons),
             met.Folded ?? had?.Folded,
-            had?.Planned ?? met.Planned);
+            had?.Planned ?? met.Planned,
+            met.Waited);
 
         return json && answered.Data.Count == 0
             ? OrchestrationReports.Document(answered, facts)
@@ -4016,6 +4038,9 @@ public sealed class AgentService(
 
         /// <summary>What the plan of the verb names, measured under its hold; <see langword="null"/> before, and where none was measured.</summary>
         public AgentPlanned? Planned { get; set; }
+
+        /// <summary>How long the apply waited for the main tree's lock, which a side-task held; zero where it did not wait.</summary>
+        public TimeSpan Waited { get; set; }
 
         /// <summary>The reasons the --apply's own measure was refused for, by kind, where it typed any; empty otherwise.</summary>
         public IReadOnlyList<RefusalKind> Reasons { get; set; } = [];

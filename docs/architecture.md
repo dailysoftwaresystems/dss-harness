@@ -1384,7 +1384,11 @@ refused, since nothing was reconciled there and handing the main tree's copy wou
 sorted as any hand-over sorts what the main tree holds, asked what of the agent's own it would go over or through
 (`InTheWayOfHanding`), and measured in the agent's worktree; `ApplyAsync` hands it last, after every write of the main
 tree, through the one loop every hand-over takes - deletions, then files, each asked first to be what was weighed - and
-`FoldedAsync` records it through the ledger. Both trees and the seed then agree, so the agent's next fold starts from
+`FoldedAsync` records it through the ledger. Every write the engine makes in the main tree - a fold's apply, a
+deletion's, a refresh's and a rebase's apply, a commit step's staging and commit - takes the main tree's lock
+(`MainTreeWriteLock`, a `MachineWideMutex` named for the tree's path), which a side-task's writes and commands take
+for their duration too: each side waits the other out, for a long command holds the folds back for as long as it runs,
+and the step's output says how long it waited and for what. Both trees and the seed then agree, so the agent's next fold starts from
 the reconciliation, and delete-agent's proof that nothing is left to fold holds without being told which paths were
 settled. rebase-agent's `--settled` is another option: there the person reconciled the agent's copy, which stays as its
 change on the new base.
@@ -3081,7 +3085,8 @@ branch the run started on (`FlowRunPlace.OffItsBranch`, over `FlowRunContext.Bra
 and the pull request apply), every fold upstream settled (`FoldOwed.Unsettled`), an empty index, each path's digest and
 no path to stage the index marks assume-unchanged or skip-worktree checked before anything is
 staged; the staged set written to the ledger (`FlowCommitEntry`) before `IGitPublisher` stages it by explicit path and
-commits once, then held over the commit the branch named before it: its parents, as its own object names them
+commits once under the main tree's lock (`MainTreeWriteLock`, shared with a side-task's writes and commands, the
+step's output saying what it waited out for it), then held over the commit the branch named before it: its parents, as its own object names them
 (`IGitClient.ParentsOfAsync`, `git cat-file commit`, which no graft or shallow boundary stands in for), that commit
 alone - a hook could move the branch to a commit of its own, standing on one that carries anything - and what it
 changes against that commit the set alone; one that stands elsewhere, took more, or left a path of the set out, is

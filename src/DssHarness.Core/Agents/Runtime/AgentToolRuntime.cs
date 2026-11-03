@@ -327,6 +327,20 @@ public sealed partial class AgentToolRuntime : IDisposable
         Tally.Called();
         Answer answer;
 
+        // A side-task's write or command holds the main tree's lock for its duration: the engine's folds and commits
+        // wait it out, as it waits out theirs, and its chat says when it waited - the engine's step records say the
+        // same of theirs.
+        using var tree = _run.Ground is { SideTask: true } && _tools.TryGetValue(call.Name, out var tool) && tool.Barrier
+            ? await MainTreeWriteLock.HoldAsync(_run.Workspace.MainCheckout, cancellationToken).ConfigureAwait(false)
+                ?? throw new OperationCanceledException(cancellationToken)
+            : null;
+
+        if (tree?.Waited > TimeSpan.Zero)
+        {
+            await _events.EmitAsync(new Notice(
+                $"waited {Math.Round(tree.Waited.TotalSeconds, 1):0.#} s for {MainTreeWriteLock.WaitedOutOnFromSideTask} to end")).ConfigureAwait(false);
+        }
+
         try
         {
             answer = await AnswerAsync(call, cancellationToken).ConfigureAwait(false);

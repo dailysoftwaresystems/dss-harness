@@ -780,6 +780,45 @@ public sealed class FoldStepTests
         Assert.Empty(FoldWithin.Outside(["anything.txt"], null, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A fold takes the main tree's lock, as every engine write to the main tree does, waiting out a side-task's write or
+    /// command that holds it: nothing reaches the tree while the other side's hold stands, and once it lets go the fold
+    /// goes on and its step's output says how long it waited and for what.
+    /// </summary>
+    [Fact]
+    public async Task AFold_WaitsOutASideTasksHoldOfTheMainTree_AndItsOutputSaysWhatItWaitedFor()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+
+        using var sideTask = DssHarness.Core.Platform.MachineWideMutex.TryHold(
+            DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(kit.Main),
+            "a test as a side-task");
+
+        Assert.NotNull(sideTask);
+
+        var folding = Task.Run(() => Runner(kit).RunAsync(Run(kit, Fold()), Token));
+
+        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(3); DateTime.UtcNow < till; )
+        {
+            Assert.NotEqual("two\nagent edit\n", File.Exists(Path.Combine(kit.Main, "b.txt")) ? File.ReadAllText(Path.Combine(kit.Main, "b.txt")) : null);
+            await Task.Delay(50, Token);
+        }
+
+        sideTask!.Dispose();
+
+        var folded = await folding;
+
+        Assert.True(folded.Passed, folded.Error);
+        Assert.True(folded.Output!["waited"]!["seconds"]!.GetValue<double>() >= 0.1, folded.Output.ToJsonString());
+        Assert.Equal(
+            DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOn,
+            folded.Output["waited"]!["for"]!.GetValue<string>());
+        Assert.True(File.Exists(Path.Combine(kit.Main, "b.txt")));
+    }
+
     private static WorkflowStep Fold() => new() { Name = "fold", Type = "fold", Of = "made" };
 
     private static WorkflowStep Delete() => new() { Name = "delete", Type = "delete-agent", Of = "made" };

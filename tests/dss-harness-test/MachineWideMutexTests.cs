@@ -248,4 +248,47 @@ public sealed class MachineWideMutexTests
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.Contains("belongs to another user", refusal.Message, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// A waiting take waits for the mutex and says how long it waited, taking it where its holder let it go before the
+    /// wait's whole window passed - the caller awaiting the hold, so the thread that waits is the hold's own.
+    /// </summary>
+    [Fact]
+    public async Task AWaitingTake_WaitsForTheMutex_AndSaysHowLongItWaited()
+    {
+        var name = Name();
+        using var held = MachineWideMutex.TryHold(name, "a test's subject");
+
+        Assert.NotNull(held);
+        Assert.True(held.Waited < TimeSpan.FromMilliseconds(50), $"waited {held.Waited}");
+
+        var waiting = MachineWideMutex.HoldAsync(name, "a test's subject", TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
+
+        held.Dispose();
+
+        using var taken = await waiting;
+
+        Assert.NotNull(taken);
+        Assert.True(taken.Waited >= TimeSpan.FromMilliseconds(200), $"waited {taken.Waited}");
+    }
+
+    /// <summary>A waiting take whose window passes without the mutex answers null, and one a token ends answers null: neither holds what it did not take.</summary>
+    [Fact]
+    public async Task AWaitingTake_ItsWindowPassedOrItsTokenEnded_AnswersNull()
+    {
+        var name = Name();
+        using var held = MachineWideMutex.TryHold(name, "a test's subject");
+
+        Assert.NotNull(held);
+        Assert.Null(await MachineWideMutex.HoldAsync(name, "a test's subject", TimeSpan.FromMilliseconds(200), CancellationToken.None));
+
+        using var ended = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        Assert.Null(await MachineWideMutex.HoldAsync(name, "a test's subject", Timeout.InfiniteTimeSpan, ended.Token));
+    }
+
+    private static string Name()
+        => MachineWideMutex.NameFor("test", [Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))], ignoreCase: true);
 }

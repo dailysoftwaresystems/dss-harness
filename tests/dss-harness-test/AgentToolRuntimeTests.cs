@@ -1790,6 +1790,64 @@ public sealed class AgentToolRuntimeTests : IDisposable
         return new AgentToolCallRequest(id, tool, input.ToJsonString());
     }
 
+    /// <summary>
+    /// A side-task's write holds the main tree's lock for its duration, as the engine's folds and commits do: it waits
+    /// out whatever holds the tree, saying so as the engine's step records say the same of theirs, and nothing it writes
+    /// reaches the tree before the other side lets go.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksWrite_TakesTheMainTreesLock_WaitingOutWhateverHoldsIt_AndSayingSo()
+    {
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Write], sideTask: true);
+
+        using var engine = DssHarness.Core.Platform.MachineWideMutex.TryHold(
+            DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(_worktree),
+            "a test as the engine");
+
+        Assert.NotNull(engine);
+
+        var writing = Task.Run(() => Call(runtime, AgentTools.CreateFile, ("path", "w.txt"), ("content", "written\n")));
+
+        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(3); DateTime.UtcNow < till; )
+        {
+            Assert.False(File.Exists(Path.Combine(_worktree, "w.txt")), "the side-task wrote while the engine held the main tree's lock");
+            await Task.Delay(50, Token);
+        }
+
+        engine!.Dispose();
+
+        var result = await writing;
+
+        Assert.True(result.Ok, result.Text);
+        Assert.Equal("written\n", Read("w.txt"));
+
+        var said = Assert.Single(_events.All.OfType<Notice>());
+        Assert.StartsWith("waited ", said.Text);
+        Assert.EndsWith($" s for {DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOnFromSideTask} to end", said.Text);
+    }
+
+    /// <summary>
+    /// A step's agent takes no hold of the main tree's lock: its tree is the run's own, held by the run's own means, and
+    /// its writes go straight through a lock another holds.
+    /// </summary>
+    [Fact]
+    public async Task AStepAgentsWrite_TakesNoHoldOfTheMainTreesLock()
+    {
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Write]);
+
+        using var engine = DssHarness.Core.Platform.MachineWideMutex.TryHold(
+            DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(_worktree),
+            "a test as the engine");
+
+        Assert.NotNull(engine);
+
+        var result = await Call(runtime, AgentTools.CreateFile, ("path", "w.txt"), ("content", "written\n"));
+
+        Assert.True(result.Ok, result.Text);
+        Assert.Equal("written\n", Read("w.txt"));
+        Assert.Empty(_events.All.OfType<Notice>());
+    }
+
     private static Task<AgentToolCallResult> Call(AgentToolRuntime runtime, string tool, params (string Name, object? Value)[] members)
         => Call(runtime, tool, "call_1", members);
 
@@ -1828,7 +1886,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
         TimeProvider? clock = null,
         AgentWebSearch? webSearch = null,
         AgentNativeAsk? native = null,
-        DssHarness.Core.Agents.Isolation.LaunchIsolation? isolation = null)
+        DssHarness.Core.Agents.Isolation.LaunchIsolation? isolation = null,
+        bool sideTask = false)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -1841,6 +1900,11 @@ public sealed class AgentToolRuntimeTests : IDisposable
             webDomains,
             writes,
             reporterRoot);
+
+        if (sideTask)
+        {
+            ground = ground with { SideTask = true };
+        }
 
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, endpoint ?? new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var files = fileSystem ?? _harness.FileSystem;

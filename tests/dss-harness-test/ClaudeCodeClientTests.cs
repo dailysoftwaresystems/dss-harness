@@ -353,6 +353,56 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// A side-task's own write on Claude Code holds the main tree's lock for its duration: its permission is answered
+    /// only once the lock is held, the launch waiting out whatever holds the tree and the chat saying so, and the hold
+    /// goes with the call's result - the read beside it needs none.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksOwnWriteOnClaudeCode_TakesTheMainTreesLock_WaitingOutWhateverHoldsIt_AndLetsItGoAtItsResult()
+    {
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" }, ["result"] = "ok" },
+                    new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["result"] = "1\talpha" }),
+            },
+        ]);
+        var sink = new Sink();
+
+        using var engine = DssHarness.Core.Platform.MachineWideMutex.TryHold(
+            DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(kit.Temp.Path),
+            "a test as the engine");
+
+        Assert.NotNull(engine);
+
+        var running = Task.Run(() => kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token));
+
+        await Task.Delay(TimeSpan.FromSeconds(2), Token);
+
+        Assert.False(running.IsCompleted, "the launch answered a write's permission and went on while the engine held the main tree's lock");
+        Assert.Empty(sink.Of<PermissionDenied>());
+
+        engine!.Dispose();
+
+        var result = await running;
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Empty(sink.Of<PermissionDenied>());
+        Assert.StartsWith("waited ", Assert.Single(sink.Of<Notice>()).Text);
+        Assert.EndsWith($" s for {DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOnFromSideTask} to end", Assert.Single(sink.Of<Notice>()).Text);
+
+        // The call's result let the hold go: the tree's lock is free again once the run has ended.
+        using var taken = DssHarness.Core.Platform.MachineWideMutex.TryHold(
+            DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(kit.Temp.Path),
+            "a test as the engine");
+
+        Assert.NotNull(taken);
+    }
+
+    /// <summary>
     /// The stored stream is written as the launch runs, by the runner from the client's events: the launch's start, the
     /// prompt, the turn, the call and its result, the message, the turn's end, in that order, no delta among them; the
     /// control messages both ways are kept beside it.
