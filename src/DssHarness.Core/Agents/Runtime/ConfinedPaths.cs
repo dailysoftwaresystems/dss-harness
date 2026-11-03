@@ -15,11 +15,11 @@ namespace DssHarness.Core.Agents.Runtime;
 /// <remarks>
 /// Each root is compared as its own file system names it (<see cref="PathCase.In"/>), by its real path - the place a link
 /// to it, or a link along the path asked, leads - so no spelling reaches past a root. A link put in place between this
-/// check and the tool's own act is met at the act where a file's bytes pass: a file is read and written through the
-/// file as it was opened, where the open file stands decided again before a byte is read or written
-/// (<see cref="AgentFiles.ReadAsync"/>, <see cref="AgentFiles.Write"/>). What goes by a path alone still meets such a
-/// link, said in help: a directory listed, made, moved or deleted, a file moved or deleted, and the rename that puts a
-/// written file in place.
+/// check and the tool's own act reaches nothing at the act: a file is read through the file as it was opened, where the
+/// open file stands decided again before a byte is read (<see cref="AgentFiles.ReadAsync"/>), and a file written, a
+/// directory made, and an entry moved or deleted is acted on relative to its directory held from the writable root it
+/// was decided in (<see cref="WritableRootOf"/>, <see cref="AgentFiles.Write"/>, <see cref="UnfollowedFiles"/>). A
+/// directory listed goes by its path: what a link put in place of one leads to is listed by name, never read.
 /// </remarks>
 public sealed class ConfinedPaths
 {
@@ -82,7 +82,7 @@ public sealed class ConfinedPaths
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tree);
 
-        return new ConfinedPaths(fileSystem, platform, new AgentPolicyGround(tree, [], [tree], [], [], [], [], null, null, null, WorktreeRules: false, ProtectedPaths: false, []));
+        return new ConfinedPaths(fileSystem, platform, new AgentPolicyGround(tree, [], [tree], [], [], [], [], [], null, null, null, WorktreeRules: false, ProtectedPaths: false, []));
     }
 
     /// <summary>
@@ -123,6 +123,29 @@ public sealed class ConfinedPaths
         return ConfinedPath.Refused(
             RootsRule,
             $"'{final}' is where the open file stands, outside the {(write ? "writable roots" : "roots")} of this agent: {string.Join(", ", _roots.Where(root => !write || root.Writable).Select(root => root.Given))}");
+    }
+
+    /// <summary>
+    /// The writable root a place <see cref="Write"/> allowed lies in, spelt as the place is - the root as given, or where
+    /// it resolves - for the place to be acted on relative to it, held from it with no link below
+    /// (<see cref="HeldDirectory"/>).
+    /// </summary>
+    /// <param name="full">A place <see cref="Write"/> allowed, as it answered it.</param>
+    /// <exception cref="ArgumentException">No writable root holds it as it is spelt.</exception>
+    public string WritableRootOf(string full)
+    {
+        ArgumentNullException.ThrowIfNull(full);
+
+        // The deepest that holds it, where one root lies in another: the walk from it is the shortest, and the root nearest
+        // the place is the one a write was decided in.
+        var holding = _roots.Where(root => root.Writable)
+            .SelectMany(root => new[] { root.Given, root.Real }.Select(spelt => (Spelt: spelt, root.Comparison)))
+            .Where(root => PathContainment.IsInsideOrSame(root.Spelt, full, root.Comparison))
+            .OrderByDescending(root => root.Spelt.Length)
+            .Select(root => root.Spelt)
+            .FirstOrDefault();
+
+        return holding ?? throw new ArgumentException($"'{full}' lies in no writable root of this agent as it is spelt.", nameof(full));
     }
 
     /// <summary>Whether <paramref name="path"/>, absolute, is one of the agent's roots itself, as asked or as it resolves.</summary>

@@ -85,7 +85,7 @@ public sealed partial class GitClient
     {
         var result = await RunForBytesAsync(
             directory,
-            Listing(["status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames"], paths),
+            Listing(["status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames", GitOwnSettings.SubmoduleCommits], paths),
             cancellationToken).ConfigureAwait(false);
 
         Ensure(result, "read the working tree's status");

@@ -35,6 +35,74 @@ public sealed class WorktreeDeletionTests
         await AssertNotRegisteredAsync(harness, temp, path);
     }
 
+    /// <summary>
+    /// A link put where the lock's reason is read - a worktree's own git directory is a place an isolated agent's
+    /// commands write - is never read through: the deletion refuses saying it could not check, what the link leads to
+    /// is neither printed nor changed, and nothing is deleted.
+    /// </summary>
+    [Fact]
+    public async Task ALinkWhereTheLocksReasonIsRead_RefusesTheDeletion_NeverReadingWhatItLeadsTo()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "linked");
+        await harness.RunGitAsync(temp.Path, ["worktree", "lock", "--reason", "on a USB disk", path], cancellationToken);
+        var record = Path.Combine(temp.Path, ".git", "worktrees", "linked");
+        var locked = Path.Combine(record, "locked");
+        var secret = outside.WriteFile("slot.txt", "a credential slot's own text\n");
+
+        TestLinks.OrSkip(() =>
+        {
+            File.Delete(locked);
+            File.CreateSymbolicLink(locked, secret);
+        });
+
+        var outcome = await harness.WorktreeService.DeleteAsync(temp.Path, "linked", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.Outcome.ExitCode);
+        Assert.Equal(
+            $"Could not read whether the worktree is locked, from '{locked}': '{locked}' is reached through the link '{locked}', which the tool never follows in a place an isolated process writes"
+            + " Nothing was deleted: what worktree 'linked' holds could not be checked. Fix the cause and try again; --force would delete it unchecked.",
+            outcome.Outcome.Message);
+        Assert.Equal("a credential slot's own text\n", File.ReadAllText(secret));
+        Assert.True(Directory.Exists(path));
+    }
+
+    /// <summary>
+    /// A link put where the worktree's own gitdir record is read is never read through either: the deletion refuses
+    /// saying it could not check, what the link leads to is neither printed nor changed, and nothing is deleted.
+    /// </summary>
+    [Fact]
+    public async Task ALinkWhereTheWorktreesGitdirRecordIsRead_RefusesTheDeletion_NeverReadingWhatItLeadsTo()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "linked");
+        var record = Path.Combine(temp.Path, ".git", "worktrees", "linked");
+        var gitdir = Path.Combine(record, "gitdir");
+        var secret = outside.WriteFile("record.txt", "a credential slot's own text\n");
+
+        TestLinks.OrSkip(() =>
+        {
+            File.Delete(gitdir);
+            File.CreateSymbolicLink(gitdir, secret);
+        });
+
+        var outcome = await harness.WorktreeService.DeleteAsync(temp.Path, "linked", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.Outcome.ExitCode);
+        Assert.Equal(
+            $"Could not read git's worktree record '{gitdir}': '{gitdir}' is reached through the link '{gitdir}', which the tool never follows in a place an isolated process writes"
+            + " Nothing was deleted: what worktree 'linked' holds could not be checked. Fix the cause and try again; --force would delete it unchecked.",
+            outcome.Outcome.Message);
+        Assert.Equal("a credential slot's own text\n", File.ReadAllText(secret));
+        Assert.True(Directory.Exists(path));
+    }
+
     [Fact]
     public async Task ACommitOnlyADetachedHeadNames_IsRefused_WithHowToKeepIt()
     {
@@ -381,7 +449,7 @@ public sealed class WorktreeDeletionTests
     public async Task AChangedSubmodule_IsRefused_EvenWhenConfigurationIgnoresIt()
     {
         // This setting hides the change from a plain status, and a worktree holding submodules is
-        // removed past git's own check, so only --ignore-submodules=none stands in the way.
+        // removed past git's own check, so only the submodule's own status stands in the way.
         using var temp = new TempDirectory();
         using var library = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -393,6 +461,33 @@ public sealed class WorktreeDeletionTests
 
         Assert.Equal(HarnessExit.Refused, outcome.Outcome.ExitCode);
         Assert.Contains("that would be lost: lib", outcome.Outcome.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A repository made in the worktree and put in its index as a submodule's entry - its .git a directory of the work
+    /// tree, its configuration naming a clean filter - is never asked about its work tree, so nothing of that
+    /// configuration runs, and the deletion is refused for it, named as never looked into.
+    /// </summary>
+    [Fact]
+    public async Task ARepositoryPlantedAsASubmodule_IsNeverLookedInto_AndRefusesTheDeletion()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "planted");
+        var marker = outside.Combine("ran.txt");
+        await GitClientProtocolTests.PlantFilteredRepositoryAsync(harness, path, "sub", marker, cancellationToken);
+
+        var outcome = await harness.WorktreeService.DeleteAsync(temp.Path, "planted", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.False(File.Exists(marker), "The planted repository's clean filter ran.");
+        Assert.Equal(HarnessExit.Refused, outcome.Outcome.ExitCode);
+        Assert.Contains(
+            "1 uncommitted change(s) that would be lost: sub (a submodule whose repository is not among its superproject's modules, so its work tree is never looked into)",
+            outcome.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.True(Directory.Exists(path));
     }
 
     [Fact]

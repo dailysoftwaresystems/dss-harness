@@ -204,7 +204,7 @@ public sealed class BuildService(
         if (rebuilt is not null)
         {
             _output.Info(CommandName, $"{request.Leg}: rebuilding from clean, because {rebuilt}");
-            _fileSystem.DeleteDirectory(buildDirectory);
+            UnfollowedFiles.DeleteDirectory(_fileSystem, request.TreeRoot, buildDirectory);
         }
 
         // Nothing is built in a copy that holds no build directory yet: said, because a copy is expected to keep a warm
@@ -214,7 +214,9 @@ public sealed class BuildService(
             _output.Info(CommandName, $"{request.Leg}: nothing is built in its copy yet, so this build starts from nothing");
         }
 
-        _fileSystem.CreateDirectory(buildDirectory);
+        // Held from the tree, never from the directory's own place: a link the leg's isolated work put at build, or below
+        // it, would else be followed outside, and the build directory made or deleted wherever it points.
+        UnfollowedFiles.CreateDirectory(_fileSystem, request.TreeRoot, buildDirectory);
 
         IReadOnlyList<CompilerFact> compilers = [];
 

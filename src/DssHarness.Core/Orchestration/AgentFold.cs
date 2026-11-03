@@ -709,7 +709,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                     main),
                 cancellationToken).ConfigureAwait(false);
 
-            weighed.Add((offer, why, [new MergeTarget(Path.Combine(main, path), MainTreeName, look.Main.File!.Value), new MergeTarget(Path.Combine(worktree, path), AgentTreeName, look.Agent.File!.Value)]));
+            weighed.Add((offer, why, [new MergeTarget(Path.Combine(main, path), MainTreeName, look.Main.File!.Value, main), new MergeTarget(Path.Combine(worktree, path), AgentTreeName, look.Agent.File!.Value, worktree)]));
         }
 
         // The arm registry merged by arm is judged as a registry of the main tree as the fold leaves it: what it removes
@@ -918,7 +918,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             {
                 var file = Path.Combine(main, path);
                 await RequireMeasuredAsync(file, path, plan.MainContent[path], MainTreeName, "removed").ConfigureAwait(false);
-                _fileSystem.DeleteFile(file);
+                UnfollowedFiles.Delete(_fileSystem, main, file);
                 deleted.Add(path);
                 _fileSystem.RemoveEmptiedDirectories(main, Path.GetDirectoryName(file), _platform.PathComparison);
             }
@@ -927,7 +927,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             {
                 var destination = Path.Combine(main, path);
                 await RequireMeasuredAsync(destination, path, plan.MainContent[path], MainTreeName, "written over").ConfigureAwait(false);
-                await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(worktree, path), destination, plan.AgentContent[path]?.Digest, CancellationToken.None).ConfigureAwait(false);
+                await VerifiedFileCopy.CopyUnfollowedAsync(_fileSystem, worktree, Path.Combine(worktree, path), main, destination, plan.AgentContent[path]?.Digest, CancellationToken.None).ConfigureAwait(false);
                 written.Add(path);
             }
 
@@ -980,21 +980,22 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         foreach (var into in merge.Into)
         {
-            await WriteMergedAsync(into.File, merge).ConfigureAwait(false);
+            await WriteMergedAsync(into, merge).ConfigureAwait(false);
         }
     }
 
     /// <summary>
-    /// Writes a merged path's bytes to <paramref name="file"/>, with the bit the merge gave it, unless the file is that
-    /// already: a tree that holds what the merge gives is not written again.
+    /// Writes a merged path's bytes to one tree's copy of it, with the bit the merge gave it, unless the file is that
+    /// already: a tree that holds what the merge gives is not written again. Written relative to the file's directory held
+    /// from the tree's root, so no link put on its way leads the merge elsewhere.
     /// </summary>
-    /// <param name="file">One tree's copy of the path.</param>
+    /// <param name="into">One tree's copy of the path.</param>
     /// <param name="merge">The merge.</param>
-    private async Task WriteMergedAsync(string file, MergedPath merge)
+    private async Task WriteMergedAsync(MergeTarget into, MergedPath merge)
     {
-        if (await IdentityAsync(file, CancellationToken.None).ConfigureAwait(false) != new FileIdentity(merge.Digest, merge.Executable))
+        if (await IdentityAsync(into.File, CancellationToken.None).ConfigureAwait(false) != new FileIdentity(merge.Digest, merge.Executable))
         {
-            await VerifiedFileCopy.WriteAsync(_fileSystem, _permissions, merge.Working, file, merge.Executable, CancellationToken.None).ConfigureAwait(false);
+            await VerifiedFileCopy.WriteUnfollowedAsync(_fileSystem, merge.Working, into.Root, into.File, merge.Executable, CancellationToken.None).ConfigureAwait(false);
         }
     }
 
@@ -1602,7 +1603,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                     worktree),
                 cancellationToken).ConfigureAwait(false);
 
-            weighed.Add((offer, mainLinked || agentLinked ? [] : [new MergeTarget(agentFile, AgentTreeName, theirs)], ours));
+            weighed.Add((offer, mainLinked || agentLinked ? [] : [new MergeTarget(agentFile, AgentTreeName, theirs, worktree)], ours));
         }
 
         return weighed;
@@ -1847,7 +1848,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             switch (_fileSystem.KindOf(copy))
             {
                 case PathKind.File or PathKind.Link:
-                    _fileSystem.DeleteFile(copy);
+                    UnfollowedFiles.Delete(_fileSystem, worktree, copy);
                     _fileSystem.RemoveEmptiedDirectories(worktree, Path.GetDirectoryName(copy), _platform.PathComparison);
                     break;
                 case PathKind.Directory:
@@ -1861,7 +1862,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             var copy = Path.Combine(worktree, path);
             await RequireHeldAsync(worktree, path, held, "written over").ConfigureAwait(false);
-            var made = await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(main, path), copy, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var made = await VerifiedFileCopy.CopyUnfollowedAsync(_fileSystem, main, Path.Combine(main, path), worktree, copy, cancellationToken: cancellationToken).ConfigureAwait(false);
             await handed(path, made.Content).ConfigureAwait(false);
         }
     }
@@ -2161,7 +2162,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                         worktree),
                     cancellationToken).ConfigureAwait(false);
 
-                weighed.Add((offer, why, linked ? [] : [new MergeTarget(file, AgentTreeName, agent)]));
+                weighed.Add((offer, why, linked ? [] : [new MergeTarget(file, AgentTreeName, agent, worktree)]));
             }
         }
 

@@ -200,6 +200,22 @@ public interface IFileSystem
     string FinalPathOfDirectory(string directory);
 
     /// <summary>
+    /// Holds <paramref name="directory"/> open by its handle, reached from <paramref name="anchor"/> with no link below it
+    /// (<see cref="HeldDirectory"/>): the one way the tool opens, makes, removes or renames anything in a place an isolated
+    /// process writes, each relative to a directory held, so a link put on the way - or swapped in while it acts - reaches
+    /// nothing.
+    /// </summary>
+    /// <param name="anchor">The place's root, absolute, taken as it is: a writable root of the isolation, or a place above every one.</param>
+    /// <param name="directory">The directory, absolute: the anchor or below it.</param>
+    /// <param name="make">Whether a directory missing on the way is made.</param>
+    /// <param name="asked">The path the caller asked about, as a refusal names it; <paramref name="directory"/> where none is given.</param>
+    /// <exception cref="LinkOnTheWayException">A link stands on the way, or at the directory.</exception>
+    /// <exception cref="DirectoryNotFoundException">A directory on the way is not there, and was not to be made, or a file stands there.</exception>
+    /// <exception cref="IOException">A directory could not be opened or made.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not open or make one.</exception>
+    HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null);
+
+    /// <summary>
     /// Opens a file of lines that only grows, made where it is not there: read back from any place and cut to a length
     /// while its writer recovers it, and appended to with each write on the disk before the next is taken. Others may
     /// read it while it is open, and no one else may write it, on every system: a second writer, in this process or

@@ -409,7 +409,8 @@ public sealed class AgentArmRegistryTests
     /// <summary>
     /// A fold of two hundred paths whose merged registry cites three of them reads only what the registry's validation asks
     /// for to judge it: the two texts it reads, of all the fold writes, are the only ones opened again after each path the
-    /// fold writes is opened once to be hashed.
+    /// fold writes is opened once to be hashed, beside the one read of its repository's mark, which says the tree is the
+    /// agent's.
     /// </summary>
     [Fact]
     public async Task AFoldOfTwoHundredPaths_ReadsOnlyTheTextsTheMergedRegistryCites_ToJudgeIt()
@@ -435,7 +436,8 @@ public sealed class AgentArmRegistryTests
         Assert.Equal(
             [$"{Texts}/gamma.before", $"{Texts}/gamma.diag"],
             reads.Read.Where(path => path != Registry).GroupBy(path => path).Where(opened => opened.Count() > 1).Select(opened => opened.Key).Order(StringComparer.Ordinal));
-        Assert.Equal(202, reads.Read.Count(path => path != Registry));
+        // Each written path once, the two cited texts again, and the mark of the agent's repository once.
+        Assert.Equal(203, reads.Read.Count(path => path != Registry));
     }
 
     /// <summary>

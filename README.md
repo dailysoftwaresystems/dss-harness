@@ -66,10 +66,10 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `init [--install-tools]` | Create `.harness-config` in the tree it runs in, a worktree's included, seed `config.json`, add ignore rules; installs tools only when asked |
 | `verify-git` | Check git is installed and this is a repository |
 | `create-worktree <name>` | Create a worktree (`--random` generates the name) |
-| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in `.mutations`, and on this machine the leg copies in `.legs`; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, or one with a copy in it that a sweep or a run still holds or that cannot be removed, without `--force` |
-| `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is |
+| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in `.mutations`, and on this machine the leg copies in `.legs`; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, or one with a copy in it that a sweep or a run still holds or that cannot be removed, without `--force`; an agent's repository of its own is deleted whole, the commits made in it that no ref of the main checkout's reaches counted as work that would be lost |
+| `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is; `--json` says of each whether it is one of git's linked worktrees (`"kind": "worktree"`) or an agent's repository of its own (`"kind": "repository"`) |
 | `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
-| `create-agent <o> <a> --model <id> [--empty \| --no-worktree]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it; `--no-worktree` makes the engine's own kind, a record and two directories that read the main tree and record no session - a person has no use for one by hand |
+| `create-agent <o> <a> --model <id> [--empty \| --no-worktree]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>` - a git repository of its own that borrows the main checkout's objects, not one of git's linked worktrees, so `git worktree list` in the main checkout does not show it and nothing done in it reaches the main checkout's refs or objects - and its seed, the main tree's uncommitted state handed to it; `--no-worktree` makes the engine's own kind, a record and two directories that read the main tree and record no session - a person has no use for one by hand |
 | `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again, with every path the main tree holds otherwise than the agent shares it, committed or not; refused over changes of its own without `--force`; a file written after it was weighed stops it, exit 21, never written over |
 | `refresh-agent <o> <a> [<path>... \| --all] [--except <path>]... [--stale <path>]... [--merge <path>]... [--apply] [--json]` | Copy into a live agent every path under the paths - the anchor registries' directory by default, anywhere in the tree with `--all` - that the main tree holds otherwise than the agent shares it, committed or not, recorded as handed to it; a path the agent already holds as the main tree does is recorded as shared; refused over a path the agent changed, naming each, unless `--except` leaves it as the agent changed it, `--stale` hands it the main tree's copy where the main tree's history holds the agent's very bytes at that path, or `--merge` writes a clean three-way merge of the two into its worktree as its change, the path recorded as handed the main tree's copy; the arm registry both changed is merged by arm, unasked, and taken where the result reads as a registry; a file the agent's session wrote after it was weighed stops it, exit 21, never written over |
 | `rebase-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; a path both changed is refused with what a three-way merge of it gives, unless `--merge` names it and its merge is clean - written into the worktree as the agent's own change on the new base - or `--settled` keeps the copy reconciled by hand; the arm registry is merged by arm, unasked, and taken where the result reads as a registry; refused over anything of its own what comes in would go over, a file renamed in case alone over the agent's copy at its old name, or its deletion of it, among it; a file the agent's session wrote after it was weighed stops it, exit 21, never written over; run again after one that stopped part way - the command its last words name - it finishes it |
@@ -84,7 +84,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `stop-orchestrator <run> [--now] [--json]` | Ask the engine running a run to stop where it stands, and wait 30 s; `--now` ends the engine's process - only on this machine, and only the process its owner names by its start |
 | `ask-orchestrator-status <run> [--json]` | The tool's own question of a run - what is happening now, what is done, what is left, what it waits for, and when it may finish - answered with the engine's facts (computed from the run's records, stamped with the moment they were read) and, where the workflow's `reporter` names one, its words: the facts first, then the model's, then what the answer cost - the person's, never the run's. Reads only: nothing of the run is written or locked but the command's own record under the run's `asks/`; where no model words the facts, they are still the answer, the command says why no model did, and it exits 0. `--json` gives the facts and the answer apart; an orchestrator that holds no run is answered with `list-orchestrator`'s facts of it, said to be such |
 | `ask-orchestrator <run> "<question>" [--json]` | A person's question about a run, answered from its records by the workflow's `reporter` over the engine's facts; reads only, as `ask-orchestrator-status` does. Refused where no model can answer: 12 where the workflow names no reporter or the reporter's own files do not read, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model failed, 21 where it could not be reached or its account is at its limit; neither command installs Claude Code or brings one up to date |
-| `run-side-task [--prompt <text> \| --prompt-file <path>] [--resume <task>] [--name <task>] [--model <code> \| --tier <tier>] [--client <client>] [--effort <level> \| --effort <code>=<level>]... [--json]` | An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept (root actions, every credential slot and Claude Code directory - to its file tools, and to every word of its commands, a directory that holds one but the main tree it works in among them - git's own files, the tool's state, a git or `gh` command called by an alias or an extension, `run-side-task` itself where a word of a command or of a script the policy reads names it or a verb the shell expands may, which also refuses itself started under any agent - told by its mark and by the process tree, a process of this tool's among the ones that started it, parent by parent, a process that took a freed id never read as a parent, the tool's own runtime told by the file it runs where the table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by its name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is none; one detached from the agent's tree (`at`, a `tmux` server, a double fork) told by the mark alone, and a tree that could not be read refused saying why - and a command that sets the mark, takes it away, or may take it away or names it but as data), the tool's own verbs open to it as the person's are, but those that read a credential slot or write its state - a policy of what a command names, not a sandbox: a command over the whole main tree, `.` or no path, reaches the slots' files beneath it, and code an interpreter runs (`python -c`, `perl -e`, awk's `system`) or a process apart from the agent's tree does what no word the policy reads says, where the operating system's isolation beneath it (below) does not hide every slot from each command and keep it from git's code-running files and the tool's state; its `web_search` asks every configured source turned on and one more - `native`, the provider's own search: a request of the harness's own on the Claude API, asked with the model and key serving the side-task when the agent asks and through that key's gate as every request is, its cost counted then to that model and key and a failure of it - a gate held past the longest wait among them - one failed part saying why, Claude Code's own `WebSearch` kept in its tools, none on Z.AI. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn where it stands - on a client that stores its conversations what was said kept up to its last whole turn and what the cut request used kept as the turn's - and a second ending the chat as `/exit` does - a turn under way cut and its result read within 10 s, the lines the agent had not taken dropped, so what the turn used, cost and spent is kept, and a launch still waiting its turn at the gate, its wait said, never begun - each interrupt saying whether a turn of the agent's was under way to cut, or none was and nothing is cut - a first one while a launch waits at the gate among them, the launch begun once the wait passes - a move to a later model of its tier going on from the conversation so far - a one shot's turn and each message to a client that stores its conversations tried again 3 times on its model first, as a step's, a chat's launch held open never tried again but moved at its first failure, decline, limit, refused key or model that cannot be started - and where no turn runs, while it is set up or a model made ready, an interrupt stopping it, a one shot's first and a chat's second - a line ending in `\` going on to the next, `/exit`, `/model`, `/effort` (a level, `<code>=<level>`, or `default`) - a new model keeping only the levels that name it and the one for the rest, a launch at work giving way as the person leaving does and the lines it never took going on to the new one - `/records`, `/help` - or one message with `--prompt`/`--prompt-file`, answered once with the agent's final text (`--json` its one document, and a usage error without a prompt), Ctrl+C there cutting its turn - a Claude Code launch's at that turn's result, an API client's request left where it stands, what the provider had said it used counted and a cost it had said nothing of unknown - what it used kept, and ending it interrupted (130), a launch still waiting its turn at the gate or to be tried again never begun. Named by when it began - with its first words in one shot; a chat, named before its first message is typed, by the time alone - unless `--name` names it, a name another side-task holds refused (13) and that one's records named as its. `--resume` opens one again, going on with its stored conversation - or from the conversation so far where its model's client is handed none - on what the person last set it to run on, its tier with the tier's later models or the model named outright, unless `--model` or `--tier` names another; refused (13) where it names no side-task or another process holds it open, and `--name` beside it a usage error; what it spends is counted against its key. Exits 0 ended as asked - a chat 0 however the person leaves it once it has begun, 130 where interrupts stop it before it began, while it is set up or opened again - 10 usage (an effort a model does not take among them), 12 the configuration (in one shot an agent the configuration keeps from starting among it), 13 refused (a name taken, an unignored `.side-tasks`, started under an agent or its starting processes unread, an update of Claude Code refused, and in one shot a key missing or the tool running elevated), 14 a client that cannot start or, under `agentPolicy.isolation` `required`, a machine that cannot isolate the agent's commands, 21 the install of Claude Code timed out or could not reach the registry; in one shot besides, 20 the model failed past its retries and fallback, 21 cut short by the account's limit, a stall or the clock, 130 interrupted; the records under `.side-tasks/<task>/` are named on every exit - or said to be none where it stopped before any were written - and kept until a person removes them (`help side-tasks`) |
+| `run-side-task [--prompt <text> \| --prompt-file <path>] [--resume <task>] [--name <task>] [--model <code> \| --tier <tier>] [--client <client>] [--effort <level> \| --effort <code>=<level>]... [--json]` | An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept (root actions, every credential slot, Claude Code directory and place the user keeps credentials in - to its file tools, and to every word of its commands, a directory that holds one but the main tree it works in among them - git's own files, the tool's state, a git or `gh` command called by an alias or an extension, `run-side-task` itself where a word of a command or of a script the policy reads names it or a verb the shell expands may, which also refuses itself started under any agent - told by its mark and by the process tree, a process of this tool's among the ones that started it, parent by parent, a process that took a freed id never read as a parent, the tool's own runtime told by the file it runs where the table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by its name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is none; one detached from the agent's tree (`at`, a `tmux` server, a double fork) told by the mark alone, and a tree that could not be read refused saying why - and a command that sets the mark, takes it away, or may take it away or names it but as data), the tool's own verbs open to it as the person's are, but those that read a credential slot or write its state - a policy of what a command names, not a sandbox: a command over the whole main tree, `.` or no path, reaches the slots' files beneath it, and code an interpreter runs (`python -c`, `perl -e`, awk's `system`) or a process apart from the agent's tree does what no word the policy reads says, where the operating system's isolation beneath it (below) does not hide every slot from each command and keep it from git's code-running files and the tool's state; its `web_search` asks every configured source turned on and one more - `native`, the provider's own search: a request of the harness's own on the Claude API, asked with the model and key serving the side-task when the agent asks and through that key's gate as every request is, its cost counted then to that model and key and a failure of it - a gate held past the longest wait among them - one failed part saying why, Claude Code's own `WebSearch` kept in its tools, none on Z.AI. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn where it stands - on a client that stores its conversations what was said kept up to its last whole turn and what the cut request used kept as the turn's - and a second ending the chat as `/exit` does - a turn under way cut and its result read within 10 s, the lines the agent had not taken dropped, so what the turn used, cost and spent is kept, and a launch still waiting its turn at the gate, its wait said, never begun - each interrupt saying whether a turn of the agent's was under way to cut, or none was and nothing is cut - a first one while a launch waits at the gate among them, the launch begun once the wait passes - a move to a later model of its tier going on from the conversation so far - a one shot's turn and each message to a client that stores its conversations tried again 3 times on its model first, as a step's, a chat's launch held open never tried again but moved at its first failure, decline, limit, refused key or model that cannot be started - and where no turn runs, while it is set up or a model made ready, an interrupt stopping it, a one shot's first and a chat's second - a line ending in `\` going on to the next, `/exit`, `/model`, `/effort` (a level, `<code>=<level>`, or `default`) - a new model keeping only the levels that name it and the one for the rest, a launch at work giving way as the person leaving does and the lines it never took going on to the new one - `/records`, `/help` - or one message with `--prompt`/`--prompt-file`, answered once with the agent's final text (`--json` its one document, and a usage error without a prompt), Ctrl+C there cutting its turn - a Claude Code launch's at that turn's result, an API client's request left where it stands, what the provider had said it used counted and a cost it had said nothing of unknown - what it used kept, and ending it interrupted (130), a launch still waiting its turn at the gate or to be tried again never begun. Named by when it began - with its first words in one shot; a chat, named before its first message is typed, by the time alone - unless `--name` names it, a name another side-task holds refused (13) and that one's records named as its. `--resume` opens one again, going on with its stored conversation - or from the conversation so far where its model's client is handed none - on what the person last set it to run on, its tier with the tier's later models or the model named outright, unless `--model` or `--tier` names another; refused (13) where it names no side-task or another process holds it open, and `--name` beside it a usage error; what it spends is counted against its key. Exits 0 ended as asked - a chat 0 however the person leaves it once it has begun, 130 where interrupts stop it before it began, while it is set up or opened again - 10 usage (an effort a model does not take among them), 12 the configuration (in one shot an agent the configuration keeps from starting among it), 13 refused (a name taken, an unignored `.side-tasks`, started under an agent or its starting processes unread, an update of Claude Code refused, and in one shot a key missing or the tool running elevated), 14 a client that cannot start or, under `agentPolicy.isolation` `required`, a machine that cannot isolate the agent's commands, 21 the install of Claude Code timed out or could not reach the registry; in one shot besides, 20 the model failed past its retries and fallback, 21 cut short by the account's limit, a stall or the clock, 130 interrupted; the records under `.side-tasks/<task>/` are named on every exit - or said to be none where it stopped before any were written - and kept until a person removes them (`help side-tasks`) |
 | `list-side-tasks [--json]` | The repository's side-tasks, newest first: each by its name, when it began and last spoke, its model, its turns and cost, and whether it is open now |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there, each step's schema one the engine reads (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
@@ -902,15 +902,16 @@ ends. Where this tool cannot decide a call it denies it, never allows: nothing
 runs while the host that would answer is silent or gone. The policy is built and holds every
 action behind it; the `claude-code` client asks it of every call, the tool runtime below decides
 by it each call it runs - the web's of the `claude-code` client, and its file tools' where Claude
-Code's own process runs outside the isolation, served through the engine's tool server, and every
+Code's own process runs apart from the isolation, served through the engine's tool server, and every
 call of the API clients, the `claude-api` and `glm` clients below - for every
 agent a command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a
 side-task.
 
 Beneath the policy, the operating system isolates every command an agent runs, so a command spelt
 past a reader of words still reads no credential slot, and writes none of git's code-running files,
-none of its pointers to another repository and none of the tool's state - what it writes is the
-work itself, whose limits are said below. On Linux, WSL 2's included, the mechanism is the system's
+none of its pointers to another repository and none of the tool's state; what it leaves that git
+outside would go on with as it lies - an operation's state, a replacement - fails what ran once it
+has, and the rest it writes is the work itself, whose limits are said below. On Linux, WSL 2's included, the mechanism is the system's
 bubblewrap 0.8 or newer -
 the first `bwrap` in an absolute directory of the PATH outside the tree, none where the user could
 write it or a directory above it, for the tool runs it outside - on macOS the system's own sandbox,
@@ -921,18 +922,34 @@ which starts the program inside a container of its own and hands back its stream
 so no child runs outside it for an instant.
 
 Inside it the machine is read-only. Written are the agent's writable roots - its worktree, its work
-directory - what git writes of a tree it writes, by the tree's kind: for a linked worktree its own
-git directory and the common directory's `objects/`, `refs/` and `logs/` (and Git LFS's `lfs/`
-where there is one), never the common directory itself, where a file made - a `commondir` - would
-lead every git to another repository's own files; for a main checkout its `.git` whole, for git makes
-its lock files directly in it - so `git add`, `commit`, `fetch`, `rm` and `status` write the objects,
-the index and the refs, while in a linked worktree what writes the common directory itself fails: a
-shallow repository's fetch, a rewrite of `packed-refs`, `git gc`; a temporary directory
-of the launch's own, named by `TMPDIR` - on Linux the system's `/tmp` inside, so nothing another
+directory - and what git writes of a tree it writes: its own git directory alone. A main checkout's `.git`
+is written whole, and an agent's worktree a repository of its own, for git makes its lock files directly
+in it, but a main checkout's `commondir` - made naming the directory itself, which git takes as no
+pointer, where a file made would lead every git to another repository's own files, and never made in a
+repository that keeps its refs in a reftable, where any file there breaks every commit git makes on a
+branch - and its `worktrees/`; a linked worktree's own git directory is its directory under the common directory's
+`worktrees/`, and the common directory itself - its `objects/`, its `refs/` and `reftable/` wherever
+the repository keeps them, its `logs/` and Git LFS's `lfs/` where there is one - is read-only to the
+work: `git add`, `commit`, `fetch`, `rm` and `status` write the objects, the index and the refs in a
+main checkout and in an agent's repository, while in a linked worktree - an agent an earlier version
+made, a leg pinned to a plain worktree - `git add` and `git fetch` fail there, said at each launch
+over one and on each leg's line over one; and in a main checkout what writes another worktree's git directory: `git worktree add`,
+`move`, `remove` and `prune`, `git`
+gc where there are linked worktrees. The refs written are those of a repository whose git directory
+the work writes whole - the main checkout's over a side-task, a leg in place and a run's commit and
+push hooks, an agent's own in its repository - every branch, tag,
+stash and remote-tracking ref, and their reflogs - which a command spelt past the words policy can
+move; a run's push sends the commit its commit step recorded, never what the branch names later.
+Written too are a temporary directory of the launch's own, named by `TMPDIR` - on Linux the system's `/tmp` inside, so nothing another
 process keeps there is reached, on Windows MXC's own; and the declared tool caches, each pointed by
-its variable into the isolation's own cache directory (`dssharness-isolation/caches` under
-`XDG_CACHE_HOME`, else `~/.cache` - `~/Library/Caches` on macOS - and under `LOCALAPPDATA` on
-Windows): `NUGET_PACKAGES`, `NUGET_HTTP_CACHE_PATH`, `NUGET_PLUGINS_CACHE_PATH`, `npm_config_cache`,
+its variable into the cache directory of the child's write scope - the places it writes and the Unix
+sockets outside it reaches (`IsolationCaches.ScopeName`) - under the isolation's own
+(`dssharness-isolation/caches` under `XDG_CACHE_HOME`, else `~/.cache` - `~/Library/Caches` on macOS -
+and under `LOCALAPPDATA` on Windows, each scope's directory beside a `.scope` file naming its places),
+so a package one child plants is run only by a child that writes everything it writes - the next
+launch of the agent, the next run of the leg - never by one that writes another tree or the main
+checkout, a commit's or a push's hooks among them, or reaches the user's SSH agent, and a scope's
+caches are taken away once none of its places is left (`IsolationCaches.Sweep`): `NUGET_PACKAGES`, `NUGET_HTTP_CACHE_PATH`, `NUGET_PLUGINS_CACHE_PATH`, `npm_config_cache`,
 `YARN_CACHE_FOLDER`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `CARGO_HOME`, `GOMODCACHE`, `GOCACHE`,
 `GRADLE_USER_HOME`, `CCACHE_DIR`, `npm_config_store_dir` (pnpm's store), `YARN_GLOBAL_FOLDER` (Yarn 2
 and later), `BUN_INSTALL_CACHE_DIR`, `PUB_CACHE` (Dart's and Flutter's) and `XDG_CACHE_HOME`
@@ -943,20 +960,52 @@ not read inside, and Maven's local repository has none, so a Maven build names a
 `-Dmaven.repo.local`. Moving `XDG_CACHE_HOME` moves what the user installed under it too: on Linux
 Playwright's browsers are read where they are (`PLAYWRIGHT_BROWSERS_PATH` at the user's `ms-playwright`, where it is there and the
 variable names none already), so a browser installed inside fails; everything else there - Hugging
-Face's models, pre-commit's environments - is fetched again into the isolation's own. Hidden - an
+Face's models, pre-commit's environments - is fetched again into the scope's own. Hidden - an
 empty place under bubblewrap, refused by macOS's sandbox, denied by MXC's container - are every
 credential slot of the main checkout and every Claude Code directory - `~/.claude`, the tool's own
 and the one the slot names for the `claude-code` client's logins (`ClaudeCodeDirectories`, one list
 for a launch and for the tool's executions alike) - with `~/.claude.json` beside each, the shell
 snapshots Claude Code sources read again, and on Windows a `claude-code` launch's own read, below.
+Hidden too, from every isolated command and every execution of the agents' work alike, are the places
+the user keeps credentials in (`UserCredentials.Declared`, listed by `help agent-clients`): `~/.ssh`
+but its `known_hosts` and `config`, which ssh reads itself to reach a host; `~/.aws`, `~/.azure`,
+gh's `~/.config/gh`, `~/.kube`, `~/.docker/config.json`, `~/.netrc` (and `~/_netrc` on Windows),
+`~/.git-credentials` and git's `~/.config/git/credentials`, GnuPG's `private-keys-v1.d` and
+`secring.gpg`, `~/.config/gcloud`, `~/.npmrc`, `~/.pypirc`, Cargo's `credentials.toml`, Maven's
+`settings-security.xml` and Gradle's `gradle.properties` - each also where its tool's own variable moves
+it in this tool's environment (`GNUPGHOME`, `DOCKER_CONFIG`, `GH_CONFIG_DIR`, `KUBECONFIG`,
+`AWS_SHARED_CREDENTIALS_FILE` and their kind), `XDG_CONFIG_HOME` in place of `~/.config`, and on
+Windows gh's, GnuPG's and Google Cloud's under `%APPDATA%`. Under MXC's container, which grants nothing
+beneath a denial, `~/.ssh` is hidden whole. `agentPolicy.hiddenPlaces` adds more and takes none away:
+each a whole path or one under `~/`, a directory where it ends with a separator, else a file - refused
+given empty, and where an entry is no whole path, climbs with `..`, holds a pattern, or is a root or
+the home itself. The words policy refuses a file tool's read and write in one, a search over one, and
+a command that names one - ssh's own files among them, which inside only ssh reads - or a directory
+that holds one and may read it, as it refuses a slot. Left out, for builds read them: NuGet's
+`~/.nuget/NuGet/NuGet.Config` (`%APPDATA%\NuGet\NuGet.Config` on Windows), whose package sources
+every restore reads, and Maven's `~/.m2/settings.xml`, whose mirrors and repositories every Maven
+build reads - each refuses a file it cannot read - so a password either holds is better given as a
+value (NuGet's `NuGetPackageSourceCredentials_<source>`, Maven's `${env.NAME}`). A build that reads a
+hidden place fails inside - a private registry's token in `~/.npmrc`, a cloud's key in `~/.aws`, a
+git dependency fetched over ssh with the user's own key: hand it the secret as a value in the
+runner's environment instead, which this tool reads and gives its steps. A place that is not there is
+made, empty, only where a command could make it, inside a place written: every isolated child reads
+the home alone, so nothing is made there and the user's home is left as it is. One that holds a tree,
+or a place written, leaves the launch or the execution with no isolation, saying which.
 Written by nobody, inside what is written, are git's code-running files and its pointers to its own
 directories and to other content: the hooks git runs and the common directory's `hooks/` beside them,
 which git runs again once `core.hooksPath` is gone; the common directory's `config`,
 `config.worktree` and `info/`; its `refs/replace/` and `objects/info/`, whose replacements and
-alternates would put other content in place of what every checkout reads; each linked worktree's
-`config.worktree`, `commondir` and `gitdir`; a worktree's `.git` file; and every git directory's
-`modules/` whole - the common one's and each linked worktree's - which holds the submodules' own git
-directories, so a submodule's git fails inside. Written by nobody too are every configuration file git
+alternates would put other content in place of what every checkout reads; its own `commondir` -
+made, where a main checkout's `.git` holds none, naming that directory itself (`.`), which git takes
+as no pointer, and in a repository that keeps its refs in a reftable, where any commondir file in a
+git directory the work writes breaks every commit git makes on a branch, never made and held absent
+instead - macOS's sandbox and MXC's container denying its creation with nothing at the path, and
+bubblewrap, whose every rule is a mount that holds no path that is not there, leaving the ground
+with no isolation - and its `worktrees/`; each linked worktree's `config.worktree`, `commondir` and
+`gitdir`; every linked worktree's `.git` file, the agent's own and every other git lists; and every
+git directory's `modules/` whole - the common one's and each linked worktree's - which holds the
+submodules' own git directories, so a submodule's git fails inside. Written by nobody too are every configuration file git
 says it reads there (`git config --show-origin`), every file one includes whether its condition holds
 now or not - an `onbranch:` a later checkout makes true among them - each tree's `.harness-config`,
 the tool's state and the launch's own directory. Each place not there inside a
@@ -967,26 +1016,47 @@ no writable root itself, is renamed or removed - a place moved away would take i
 leave its name free to be made again, and a root put back as a link would lead the next launch's
 rules elsewhere. A launch has no isolation - which the mode below turns into a refusal or a notice -
 where its places cannot be held: git cannot say where a tree keeps its files (git 2.31 or newer
-answers), a main checkout's `.git` holds a `commondir` or `gitdir` - a pointer to another
-repository's own files, which no main checkout's holds - a file git's configuration includes is not
-there inside a place the agent writes, where a command could make it (an empty file includes
-nothing), a link stands where the agent writes on the way to a guarded place, or, under bubblewrap, a
-guarded place stands on a file system that finds a name in any case - a Windows drive under `/mnt` -
-where a mount holds one spelling alone. Once a launch or one of the tool's executions has run under a
-mechanism, the tool looks in the trees' git directories before anything of its own goes on over
-them: a `commondir` or `gitdir` made there while it ran, or a replacement a `packed-refs` came to
-name - which a main checkout's `.git`, written whole, could take, and every git started outside
-would follow - fails the step, the leg, the commit or the push, naming it and the remedy
-(`IsolationDecision.Afterward`). Every git of this tool's own runs with no file-system monitor
+answers) or list its repository's replacements, a main checkout's `.git` holds a `commondir`
+leading anywhere but to itself - to another repository's own files - or holds one at all, or none
+and the mechanism holds no path that is not there, in a repository that keeps its refs in a
+reftable, where any commondir file in a git directory the work writes breaks every commit git
+makes on a branch, a file git's configuration
+includes is not there inside a place the agent writes, where a command could make it (an empty file
+includes nothing), a link stands where the agent writes on the way to a guarded place, or, under
+bubblewrap, a guarded place stands on a file system that finds a name in any case - a Windows drive
+under `/mnt` - where a mount holds one spelling alone. Once a launch or one of the tool's executions
+has run under a mechanism, however it ended, the tool looks at what no rule could hold before
+anything of its own goes on over the trees: the state of an operation under way - `rebase-merge/`,
+`rebase-apply/`, `sequencer/` - made or changed in a tree's own git directory it wrote, which git's
+next continue outside, the user's or an editor's, goes on with as it lies, running each `exec` line
+its todo holds; or a replacement made or moved in a repository whose refs it wrote, as git lists them
+whatever keeps them - loose, `packed-refs` or a reftable - which every git started outside would read
+in an object's place. Either fails the step, the leg, the commit or the push, naming it and the
+remedy - remove the state, never continue or abort it, for an abort puts the branch where the state
+says - as does a git that cannot list the replacements within a minute
+(`IsolationDecision.AfterwardAsync`). Every git of this tool's own runs with no file-system monitor
 (`core.fsmonitor=false`), no object replaced (`GIT_NO_REPLACE_OBJECTS=1`) and, in a tree an isolated
 agent or execution works over - a worktree or the main checkout - with the git directories git
 named before it ran (`GIT_DIR`, `GIT_COMMON_DIR`), whatever the tree's own files say later
-(`GitOwnSettings`); otherwise it reads the repository's configuration as git does, its filters among
-it, which is why every configuration file is written by nobody. The user's own git, an editor and a
-prompt read the repository as it stands.
+(`GitOwnSettings`); and none of them runs a submodule's own configuration - a repository an agent
+made in its tree and put in the index is one, its clean filters among it: none recurses into a
+submodule (`submodule.recurse=false` but for a commit's and a push's, which run inside), and every
+status and diff tells a submodule by the commit its entry records against its HEAD
+(`--ignore-submodules=dirty`, given on the command line, which no `.gitmodules` outranks), never
+asking its own git about its work tree. So a submodule's own uncommitted edits are no change to a
+status of the tool's: deleting a worktree asks each checked-out submodule whose repository is among
+its superproject's modules for its own, and names one whose repository is anywhere else - a `.git`
+of its own in the work tree - as a change never looked into, which stops the deletion as any
+uncommitted change does. Otherwise a git of the tool's reads the repository's configuration as git
+does, its filters among it, which is why every configuration file is written by nobody. The user's
+own git, an editor and a prompt read the repository as it stands: the refs and objects the work
+wrote, an operation's state it left until a person removes it, and a repository it made inside its
+tree, whose own configuration - an fsmonitor, a filter - git started in that directory reads and
+runs, as it does any repository's.
 
 Under bubblewrap the child has a user namespace of its own that allows no further one
-(`--disable-userns`) and a process namespace with its own `/proc`, so no command reaches another
+(`--disable-userns`) - but a `claude-code` launch's outer layer, below, which is left one to make each
+command's own layer in - and a process namespace with its own `/proc`, so no command reaches another
 process's environment; each place is a mount, each directory above one a mount point no command
 moves; WSL's interoperation sockets and shared directory (`/run/WSL`, `/mnt/wsl`, and `WSL_INTEROP`
 taken from its environment), screen's sessions, the user's runtime directory whole - their service
@@ -1014,27 +1084,52 @@ step was given and the container's own user interface - no clipboard, no input s
 window - which a program that loads Windows' user interface library needs to start at all. On each,
 the network is the user's, the loopback both ways.
 
-On Linux and macOS a `claude-code` launch's own process runs outside the isolation, reading its
-login and the key it is handed there, and every shell command it starts is handed to the isolation
-through its shell prefix (`CLAUDE_CODE_SHELL_PREFIX`: this tool and `--isolated-shell`, which becomes
-the mechanism with `/bin/bash` inside, the launch's isolation read from the file
+On Linux and macOS a `claude-code` launch's own process runs apart from its commands, reading its
+login and the key it is handed there, and every shell command it starts is handed into a layer of
+its own through its shell prefix (`CLAUDE_CODE_SHELL_PREFIX`: this tool and `--isolated-shell`, which
+becomes the mechanism with `/bin/bash` inside, the launch's isolation read from the file
 `DSSHARNESS_ISOLATED_SHELL` names) - so no command it runs reaches its directories, its login or its
-environment. There Claude Code opens no file of the agent's in its own process: its file tools are
+environment. On Linux Claude Code's own process runs inside an outer layer of bubblewrap: the
+machine read-only, every credential slot hidden, git's code-running files and the tool's state
+sealed as for its commands, and written but its writable roots, its temporary directory, the
+declared caches, Claude Code's own directories and `~/.claude.json` - without which it fails every
+shell command - and the step's `claude-receipts` and `claude-tmp`; the outer layer alone is left a
+user namespace to make each command's layer in, and the mounts it laid are locked into every
+namespace made inside it, so none is undone there. A command Claude Code ran without its prefix
+therefore still runs inside the outer layer, never with the user's rights - though there it reads
+Claude Code's login and environment and could write its directories. Where Claude Code never ran,
+its directory and `.claude.json` (holding `{}`) are made first, for inside it can make neither. Where
+this machine's bubblewrap cannot start again inside a layer of its own - an AppArmor profile that
+denies its children every capability, as Ubuntu's `bwrap-userns-restrict` does - the probe says so,
+and Claude Code's own process runs outside every layer, as on macOS, whose sandbox starts none inside
+another; there a command Claude Code ran without its prefix runs outside with the user's rights, and
+each launch says so as it starts. In or out of a layer, Claude Code opens no file of the agent's in
+its own process: its file tools are
 not given, `--tools` names its shell alone, and the engine's tool server serves the tool runtime's
 (`view_file`, `find_files`, `search_files`, `create_file`, `replace_in_file`, `insert_in_file`,
-`create_directory`, `delete_file`, `delete_directory`, `move_path`) in their place, each file opened
-by the engine and decided again by where the system names the open file, so a link a command - one
-left running in the background among them - puts on a path between the decision and the open
-reaches nothing. Each shell command the engine allows is given back with a receipt at its head
+`create_directory`, `delete_file`, `delete_directory`, `move_path`) in their place, each file read
+through the file the engine opened, decided again by where the system names it, and each written,
+made, moved or deleted relative to its directory held from the writable root it was decided in with
+no link on the way, so a link a command - one left running in the background among them - puts on a
+path between the decision and the act reaches nothing. Each shell command the engine allows is given back with a receipt at its head
 (`: dssharness-receipt <32 hexadecimal digits>;`, the shell's no-op), which `--isolated-shell` writes
-in the step's `claude-receipts` directory, where no command writes, before it runs the command; a
-call that comes back with none - a Claude Code that skipped its prefix, the command run outside -
-ends the launch failed at once, a call run in the background within 20 s or by its turn's end.
+in the step's `claude-receipts` directory, where no command handed over writes, before it runs the
+command - the command itself run without that mark, and without the variables that hand it over, so
+nothing it is started with names its receipt or where receipts are written. A call that comes back
+with none - a Claude Code that skipped its prefix - ends the launch failed at once, and one run in
+the background is waited for within 20 s; however a launch ends - at a turn's result, Claude Code
+gone or its output cut - each allowed call whose receipt is not there yet is waited for within 20 s
+before anything of it is ended, one with none by then ending it failed, and where the launch was
+stopped or ended at once, each is said. A receipt proves only that Claude Code handed the command
+over, and only once it has run: it stops nothing, and a command run without the prefix runs where
+Claude Code's own process runs, where it could write a receipt of its own - so what holds such a
+command is the outer layer on Linux, and nothing on macOS or where bubblewrap starts none inside
+itself.
 Claude Code's own temporary directory is the step's `claude-tmp`, where no command writes but the
 one file each ends by writing its working directory to - made empty, given that command alone,
 written in place, never removed or replaced - so nothing Claude Code writes or reads there in its own process
 is a command's to replace with a link; it goes with the launch. Claude Code's own sandbox is turned
-off in its settings, for none nests in this one; where this tool runs as a runtime handed its
+off in its settings, for none nests in a command's layer; where this tool runs as a runtime handed its
 assembly, or from a path holding ` -`, neither of which the prefix can name, the launch is not
 started, saying why. On Windows, where nothing becomes another program and every command Claude Code
 runs is Git Bash's, the launch runs whole inside MXC's container with its directories read alone: its
@@ -1051,7 +1146,10 @@ unread, by its name and by another case of it, a place written by nobody unwritt
 outside every open one unwritten, an open place written - on Windows after MXC's library says this
 Windows has the container (Windows 11 24H2 build 26100.9278 or later, or 26H2 build 26300.9550 or
 later), and followed by each of node, git and Git Bash's `sh` found on this machine started inside it
-and asked to answer, one that does not making none, said with how it ended. MXC 1.0.1 ends every
+and asked to answer, one that does not making none, said with how it ended; on Linux bubblewrap,
+once proved, is started again inside an outer layer of its own around a shell that must end 0, and
+where it does not, it is the mechanism all the same, a `claude-code` launch's own process outside
+every layer, said with how the trial ended. MXC 1.0.1 ends every
 program of Git Bash's with `0xC0000142`, a library that would not start, so where Git Bash is
 installed Windows has none yet; from WSL 2, bubblewrap isolates. `agentPolicy.isolation` says what
 happens where this machine has none: `required`, where nothing is said, starts no agent that may run
@@ -1063,12 +1161,26 @@ reporter - needs none, and none is probed. Each launch's records say what it ran
 in `result.json` and in each turn of a side-task's `task.json`: the mode, with the mechanism and its
 version - macOS's own for its sandbox, MXC's library's for its container - what it leaves reached
 (`leaves`) and what its anchors cost (`anchorCost`), or why there was none. Where it ends: the
-machine stays readable as the user reads it - their ssh keys and every credential outside the slots
-among it, and on macOS the login keychain through the system's security service - the network is
+machine stays readable as the user reads it but the hidden places - a credential kept anywhere else
+among it - and the system's own credential stores are services, not places: on macOS the login
+keychain is reached through the system's security service, which the sandbox lets through for the
+trust of certificates; on Windows MXC's container shows the Credential Manager empty; on Linux the
+keyring sits behind the user's message bus, hidden with the runtime directory. The network is
 theirs, and what no rule at a path reaches - a hard link made before the launch, another path bound
-to the same files - is reached. git's object store, and Git LFS's, are written as git needs them,
-and git's checkout reads an object as it lies without hashing it again, so a command can put other
-content under a name the store already holds, which a checkout outside then writes. This tool's verbs that
+to the same files - is reached; inside, no hard link can be made from the machine's files into a
+written place: under bubblewrap each place is a mount of its own and a link fails across them,
+macOS's sandbox denies every operation it does not allow and no rule of the profile's allows one, and
+MXC's container grants the machine read alone, which a hard link needs written - each held by a canary
+in its real suite, whose failure would name the link allowed. git's refs and object store, and Git
+LFS's, are written as git needs them in each ground's own repository - the main checkout's over a
+side-task, a leg in place and a run's commit and push hooks, an agent's repository its own, a linked
+worktree's none, its common directory read-only to the work: so a command over the main checkout can
+move any branch, tag, stash or remote-tracking
+ref, which a person's checkout outside then takes, and, as git's checkout reads an object as it lies
+without hashing it again, put other content under a name the store already holds, which a checkout
+outside then writes. A command Claude Code runs without its shell prefix runs where Claude Code's
+own process runs - in the outer layer on Linux, with the user's rights on macOS and where bubblewrap
+starts none inside itself - its missing receipt telling it only once it has run. This tool's verbs that
 read a credential slot or write its state or install would fail inside it, so each is refused to
 every agent by name, a side-task's as well as a step's (`AgentPolicy.SlotOrStateVerbs`, listed by
 `help agent-clients`): `init`, `create-worktree`,
@@ -1085,17 +1197,52 @@ What the agents wrote runs inside the same isolation when this tool runs it. The
 run's `build`, `test`, `run` and `check-mutations` step that this machine runs - every phase it starts:
 configure, build and test commands, a runner's steps, a sweep's arms - is held inside it, its own
 profile from the leg's ground (`ExecutionGrounds.OfLeg`), built as a launch's is: the machine
-read-only; every credential slot of the main checkout and every Claude Code directory hidden;
-the tree the leg works in - the step's tree or its copy under `.legs` - the run's records, a sweep's
-workers under `.mutations`, a temporary directory of its own and the declared tool caches written, and
-inside them git's code-running files, the configuration directory and the tool's state written by
-nobody. A runner's values and secrets reach its steps as values in their environment, read by this
+read-only; every credential slot of the main checkout, every Claude Code directory and every place the
+user keeps credentials in hidden;
+the tree the leg works in - the step's tree or its copy under `.legs` - a sweep's workers under
+`.mutations`, the build directory of the leg's run of each runner action it runs, its own and a run
+check's (`{actionBuild}`, each step's `{stepBuild}` in it; `LegWorkload.WritesIn`), a temporary
+directory of its own and the declared tool caches written, and inside them git's code-running files,
+the configuration directory - but those build directories, under it - and the tool's state written by
+nobody. The
+run's records are no place the work writes: every log, the ledger, the run's claim and its stop are
+the tool's own, written from what each phase prints. What the tool itself reads out of, or writes
+into, a place such work writes - a runner's step's own directory and its kept outputs, a test's evidence kept on failure, a sweep's
+sites mutated and put back in its workers, a sync's every read, write, removal and listing in a copy -
+goes through no link below that place's root
+(`UnfollowedFiles`): each acts relative to a directory held open from that root, every entry on the
+way opened as itself and never looked up by its path again, so a link on the way - or one the work
+swaps in while the tool acts - is refused, naming it, and a link at the entry's own place is replaced
+or removed as itself; a link the work put there never has the tool, outside, write over a file of
+the user's or carry what a hidden place holds to where the agents read. A pull (`sync --pull`) alone
+follows a link along the path it names, as it is spelt - a build directory pointed at another volume
+is ordinary - but never into a place the isolation hides from every command, decided by where what
+it opened stands as the system names it; a link below a directory it names is passed over and named. A runner's values and secrets reach its steps as values in their environment, read by this
 tool, never as the slot's files, which they cannot read. A set-up's lines are the configuration's and
-bring up what outlives the leg, and run as it gives them. A leg another machine runs - an ssh host, a
-WSL distribution - runs there as that machine's tool runs any leg, outside this machine's isolation:
-an ssh host holds none of this machine's slots, state or git's files, which a sync never carries; a
-WSL distribution reaches this machine's drives under `/mnt`, its slots among them, so where that
-matters keep an agents' run's legs on this machine or an ssh host. A run's `commit` and `push` run git
+bring up what outlives the leg, which no isolation outlives, so they run outside it: where the leg's
+work is held inside it under `required`, each runs from an empty directory outside every tree
+(`outside/` under the isolation's own, `ExecutionIsolation.Outside`), so a program that looks for its
+project where it runs or above it - a compose file, a package's scripts, a makefile, a repository -
+finds none of the agents', and each is read first as the policy reads an agent's command
+(`CommandAnalysis`) - its words, every command it runs, every path a word names, a `source:target`'s
+and a search path's parts among them, and every value the leg's environment gives it. One that names
+a place in the tree the leg works in, the run's or the main checkout, or a directory holding one, that
+names a place by what its shell would expand, that moves to a directory that is no whole path, or that
+cannot be read whole skips the leg (`skipped-unavailable`) before any set-up comes up
+(`SetUpConfinement`); one that fails says where it ran, where nothing of the tree is found - keep what
+a line reads outside the trees and name it by its whole path, or bring what it serves up by hand.
+Under `preferred` they run in the tree as the configuration gives them. A leg
+another machine runs - an ssh host, a WSL distribution - runs there as that machine's tool runs any
+leg, outside this machine's isolation: an ssh host holds none of this machine's slots, state or git's
+files, which a sync never carries, for an ssh host is taken to be another machine that reaches none of
+this one's files - one that is this machine, or a WSL distribution, a virtual machine or a container
+reached over ssh that shares its drives, cannot be told from another by its name or its address, which
+ssh's own configuration may point anywhere and a loopback port may forward anywhere, and runs the
+agents' work outside the isolation, this machine's files written: name no such host for a run's legs
+where the agents' work must be held; a WSL distribution runs on this machine and reaches its drives
+under `/mnt`, written, its slots and every tree's git files among them, so a run's step whose legs'
+work is held inside the isolation skips such a leg under `required` (`skipped-unavailable`) and runs
+it there under `preferred`, its line saying so. A run's `commit` and `push` run git
 and the repository's hooks - those git's directory holds, and those `core.hooksPath` points into the
 tree for, a husky directory, a pre-commit or lefthook configuration they read - inside it too, over
 the main checkout, which they write: its work tree and its `.git`, but git's code-running files, its
@@ -1105,16 +1252,22 @@ cannot make `.git\index.lock` and fails there. A push to a remote over http or h
 credential git's own helpers give for its address, asked outside (`git credential fill`), as values in
 its environment read by a helper its command line names in place of every helper the configuration
 names - so it needs no keyring behind the user's message bus, which the isolation hides - and whatever
-runs inside the push, its pre-push hook among it, can read them, as in any push; one over ssh reads the
-user's keys as the read-only machine shows them. Under bubblewrap and macOS's sandbox a push to a
+runs inside the push, its pre-push hook among it, can read them, as in any push; one over ssh signs
+through the user's SSH agent alone, for their keys under `~/.ssh` are hidden, its `known_hosts` and
+`config` read. Under bubblewrap and macOS's sandbox a push to a
 remote over ssh (`ssh://`, `git+ssh://` or `host:path`, as git reads its push address), and a commit
 the repository signs with an ssh key (`commit.gpgsign` with `gpg.format` `ssh`), reach the one Unix
-socket outside that is the user's SSH agent's (`SSH_AUTH_SOCK`), wherever it stands - their hooks
-with them - and no other (`GitSsh`); every other commit and push, and every leg, reaches none, so a
-hook reaches the user's SSH agent only where git's own work does; MXC's container is handed none. A commit the
+socket outside that is the user's SSH agent's (`SSH_AUTH_SOCK`), wherever it stands - inside ssh's
+hidden directory among it, named to them at its real spelling, so a link there leads nowhere hidden -
+their hooks with them - and no other (`GitSsh`); every other commit and push, and every leg, reaches none, so a
+hook reaches the user's SSH agent only where git's own work does; MXC's container is handed none, and as it
+hides `~/.ssh` whole a push over ssh inside it finds neither key nor `known_hosts` and fails - a push over
+https, whose credential this tool hands in as values, works there. A commit the
 repository signs with gpg or x509 reaches no agent of the user's where its socket is hidden - in the
 user's runtime directory under bubblewrap, and every one under macOS's sandbox and MXC's container -
-and fails there, as does one signed with an ssh key under MXC. Every other git command of this
+and fails there, as does one signed with an ssh key under MXC. One signed with an ssh key whose
+`user.signingKey` names a file under `~/.ssh` fails as well, for the file is hidden: name the public
+key itself (`key::` and its line) and keep the private key in the agent. Every other git command of this
 tool's runs none of the repository's hooks - `core.hooksPath` pointed at the null device (`GitHooks`),
 set as every git of the tool's sets its own settings, through `GIT_CONFIG_PARAMETERS` - so a fold, a
 refresh, a rebase, a sync or a question of the tool's never runs the agents' work as a side effect of
@@ -1134,7 +1287,7 @@ every other root it reaches added. It is given its model and no fallback, the st
 the agent's capabilities and no other (`read`: `Read`, `Grep`, `Glob`; `write`: `Write`, `Edit`,
 `NotebookEdit`; `run`: `Bash`; `web`: none of Claude Code's, but `mcp__dssharness__web_fetch` and
 `mcp__dssharness__web_search` of the engine's tool server beside them), never one that starts
-agents, loads skills, asks a person or plans; where its own process runs outside the isolation it
+agents, loads skills, asks a person or plans; where its own process runs apart from the isolation it
 hands its commands to (above), the engine's tool server serves the tool runtime's file tools in
 place of Claude Code's own - `read`: `mcp__dssharness__view_file`, `mcp__dssharness__find_files`,
 `mcp__dssharness__search_files`; `write`: `mcp__dssharness__create_file`,
@@ -1182,7 +1335,7 @@ a new launch, and a move within the step's work goes on from what the engine sto
 The tool runtime is the harness's own tools, built for the API clients to give their agents in
 place of a client's own - the `claude-api` and `glm` clients below - and serving
 the `claude-code` client the web's through the engine's tool server, and its file tools there
-too where Claude Code's own process runs outside the isolation: `view_file`, `find_files` and `search_files` (read),
+too where Claude Code's own process runs apart from the isolation: `view_file`, `find_files` and `search_files` (read),
 `create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
 `delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` and `web_search` (web), each under
 the capability that gives it; the run's reporter is given those that read and no other. Each
@@ -1193,11 +1346,13 @@ device's prefix, a device's name (`CON`, `NUL`, `COM1` and the rest), a drive's 
 (`C:x`) or an alternate data stream -
 its links followed (one whose links cannot be followed refused as undecided) and held to the
 agent's roots: a read inside one of them, a write inside a
-writable one and through no link below it (a file is read and written through the file as it was
-opened, where the open file stands decided again before a byte passes, so a link put in place
-between the check and the act reaches nothing refused; what goes by a path alone - a directory
-listed, made, moved or deleted, a file moved or deleted, and the rename that puts a written file in
-place - is where such a link is the known limit); then the policy is asked of it, a deleting or moving tool a write to every path it
+writable one and through no link below it (a file is read through the file as it was opened, where
+the open file stands decided again before a byte passes - opened never to wait, so a pipe put there
+is refused - and a file written, a directory made, and a file or a directory moved or deleted is
+acted on relative to its directory held from the writable root it was decided in, every entry on the
+way opened as itself, so a link put in place between the check and the act, or swapped in while it
+acts, reaches nothing and the call is refused naming it; a directory listed goes by its path, so a
+link put in place of one lists names, never a byte of a file); then the policy is asked of it, a deleting or moving tool a write to every path it
 touches, at both ends of a move. A directory deleted or moved is refused where it is a root, holds a link,
 holds a path that may not be written or holds more than 2,000 entries. A file past 16 MiB is
 neither viewed nor edited, and one past 2 MiB is passed over by search_files - a command reads or searches it. A replace or an insert needs
@@ -1317,7 +1472,8 @@ iterations of the newest attempt word for word from its stored stream, every run
 numbered as one (each the agent's message as it wrote it, its thinking as far as the provider
 showed it, each call it made with the tool, its input and its result as the stream holds them, and
 each message the engine sent the agent after it, in its place) - nothing in it written or shortened
-by a model, and whatever is cut named with a copy in the agent's `work/continuation/`. Its bounds
+by a model, and whatever is cut named with a copy in the step's own `handed/continuation/`, which the
+tool alone writes and the agent reads, never where its commands write. Its bounds
 are `agentContext.continuation`'s - `recordChars` (60000), `stepChars` (16000), `paths` (300),
 `lastIterations` (3) and `iterationChars` (120000), each at its default where the key says none,
 each a positive number, the earlier iterations kept back from the last until the first that does
@@ -1385,9 +1541,10 @@ way round - and a `SKILL.md` that is there and cannot be used is refused, the ne
 in its stead. The places are read in the main checkout, never in an agent's worktree, and each
 step reads them as it starts: a run does not freeze its skills. What is put into the prompt is the
 body, not the frontmatter, inside one block that names the skill, its place and the folder handed
-to the step; the folder is copied whole into the agent's work directory,
-`work/<agent>/skills/<name>/`, in place of any earlier copy, and that path is what
-`${CLAUDE_SKILL_DIR}` becomes. A folder that holds a link, more than 500 files or more than 16 MB
+to the step; the folder is copied whole into what the step's agent is handed, the step's own
+`handed/skills/<name>/` - which the tool alone writes, through no link, and the agent reads as a root
+of its own, never its work directory, where its commands write - in place of any earlier copy, and
+that path is what `${CLAUDE_SKILL_DIR}` becomes. A folder that holds a link, more than 500 files or more than 16 MB
 is refused. The step's record names every skill it was given, each once over its attempts - its
 `step.json` `skills[]`, and its stream's `sessionStarted` event - with each one's place, its
 `SKILL.md`, the folder handed over, and the SHA-256 of the file and of the folder. The frontmatter's keys are each honoured, recorded or refused: `allowed-tools` is
@@ -1622,16 +1779,19 @@ commits the folds upstream of it and no other work - each path they changed that
 its fold left there (a path edited or restored since, a path the index marks assume-unchanged or skip-worktree, the
 main checkout off the branch the run started on, or a fold upstream whose intent nobody settled, fails it, and nothing
 is staged), on an empty index, by explicit path, with the configuration's `commit.template` filled or the step's own
-message, the commit held to that set (one a hook made take more, or less, fails it, 20, left for a person) - answers the
+message, the commit held to that set over the commit the branch named before it (one a hook made take more, or less,
+or stand on anything but that commit alone, fails it, 20, left for a person) - answers the
 paths git ignores, which it never commits, and with nothing owed is done and runs no git - its commit and the
 repository's commit hooks run inside the isolation of the agents' work, answered as `isolation` (none here and `required`
 fails it, 14, nothing staged); any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
-checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`); `push`, which pushes the main checkout's
-HEAD to its branch on the remote the run's branch goes to (or the step's), a fast-forward never forced, and answers
-whether the branch moved, its push and the repository's push hooks inside the isolation of the agents' work, answered
-as `isolation` (a detached HEAD, the main checkout off the branch the run started on, or no remote it can name refuses
-it, 13; no isolation here under `required` fails it, 14; the remote refusing fails it, 20; push steps that name two
-remotes are refused); and
+checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`); `push`, which pushes the commit the
+run's commit steps recorded last, else the one the run started on - never what the branch names by then, which a hook
+or a build working in the main checkout could have moved - to the main checkout's branch on the remote the run's branch
+goes to (or the step's), a fast-forward never forced, and answers whether the branch moved, its push and the
+repository's push hooks inside the isolation of the agents' work, answered as `isolation` (a detached HEAD, the main
+checkout off the branch the run started on, a run that made no commit and started on none, or no remote it can name
+refuses it, 13; no isolation here under `required` fails it, 14; the remote refusing fails it, 20; push steps that name
+two remotes are refused); and
 `pull-request`, which opens the run's branch's pull request against its base - the step's, else the remote's default -
 on the repository the remote's address names, its body the workflow's file filled where the step starts, and answers an
 open one as it is (`created` false) so a step run again opens no second, and never one from a fork's branch of the same

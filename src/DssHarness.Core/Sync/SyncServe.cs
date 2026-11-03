@@ -291,10 +291,19 @@ public static class SyncServe
     /// <summary>Removes directories of the copy that a deletion left empty.</summary>
     public const string Prune = "prune";
 
-    /// <summary>Reads one file out of the copy.</summary>
+    /// <summary>Reads one file out of the copy, through no link the copy holds.</summary>
     public const string Read = "read";
 
-    /// <summary>Lists the files below one directory of the copy, each with its size, for a pull that names the directory.</summary>
+    /// <summary>
+    /// Reads one file a pull brings back out of the copy: the links along its path followed as it is spelt, never into a
+    /// place the isolation hides on the host (<see cref="ISyncTransport.PullFileAsync"/>).
+    /// </summary>
+    public const string Pull = "pull";
+
+    /// <summary>
+    /// Lists the files below one directory of the copy, each with its size, for a pull that names the directory: the links
+    /// along its path followed as it is spelt, never into a place the isolation hides on the host.
+    /// </summary>
     public const string List = "list";
 
     /// <summary>The most files a pull brings back from one directory it names.</summary>

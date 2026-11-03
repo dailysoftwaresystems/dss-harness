@@ -9,7 +9,7 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// The names are the ones Claude Code gives its tools, as the probe read them on every version it measured. A web tool of
 /// Claude Code's own is named by no capability: the web reaches an agent on this client through the engine's tool server
 /// (<see cref="ServerTools"/>), which serves the harness's own fetch and search beside <c>--tools</c>. Where Claude Code's
-/// own process runs outside the isolation it hands its commands to, its file tools are given no launch either: the same
+/// own process runs apart from the isolation it hands its commands to, its file tools are given no launch either: the same
 /// server serves the runtime's in their place (<see cref="FileTools"/>), and <c>--tools</c> names its shell alone.
 /// </remarks>
 public static class ClaudeCodeTools
@@ -58,13 +58,13 @@ public static class ClaudeCodeTools
 
     /// <summary>
     /// The capabilities whose tools are the file tools: Claude Code's own, where its process runs where its commands do;
-    /// served by the engine in their place where it runs outside the isolation it hands its commands to.
+    /// served by the engine in their place where it runs apart from the isolation it hands its commands to.
     /// </summary>
     public static IReadOnlyList<AgentCapability> FileCapabilities { get; } = [AgentCapability.Read, AgentCapability.Write];
 
     /// <summary>
     /// The runtime's file tools, by the runtime's names, in its table's order: what the engine's tool server serves a launch
-    /// in place of Claude Code's own file tools, where Claude Code's own process runs outside the isolation it hands its
+    /// in place of Claude Code's own file tools, where Claude Code's own process runs apart from the isolation it hands its
     /// commands to. Claude Code would open each file by a path the engine decided earlier, in its own process outside - a
     /// link a command put on the way in between reaching what the isolation keeps from every command; the runtime opens
     /// each and decides the open file again by where the system names it.
@@ -138,7 +138,7 @@ public static class ClaudeCodeTools
     /// <param name="ownWeb">Whether Claude Code's own web tools are given with them, as a side-task's launch alone
     /// is.</param>
     /// <param name="ownFiles">
-    /// Whether Claude Code's own file tools are given: false where its own process runs outside the isolation it hands its
+    /// Whether Claude Code's own file tools are given: false where its own process runs apart from the isolation it hands its
     /// commands to, and the engine's tool server serves <see cref="FileTools"/> in their place.
     /// </param>
     public static IReadOnlyList<string> Of(IReadOnlyList<AgentCapability> capabilities, bool ownWeb = false, bool ownFiles = true)

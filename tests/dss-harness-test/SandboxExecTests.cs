@@ -8,7 +8,8 @@ namespace DssHarness.Tests;
 /// macOS's sandbox: the command line and the whole profile it is handed - its places at their real spellings, as
 /// parameters - and every decision of its probe, each from doubles of the machine on every system; then the system's
 /// sandbox run for real on macOS: the probe proves it once for the process, and a step's launch over a real repository
-/// keeps a command inside from a credential slot's file, git's hooks, the tool's state, the launch's own directory and
+/// keeps a command inside from a credential slot's file, every place the user keeps credentials in but ssh's known_hosts
+/// and config, git's hooks, the tool's state, the launch's own directory and
 /// every directory above them, while it writes its worktree and git stages there. The real tests are skipped where this
 /// is not macOS, and where the sandbox does not prove itself - failed instead where the machine says it holds every
 /// build tool, as the continuous integration runners do.
@@ -50,8 +51,8 @@ public sealed class SandboxExecTests
 
         Assert.Equal(("/usr/bin/sandbox-exec", "sandbox-exec", "15.3"), (program, mechanism.Name, mechanism.Version));
         Assert.Equal(
-            (true, false, (string?)null, (string?)null, false, true),
-            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands));
+            (true, false, (string?)null, (string?)null, true, false, true, SandboxExec.NoSandboxInside),
+            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.HoldsAnAbsentFile, mechanism.OwnTemp, mechanism.TakesHandedCommands, mechanism.Unnested));
         Assert.Equal(
             [
                 "-p",
@@ -209,6 +210,48 @@ public sealed class SandboxExecTests
     }
 
     /// <summary>
+    /// The places the user keeps credentials in are handed over as every hidden place is - a directory denied read and
+    /// write beneath it, a file alone - ssh's known_hosts and config read again inside its directory, after its denial, and
+    /// the user's SSH agent's socket there reached last, each at its own spelling as a parameter.
+    /// </summary>
+    [Fact]
+    public void ThePlacesTheUserKeepsCredentialsIn_AreDenied_SshsKnownHostsAndConfigReadAgain_ItsAgentReached()
+    {
+        var mechanism = new SandboxExec("15.3", path => path);
+        var profile = new IsolationProfile(
+            [new IsolatedPath("/Users/u/.ssh", Directory: true), new IsolatedPath("/Users/u/.aws", Directory: true), new IsolatedPath("/Users/u/.netrc", Directory: false)],
+            [])
+        {
+            Reopened = ["/Users/u/.ssh/known_hosts", "/Users/u/.ssh/config"],
+            Sockets = ["/Users/u/.ssh/agent"],
+        };
+
+        var (text, parameters) = mechanism.Policy(profile);
+
+        Assert.Equal(
+            [
+                "(deny file-read* file-write* (subpath (param \"HIDDEN_0\")))",
+                "(deny file-read* file-write* (subpath (param \"HIDDEN_1\")))",
+                "(deny file-read* file-write* (literal (param \"HIDDEN_2\")))",
+                "(allow file-read* (subpath (param \"REOPENED_0\")))",
+                "(allow file-read* (subpath (param \"REOPENED_1\")))",
+                "(allow network-outbound (remote unix-socket (literal (param \"SOCKET_0\"))))",
+                "(deny system-fcntl (fcntl-command 80 110))",
+            ],
+            text.TrimEnd('\n').Split('\n').TakeLast(7));
+        Assert.Equal(
+            [
+                ("HIDDEN_0", "/Users/u/.ssh"),
+                ("HIDDEN_1", "/Users/u/.aws"),
+                ("HIDDEN_2", "/Users/u/.netrc"),
+                ("REOPENED_0", "/Users/u/.ssh/known_hosts"),
+                ("REOPENED_1", "/Users/u/.ssh/config"),
+                ("SOCKET_0", "/Users/u/.ssh/agent"),
+            ],
+            parameters);
+    }
+
+    /// <summary>
     /// On macOS the probe proves the system's sandbox once for the process: its program at the one path it is taken from,
     /// this process inside no sandbox, and a trial run of the probe's command under the tree's runs directory - contained,
     /// inside the sandbox, a hidden place, an open place and a place written by nobody inside it in its profile, the
@@ -340,6 +383,49 @@ public sealed class SandboxExecTests
     }
 
     /// <summary>
+    /// A command inside a step's launch reads no place the user keeps credentials in - ssh's directory, its key, AWS's
+    /// credentials and the logins curl and git read, the sandbox refusing each - but reads ssh's known_hosts and config,
+    /// which it never writes; every one of them is left as it was.
+    /// </summary>
+    [Fact]
+    public async Task ACommandInside_ReadsNoPlaceTheUserKeepsCredentialsIn_ButSshsKnownHostsAndConfig()
+    {
+        using var temp = new TempDirectory();
+        using var home = RealIsolation.Home();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var credentials = await RealIsolation.CredentialsAsync(home);
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+
+        var listed = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "ls -A \"$1\"", "sh", Path.GetDirectoryName(credentials.Key)!);
+        var refused = new List<(string Place, ProcessResult Result)>();
+
+        foreach (var place in new[] { credentials.Key, credentials.Aws, credentials.Netrc })
+        {
+            refused.Add((place, await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "cat \"$1\"", "sh", place)));
+        }
+
+        var read = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", "cat \"$1\" \"$2\"", "sh", credentials.KnownHosts, credentials.Config);
+        var written = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/sh", "-c", ": > \"$1\"", "sh", credentials.KnownHosts);
+
+        Assert.Equal((false, string.Empty), (listed.ExitCode == 0, listed.StandardOutput));
+        Assert.Contains("Operation not permitted", listed.StandardError, StringComparison.Ordinal);
+
+        foreach (var (place, result) in refused)
+        {
+            Assert.Equal((place, 1, string.Empty), (place, result.ExitCode, result.StandardOutput));
+            Assert.True(result.StandardError.Contains("Operation not permitted", StringComparison.Ordinal), $"{place}: {result.StandardError}");
+        }
+
+        Assert.Equal((0, "knownHost *"), (read.ExitCode, read.StandardOutput));
+        Assert.NotEqual(0, written.ExitCode);
+        Assert.Contains("Operation not permitted", written.StandardError, StringComparison.Ordinal);
+        Assert.Equal(
+            ["secret", "known", "Host *", "secret", "secret"],
+            await Task.WhenAll(new[] { credentials.Key, credentials.KnownHosts, credentials.Config, credentials.Aws, credentials.Netrc }.Select(file => File.ReadAllTextAsync(file, Token))));
+    }
+
+    /// <summary>
     /// A command inside moves no directory above a guarded place - neither the repository's git directory, whose hooks it
     /// may not write, nor the directory that holds the credential slots - for the sandbox meets a place by its path, and a
     /// place moved away would leave its rule behind and its name free to make again.
@@ -364,6 +450,31 @@ public sealed class SandboxExecTests
             Assert.True(Directory.Exists(anchor), anchor);
             Assert.False(Directory.Exists(anchor + "-moved"), anchor);
         }
+    }
+
+    /// <summary>
+    /// A command inside a step's launch makes no hard link from a file of the main checkout's into a place it writes: the
+    /// sandbox denies every operation it does not allow, and no rule of the profile's allows creating one, so nothing
+    /// read-only gains a second name a command could write by. This is the hard-link canary of macOS's sandbox: where it
+    /// fails, the sandbox allows the link, and the profile must deny link creation from outside the writable roots.
+    /// </summary>
+    [Fact]
+    public async Task ACommandInside_MakesNoHardLinkFromTheMainCheckout_IntoAPlaceItWrites()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = RealIsolation.Platform();
+        await ProvedAsync(platform, temp.Path);
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var packed = Path.Combine(launch.Kit.Main, ".git", "objects", "pack");
+        await launch.Kit.Harness.RunGitAsync(launch.Kit.Main, ["repack", "--quiet", "-ad"], Token);
+        var pack = Assert.Single(Directory.GetFiles(packed, "*.pack"));
+
+        var linked = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, "/bin/ln", pack, Path.Combine(launch.Worktree, "hard"));
+
+        Assert.NotEqual(0, linked.ExitCode);
+        Assert.Contains("Operation not permitted", linked.StandardError, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(launch.Worktree, "hard")));
     }
 
     /// <summary>

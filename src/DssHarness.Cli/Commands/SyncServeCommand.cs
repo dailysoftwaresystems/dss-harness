@@ -166,12 +166,14 @@ internal static class SyncServeCommand
 
                 case SyncServe.List:
                     return Answer(await transport
-                        .ListFilesAsync(root, Required(arguments, 1, operation), cancellationToken)
+                        .ListFilesAsync(root, Required(arguments, 1, operation), HiddenHere(context, root), cancellationToken)
                         .ConfigureAwait(false));
 
                 case SyncServe.Read:
-                    var contents = await transport
-                        .ReadFileAsync(root, Required(arguments, 1, operation), cancellationToken)
+                case SyncServe.Pull:
+                    var contents = await (operation == SyncServe.Pull
+                            ? transport.PullFileAsync(root, Required(arguments, 1, operation), HiddenHere(context, root), cancellationToken)
+                            : transport.ReadFileAsync(root, Required(arguments, 1, operation), cancellationToken))
                         .ConfigureAwait(false);
 
                     // Refused here rather than where it is decoded, because this is the side
@@ -209,6 +211,15 @@ internal static class SyncServeCommand
 
     /// <summary>An operation that answers nothing, which must still say nothing rather than a status line.</summary>
     private static CommandOutcome Done() => CommandOutcome.Ok(string.Empty) with { Quiet = true };
+
+    /// <summary>
+    /// The places the isolation hides on this host, which no pull out of the copy at <paramref name="root"/> reaches: its
+    /// user's Claude Code directories and the file Claude Code keeps beside one, and any credential slot the copy holds
+    /// (<see cref="DssHarness.Core.Agents.Isolation.IAgentIsolation.Hidden"/>). No provider of the machine asking names a
+    /// directory here, so none is read from its configuration.
+    /// </summary>
+    private static IReadOnlyList<DssHarness.Core.Processes.IsolatedPath> HiddenHere(CommandContext context, string root)
+        => context.Get<DssHarness.Core.Agents.Isolation.IAgentIsolation>().Hidden(new DssHarness.Core.Configuration.HarnessConfig(), root);
 
     private static string Required(string[] arguments, int index, string operation)
         => index < arguments.Length

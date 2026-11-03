@@ -9,27 +9,31 @@ using DssHarness.Core.Results;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// A <c>push</c> step (part 04): pushes the commit the main checkout's HEAD names to its branch on the remote - the one
-/// the step names, else the one the run's branch goes to (<see cref="FlowCheckout.Remote"/>) - as a fast-forward and never
-/// forced, through <see cref="IGitPublisher.PushAsync"/> under the step's time limit, else the push's own
-/// (<see cref="PublisherCommands.Push"/>). It
+/// A <c>push</c> step (part 04): pushes the commit the run's commit steps recorded last in its ledger
+/// (<see cref="FlowCommitEntry.Committed"/>), else the one the run started on (<see cref="FlowRunPlace.StartCommit"/>) -
+/// never whatever the branch names now, which a hook or a build working in the main checkout could have moved - to the
+/// branch the main checkout is on, on the remote - the one the step names, else the one the run's branch goes to
+/// (<see cref="FlowCheckout.Remote"/>) - as a fast-forward and never forced, through <see cref="IGitPublisher.PushAsync"/>
+/// under the step's time limit, else the push's own (<see cref="PublisherCommands.Push"/>). It
 /// answers whether the remote's branch moved, the remote, the branch and the commit it pushed, which a <c>ci-wait</c> that
 /// names no commit waits on. HEAD detached, the main checkout on another branch than the run started on
-/// (<see cref="FlowRunPlace.OffItsBranch"/>), no commit yet or no remote fails it 13 with nothing pushed; a push the remote
-/// refused fails it 20, one that did not finish in time 21. A checkpoint push the switch keeps off never reaches it: the
-/// engine skips it (<c>pushCheckpoints</c>). Run again, it pushes what is pushed already, and answers <c>pushed</c> false.
+/// (<see cref="FlowRunPlace.OffItsBranch"/>), no commit to push or no remote fails it 13 with nothing pushed; a push the
+/// remote refused fails it 20, one that did not finish in time 21. A checkpoint push the switch keeps off never reaches it:
+/// the engine skips it (<c>pushCheckpoints</c>). Run again, it pushes what is pushed already, and answers <c>pushed</c> false.
 /// The push runs the repository's push hooks inside the operating system's isolation of the agents' work
 /// (<see cref="ExecutionGrounds.OfHooks"/>), as <c>isolation</c> in its output says; where this machine has none,
 /// <c>agentPolicy.isolation: required</c> fails it 14 with nothing pushed, and <c>preferred</c> runs them outside.
 /// </summary>
 /// <param name="contextLoader">Finds the repository.</param>
 /// <param name="platform">This machine.</param>
-/// <param name="git">Reads the main checkout: its branch, its HEAD and its remotes.</param>
+/// <param name="store">Reads the run's ledger of its commits.</param>
+/// <param name="git">Reads the main checkout: its branch and its remotes.</param>
 /// <param name="publisher">Pushes.</param>
 /// <param name="isolation">Decides the isolation the push's hooks run inside.</param>
 public sealed class PushStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
+    OrchestrationStore store,
     IGitClient git,
     IGitPublisher publisher,
     IAgentIsolation isolation) : IFlowStepTypeRunner
@@ -56,9 +60,11 @@ public sealed class PushStepRunner(
             return Refused(off);
         }
 
-        if (checkout.Head is not { } commit)
+        // What the run committed - the commit its commit step held to the folds it took - else what it started on: never what
+        // HEAD names now, which anything that wrote the main checkout's git directory since could have moved.
+        if ((LastCommitted(OrchestratorLayout.Of(context.Layout, place.Run)) ?? place.StartCommit) is not { } commit)
         {
-            return Refused($"'{run.Instance}' pushes '{branch}', which holds no commit yet. Nothing was pushed.");
+            return Refused($"'{run.Instance}' pushes the commit the run made on '{branch}', and it has made none there and started on none. Nothing was pushed.");
         }
 
         if ((run.Step.Remote ?? checkout.Remote) is not { } remote)
@@ -84,8 +90,8 @@ public sealed class PushStepRunner(
 
         var pushed = await publisher.PushAsync(tree, remote, commit, branch, WorkflowStepTypes.CommandLimitOf(run.Step), hooks.ForProcess, cancellationToken).ConfigureAwait(false);
 
-        // What the hooks made in the tree's git directory that no git may go on over ends the step.
-        if (hooks.Afterward() is { } made)
+        // What the hooks left in the tree's git directory that no git may go on over ends the step.
+        if (await hooks.AfterwardAsync(CancellationToken.None).ConfigureAwait(false) is { } made)
         {
             var done = pushed ? $"pushed {commit} to" : $"found {commit} already on";
 
@@ -97,6 +103,10 @@ public sealed class PushStepRunner(
             HarnessExit.Success,
             output: new JsonObject { ["pushed"] = pushed, ["remote"] = remote, ["branch"] = branch, ["sha"] = commit, ["isolation"] = hooks.Record.ToOutput() });
     }
+
+    /// <summary>The commit the run's commit steps recorded last in its ledger; null where they recorded none.</summary>
+    private string? LastCommitted(OrchestratorLayout layout)
+        => store.ReadFolds(layout)?.Commits.LastOrDefault(entry => entry.State == FlowCommitEntry.Committed)?.Sha;
 
     private static FlowStepResult Refused(string why) => FlowStepResult.Ended(passed: false, HarnessExit.Refused, why);
 }

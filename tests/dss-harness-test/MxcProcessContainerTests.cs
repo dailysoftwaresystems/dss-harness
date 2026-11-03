@@ -15,7 +15,8 @@ namespace DssHarness.Tests;
 /// every grant of its files - an anchor whose holder is written read alone, its entries written again - and every decision
 /// of its probe, each from doubles of the machine on every system; then the container run for real on Windows where MXC's
 /// library says the machine has it: the probe's decision as node, git and Git Bash's sh really behave inside it, and a
-/// launch's commands kept from a credential slot's file, git's hooks, the tool's state and the launch's own directory, its
+/// launch's commands kept from a credential slot's file, every place the user keeps credentials in - ssh's directory
+/// whole - git's hooks, the tool's state and the launch's own directory, its
 /// git directory and its harness directory never moved. The real tests are skipped where MXC's container is not on the
 /// machine - no runner image is meant to hold it.
 /// </summary>
@@ -59,8 +60,8 @@ public sealed class MxcProcessContainerTests
             ],
             arguments);
         Assert.Equal(
-            (true, false, (string?)null, MxcProcessContainer.AnchorReadAlone, true, false),
-            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.OwnTemp, mechanism.TakesHandedCommands));
+            (true, false, (string?)null, MxcProcessContainer.AnchorReadAlone, true, true, false, "MXC's container takes no command handed to it"),
+            (mechanism.HoldsEveryCase, mechanism.Scoped, mechanism.Leaves, mechanism.AnchorCost, mechanism.HoldsAnAbsentFile, mechanism.OwnTemp, mechanism.TakesHandedCommands, mechanism.Unnested));
     }
 
     /// <summary>
@@ -428,6 +429,40 @@ public sealed class MxcProcessContainerTests
     }
 
     /// <summary>
+    /// A command inside MXC's container in a step's launch reads no place the user keeps credentials in - ssh's directory
+    /// whole, its known_hosts and config among it, for the container grants nothing beneath a denial; AWS's credentials;
+    /// the logins curl and git read - while it reads the rest of the home, and every one of them is left as it was.
+    /// </summary>
+    [Fact]
+    public async Task OnWindows_ACommandInside_ReadsNoPlaceTheUserKeepsCredentialsIn_SshsDirectoryWhole_ForReal()
+    {
+        var version = Supported();
+        using var temp = new TempDirectory();
+        using var home = RealIsolation.Home();
+        var platform = new FixedIsolationPlatform(IsolationAvailability.Of(new MxcProcessContainer(version, (CliRunner.CliProgram, []))));
+        var credentials = await RealIsolation.CredentialsAsync(home);
+        var gitconfig = home.WriteFile(".gitconfig", "visible");
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var hidden = new[] { credentials.Key, credentials.KnownHosts, credentials.Config, credentials.Aws, credentials.Netrc };
+        var refused = new List<(string Place, ProcessResult Result)>();
+
+        foreach (var place in hidden)
+        {
+            refused.Add((place, await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, Interpreter, "/d", "/c", "type", place)));
+        }
+
+        var visible = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, Interpreter, "/d", "/c", "type", gitconfig);
+
+        foreach (var (place, result) in refused)
+        {
+            Assert.Equal((place, false, string.Empty), (place, result.ExitCode == 0, result.StandardOutput));
+        }
+
+        Assert.Equal((0, "visible"), (visible.ExitCode, visible.StandardOutput));
+        Assert.Equal(["secret", "known", "Host *", "secret", "secret"], await Task.WhenAll(hidden.Select(file => File.ReadAllTextAsync(file, Token))));
+    }
+
+    /// <summary>
     /// A command inside MXC's container over a side-task's main tree, which it writes, moves neither the tree's git
     /// directory, whose hooks it may not write, nor the directory that holds the credential slots - MXC meets a place by its
     /// path, and a directory moved away would carry its guarded places out from under their rules.
@@ -443,7 +478,7 @@ public sealed class MxcProcessContainerTests
         var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(container)), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
         var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings, AgentPolicy = new AgentPolicyConfig { Isolation = AgentIsolationMode.Required } };
         var layout = new HarnessLayout(kit.Main, kit.Main);
-        var launched = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        var launched = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
         var commands = Assert.IsType<ProcessIsolation>(launched.ForCommands);
 
         foreach (var anchor in new[] { Path.Combine(kit.Main, ".git"), Path.Combine(kit.Main, HarnessLayout.DirectoryName) })
@@ -454,6 +489,68 @@ public sealed class MxcProcessContainerTests
             Assert.False(Directory.Exists(anchor + "-moved"), anchor);
             Assert.NotEqual(0, moved.ExitCode);
         }
+    }
+
+    /// <summary>
+    /// A command inside MXC's container makes no hard link from a file of the main checkout's into a place it writes: the
+    /// container grants the main checkout read alone, and a hard link needs it written, so nothing read-only gains a second
+    /// name a command could write by. This is the hard-link canary of Windows' container: where it fails, the container
+    /// allows the link, and the profile must deny link creation from outside the writable roots.
+    /// </summary>
+    [Fact]
+    public async Task OnWindows_ACommandInside_MakesNoHardLinkFromTheMainCheckout_IntoAPlaceItWrites_ForReal()
+    {
+        var version = Supported();
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var platform = new FixedIsolationPlatform(IsolationAvailability.Of(new MxcProcessContainer(version, (CliRunner.CliProgram, []))));
+        var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
+        var objects = Path.Combine(launch.Kit.Main, ".git", "objects");
+        var stored = Assert.Single(Directory.EnumerateFiles(objects, "*", SearchOption.AllDirectories).Take(1));
+
+        var linked = await RealIsolation.InsideAsync(launch.Commands, launch.Worktree, Interpreter, "/d", "/c", "mklink", "/H", Path.Combine(launch.Worktree, "hard"), stored);
+
+        Assert.NotEqual(0, linked.ExitCode);
+        Assert.False(File.Exists(Path.Combine(launch.Worktree, "hard")));
+    }
+
+    /// <summary>
+    /// A command inside the container over a side-task's main tree, a repository that keeps its refs in a reftable, finds
+    /// no commondir there - none is made - and makes none, the container denying the path its creation with nothing at it:
+    /// git outside still commits on a branch over the main checkout, which any commondir file there would break.
+    /// </summary>
+    [Fact]
+    public async Task OnWindows_ACommandInsideOverAReftableMain_MakesNoCommondir_AndCannotPlantIt_ForReal()
+    {
+        var version = Supported();
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var harness = new HarnessFactory();
+        var main = Directory.CreateDirectory(Path.Combine(temp.Path, "main")).FullName;
+        var made = await harness.GitClient.RunAsync(main, ["init", "--quiet", "--ref-format=reftable", "-b", "main", "."], cancellationToken: Token);
+
+        Assert.SkipUnless(made.Succeeded, $"this git keeps no refs in a reftable: {made.FailureMessage}");
+
+        await harness.RunGitAsync(main, ["config", "user.email", "test@example.com"], Token);
+        await harness.RunGitAsync(main, ["config", "user.name", "Test"], Token);
+        await harness.RunGitAsync(main, ["commit", "--quiet", "--allow-empty", "-m", "base"], Token);
+        var container = new MxcProcessContainer(version, (CliRunner.CliProgram, []));
+        var config = new HarnessConfig();
+        var layout = new HarnessLayout(main, main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(container)), harness.GitClient, harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var pointer = Path.Combine(main, ".git", Core.Agents.Isolation.AgentIsolation.CommonDirectoryFile);
+
+        var launched = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), main, SideTaskLayout.Of(layout, "one").Directory, Token);
+        var commands = Assert.IsType<ProcessIsolation>(launched.ForCommands);
+
+        Assert.False(launched.Refused);
+        Assert.False(File.Exists(pointer), pointer);
+
+        var planted = await RealIsolation.InsideAsync(commands, main, Interpreter, "/d", "/c", "type", "nul", ">", pointer);
+
+        Assert.NotEqual(0, planted.ExitCode);
+        Assert.False(File.Exists(pointer), pointer);
+        Assert.True((await harness.RunGitAsync(main, ["commit", "--quiet", "--allow-empty", "-m", "outside"], Token)).Succeeded);
     }
 
     /// <summary>The system's command interpreter.</summary>

@@ -1562,9 +1562,12 @@ public sealed class FlowCoordinator
         var said = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
         string? text = null;
         string? why = null;
-        var boundPassed = false;
 
-        using var boundToCancel = new CancellationTokenSource();
+        // The bound's own cancellation, asked of a source no stop reaches: whether the turn ended for the bound is read
+        // off it - a state every thread sees as it is - never off a plain flag written beside the cancellation, which a
+        // thread woken by the cancellation could read as it was before.
+        using var passedBound = new CancellationTokenSource();
+        using var boundToCancel = CancellationTokenSource.CreateLinkedTokenSource(passedBound.Token);
 
         lock (_handoffBounds)
         {
@@ -1583,8 +1586,7 @@ public sealed class FlowCoordinator
             using var timer = _clock.CreateTimer(_ =>
             {
                 // A turn answered inside its bound has let go of the source: the timer outlived it.
-                boundPassed = true;
-                boundToCancel.TryCancel();
+                passedBound.TryCancel();
             }, null, TimeSpan.FromSeconds(seconds), TimeSpan.FromMilliseconds(-1));
 
             if (!asked)
@@ -1603,7 +1605,7 @@ public sealed class FlowCoordinator
                 {
                     // The bound passed, or a stop came, before the agent answered: the attempt is ended, and its runner
                     // is waited for no longer than a stopped step's is, for it may still be writing.
-                    why = boundPassed ? $"the agent's handoff turn passed its {said} s" : "the run was stopped before the agent answered its handoff turn";
+                    why = passedBound.IsCancellationRequested ? $"the agent's handoff turn passed its {said} s" : "the run was stopped before the agent answered its handoff turn";
                     instance.Stoppable?.Cancel();
 
                     if (!await EndedWithinTheDrainAsync(work).ConfigureAwait(false))
@@ -1625,14 +1627,14 @@ public sealed class FlowCoordinator
             {
                 text = await _runner.HandoffAsync(run, boundToCancel.Token).ConfigureAwait(false);
 
-                if (boundPassed)
+                if (passedBound.IsCancellationRequested)
                 {
                     why ??= $"the agent's handoff turn passed its {said} s";
                 }
             }
             catch (OperationCanceledException)
             {
-                why ??= boundPassed ? $"the agent's handoff turn passed its {said} s" : "the run was stopped before the agent answered its handoff turn";
+                why ??= passedBound.IsCancellationRequested ? $"the agent's handoff turn passed its {said} s" : "the run was stopped before the agent answered its handoff turn";
             }
             catch (Exception failed)
             {

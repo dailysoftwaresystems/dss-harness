@@ -49,7 +49,8 @@ public interface IIsolationPlatform
 /// child is started. On Linux, WSL's included, the system's bubblewrap 0.8 or newer - the first <c>bwrap</c> in an
 /// absolute directory of the PATH outside the tree, where Ubuntu's AppArmor profile for it attaches, refused where the user
 /// could write the program or a directory above it, for the tool runs it outside before anything is isolated - with
-/// Landlock's scope of abstract sockets and signals where the kernel has it. On macOS the system's own sandbox, <c>/usr/bin/sandbox-exec</c>, where this process is not already inside a sandbox, which macOS
+/// Landlock's scope of abstract sockets and signals where the kernel has it, and asked once proved whether it starts again
+/// inside a layer of its own, as a Claude Code launch's outer layer starts it for each command. On macOS the system's own sandbox, <c>/usr/bin/sandbox-exec</c>, where this process is not already inside a sandbox, which macOS
 /// would not start another inside. On Windows MXC's process container, where MXC's library says the machine has one that
 /// denies a place outright, proved by the same canary trial and then by each of node, git and Git Bash's sh found here
 /// started inside it and answering - the programs an agent's commands are made of, which a container that cannot run
@@ -182,8 +183,29 @@ public sealed partial class IsolationPlatform(
         }
 
         var mechanism = new Bubblewrap(program, version.Said!, Masked()) { Scoped = _landlock() >= Landlock.ScopedVersion };
+        var proved = await ProvedAsync(mechanism, tree, LinkPaths.Resolve, how => Unproved(mechanism, how), cancellationToken).ConfigureAwait(false);
 
-        return await ProvedAsync(mechanism, tree, LinkPaths.Resolve, how => Unproved(mechanism, how), cancellationToken).ConfigureAwait(false);
+        return proved.Mechanism is null
+            ? proved
+            : IsolationAvailability.Of(mechanism with { Unnested = await UnnestedAsync(mechanism, cancellationToken).ConfigureAwait(false) });
+    }
+
+    /// <summary>
+    /// Why bubblewrap cannot be started again inside a layer of its own on this machine, as a program's outer layer starts it
+    /// for each command it hands over: the trial runs it, contained and inside an outer layer of its own, around a shell that
+    /// ends 0 - which an AppArmor profile that denies bubblewrap's children every capability, as Ubuntu's
+    /// <c>bwrap-userns-restrict</c> does, keeps from mounting anything; null where it ran.
+    /// </summary>
+    private async Task<string?> UnnestedAsync(Bubblewrap mechanism, CancellationToken cancellationToken)
+    {
+        var (inner, arguments) = mechanism.Command(IsolationProfile.Nothing, "/bin/sh", ["-c", "exit 0"]);
+        var (result, failed) = await TrialRunAsync(new ProcessIsolation(mechanism, IsolationProfile.Nothing with { Outer = true }), "/", inner, arguments, cancellationToken).ConfigureAwait(false);
+        var how = failed
+            ?? (result!.ExitCode != 0
+                ? $"ended {Code(result.ExitCode)}: '{FirstLine(result.StandardError.Trim().Length > 0 ? result.StandardError : result.StandardOutput)}'"
+                : null);
+
+        return how is null ? null : $"bubblewrap {mechanism.Version} ('{mechanism.Program}') starts none inside a layer of its own here: its trial {how}";
     }
 
     /// <summary>

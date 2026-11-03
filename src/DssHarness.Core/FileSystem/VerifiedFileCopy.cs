@@ -140,6 +140,142 @@ public static class VerifiedFileCopy
     }
 
     /// <summary>
+    /// <see cref="CopyAsync"/> where either tree is a place an isolated process writes: the source read once, relative to
+    /// its directory held from <paramref name="sourceRoot"/>, and the copy made, read back and put in place relative to its
+    /// directory held from <paramref name="destinationRoot"/>, each with no link on the way (<see cref="UnfollowedFiles"/>) -
+    /// so a link put on either's way, or swapped in while the copy runs, reaches nothing. What is written is what was read
+    /// and hashed, its mode kept on Linux and macOS.
+    /// </summary>
+    /// <param name="fileSystem">Holds the files' directories.</param>
+    /// <param name="sourceRoot">The root of the tree the file is read from.</param>
+    /// <param name="source">The file to copy.</param>
+    /// <param name="destinationRoot">The root of the tree it is written in.</param>
+    /// <param name="destination">Where it goes; a file there is replaced, a link there replaced as itself.</param>
+    /// <param name="expected">The SHA-256 the source held when it was measured; a source that holds anything else now is not copied.</param>
+    /// <param name="cancellationToken">Stops it before the copy is put in place.</param>
+    /// <exception cref="LinkOnTheWayException">A link stands on either's way, or at the source.</exception>
+    /// <exception cref="IOException">
+    /// The source is not what was measured, or the copy did not read back as the source did; nothing was put in place.
+    /// </exception>
+    public static async Task<FileContent> CopyUnfollowedAsync(
+        IFileSystem fileSystem,
+        string sourceRoot,
+        string source,
+        string destinationRoot,
+        string destination,
+        string? expected = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destination);
+
+        var read = UnfollowedFiles.OpenRead(fileSystem, sourceRoot, source);
+
+        await using (read.ConfigureAwait(false))
+        {
+            FileContent copied = default;
+
+            UnfollowedFiles.Written(
+                fileSystem,
+                destinationRoot,
+                destination,
+                write =>
+                {
+                    copied = Hashed(read, write, cancellationToken);
+                    RequireMeasured(source, copied, expected);
+                },
+                UnfollowedFiles.ModeOf(read),
+                back =>
+                {
+                    var made = Hashed(back, Stream.Null, cancellationToken);
+
+                    if (made != copied)
+                    {
+                        throw new IOException($"'{source}' was copied to '{destination}' as {ReportText.Counted(made.Length, "byte")} with SHA-256 {made.Content}, where it holds "
+                            + $"{copied.Length} with {copied.Content}; the copy was not put in place.");
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+                });
+
+            return copied;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="WriteAsync"/> where the tree written is a place an isolated process writes: made, read back and put in
+    /// place relative to its directory held from <paramref name="root"/> with no link on the way
+    /// (<see cref="UnfollowedFiles"/>), as a file that can be run or one that cannot.
+    /// </summary>
+    /// <param name="fileSystem">Holds the file's directory.</param>
+    /// <param name="contents">The bytes to write.</param>
+    /// <param name="root">The root of the tree it is written in.</param>
+    /// <param name="destination">Where they go; a file there is replaced, a link there replaced as itself.</param>
+    /// <param name="executable">Whether the file written is one that can be run, where the platform keeps that.</param>
+    /// <param name="cancellationToken">Stops it before the file is put in place.</param>
+    /// <exception cref="LinkOnTheWayException">A link stands on the way.</exception>
+    /// <exception cref="IOException">What was written did not read back as the bytes given; nothing was put in place.</exception>
+    public static Task<FileContent> WriteUnfollowedAsync(
+        IFileSystem fileSystem,
+        byte[] contents,
+        string root,
+        string destination,
+        bool executable,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(contents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destination);
+
+        var given = FileContent.Of(contents);
+
+        UnfollowedFiles.Written(
+            fileSystem,
+            root,
+            destination,
+            write => write.Write(contents),
+            OperatingSystem.IsWindows() ? null : RunnableAs(executable),
+            back =>
+            {
+                var written = Hashed(back, Stream.Null, cancellationToken);
+
+                if (written != given)
+                {
+                    throw new IOException($"'{destination}' was written as {ReportText.Counted(written.Length, "byte")} with SHA-256 {written.Content}, where it was given "
+                        + $"{given.Length} with {given.Content}; what was written was not put in place.");
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+            });
+
+        return Task.FromResult(given);
+    }
+
+    /// <summary>The mode a file made as one that can be run, or one that cannot, is given (<see cref="PosixFilePermissions.Executable"/>).</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private static Func<UnixFileMode, UnixFileMode> RunnableAs(bool executable) => made => PosixFilePermissions.Executable(made, executable);
+
+    /// <summary>What <paramref name="from"/> holds, hashed as it is copied to <paramref name="to"/>, a block at a time.</summary>
+    private static FileContent Hashed(Stream from, Stream to, CancellationToken cancellationToken)
+    {
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        var buffer = new byte[81920];
+        long length = 0;
+        int read;
+
+        while ((read = from.Read(buffer)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            hash.AppendData(buffer, 0, read);
+            to.Write(buffer, 0, read);
+            length += read;
+        }
+
+        return new FileContent(length, Convert.ToHexStringLower(hash.GetHashAndReset()));
+    }
+
+    /// <summary>
     /// Stops a copy of <paramref name="source"/> where what was read of it is not what was measured, named by
     /// <paramref name="expected"/>: what would be written is not what was weighed.
     /// </summary>

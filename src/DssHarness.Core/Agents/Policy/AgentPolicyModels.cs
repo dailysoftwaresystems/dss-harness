@@ -121,6 +121,10 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// Every Claude Code directory a client of this run uses, and the tool's own process's: no command of
 /// an agent names one.
 /// </param>
+/// <param name="CredentialPlaces">
+/// Every place the user keeps credentials in on this machine (<c>Isolation.UserCredentials</c>): no file tool of an
+/// agent reads or writes one, no command names one, and no isolated command reads one but the files each leaves read.
+/// </param>
 /// <param name="Restrictions">
 /// Every restriction that applies to this agent, all applied together: the configuration's, the
 /// definition's and the step's. A restriction only ever refuses.
@@ -175,6 +179,7 @@ public sealed record AgentPolicyGround(
     IReadOnlyList<string> WritableRoots,
     IReadOnlyList<string> SlotDirectories,
     IReadOnlyList<string> ClaudeCodeDirectories,
+    IReadOnlyList<Isolation.HiddenPlace> CredentialPlaces,
     IReadOnlyList<AgentRestriction> Restrictions,
     IReadOnlyList<AgentCapability> Capabilities,
     IReadOnlyList<string>? WebDomains,

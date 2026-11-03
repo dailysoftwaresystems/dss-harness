@@ -582,6 +582,60 @@ public sealed class PhysicalFileSystemTests
         Assert.True(File.Exists(outside));
     }
 
+    /// <summary>
+    /// A directory of the tree swapped for a link to a place outside, back and forth, while the tree is removed, leads
+    /// the removal nowhere outside: each entry is removed relative to the directory it is in, held, so a link put where
+    /// a directory was is removed as the link and the files outside stay.
+    /// </summary>
+    [Fact]
+    public async Task DeleteDirectory_WhileADirectoryIsSwappedForALink_DeletesNothingOutside()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var files = Create();
+        var tree = temp.Combine("tree");
+        var x = Path.Combine(tree, "x");
+        var real = temp.Combine("x-dir");
+        var link = temp.Combine("x-link");
+        var victim = outside.WriteFile("victim.txt", "the user's own file");
+        Directory.CreateDirectory(real);
+
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(link, outside.Path));
+
+        using var stop = new CancellationTokenSource();
+        var swapper = Task.Run(() => UnfollowedFilesTests.Swap(x, real, link, stop.Token), TestContext.Current.CancellationToken);
+
+        try
+        {
+            for (var until = Environment.TickCount64 + 3000; Environment.TickCount64 < until && File.Exists(victim);)
+            {
+                Directory.CreateDirectory(tree);
+                Quietly(() => File.WriteAllText(Path.Combine(real, "victim.txt"), "the remover's own"));
+                Quietly(() => files.DeleteDirectory(tree));
+            }
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await swapper;
+        }
+
+        Assert.Equal("the user's own file", File.ReadAllText(victim));
+        Assert.Single(Directory.GetFiles(outside.Path));
+    }
+
+    /// <summary>Does what <paramref name="act"/> does; a refusal or a file held at that instant passes, as the swap makes them.</summary>
+    private static void Quietly(Action act)
+    {
+        try
+        {
+            act();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
     /// <summary>A tree that is itself a junction is not walked, so nothing behind it is looked at or removed.</summary>
     [Fact]
     public void RemoveJunctions_OnATreeThatIsItselfAJunction_TouchesNothingBehindIt()

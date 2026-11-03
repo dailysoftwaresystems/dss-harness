@@ -32,7 +32,10 @@ public sealed record IsolationProfile(IReadOnlyList<IsolatedPath> Hidden, IReadO
     /// </summary>
     public IReadOnlyList<string> Reads { get; init; } = [];
 
-    /// <summary>The directories read again inside a hidden place, each beneath one: what a launch's own program reads there.</summary>
+    /// <summary>
+    /// The places - directories or files - read again inside a hidden place, each beneath one: what a program reads there by
+    /// itself, Claude Code's shell snapshots and ssh's <c>known_hosts</c> and <c>config</c> among them.
+    /// </summary>
     public IReadOnlyList<string> Reopened { get; init; } = [];
 
     /// <summary>
@@ -43,6 +46,13 @@ public sealed record IsolationProfile(IReadOnlyList<IsolatedPath> Hidden, IReadO
 
     /// <summary>The variables set in the child, in order: its temporary directory and each declared tool cache's.</summary>
     public IReadOnlyList<KeyValuePair<string, string>> Environment { get; init; } = [];
+
+    /// <summary>
+    /// Whether the child is a program's outer layer, which starts the mechanism again inside it for each command it hands
+    /// over (<see cref="IIsolationMechanism.Unnested"/>): bubblewrap leaves it a user namespace to make each command's own
+    /// layer in, where every command's own layer allows none inside it. False for every other child.
+    /// </summary>
+    public bool Outer { get; init; }
 
     /// <summary>
     /// The Unix sockets outside the child reaches, each alone wherever it stands - inside a hidden place or the system's
@@ -180,18 +190,33 @@ public interface IIsolationMechanism
     string? AnchorCost { get; }
 
     /// <summary>
+    /// Whether the mechanism holds a rule at a file that is not there, denying its creation while nothing stands at the
+    /// path for a child to read, as it holds one at a file that is. A mechanism whose every rule is a mount cannot: a
+    /// mount at a path that is not there either holds nothing or puts a file of its own there.
+    /// </summary>
+    bool HoldsAnAbsentFile { get; }
+
+    /// <summary>
     /// Whether the mechanism gives the child a temporary directory of its own, removed with it - so a profile names none
     /// (<see cref="IsolationProfile.Temp"/>) and sets no variable for one.
     /// </summary>
     bool OwnTemp { get; }
 
     /// <summary>
-    /// Whether a program kept outside may hand each shell command it runs to the mechanism through this tool's isolated
-    /// shell (<see cref="IsolatedShell"/>), which becomes the mechanism in the command's place - so Claude Code's own
-    /// process, its login and the key it is handed stay outside every command it runs. Where false, a launch of Claude
-    /// Code runs whole inside.
+    /// Whether a program may hand each shell command it runs to the mechanism through this tool's isolated shell
+    /// (<see cref="IsolatedShell"/>), which becomes the mechanism in the command's place - so Claude Code's own process, its
+    /// login and the key it is handed stay apart from every command it runs. Where false, a launch of Claude Code runs whole
+    /// inside.
     /// </summary>
     bool TakesHandedCommands { get; }
+
+    /// <summary>
+    /// Why a program inside the mechanism cannot start it again, tighter, for each command it hands over - so a program that
+    /// hands its commands over (a Claude Code launch) runs outside every layer, where a command it ran without handing it
+    /// over would run with the user's rights; null where it can, and the program runs inside an outer layer of its own
+    /// (<see cref="IsolationProfile.Outer"/>), so even such a command stays inside that one.
+    /// </summary>
+    string? Unnested { get; }
 
     /// <summary>
     /// The command line that runs <paramref name="program"/> with <paramref name="arguments"/> inside

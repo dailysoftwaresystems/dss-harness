@@ -134,6 +134,7 @@ public sealed class ReporterRunner(
             workspace,
             webSearchGiven: false,
             _launch.ClaudeDirectories(context.Config, context.Layout),
+            _launch.CredentialPlaces(context.Config),
             readsOnly: true) with
         {
             ReporterRoot = layout.Directory,

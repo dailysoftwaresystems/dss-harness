@@ -2210,19 +2210,47 @@ public sealed class AgentFoldTests
         Directory.Delete(directory, recursive: true);
     }
 
+    /// <summary>
+    /// The real file system, except that one file's content is replaced just before it is reached a second time by its
+    /// path, or the first time relative to a directory held - the fold reading it to copy or to write it - as an agent
+    /// still at work changing it.
+    /// </summary>
     private sealed class ShiftingFileSystem(IFileSystem inner, string file, string later) : PassThroughFileSystem(inner)
     {
         private int _reads;
+        private bool _shifted;
 
         public override Stream OpenRead(string path)
         {
-            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase) && Interlocked.Increment(ref _reads) == 2)
+            if (IsTheFile(path) && Interlocked.Increment(ref _reads) == 2)
             {
-                File.WriteAllText(file, later);
+                Shift();
             }
 
             return base.OpenRead(path);
         }
+
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            if (IsTheFile(asked ?? directory))
+            {
+                Shift();
+            }
+
+            return base.Hold(anchor, directory, make, asked);
+        }
+
+        private void Shift()
+        {
+            if (!_shifted)
+            {
+                _shifted = true;
+                File.WriteAllText(file, later);
+            }
+        }
+
+        private bool IsTheFile(string path)
+            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>The real file system, except that what is at one path cannot be asked, as under a directory this process may not look in.</summary>

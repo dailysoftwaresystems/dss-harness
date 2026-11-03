@@ -270,10 +270,10 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// Each skill the prompt names is looked up again where the step starts, its folder copied whole into the agent's
-    /// work directory, and its block put where the placeholder stood - its <c>${CLAUDE_SESSION_ID}</c> the id the run's
-    /// first session begins as, which the request hands the client - and the skill recorded on the request, for the
-    /// step's stream to say what it was given.
+    /// Each skill the prompt names is looked up again where the step starts, its folder copied whole into what the step's
+    /// agent is handed, in the step's own directory, and its block put where the placeholder stood - its
+    /// <c>${CLAUDE_SESSION_ID}</c> the id the run's first session begins as, which the request hands the client - and the
+    /// skill recorded on the request, for the step's stream to say what it was given.
     /// </summary>
     [Fact]
     public async Task EachSkillThePromptNames_IsHandedOver_AndItsBlockPutInThePrompt()
@@ -288,7 +288,7 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(handed.Passed, handed.Error);
         var asked = agents.Asked.Single();
-        var copied = Path.Combine(kit.Layout.WorkDirectory("a9"), "skills", "planning");
+        var copied = Path.Combine(OrchestratorLayout.HandedDirectory(kit.Layout.InstanceDirectory("think", "a9")), "skills", "planning");
         Assert.True(Guid.TryParseExact(asked.SessionId, "D", out _), asked.SessionId);
         Assert.Equal(
             $"Plan with <skill name=\"planning\" from=\".harness-config/skills\" directory=\"{copied}\">\nFiles this skill refers to are in that directory. Read them from there.\n\nPlan in steps, session {asked.SessionId}.\n\n</skill>.",
@@ -312,6 +312,31 @@ public sealed class ReasonStepRunnerTests
 
         Assert.Equal((false, HarnessExit.Refused), (notStarted.Passed, notStarted.Exit));
         Assert.Empty(notStarted.Skills);
+    }
+
+    /// <summary>
+    /// What the step's agent is handed is never written where its commands write: a link one of them planted in its work
+    /// directory, where a skill's copy would go, leads no write of the tool's out of the places it writes - the copy is in
+    /// the step's own directory, which the agent reads, and what the link leads to is untouched.
+    /// </summary>
+    [Fact]
+    public async Task ALinkPlantedInTheWorkDirectory_LeadsNoCopyOfASkillOutOfIt()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "skills", "planning", "SKILL.md"), "---\ndescription: how to plan\n---\nPlan in steps.\n");
+        var work = kit.Layout.WorkDirectory("a9");
+        Directory.CreateDirectory(work);
+        TestLinks.DirectoryLink(Path.Combine(work, "skills"), outside.Path);
+
+        var handed = await Runner(kit, agents).RunAsync(Run(kit, prompt: "Plan with {skill.planning}.", made: new FlowMadeAgent("a9", "claude-opus-5-5")), Token);
+
+        Assert.True(handed.Passed, handed.Error);
+        var directory = OrchestratorLayout.HandedDirectory(kit.Layout.InstanceDirectory("think", "a9"));
+        Assert.Equal(Path.Combine(directory, "skills", "planning"), Assert.Single(agents.Asked.Single().Skills).Folder);
+        Assert.Contains(directory, agents.Asked.Single().Ground!.ReadRoots);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(outside.Path));
     }
 
     /// <summary>
@@ -416,8 +441,8 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// A step's launch is built as every launch's is: the tool's own Claude Code directory among those no action of its
-    /// agent reaches, whatever client it is on; every secret the slot answers in its mask; and the retries its workflow
+    /// A step's launch is built as every launch's is: the tool's own Claude Code directory and the places the user keeps
+    /// credentials in among those no action of its agent reaches, whatever client it is on; every secret the slot answers in its mask; and the retries its workflow
     /// allows a step.
     /// </summary>
     [Fact]
@@ -432,6 +457,7 @@ public sealed class ReasonStepRunnerTests
         Assert.True(result.Passed, result.Error);
         var asked = agents.Asked.Single();
         Assert.Equal([new ClaudeTranscripts(kit.Harness.FileSystem, kit.Harness.Platform).ConfigDirectory], asked.Ground!.ClaudeCodeDirectories);
+        Assert.Contains(Path.Combine(kit.Harness.Platform.HomeDirectory, ".ssh"), asked.Ground.CredentialPlaces.Select(place => place.Path));
         Assert.Equal($"the key {DssHarness.Core.Runners.ActionValues.Mask}", asked.Mask!.Redact("the key sk-test-one"));
         Assert.Equal(WorkflowDefinition.DefaultMaxRetries, asked.Retries);
     }

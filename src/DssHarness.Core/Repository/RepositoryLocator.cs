@@ -1,12 +1,20 @@
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Repository;
 
 /// <inheritdoc cref="IRepositoryLocator"/>
-public sealed class RepositoryLocator(IGitClient gitClient) : IRepositoryLocator
+/// <param name="gitClient">Asks git where the tree and its main checkout are.</param>
+/// <param name="fileSystem">Looks for an agent's repository's own configuration.</param>
+/// <param name="platform">How paths compare.</param>
+public sealed class RepositoryLocator(IGitClient gitClient, IFileSystem fileSystem, IHostPlatform platform) : IRepositoryLocator
 {
     private readonly IGitClient _gitClient = gitClient;
+    private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly IHostPlatform _platform = platform;
 
     public async Task<HarnessLayout?> LocateAsync(
         string startDirectory,
@@ -51,6 +59,24 @@ public sealed class RepositoryLocator(IGitClient gitClient) : IRepositoryLocator
                 HarnessExit.Refused,
                 $"'{repositoryRoot}' is a worktree of the bare repository '{main.Path}'. "
                 + "DssHarness keeps its state in the main checkout, and a bare repository has none.");
+        }
+
+        // An agent's tree is a repository of its own, which git names its own main checkout: its mark names the main
+        // checkout it was made from, taken as the tree's only where that checkout still lends it its objects. One whose
+        // checkout does not is refused, never taken for a main checkout: every path derived from it would be the agent's.
+        if (PathContainment.AreSame(main.Path, repositoryRoot, _platform.PathComparison)
+            && await AgentRepositoryMark.ReadAsync(_gitClient, _fileSystem, repositoryRoot, cancellationToken).ConfigureAwait(false) is { } mark)
+        {
+            if (await mark.NotLentAsync(_gitClient, _fileSystem, _platform, repositoryRoot, cancellationToken).ConfigureAwait(false) is { } why)
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"'{ReportText.Printable(repositoryRoot)}' is an agent's repository of '{ReportText.Printable(mark.MainCheckout)}', which {why}. "
+                    + "DssHarness keeps its state in the main checkout, and so runs nothing from here; run it from a main checkout, "
+                    + $"and delete '{ReportText.Printable(repositoryRoot)}' once nothing in it is needed.");
+            }
+
+            return new HarnessLayout(repositoryRoot, mark.MainCheckout);
         }
 
         return new HarnessLayout(repositoryRoot, main.Path);

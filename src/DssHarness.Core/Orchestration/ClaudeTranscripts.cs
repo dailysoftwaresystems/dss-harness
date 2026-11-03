@@ -49,6 +49,16 @@ public sealed class ClaudeTranscripts(IFileSystem fileSystem, IHostPlatform plat
     /// <summary>Where Claude Code keeps its projects' transcripts on this machine, for this user.</summary>
     public string ProjectsDirectory => Path.Combine(ConfigDirectory, "projects");
 
+    /// <summary>
+    /// The file Claude Code keeps its own state in on this machine, for this user: <c>.claude.json</c> in the directory
+    /// <c>CLAUDE_CONFIG_DIR</c> names where it is set, else <c>.claude.json</c> in the home directory, beside <c>.claude</c>.
+    /// </summary>
+    public string StateFile
+        => _environment(ConfigDirectoryVariable) is { Length: > 0 } configured ? Path.Combine(configured, StateFileName) : Path.Combine(_platform.HomeDirectory, StateFileName);
+
+    /// <summary>The name of the file Claude Code keeps its own state in.</summary>
+    public const string StateFileName = ".claude.json";
+
     /// <summary>Every transcript of <paramref name="session"/>: a session's, in any project, and a subagent's, under any session.</summary>
     /// <param name="session">A session's id, or a subagent's.</param>
     public TranscriptsFound Find(string session)

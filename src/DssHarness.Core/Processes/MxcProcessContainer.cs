@@ -14,7 +14,9 @@ namespace DssHarness.Core.Processes;
 /// <para>
 /// The container grants nothing it is not told to (<see cref="Request"/>): every fixed drive is granted to read, each
 /// writable root to write, each place written by nobody to read again inside a writable root, and each hidden place is
-/// denied outright - read, written and listed. MXC meets a place by its path alone, so a directory renamed would carry the
+/// denied outright - read, written and listed - whole: what a profile reads again inside one
+/// (<see cref="IsolationProfile.Reopened"/>) is not handed over, for the container grants nothing beneath a denial, and a
+/// hidden directory denied entry by entry would leave an entry made after the start read. MXC meets a place by its path alone, so a directory renamed would carry the
 /// places beneath it out from under their rules and leave its name free to make again; every directory above a guarded
 /// place whose own directory may be written - and so whose name may be moved - is granted to read alone, each entry it
 /// holds granted again as the profile has it, so nothing is renamed, made or removed directly inside it.
@@ -75,6 +77,9 @@ public sealed class MxcProcessContainer(string version, (string Program, IReadOn
     /// <inheritdoc/>
     public string? AnchorCost => AnchorReadAlone;
 
+    /// <summary>The container meets a place by its path alone, granting a sealed one read alone there or not, so a file that is not there is held against its creation.</summary>
+    public bool HoldsAnAbsentFile => true;
+
     /// <summary>MXC gives every container a temporary directory of its own, removed with it.</summary>
     public bool OwnTemp => true;
 
@@ -83,6 +88,9 @@ public sealed class MxcProcessContainer(string version, (string Program, IReadOn
     /// a launch of it runs whole inside the container.
     /// </summary>
     public bool TakesHandedCommands => false;
+
+    /// <summary>Nothing is handed to the container one command at a time: a launch runs whole inside it.</summary>
+    public string? Unnested => "MXC's container takes no command handed to it";
 
     /// <inheritdoc/>
     public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)

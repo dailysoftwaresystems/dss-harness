@@ -48,7 +48,7 @@ public sealed class HarnessFactory
         ProcessRunner = new ProcessRunner(Platform, FilePermissions, CliRunner.CliProgram);
         ProcessTable = ProcessTableFactory.Create(Platform, ProcessRunner);
         GitClient = new GitClient(ProcessRunner, Output, localVariables: LocalVariables);
-        RepositoryLocator = new RepositoryLocator(GitClient);
+        RepositoryLocator = new RepositoryLocator(GitClient, FileSystem, Platform);
         ConfigStore = new JsonConfigStore(FileSystem);
         GitIgnoreManager = new GitIgnoreManager(FileSystem);
         ProjectDetector = new ProjectDetector(FileSystem);

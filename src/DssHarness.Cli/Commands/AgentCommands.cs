@@ -35,7 +35,7 @@ internal static class CreateAgentCommand
     {
         var command = new Command(
             Name,
-            "Create an agent of an orchestrator: its record, its worktree, and its seed - the main tree's uncommitted state handed to it, each changed file copied and each deletion made, every path recorded; refused past the orchestrator's limit. With --no-worktree, the engine's agent: a record, with no worktree or seed, counted against no limit.");
+            "Create an agent of an orchestrator: its record, its worktree - a git repository of its own that borrows the main checkout's objects, which git worktree list does not show - and its seed - the main tree's uncommitted state handed to it, each changed file copied and each deletion made, every path recorded; refused past the orchestrator's limit. With --no-worktree, the engine's agent: a record, with no worktree or seed, counted against no limit.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Options.Add(ModelOption);

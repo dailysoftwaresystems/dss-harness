@@ -2349,12 +2349,22 @@ public sealed class AgentServiceTests
     {
         public override void CopyFile(string source, string destination, bool overwrite = false)
         {
+            Refuse(source);
+            base.CopyFile(source, destination, overwrite);
+        }
+
+        public override Core.FileSystem.HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        {
+            Refuse(asked ?? directory);
+            return base.Hold(anchor, directory, make, asked);
+        }
+
+        private void Refuse(string source)
+        {
             if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException($"The process cannot access the file '{source}' because it is being used by another process.");
             }
-
-            base.CopyFile(source, destination, overwrite);
         }
     }
 

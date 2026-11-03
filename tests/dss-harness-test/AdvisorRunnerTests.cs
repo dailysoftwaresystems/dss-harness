@@ -191,7 +191,8 @@ public sealed class AdvisorRunnerTests
     /// <summary>
     /// The advice asked of a step whose agent writes in a worktree works where that agent works - the worktree's path on
     /// the disk, never its record's address - and only reads it: its own work directory is all it writes. The tool's
-    /// own Claude Code directory is kept from it, and every secret the slot answers is in its mask.
+    /// own Claude Code directory and the places the user keeps credentials in are kept from it, and every secret the slot
+    /// answers is in its mask.
     /// </summary>
     [Fact]
     public async Task AnAdviceInAWritingAgentsWorktree_ReadsItAndWritesNothingThere()
@@ -209,6 +210,7 @@ public sealed class AdvisorRunnerTests
         Assert.Equal((kit.Worktree("ag"), kit.Worktree("ag"), work), (asked.Workspace.Worktree, asked.Workspace.WorkingDirectory, asked.Workspace.WorkDirectory));
         Assert.Equal([work], asked.Ground!.WritableRoots);
         Assert.Contains(new ClaudeTranscripts(kit.Harness.FileSystem, kit.Harness.Platform).ConfigDirectory, asked.Ground.ClaudeCodeDirectories);
+        Assert.Contains(Path.Combine(kit.Harness.Platform.HomeDirectory, ".ssh"), asked.Ground.CredentialPlaces.Select(place => place.Path));
         Assert.Equal($"the key {DssHarness.Core.Runners.ActionValues.Mask}", asked.Mask!.Redact("the key sk-test-one"));
     }
 

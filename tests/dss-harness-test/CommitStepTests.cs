@@ -249,6 +249,30 @@ public sealed class CommitStepTests
     }
 
     /// <summary>
+    /// A path a fold deleted that holds a directory now - a repository made there among what one may be, whose own git a
+    /// removal staged over it would ask about its work tree - is changed since: refused, and nothing staged.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionWhosePathHoldsADirectoryNow_IsChangedSince_AndNothingIsStaged()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var ledger = Ledger(kit);
+        var id = await ledger.IntendAsync(kit.Layout, kit.Main, "fold", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }, Token);
+        File.Delete(Path.Combine(kit.Main, "b.txt"));
+        await ledger.SettleAsync(kit.Layout, kit.Main, id, HarnessExit.Success);
+        Directory.CreateDirectory(Path.Combine(kit.Main, "b.txt"));
+        File.WriteAllText(Path.Combine(kit.Main, "b.txt", "inside.txt"), "made since\n");
+
+        var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.False(ended.Passed);
+        Assert.Equal(HarnessExit.Refused, ended.Exit);
+        Assert.Equal("'b.txt' (folded by 'fold') has changed since; commit or restore it, then resume. Nothing was staged.", ended.Error);
+        Assert.Contains("b.txt", (await kit.Harness.RunGitAsync(kit.Main, ["ls-files"], Token)).StandardOutput, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Where the configuration declares a template, the message is it filled from the step's variables and the defaults,
     /// the step's own message unused; a message that would be none fails the step 12 before anything is staged.
     /// </summary>
@@ -771,7 +795,7 @@ public sealed class CommitStepTests
         var made = await HeadAsync(kit);
         Assert.NotEqual(before, made);
         Assert.Equal(
-            (false, HarnessExit.CommandFailed, $"'commit' made {made[..12]}, and it is not what its folds left alone: it took 'other.txt' besides - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft HEAD^, then resume, which settles it."),
+            (false, HarnessExit.CommandFailed, $"'commit' made {made[..12]}, and it is not what its folds left alone: it took 'other.txt' besides - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft {before}, then resume, which settles it."),
             (swept.Passed, swept.Exit, swept.Error));
         Assert.Equal("a.txt\nother.txt\n", (await kit.Harness.RunGitAsync(kit.Main, ["diff-tree", "-r", "--name-only", "--no-commit-id", "HEAD"], Token)).StandardOutput);
 
@@ -788,6 +812,68 @@ public sealed class CommitStepTests
         Assert.Equal($$"""{"committed":true,"sha":"{{made}}","paths":["a.txt"],"ignored":[]}""", kept.Output!.ToJsonString());
         Assert.Equal(made, await HeadAsync(kit));
         Assert.Equal("c1", kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of(fold)!.Paths[0].Committed);
+    }
+
+    /// <summary>
+    /// A commit is held to the commit the branch named before it: a post-commit hook that moves the branch to a commit of
+    /// its own - one that changes the set's paths alone against its own parent, and stands on a parent that carries
+    /// anything - fails the step (20) naming the parent it stands on and what it brings over the commit before, the commit
+    /// left for a person and the set staged in the ledger with what it brought; and one that brings nothing besides the set
+    /// over the commit before, its history rewritten alone, fails it all the same.
+    /// </summary>
+    /// <param name="historyAlone">Whether the hook's commit takes the parent's file out again, rewriting the history alone.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACommitAHookMovedOntoAnotherParent_FailsTheStep20_AndIsLeftForAPerson(bool historyAlone)
+    {
+        // The hook puts a workflow file in a parent of its own, then a commit over it whose own change is the set's alone -
+        // or, rewriting the history alone, takes the file out again in it.
+        const string Moving = """
+            #!/bin/sh
+            made=$(git rev-parse HEAD)
+            parent=$(git rev-parse HEAD^)
+            blob=$(echo planted | git hash-object -w --stdin)
+            GIT_INDEX_FILE="$(git rev-parse --git-dir)/hook-index"
+            export GIT_INDEX_FILE
+            git read-tree "$parent"
+            git update-index --add --cacheinfo 100644,"$blob",.github/workflows/x.yml
+            moved=$(echo chore | git commit-tree "$(git write-tree)" -p "$parent")
+            git read-tree "$made"
+            if [ HISTORY_ALONE = no ]; then git update-index --add --cacheinfo 100644,"$blob",.github/workflows/x.yml; fi
+            onto=$(git log -1 --format=%B "$made" | git commit-tree "$(git write-tree)" -p "$moved")
+            rm -f "$GIT_INDEX_FILE"
+            git update-ref HEAD "$onto"
+            """;
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        _ = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var hook = Path.Combine(kit.Main, ".git", "hooks", "post-commit");
+        File.WriteAllText(hook, Moving.Replace("HISTORY_ALONE", historyAlone ? "yes" : "no", StringComparison.Ordinal));
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(hook, File.GetUnixFileMode(hook) | UnixFileMode.UserExecute);
+        }
+
+        var before = await HeadAsync(kit);
+
+        var moved = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        var onto = await HeadAsync(kit);
+        var parent = (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", "HEAD^"], Token)).StandardOutput.Trim();
+        var besides = historyAlone ? string.Empty : ", and it took '.github/workflows/x.yml' besides";
+        Assert.NotEqual(before, parent);
+        Assert.Equal(
+            (false, HarnessExit.CommandFailed, $"'commit' made {onto[..12]}, and it is not what its folds left alone: it stands on {parent[..12]}, not on {before[..12]} alone, the commit the branch named before it{besides} - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft {before}, then resume, which settles it."),
+            (moved.Passed, moved.Exit, moved.Error));
+
+        var staged = Assert.Single(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits);
+
+        Assert.Equal((FlowCommitEntry.Staged, (string?)null), (staged.State, staged.Sha));
+        Assert.Equal(historyAlone ? [] : [".github/workflows/x.yml"], staged.Strayed?.Besides ?? []);
+        Assert.Equal(historyAlone ? null : onto, staged.Strayed?.Sha);
     }
 
     /// <summary>

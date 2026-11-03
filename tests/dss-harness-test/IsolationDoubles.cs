@@ -26,9 +26,12 @@ internal sealed class TestIsolation(
     /// <summary>Every execution that asked, in order: its ground.</summary>
     public List<ExecutionGround> Executions { get; } = [];
 
+    /// <summary>The places it hides (<see cref="IAgentIsolation.Hidden"/>): none where left out.</summary>
+    public IReadOnlyList<IsolatedPath> HiddenPlaces { get; init; } = [];
+
     /// <summary>An execution's answer under a mechanism of the test's: <paramref name="mechanism"/>, and a profile that names each of the ground's writable roots.</summary>
     /// <param name="mechanism">The mechanism.</param>
-    /// <param name="after">What it answers once it has run (<see cref="IsolationDecision.Afterward"/>); nothing where left out.</param>
+    /// <param name="after">What it answers once it has run (<see cref="IsolationDecision.AfterwardAsync"/>); nothing where left out.</param>
     public static TestIsolation Under(IIsolationMechanism mechanism, Func<string?>? after = null)
         => new(execution: (config, ground) => new ExecutionIsolation(
             ground.Kind,
@@ -36,7 +39,7 @@ internal sealed class TestIsolation(
             mechanism,
             new IsolationProfile([], [.. ground.WritableRoots.Select(root => new IsolatedWrite(root, Directory: true, Writable: true))]),
             null,
-            null) { After = after });
+            null) { After = after is null ? null : _ => Task.FromResult(after()) });
 
     /// <summary>An execution's answer where this machine has no mechanism: refused under required, run outside under preferred.</summary>
     /// <param name="why">Why there is none.</param>
@@ -71,6 +74,9 @@ internal sealed class TestIsolation(
 
         return Task.FromResult(execution?.Invoke(config, ground) ?? new ExecutionIsolation(ground.Kind, AgentIsolationMode.Of(config), null, null, NotAsked, null));
     }
+
+    /// <inheritdoc/>
+    public IReadOnlyList<IsolatedPath> Hidden(HarnessConfig config, string mainCheckout) => HiddenPlaces;
 }
 
 /// <summary>A mechanism of a test's: it hands the program its own command line unchanged, recording each it was asked for.</summary>
@@ -97,6 +103,9 @@ internal sealed class PassThroughMechanism(string name = "test", string version 
     /// <inheritdoc/>
     public string? Leaves { get; init; }
 
+    /// <summary>Whether it holds a rule at a file that is not there; a test's default holds, as macOS's sandbox and MXC's container do.</summary>
+    public bool HoldsAnAbsentFile { get; init; } = true;
+
     /// <inheritdoc/>
     public string? AnchorCost { get; init; }
 
@@ -105,6 +114,9 @@ internal sealed class PassThroughMechanism(string name = "test", string version 
 
     /// <inheritdoc/>
     public bool TakesHandedCommands { get; init; } = true;
+
+    /// <inheritdoc/>
+    public string? Unnested { get; init; }
 
     /// <inheritdoc/>
     public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)

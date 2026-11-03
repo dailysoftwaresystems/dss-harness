@@ -177,6 +177,14 @@ public sealed class AgentPolicyConfig
     /// in its records.
     /// </summary>
     public string? Isolation { get; init; }
+
+    /// <summary>
+    /// More places the user keeps credentials in, each hidden from every isolated child and named by no command of an
+    /// agent's beside the declared ones (<see cref="Agents.Isolation.UserCredentials.Declared"/>), which it never takes
+    /// away: each a whole path or one under <c>~/</c>, a directory where it ends with a separator, else a file. Left out
+    /// where none is added, which is the default; given empty it is refused.
+    /// </summary>
+    public List<string>? HiddenPlaces { get; init; }
 }
 
 /// <summary>

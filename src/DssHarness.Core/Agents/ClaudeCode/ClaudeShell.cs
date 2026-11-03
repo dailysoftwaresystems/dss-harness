@@ -3,20 +3,25 @@ using DssHarness.Core.Processes;
 namespace DssHarness.Core.Agents.ClaudeCode;
 
 /// <summary>
-/// How a Claude Code launch's shell commands run inside the operating system's isolation while Claude Code's own process
-/// stays outside it: Claude Code starts each through its shell prefix (<c>CLAUDE_CODE_SHELL_PREFIX</c>), which names this
-/// tool and <see cref="IsolatedShell.Option"/>, and this tool becomes the mechanism with the command inside
-/// (<see cref="IsolatedShell"/>), the launch's isolation read from the file its variable names. Claude Code is told the one
-/// shell the command runs in, and its own temporary directory is a directory of the launch's beside its records, which no
-/// command writes but the one file each ends by writing its working directory to - so nothing Claude Code writes or reads
-/// there in its own process is a command's to replace with a link. So Claude Code reads its login and its key in its own
-/// process while no command it runs reaches either - its environment behind a process namespace of the command's own, its
-/// directories hidden but the shell snapshots it sources.
+/// How a Claude Code launch's shell commands run inside the operating system's isolation, in a layer of their own apart
+/// from Claude Code's own process: Claude Code starts each through its shell prefix (<c>CLAUDE_CODE_SHELL_PREFIX</c>), which
+/// names this tool and <see cref="IsolatedShell.Option"/>, and this tool becomes the mechanism with the command inside
+/// (<see cref="IsolatedShell"/>), the launch's isolation read from the file its variable names. Claude Code's own process
+/// runs inside an outer layer of the same mechanism where it can be started again inside one (bubblewrap), and outside
+/// every layer where it cannot (macOS's sandbox). Claude Code is told the one shell the command runs in, and its own
+/// temporary directory is a directory of the launch's beside its records, which no command writes but the one file each
+/// ends by writing its working directory to - so nothing Claude Code writes or reads there in its own process is a
+/// command's to replace with a link. So Claude Code reads its login and its key in its own process while no command it
+/// runs reaches either - its environment behind a process namespace of the command's own, its directories hidden but the
+/// shell snapshots it sources.
 /// </summary>
 /// <remarks>
 /// Each command the engine allows is given back to Claude Code with a receipt at its head (<see cref="IsolatedShell.Marked"/>),
-/// which the isolated shell writes in the launch's receipts' directory before it runs the command; a call that comes back
-/// with no receipt of its command ran outside the isolation, and ends the launch.
+/// which the isolated shell writes in the launch's receipts' directory before it runs the command, and takes off the
+/// command before the command runs; a call that comes back with no receipt of its command was not handed over, and ends the
+/// launch. A receipt shows a Claude Code that skipped its prefix only once the command has run, and a command that runs
+/// without the prefix runs where Claude Code's own process does, where it can write a receipt of its own: the outer layer,
+/// never the receipt, is what holds such a command.
 /// </remarks>
 public static class ClaudeShell
 {
@@ -37,6 +42,18 @@ public static class ClaudeShell
 
     /// <summary>The launch's isolation, as the isolated shell reads it, in the step's directory.</summary>
     public const string FileName = "claude-isolation.json";
+
+    /// <summary>
+    /// The places in <paramref name="stepDirectory"/> that Claude Code's own process and the isolated shell write, which no
+    /// command does: the receipts' directory, then Claude Code's own temporary directory.
+    /// </summary>
+    /// <param name="stepDirectory">The step's directory, the launch's own.</param>
+    public static IReadOnlyList<string> PlacesIn(string stepDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepDirectory);
+
+        return [Path.Combine(stepDirectory, ReceiptsDirectoryName), Path.Combine(stepDirectory, TempDirectoryName)];
+    }
 
     /// <summary>
     /// The prefix that hands a command to <paramref name="program"/> - this tool's own executable, before which nothing

@@ -11,7 +11,7 @@ namespace DssHarness.Core.Agents.Policy;
 /// <para>
 /// An ask rule for every tool the launch has, so no call is allowed by a rule or a mode before the
 /// engine has seen it; the restriction rules as Claude Code's own deny rules, and a read of every
-/// credential slot and Claude Code directory of the run's beside them - which Claude Code applies to
+/// credential slot, Claude Code directory and place the user keeps credentials in of the run's beside them - which Claude Code applies to
 /// its searches too - a second layer behind the engine's answers, never the one relied on; <c>"fallbackModel": []</c> and
 /// <c>"switchModelsOnFlag": false</c>, for the engine's fallback is the only one; Claude Code's own
 /// output style, because its prompt is kept; an <c>env</c> holding every name the engine controls,
@@ -154,7 +154,8 @@ public static class ClaudeSettings
     }
 
     /// <summary>
-    /// The deny rules of one ground: a read of each credential slot and Claude Code directory, and
+    /// The deny rules of one ground: a read of each credential slot and Claude Code directory, and of
+    /// each place the user keeps credentials in - all a directory holds, a file itself - and
     /// each restriction as Claude Code spells its own - a <c>Run</c> rule a <c>Bash</c> prefix rule,
     /// a path rule absolute once for each root of the launch, but where its pattern there would
     /// cover a root the launch writes, a <c>Write</c> rule as an <c>Edit</c> rule, a <c>Web</c> rule a <c>WebFetch</c> domain rule and, where it
@@ -177,6 +178,11 @@ public static class ClaudeSettings
         foreach (var place in ground.SlotDirectories.Concat(ground.ClaudeCodeDirectories).Select(place => place.Replace('\\', '/')).Distinct(StringComparer.FromComparison(comparison)))
         {
             yield return $"Read({Absolute(place)}/**)";
+        }
+
+        foreach (var place in ground.CredentialPlaces.DistinctBy(place => place.Path, StringComparer.FromComparison(comparison)))
+        {
+            yield return place.Directory ? $"Read({Absolute(place.Path.Replace('\\', '/'))}/**)" : $"Read({Absolute(place.Path.Replace('\\', '/'))})";
         }
 
         foreach (var declared in ground.Restrictions)

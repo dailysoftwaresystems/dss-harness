@@ -363,13 +363,21 @@ public sealed class LegStepRunnerTests : IDisposable
         _ = await new SweepStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, sweeping)
             .RunAsync(Run(new WorkflowStep { Name = "arms", Type = "check-mutations" }, preferred.Path), Token);
         var copy = Path.Combine(preferred.Path, HarnessLayout.LegsDirectoryName, "a-copy");
-        var records = Path.Combine(preferred.Path, HarnessLayout.DirectoryName, "runs", "r");
-        _ = await legs.Asked[^1].Isolation!.ForLegAsync(copy, records, Token);
-        _ = await legs.Asked[^2].Isolation!.ForLegAsync(copy, records, Token);
+        var actionBuild = Path.Combine(copy, HarnessLayout.ActionBuildRelative("probe", "r9", "native"));
+        _ = await legs.Asked[^1].Isolation!.ForLegAsync(copy, [], Token);
+        _ = await legs.Asked[^2].Isolation!.ForLegAsync(copy, [], Token);
 
-        Assert.Equal([copy, records, Path.Combine(copy, HarnessLayout.MutationsDirectoryName)], sweeping.Executions[^1].WritableRoots);
+        Assert.Equal([copy, Path.Combine(copy, HarnessLayout.MutationsDirectoryName)], sweeping.Executions[^1].WritableRoots);
         Assert.Equal([preferred.Path, copy], sweeping.Executions[^1].Trees.Skip(sweeping.Executions[^1].Trees.Count - 2));
-        Assert.Equal([copy, records], none.Executions[^1].WritableRoots);
+        Assert.Equal([copy], none.Executions[^1].WritableRoots);
+
+        // What the leg's work says it writes in the tree's configuration directory - an action's build directory for the
+        // run - is written beside the tree, and beside a sweep's workers.
+        _ = await legs.Asked[^1].Isolation!.ForLegAsync(copy, [actionBuild], Token);
+        _ = await legs.Asked[^2].Isolation!.ForLegAsync(copy, [actionBuild], Token);
+
+        Assert.Equal([copy, Path.Combine(copy, HarnessLayout.MutationsDirectoryName), actionBuild], sweeping.Executions[^1].WritableRoots);
+        Assert.Equal([copy, actionBuild], none.Executions[^1].WritableRoots);
     }
 
     /// <summary>

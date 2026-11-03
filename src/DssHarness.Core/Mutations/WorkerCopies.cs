@@ -317,7 +317,7 @@ internal sealed class WorkerCopies(
             foreach (var directory in stale)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                _fileSystem.DeleteDirectory(directory);
+                UnfollowedFiles.DeleteDirectory(_fileSystem, worker, directory);
             }
         }
 

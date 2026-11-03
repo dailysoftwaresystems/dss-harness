@@ -20,13 +20,17 @@ public static class EmptyDirectories
 
     /// <summary>
     /// Removes <paramref name="directory"/> where it holds nothing, then each parent that leaves holding nothing, up to -
-    /// never including - <paramref name="root"/>; stops at the first that holds something or is not there.
+    /// never including - <paramref name="root"/>; stops at the first that holds something, is not there, or is no
+    /// directory. Each is removed relative to the directory above it, held from <paramref name="root"/> with no link on the
+    /// way (<see cref="HeldDirectory"/>), and only where it is empty as the system removes one: a link put on the way, or
+    /// in its place, stops the walk and is never followed - the trees it walks are places an isolated process may write.
     /// </summary>
-    /// <param name="fileSystem">Lists and removes the directories.</param>
-    /// <param name="root">The tree the walk never leaves, and never removes.</param>
+    /// <param name="fileSystem">Holds the directories.</param>
+    /// <param name="root">The tree the walk never leaves, and never removes; taken as it is.</param>
     /// <param name="directory">Where to start; nothing is removed where it is null or outside the tree.</param>
     /// <param name="comparison">How this platform compares paths.</param>
     /// <returns>The directories removed, deepest first.</returns>
+    /// <exception cref="IOException">A directory could not be looked at or removed for any reason but holding something.</exception>
     public static IReadOnlyList<string> RemoveEmptiedDirectories(this IFileSystem fileSystem, string root, string? directory, StringComparison comparison)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
@@ -35,12 +39,24 @@ public static class EmptyDirectories
 
         while (directory is not null
             && PathContainment.IsStrictlyInside(root, directory, comparison)
-            && fileSystem.DirectoryExists(directory)
-            && fileSystem.IsEmpty(directory))
+            && Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(directory)) is { } above)
         {
-            fileSystem.DeleteDirectory(directory);
+            try
+            {
+                using var held = fileSystem.Hold(root, above, make: false, directory);
+
+                if (!held.RemoveIfEmpty(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))))
+                {
+                    break;
+                }
+            }
+            catch (Exception ex) when (ex is LinkOnTheWayException or DirectoryNotFoundException)
+            {
+                break;
+            }
+
             removed.Add(directory);
-            directory = Path.GetDirectoryName(directory);
+            directory = above;
         }
 
         return removed;

@@ -162,7 +162,12 @@ the child ends or is stopped - every process still in it, and at a stop every on
 child's tree, read before anything is signalled, asked to end with SIGTERM, and whatever still
 stands five seconds later killed - and the output is read for five seconds more at most: a process
 that made a session of its own away from the child's tree is not reached, and nothing waits for
-what it holds. A process table that cannot be read - macOS's is read through `ps`, which a session
+what it holds. On macOS, where the isolation keeps no process namespace, such a process of an
+isolated command's outlives its launch and goes on writing the places it was given; every file
+operation of the tool's over those places - a fold, a hand-over, evidence kept, a removal, a sync -
+acts relative to directories it holds (`UnfollowedFiles`, `HeldDirectory`), so a link it swaps in
+meanwhile reaches nothing of the tool's. git's own removal of a worktree (`git worktree remove`)
+walks the tree by path, and is where such a process still meets the tool's work. A process table that cannot be read - macOS's is read through `ps`, which a session
 that has used up every process it may start leaves unable to start - takes nothing from the stop:
 the group is still asked and then killed by its id, which needs no table, the tree is still ended,
 and what went unreached is said in the result (`ProcessResult.Uncontained`), or, where the caller
@@ -218,10 +223,12 @@ The machine is read-only under each. What a mechanism holds of its own it says o
 ignores letter case reaches it by (`HoldsEveryCase`), whether abstract sockets and signals are
 scoped (`Scoped`) and what is left reached where not (`Leaves`), what its anchors cost
 (`AnchorCost`), whether it gives the child a temporary directory of its own (`OwnTemp`), and whether
-it takes a command handed to it from a process outside (`TakesHandedCommands`). On Linux the
+it takes a command handed to it from a process apart from it (`TakesHandedCommands`), and why a process inside it
+cannot start it again for each command it hands over (`Unnested`). On Linux the
 mechanism is the system's bubblewrap (`Bubblewrap`): the machine bound read-only (`--ro-bind / /`,
 `--dev /dev`), a user namespace of its own allowing no further one (`--unshare-user
---disable-userns`), a process namespace with its own `/proc` (`--unshare-pid --proc /proc`, so
+--disable-userns`) - but a program's outer layer (`IsolationProfile.Outer`), left one to make each command's own layer
+in - a process namespace with its own `/proc` (`--unshare-pid --proc /proc`, so
 `/proc/<id>/root` and `/proc/<id>/environ` reach no process outside), never `--die-with-parent`,
 whose parent would be the thread that started the step; the launch's temporary directory bound at
 `/tmp` and any read root under `/tmp` bound again read-only; then the profile's writes in its order,
@@ -294,7 +301,11 @@ case of its directory's; a place written by nobody unwritten, by either spelling
 every open one unwritten; an open place written - each checked from outside, through `sh` on Linux
 and macOS and through `cmd.exe` on Windows, a run for each, and why not with the remedy where it
 fails (Ubuntu's `apparmor_restrict_unprivileged_userns` named with the `bwrap-userns-restrict`
-profile; on Windows the builds MXC needs, or WSL 2). On Windows each of node, git and Git Bash's
+profile; on Windows the builds MXC needs, or WSL 2). On Linux bubblewrap, once proved, is started again
+inside an outer layer of its own around a shell that must end 0, as a `claude-code` launch's outer layer starts it for
+each command; where it does not - an AppArmor profile that denies bubblewrap's children every capability, as
+`bwrap-userns-restrict` does - it is the mechanism all the same, its `Unnested` saying how the trial ended, and a
+`claude-code` launch's own process runs outside. On Windows each of node, git and Git Bash's
 `sh` - on the PATH outside the tree, `sh` else beside the git found - is then started inside the
 container and must end 0 having said something; one that does not is no mechanism, named with its
 path and how it ended, a status the system ended it with written in hexadecimal, and one not on the
@@ -667,14 +678,22 @@ does; one made with `--separate-git-dir` records none, and is then the tree aske
 lists that as no linked worktree. From a linked worktree of such a checkout, nothing says which
 checkout is the main one, and the command is refused, saying how to record it.
 
-`create-worktree` records the commit a worktree was made from, under
-`refs/harness/worktree-base/<name>`, and `list-worktree` reports it. A worktree's own HEAD moves
-with every commit made in it, so after the first one nothing else says what tree the worktree
-started from, and it can only be reproduced from the moment it happened to be made. The record is
-kept under `refs/harness/` rather than among heads, tags or remotes precisely so it can never be
-mistaken for somewhere work is kept: the deletion checks below read branches, tags,
-remote-tracking refs, the newest stash and other worktrees' HEADs, and this record is none of them.
-It is removed when the worktree is, so it can never answer for a later worktree of the same name.
+`create-worktree` and `create-agent` record the commit a worktree was made from, under
+`refs/harness/worktree-base/<name>`, and `list-worktree` reports it (`WorktreeKeepalive`, the one
+owner of these refs). A worktree's own HEAD moves with every commit made in it, so after the first
+one nothing else says what tree the worktree started from, and it can only be reproduced from the
+moment it happened to be made. The record is kept under `refs/harness/` rather than among heads,
+tags or remotes precisely so it can never be mistaken for somewhere work is kept: the deletion
+checks below read branches, tags, remote-tracking refs, the newest stash and other worktrees'
+HEADs, and this record is none of them. For an agent's repository it is also what keeps the commit
+alive: the repository borrows it from the main checkout's store and holds no ref the main
+checkout's gc reads, so it is written before anything of the repository is made, and nothing is
+made where it cannot be; while rebase-agent moves the agent's base, `refs/harness/worktree-moving/<name>`
+keeps the commit it moves to, written before the move records or writes anything and gone once the
+base's ref names it. A keepalive removed by hand, or by a rewrite of the main checkout's history,
+refuses every verb that works on the agent, naming the `git update-ref` that writes it again while
+the commit is there. The records are removed when the worktree is, so they can never answer for a
+later worktree of the same name.
 
 Every git command the harness runs, and the forge's command line, which runs git itself, starts
 without any variable git reads a repository from: every name `git rev-parse --local-env-vars`
@@ -693,7 +712,10 @@ taken, and the command fails without running git.
 
 An orchestrator's agents' worktrees sit below the directory named for it,
 `<root>/<orchestrator>/<agent>`, and are made by `create-agent` with the agent's records, never by
-`create-worktree`, which makes plain worktrees only. Each is named by its address,
+`create-worktree`, which makes plain worktrees only. Each is a git repository of its own, never one
+of git's linked worktrees: a linked worktree shares the main checkout's refs and object store, so
+whatever runs in it can move the main checkout's branches, write its tags and stash, and store
+other content under an object's id, which git verifies only when it receives objects. Each is named by its address,
 `orchestrator/agent`, wherever a person reads or types it: `list-worktree` lists it so,
 `delete-worktree` takes it, and the commit it was made from is recorded at
 `refs/harness/worktree-base/<orchestrator>/<agent>`. Plain worktrees and orchestrators share the
@@ -703,14 +725,65 @@ of its own that holds worktrees below it - an orchestrator's, holding its agents
 as one, `--force` or not: deleting it would delete each of them. A worktree's submodules and nested
 repositories are its own contents, and do not make it such a directory.
 
+An agent's worktree is a repository of its own (`AgentRepositories`): one that git records
+nowhere, so the main checkout's `git worktree list` holds the main checkout alone, whose own `.git/config` carries the mark naming this main checkout and the agent's address
+(`harness.mainCheckout`, `harness.agent`, read by `AgentRepositoryMark` from that file alone, never
+through the main checkout's configuration it includes), and which borrows the main checkout's
+objects. It is taken for the agent's worktree only where all three hold at the address it sits at.
+A command run inside one finds the main checkout its mark names, as from inside a linked worktree;
+one whose mark names a checkout that is not there, is bare, is no main checkout of its own, carries
+a mark itself or does not lend it its objects is refused, never taken for a main checkout.
+`list-worktree` lists it by its address, its `--json` saying `"kind": "repository"` of it and
+`"kind": "worktree"` of a linked one; delete-orchestrator and `delete-worktree <orchestrator>`
+count it among the worktrees below, never as a directory git records nothing at.
+
+It is made by `git init` - no template, the files ref format and the main checkout's object format
+- never by a clone, which would copy the main checkout's refs in as remote-tracking refs that
+dangle once its branches move on and its gc prunes, add a remote, and pick the ref format itself.
+Its `objects/info/alternates` names the main checkout's object directory as git spells it, so it
+reads every object the main checkout holds and writes only into its own store; its configuration
+includes the main checkout's first - filters, line endings, merge drivers, remotes, identity and
+`core.hooksPath` are the main checkout's, live - and then holds its own keys: what `git init`
+probed of the file system, `core.worktree` where the main checkout names one, no gc, maintenance
+or commit-graph of its own, the main checkout's large-file store (`lfs.storage`, so a file git-lfs
+keeps is checked out from there, and one changed inside the isolation cannot be added), a partial
+clone's extension, and the mark. The main checkout's `shallow` and `info/sparse-checkout` are
+copied, and its HEAD is checked out detached: no ref but its HEAD, no branch left in the main
+checkout. What git itself keeps of the main checkout does not apply in it: its `.git/hooks`
+(`core.hooksPath` still does), its branches (`git branch -a` lists none), an `includeIf` of its
+configuration is weighed against the repository. A partial clone's missing objects are fetched into
+the agent's own store. Its own objects go with it, and moving the main checkout breaks it, as it
+breaks a linked worktree. A repository whose making fails part way is taken back whole, its
+directory and its keepalive, and what could not be is said.
+
+Work comes back from it as files, never as objects: agents never commit (a HEAD moved off its
+base is refused by every verb), and fold-agent lists what changed from the repository's status
+and reads each file's bytes, while the base it compares them with is read from the main checkout's
+store, and every two-change question is asked with the main checkout as the tree. So an object the
+agent stores in its own repository under another object's id - content that does not hash to its
+name, which git there reads before the borrowed one - can only make the tool misjudge the agent's
+own changes, never write into the main checkout. rebase-agent writes only the repository: the
+commit it moves to is read through the alternates, by its id.
+
+An agent's record says `"tree": "repository"` (`AgentRecord.Tree`). A record that says nothing is
+an agent an earlier version made, whose worktree is one of git's linked worktrees: it is still read,
+folded, rebased and deleted as before, and nothing converts it - deleting it and making another
+agent gives a repository of its own. A tree of the other kind than its record names is refused as
+no worktree of the agent's, nothing read; list-orchestrator's `--json` says each agent's `kind`.
+
 ### What deleting one refuses
 
 Without `--force`, every check runs before anything is touched. A refusal deletes nothing of the
 worktree, names everything it found on one line, each with its remedy, and exits 13:
 
 - **Uncommitted changes.** A modified, staged or untracked file git does not ignore, or a
-  changed submodule. Status runs with `--untracked-files=normal` and
-  `--ignore-submodules=none`, so configuration can hide neither. Status never compares a file
+  changed submodule. Status runs with `--untracked-files=normal` and tells a submodule by its
+  commit (`--ignore-submodules=dirty`, `GitOwnSettings`), so configuration can hide neither, and
+  never asks a submodule's own git about its work tree - which would run its configuration - from
+  there: each checked-out submodule whose repository is among its superproject's modules, which
+  git's own submodule commands write, is asked for its own changes; one whose repository is
+  anywhere else - a `.git` of its own in the work tree, which whatever writes the tree writes - is
+  a change never looked into. Status never compares a file
   marked assume-unchanged or skip-worktree, so those present on disk are compared on a copy of
   the index with the marks cleared, which applies git's own line-ending rules and never touches
   the real index. A skip-worktree file absent from disk, as a sparse checkout leaves it, is not
@@ -829,6 +902,20 @@ history of a repository nested inside one included.
   git could not name that directory, by git's list. A record whose directory is already gone,
   as an interrupted delete or a directory removed by hand leaves it, is cleared once its lock,
   unreferenced commits and submodule repositories are checked, so the name can be used again.
+- An agent's repository of its own (see *Worktrees*) is weighed as a linked worktree is - its
+  changes, the edits status cannot see, its submodules' repositories - but for its commits: those
+  `git rev-list HEAD --all --not --alternate-refs` counts there, made in it and reached by no ref of
+  the main checkout's, refuse it, since its own store goes with it. The refusal names fold-agent
+  for its changes and a fetch into the main checkout for its commits, never a branch or a stash,
+  which would be made in the store being deleted. It has no lock and no record of git's, and git
+  no removal of its own for it: its directory is deleted whole (`WorktreeService.RemoveRepository`),
+  its read-only object files with it and a link in it as a link, and then looked for; a deletion
+  that cannot finish says part of it may be gone and names `--force` to finish it, safe where every
+  check passed. Forced, it is deleted the same way, unchecked.
+- The records of the commit a worktree stood on, `refs/harness/worktree-base/<address>` and
+  `refs/harness/worktree-moving/<address>` (`WorktreeKeepalive`), are forgotten once its directory
+  is gone, by this deletion or before it: left behind, they would keep that commit in the main
+  checkout's store for nothing and answer for a later worktree of the same address.
 
 An interruption stops the command cleanly only before its first destructive step. After that
 the deletion goes on, the command says at once that it is under way, and it waits up to two
@@ -1190,12 +1277,13 @@ the main tree - unless the move being finished removed it, the new name written 
 (`MovingRemoved`: the old names the agent's index no longer holds once the git checking out what the move writes first
 ends, having written it all or stopped part way). git leaves the index and the disk alike after that checkout and after
 a `git rm` of the agent's session; a removal of the move's its record missed - a move killed between git and its
-record - is refused so, costing a refusal, never a file. The record names where the move goes (`Moving`) before
-anything is written; then each
+record - is refused so, costing a refusal, never a file. The main checkout keeps the commit the move goes to alive
+(`refs/harness/worktree-moving/<orchestrator>/<agent>`, exit 20 and nothing changed where it cannot) and the record
+names where the move goes (`Moving`) before anything is written; then each
 path the move takes is asked to hold what was measured there (`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a
 file the agent's session wrote since stops the move, exit 21, before git writes anything, never written over; then the new
 base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
-name the new base: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
+name the new base, and the move's keepalive goes: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
 again - the command its last words name, with every `--merge` and `--settled` the move was given, a merge it wrote
 merged again to the same bytes - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
 base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, naming
@@ -1660,7 +1748,7 @@ pattern is read as one only where the shell that reads it expands it, a PowerShe
 wildcard among them (`CommandAnalysis.HasOpenPattern`); a command that removes or moves a directory
 whole (`CommandAnalysis.RemovalTargets`: `rm -r`, `Remove-Item -Recurse`, `rd /s`, `mv`,
 `Move-Item`, `rsync --delete`, `git clean -dx`) is refused where it holds a tree's `.git`, the state,
-a slot or a Claude Code directory, with no working-directory exception (`AgentPolicy.RemovalRefusal`),
+a slot, a Claude Code directory or a place the user keeps credentials in, with no working-directory exception (`AgentPolicy.RemovalRefusal`),
 a `git clean`'s or stash's pathspecs read as git reads them; a `find` or an `fd` walk is read once
 (`CommandAnalysis.WalkOf`, `FileWalk`: its start points, its depths, `-depth`, and its expression as a
 tree of tests and actions - names, paths and regexes in either case, kinds, emptiness, prunes, fd's
@@ -1887,8 +1975,8 @@ ones that only shape what git prints, `--exec-path`, clone's own `-c` or `--conf
 `HOMEDRIVE`, `HOMEPATH`, `USERPROFILE`) its assignments set, never a word of data that spells one - is the `git config` it is, and still the command it runs,
 each reading met by the rules. A word that names a path is read
 as each candidate it may be (`CommandAnalysis.PathsNamed`) - and a pattern the shell expands is
-refused where it may reach a credential slot or a Claude Code directory or match a directory that
-holds one, a `*`, a `?` or a bracket matching a name that begins with a dot only where its shell
+refused where it may reach a credential slot, a Claude Code directory or a place the user keeps
+credentials in, or match a directory that holds one, a `*`, a `?` or a bracket matching a name that begins with a dot only where its shell
 would (`AgentPolicy.DotNamed`: a segment that begins with a dot; a string any of whose words names
 `dotglob` or `globdots` as bash and zsh read an option's name - split at blanks, `=`, `:` and `,`,
 in any case, its underscores and dashes and its `no` taken off, so `BASHOPTS=dotglob`,
@@ -1960,7 +2048,8 @@ refused on every client; a step's `writes` is the one source that narrows, and t
 are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,
 no web). For Claude Code the policy is rendered, never re-decided, into the launch's settings
 (`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, a read of each
-credential slot and Claude Code directory as a deny rule - which Claude Code applies to its searches
+credential slot and Claude Code directory, and of each place the user keeps credentials in (all a
+directory holds, a file itself), as a deny rule - which Claude Code applies to its searches
 too - and the restriction rules as deny rules, absolute once for each root, but where a rule's
 pattern there would cover a root the launch writes, each path in the POSIX form Claude Code matches
 (`//c/x` for `C:\x`) and a `Write` rule as an `Edit` rule, for Claude Code holds every file tool to
@@ -2019,19 +2108,24 @@ API clients - `claude-api` and `glm` - each run's opened by `AgentToolHost.Open`
 the `claude-code` client the web's through the engine's tool server (`AgentToolServer`, opened by
 `AgentToolHost.Serve` for one launch: the server's tools alone, written to the launch's own
 `AgentCallRecords`, each call answered by `AgentToolRuntime.ServeAsync`, whose end the launch's
-stream tells), and the file tools there too where Claude Code's own process runs outside the isolation
+stream tells), and the file tools there too where Claude Code's own process runs apart from the isolation
 it hands its commands to (`ClaudeCodeTools.FileTools`, `Of` and `Served` given `ownFiles: false`): the
 tools are the one
 table `AgentTools` holds (what a step is offered, what help prints and what runs); each call is
 held to its tool's schema (`JsonSchemaSubset`), each path to the agent's roots by `ConfinedPaths` -
 its spelling, its links followed, a write through no link below its root - before the policy is
 asked; reads and searches go through `AgentFiles` (git's listing in a work tree, a walk elsewhere),
-which reads and writes every file's bytes through the file as it was opened (`AgentFiles.ReadAsync`,
-`AgentFiles.Write`), where the open file stands - `IFileSystem.FinalPathOf`, over `OpenedFiles`:
-`GetFinalPathNameByHandleW` on Windows, `/proc/self/fd` on Linux, libproc's `proc_pidfdinfo` on macOS -
-decided again by the same rule before a byte passes, so a link put in place after the check reaches
-nothing refused (what goes by a path alone - a directory listed, made, moved or deleted, a file moved
-or deleted, the rename that puts a written file in place - still meets one, the known limit),
+which reads every file's bytes through the file as it was opened (`AgentFiles.ReadAsync`), where the
+open file stands - `IFileSystem.FinalPathOf`, over `OpenedFiles`: `GetFinalPathNameByHandleW` on
+Windows, `/proc/self/fd` on Linux, libproc's `proc_pidfdinfo` on macOS - decided again by the same
+rule before a byte passes, the file opened never to wait (`IFileSystem.OpenRead`: on Linux and macOS
+opened non-blocking and refused before a byte unless it is a regular file, so a pipe put there hangs
+nothing) and read to the bound alone; and every write, made directory, move and removal relative to
+its directory held from the writable root it was decided in (`AgentFiles.Write`, `UnfollowedFiles`
+over `IFileSystem.Hold`, `HeldDirectory`), every entry on the way opened as itself, so a link put in
+place after the check, or swapped in while the tool acts, reaches nothing and the call is refused
+naming it (`AgentFiles.Linked`, by `ConfinedPaths.LinksRule`); a directory listed goes by its path,
+so what a link put in place of one leads to is listed by name, never a byte of a file read through it,
 edits through `EditedText` over `EncodedText` (the encoding rule the graph's `CodeFileText` reads
 by too, its lines cut by `CodeFileText.Spans`), a command through `PhaseRunner` as a contained
 phase - its environment `AgentChildEnvironment`'s, every name the configuration appoints and every
@@ -2178,7 +2272,8 @@ and any run handed none - the run's prompt as the task). The continuation record
 the files changed, the last red build or test, the handoff (never cut), the continuation message after an attempt that
 was cut off, and the last iterations word for word from the stored stream of the newest attempt (`Iterations`, each
 message the engine sent the agent in its place, the earlier iterations kept back from the last until the first that
-does not fit) - whatever is cut named with a copy in the agent's `work/continuation/` (`AgentContinuation.CopiesFolder`),
+does not fit) - whatever is cut named with a copy in the step's own `handed/continuation/` (`OrchestratorLayout.HandedDirectory`,
+`AgentContinuation.CopiesFolder`), which the tool alone writes, through no link, and the agent reads as a root of its own,
 the bounds `agentContext.continuation`'s (`AgentContinuationBounds`: recordChars, stepChars, paths, lastIterations,
 iterationChars, each default one constant the help reads). One owner says what an attempt's events are
 (`Agents\AgentAttempt.cs`): every run that names the attempt, from the first of them on - an attempt that went on with
@@ -2320,7 +2415,9 @@ tree the agent touches - its worktree, and always the main checkout, whose run r
 reaches from the worktree - and git's own files beneath both, `AgentPolicyGround.Trees`), each skill its prompt names
 looked up
 again where the step starts (`AgentSkills.Find`, its name by `AgentSkills.NameIn`'s one rule), the folder copied
-whole into `work/<agent>/skills/<name>/` and the block put where the placeholder stood, its `${CLAUDE_SESSION_ID}` the
+whole into the step's own `handed/skills/<name>/` (`OrchestratorLayout.HandedDirectory`, a root the agent reads and the
+tool alone writes, through no link - never the work directory, where the agent's commands write and could plant one)
+and the block put where the placeholder stood, its `${CLAUDE_SESSION_ID}` the
 id the run's first session begins as (`AgentStepRequest.SessionId`), each skill handed recorded on the request, in
 the stream's `sessionStarted` and on the step's record (`FlowStepResult.Skills`, kept once each over the visit's
 attempts as `FlowStepRecord.Skills`, `step.json`'s `skills[]`, and taken up again by a resume) - the engine having filled every other name into the prompt once and handed it as
@@ -2340,24 +2437,66 @@ declared caches. An agent that may run no command - the reporter - needs none (`
 nothing is probed. Otherwise the platform's mechanism, proved once per process (`IIsolationPlatform`), and a profile
 of the ground, the machine read-only: written, the ground's writable roots, what git writes of each of its trees that
 is itself one of them and its repository's top level (`AgentIsolation.GitPlacesAsync`: `rev-parse
---path-format=absolute --git-dir --git-common-dir --git-path hooks --show-toplevel`, git 2.31 or newer, so a leg's
-copy that is no repository of its own writes nothing of the repository above it), by the tree's kind
-(`AgentIsolation.GitWritten`): a linked worktree's own git directory and the common directory's `objects/`, `refs/`,
-`logs/` (made where git has not) and `lfs/` where there is one, never the common directory itself, where a
-`commondir` made would lead every git to another repository's own files, so a shallow repository's fetch, a rewrite
-of `packed-refs` and `git gc` fail there; a main checkout's `.git` whole, for git makes its lock files directly in
-it, which no rule at a path grants one name at a time - so `git add`, commit and fetch write the objects, the index
-and the refs - the launch's own temporary directory under the isolation's own (`IsolationCaches.Root`, then `tmp/`;
+--path-format=absolute --git-dir --git-common-dir --git-path hooks --git-path reftable --show-toplevel`, git 2.31 or
+newer, so a leg's copy that is no repository of its own writes nothing of the repository above it) -
+each tree's own git directory alone (`AgentIsolation.GitWritten`): a main checkout's `.git` whole,
+and an agent's repository's, which is its repository's own common directory, for git makes its lock
+files directly in it, which no rule at a path grants one name at a time, but a main checkout's
+`commondir`, made naming itself - never made where the repository keeps its refs in a reftable, held
+absent instead - and its `worktrees/`, sealed below; a linked worktree's own git
+directory is its directory under the common directory's `worktrees/`, and the common directory
+itself - its `objects/`, `refs/` and `reftable/` wherever the repository keeps them, its `logs/` and
+`lfs/` where there is one - is read-only to the work, so `git add` and fetch fail inside the isolation
+there, a legacy agent tree's and a leg-pinned plain worktree's work among them, and each launch over
+one says so. So `git add`, commit and fetch write the objects, the index and the refs in a main
+checkout and in an agent's repository, while `git worktree add`, `move`, `remove` and
+`prune` and a `git gc` that expires another worktree's reflog fail in a main checkout. The refs so written are those
+of a repository whose git directory the work writes whole, every branch, tag, stash and remote-tracking ref and their
+reflogs; the push step sends the commit the run's
+commit steps recorded, never what the branch names later - the launch's own temporary directory under the isolation's own (`IsolationCaches.Root`, then `tmp/`;
 none where the mechanism gives one, `OwnTemp`) and the declared tool caches (`IsolationCaches.Declared`, each variable
-pointed into `caches/`; a cache is code a later build runs, so the user's own stay read-only; on Linux Playwright's
+pointed into the directory of the child's write scope under `caches/`, `IsolationCaches.Prepared`: one for each set of
+outermost places written and sockets reached, named by their hash, `IsolationCaches.ScopeName`, beside a `.scope`
+record naming them, so a package one child plants is run only by a child that writes everything it writes - never by
+one writing another tree, the main checkout's hooks or reaching the user's SSH agent - and taken away with its record
+once none of its places is left, every directory no record names with it, `IsolationCaches.Sweep`, before each held
+decision; a cache is code a later build runs, so the user's own stay read-only; on Linux Playwright's
 browsers, which the moved `XDG_CACHE_HOME` would hide, named where the user has them, `IsolationCaches.Installed`);
 hidden, every credential slot (`AgentPolicyGround.SlotDirectories`) and every Claude Code directory - one list for a
 launch and an execution alike, `ClaudeCodeDirectories.Of`: `~/.claude`, the tool's own and the one the slot names for
 the claude-code client's logins - with `~/.claude.json` beside `~/.claude`, the shell snapshots Claude Code sources
-read again (`Reopened`); written by nobody, git's code-running files and its pointers to its own directories and to
+read again (`Reopened`); hidden too, every place the user keeps credentials in (`AgentPolicyGround.CredentialPlaces`,
+from the one declared list `UserCredentials.Declared` and `agentPolicy.hiddenPlaces`, which adds and never takes away,
+resolved by `UserCredentials.Of` against the home, `XDG_CONFIG_HOME`, `APPDATA` and each tool's own variable that moves
+its place - `GNUPGHOME`, `DOCKER_CONFIG`, `KUBECONFIG` and their kind - in this process's environment, which every
+child inherits): ssh's directory with its `known_hosts` and `config` read again, for ssh reads them itself to reach a
+host, and AWS's, Azure's, gh's, Kubernetes', Google Cloud's and Docker's logins, `.netrc`, git's credential store,
+GnuPG's private keys and npm's, PyPI's, Cargo's, Maven's and Gradle's credential files whole - each decided by what
+reads it: none is a file a build needs but for a secret it can be handed as a value in the runner's environment,
+and Cargo's and Gradle's homes are moved into the isolation's caches anyway; NuGet's user configuration and Maven's
+`settings.xml` are left out (`UserCredentials.LeftOut`), for every restore and every Maven build reads them for their
+feeds and refuses one it cannot read. A credential place that is not there is made empty only inside a written place,
+as every guarded place is - never in the home, which every child reads alone, so nothing of the user's is changed -
+and one that holds a tree or a written place leaves the launch with no isolation, for hiding it would hide them. The
+words policy holds the same list (`AgentPolicy`'s one list of the places no action reaches: the slots, the Claude
+Code directories and these, each refusal of one read from it): a file tool's read and write in one, a search over one and every command naming
+one or a directory holding one are refused, ssh's own files among them, which inside only ssh reads; written by nobody, git's code-running files and its pointers to its own directories and to
 other content as git names them (the hooks git runs and the common directory's own `hooks/`, which git runs again once
 `core.hooksPath` is gone; the common directory's `config`, `config.worktree`, `info/`, `refs/replace/` and
-`objects/info/`; each linked worktree's `config.worktree`, `commondir` and `gitdir`; a worktree's `.git` file; every
+`objects/info/`; its own `commondir` (`AgentIsolation.CommonDirectoryFile`), made where a main checkout's `.git`
+holds none naming that directory itself (`AgentIsolation.ItsOwnDirectory`, `.`), which git takes as no pointer while
+an empty one it refuses, so the one file of a main checkout's that would lead every git elsewhere is held as every
+other place is - but never made in a repository that keeps its refs in a reftable (`GitPlaces.Directories`' reftable,
+asked of git as the hooks directory is), for any commondir file in a git directory the work writes breaks every commit
+git makes on a branch, whatever it holds, git splitting the repository's refs over two stores the moment it reads one:
+there the path is held absent, its rule denying every command's making a file at it, which macOS's sandbox does by
+denying every write at the path and MXC's container by meeting the path alone, granting it read with nothing there, but
+which bubblewrap cannot - its every rule a mount, skipped at a path that is not there, and a mount made over one
+putting a file of bubblewrap's own there - so over such a repository's main checkout bubblewrap leaves the ground with
+no isolation, the remedy naming the migration to the files format; its `worktrees/`, so a main checkout's work makes no worktree's git directory and writes no other's;
+each linked worktree's `config.worktree`, `commondir` and `gitdir`; every linked worktree's `.git` file, the tree's
+own and each other `git worktree list` names, which a ground writing the directory it stands in - a worktree a person
+or another tool made inside the main checkout - would otherwise point at a repository of its own; every
 git directory's `modules/` whole, the common one's and each linked worktree's, where git keeps a linked worktree's own),
 every configuration file git reads there (`git config --list --show-origin`) and every file one includes, whether its
 condition holds now or not (`GitPlaces.Includes`, `AgentIsolation.IncludeTargets`, an inactive one read with `git
@@ -2369,11 +2508,18 @@ whose holder is written and each writable root itself, which no command renames 
 path, so a directory above a guarded place moved away would take the place out from under its rule and leave its name
 free to make again - a `.git` moved aside and a new one with hooks of the agent's, run by the tool's own git outside.
 Every place is ruled at its real spelling. A place not there inside a written place and under no guarded one is made
-empty first, so no command makes it inside and has it read or run outside later; a state file never is
-(`HarnessLayout.StateFileNames`), for the tool reads one as meaning something, and the words policy alone guards it. A
-launch has no isolation, said, where its places cannot be held: a git that cannot say where a tree keeps its files
-(`AgentIsolation.Unwhole`), a main checkout's `.git` holding a pointer to another repository's own files
-(`AgentIsolation.GitPointers`), which git's answers there would follow, a file git's configuration includes that is
+first - empty, but a `commondir`, made naming its own directory, and one in a repository that keeps its refs in a
+reftable never, its path held absent instead (`IIsolationMechanism.HoldsAnAbsentFile`) - so no command makes it inside
+and has it read or
+run outside later; a state file never is (`HarnessLayout.StateFileNames`), for the tool reads one as meaning
+something, and the words policy alone guards it. A launch has no isolation, said, where its places cannot be held: a
+git that cannot say where a tree keeps its files (`AgentIsolation.Unwhole`) or list its repository's replacements, a
+main checkout's `.git` holding a `commondir` that leads anywhere but to itself (`AgentIsolation.LeadsToItself`, read
+as git reads it, never through a link and never past a line's worth), which git's answers there would follow - a
+`gitdir` there git never follows from a main checkout, so it holds nothing back - a `commondir` there at all, or none
+and the mechanism holds no absent path, in a repository that keeps its refs in a reftable, where any file there breaks
+every commit on a branch and the remedy names its removal or the migration to the files format, a file git's
+configuration includes that is
 not there inside a written place, which a command could make, a link inside a written place on the way to a guarded
 one (`AgentIsolation.LinkOnTheWay`), which a command could replace with one leading elsewhere, or, under a mechanism
 whose rules hold the one spelling
@@ -2386,23 +2532,46 @@ fetch and push fail there, a side-task's git over the main tree and a run's comm
 tree's git directories, a linked worktree's and a main checkout's alike, as git named them before the launch, are
 pinned for every later git of the tool's in it (`GitDirectoryPins`), so neither a `.git` file a command rewrote nor a
 `commondir` a main checkout's `.git` came to hold leads one elsewhere; and every git of the tool's runs with its own
-settings (`GitOwnSettings.Apply`, through `GIT_CONFIG_PARAMETERS` and its own variables, so no argument list changes):
-no file-system monitor (`core.fsmonitor=false`), whose command a repository's configuration names, no hooks but where
-it runs them on purpose (`GitHooks`), no object replaced (`GIT_NO_REPLACE_OBJECTS=1`), with `GIT_DIR`,
-`GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where there is one - the repository's configuration otherwise read
-as git reads it, its filters among it, which is why every configuration file is written by nobody. What the work made
-in the trees' git directories is looked at once it has run under a mechanism, against what was there as the profile
-was built (`IsolationDecision.Afterward`, the held decision's `After`): a pointer made in a common directory or a
-linked worktree's git directory under it, or a replacement a `packed-refs` came to name - which a main checkout's
-`.git`, written whole, could take while its `refs/replace/` is sealed, and the user's own git, an editor or a prompt
-started outside would follow - ends what asked: `AgentRunner` fails the launch, `LegRunService` the leg,
-`CommitStepRunner` and `PushStepRunner` the step after git's own work, each naming it and the remedy.
+settings (`GitOwnSettings.Apply`, through `GIT_CONFIG_PARAMETERS` and its own variables): no file-system monitor
+(`core.fsmonitor=false`), whose command a repository's configuration names; no hooks but where it runs them on purpose
+(`GitHooks`); no recursion into a submodule but for those (`GitOwnSettings.NoRecursion`, `submodule.recurse=false`); no
+object replaced (`GIT_NO_REPLACE_OBJECTS=1`); with `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where
+there is one; and every comparison of a work tree (`GitOwnSettings.Comparisons`: status, diff, diff-files, diff-index)
+given `--ignore-submodules=dirty` on its command line where it names nothing of submodules (`GitOwnSettings.Arguments`,
+which refuses one asking to look into a submodule's work tree) - a submodule told by the commit its entry records
+against its HEAD, never by asking its own git about its work tree, which would run the repository's own configuration,
+its clean filters among it: a repository an agent made in its tree and put in the index is such a submodule, its
+configuration the agent's. A default in the configuration would not hold: a `.gitmodules` file's `ignore`, a file of
+the tree, outranks it. The repository's configuration is otherwise read as git reads it, its filters among it, which is
+why every configuration file is written by nobody. What the work left in the git directories it wrote that no rule
+can hold is looked at once it has run under a mechanism, however it ended, against what was there before it started
+(`IsolationDecision.AfterwardAsync`, the held decision's `After`, over the git directories the ground's written trees
+are granted, each tree's own alone): the state of an
+operation under way (`AgentIsolation.OperationState`: `rebase-merge/`, `rebase-apply/`, `sequencer/`), which no place
+made empty can stand for - git reads an empty one as an operation under way - made or changed in a tree's own git
+directory, each file read for its hash never through a link (`UnfollowedFiles`) and never past 64 MiB, so a `git
+rebase --continue` outside, the user's or an editor's, would run each `exec` line its todo holds; or a replacement made
+or moved in a repository whose refs it wrote, as `git for-each-ref refs/replace/` lists them - loose, in `packed-refs`
+or in a reftable alike, the tool reading no ref file the work wrote, and a ref store that holds git up answered within
+`AgentIsolation.AfterwardLimit` as unread - which every git started outside would read in an object's place. Either
+ends what asked: `AgentRunner` fails the launch, `LegRunService` the leg, `CommitStepRunner` and `PushStepRunner` the
+step after git's own work, each naming it and the remedy - remove the state, never continue or abort it, for an abort
+puts the branch where the state says. A worktree added while the work ran - by the tool beside a step, or by a person -
+is none of it: no ground writes a worktree's git directory but its own. The user's own git, an editor or a prompt
+started outside read the repository as it stands - the refs and objects the work wrote, and a repository it made
+inside its tree, whose configuration git started in that directory runs as any repository's.
 `agentPolicy.isolation` (`AgentIsolationMode`: `required` where nothing is said, any other word than the two a
 problem of the configuration) turns no mechanism into the launch's refusal (`LaunchIsolation.Refusal`: a step ends
 failed, 14; the advisor's advice is not obtained; `run-side-task` exits 14 having started nothing) - every mode but
 `preferred` refuses - or, under `preferred`, its notice (`LaunchIsolation.Notice`), a `Notice` the runner says at the
 launch's start, as it says the one of a mechanism that leaves something reached (`IIsolationMechanism.Leaves`:
-bubblewrap on a kernel with no Landlock scope), from the same base (`IsolationDecision.NoticeSaying`). Every launch's
+bubblewrap on a kernel with no Landlock scope), from the same base (`IsolationDecision.NoticeSaying`); and a launch
+whose ground writes a linked worktree - an agent an earlier version of this tool made - says at its start, the same
+way, that git add and fetch fail inside the isolation there and the remedy, one `Notice` per tree
+(`LaunchIsolation.LegacyWorktrees`, from the held decision's own finding of a written tree whose git directory is not
+its common directory), as a leg whose ground writes one says the same on its line
+(`ExecutionIsolation.LegacyWorktrees`, one line of the leg's ledger as its work starts,
+`LegRunService.RunTakenLegAsync`). Every launch's
 result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s `isolation`, an `AgentIsolationRecord`:
 the mode, and the mechanism with its version, what it leaves reached and what
 its anchors cost, or why there was none), and each side-task turn its own (`SideTaskTurn.Isolation`). The request
@@ -2410,28 +2579,60 @@ carries the launch's isolation (`AgentStepRequest.Isolation`, on to `AgentRun.Is
 - `LaunchIsolation.Processes`, `LaunchProcesses` - so a client is handed nothing it could end, the decision released
 by its asker once the launch has run): the tool runtime starts each `run_command` inside the commands' profile
 (`LaunchIsolation.ForCommands`, through `PhaseRequest.Isolation`). The claude-code client keeps Claude Code's own
-process outside where the mechanism takes a command handed to it (`TakesHandedCommands`: bubblewrap and macOS's
-sandbox): Claude Code reads its login and the key it is handed in its own process, and starts each shell command
+process apart from its commands where the mechanism takes a command handed to it (`TakesHandedCommands`: bubblewrap and
+macOS's sandbox): Claude Code reads its login and the key it is handed in its own process, and starts each shell command
 through its shell prefix (`ClaudeShell`, `CLAUDE_CODE_SHELL_PREFIX` naming this tool and `--isolated-shell`), which
 `Program` dispatches before anything else to `IsolatedShell.Run`, which reads the launch's isolation from the file
 `DSSHARNESS_ISOLATED_SHELL` names (`claude-isolation.json` in the step's directory) and becomes the mechanism with
 `/bin/bash` inside - so no command reaches Claude Code's directories, its login or its environment
 (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` among the controlled variables, a process namespace of the command's own), and a
-login whose token has run out is renewed by Claude Code outside, which writes its directories. Claude Code's own process
-opens no file of the agent's there: Claude Code would open a file by the path the engine decided earlier, outside,
-where a link a command - one left running in the background among them - put on the path in between would reach what
+login whose token has run out is renewed by Claude Code in its own process, which writes its directories. Where the
+mechanism starts again inside a layer of its own (`IIsolationMechanism.Unnested` null: bubblewrap, where the probe
+started it inside an outer layer of its own around a shell that ended 0), Claude Code's own process runs in an outer
+layer (`LaunchIsolation.ForClaudeCode`, the profile `AgentIsolation.ClaudeCodeOf` builds): the commands' profile, its
+slots still hidden and git's code-running files, the tool's state and the launch's directory still sealed, but Claude
+Code's own directories and `~/.claude.json` written - Claude Code 2.1.101 fails every shell command with `EROFS` on
+`<config>/session-env` without them, and ends at once, saying nothing, with no `.claude.json` it can write - and the
+step's `claude-receipts` and `claude-tmp` (`ClaudeShell.PlacesIn`), its rules laid parent first
+(`IsolationProfiles.Ordered`); marked `IsolationProfile.Outer`, for which bubblewrap leaves out `--disable-userns`, so
+the isolated shell inside makes each command's layer in a user namespace of its own, where the outer layer's mounts are
+locked and none is undone - no hidden place shown, no read-only one written. A command Claude Code ran without its
+prefix is then held by the outer layer, though it reads Claude Code's login and environment and could write its
+directories; and the outer layer's own process namespace ends whatever the launch left running once bubblewrap's first
+process inside is ended. Where Claude Code never ran, the client makes its directory and the file it keeps its state
+in (`ClaudeTranscripts.StateFile`, holding `{}`) before the launch, for inside it could make neither. Where the
+mechanism starts none inside (`Unnested`: macOS's sandbox, `SandboxExec.NoSandboxInside`; bubblewrap under an AppArmor
+profile that denies its children every capability, as Ubuntu's `bwrap-userns-restrict` does, which the probe's trial
+finds), Claude Code's own process runs outside every layer, the launch says so as it starts
+(`LaunchIsolation.ClaudeCodeOutside`, `LaunchProcesses.ClaudeCodeOutside`), and a command it ran without its prefix
+runs outside with the user's rights. In or out of an outer layer, Claude Code's own process opens no file of the
+agent's: it would open a file by the path the engine decided earlier, apart from the commands' layer, where a link a command - one left running in the background among them - put on the path in between would reach what
 the isolation keeps from every command; so its file tools are given no such launch (`ClaudeCodeTools.Of` with
 `ownFiles: false`, `--tools` its shell alone), and the engine's tool server serves the runtime's in their place
-(`ClaudeCodeTools.FileTools`, `Served`), each file opened by `AgentFiles` and decided again by where the system names
-the open file. Every shell call the engine allows is given back with a receipt at its command's head
+(`ClaudeCodeTools.FileTools`, `Served`), each file read by `AgentFiles` and decided again by where the system names
+the open file, and each written, made, moved or deleted relative to its directory held from the writable root it was
+decided in (`AgentFiles.Write`, `UnfollowedFiles`). Every shell call the engine allows is given back with a receipt at its command's head
 (`IsolatedShell.Marked`: `: dssharness-receipt <32 hexadecimal digits>; <command>`, the shell's no-op, a new one from
 the system's random source for each call), which `IsolatedShell.Prepared` reads off the line it is handed
 (`ReceiptOf`) and writes, new and never through a link, in the step's `claude-receipts` directory - named in the
-isolation file's handing (`IsolatedShellHanding`), where no command writes - before the shell runs; a call whose result
-comes back with no receipt of its command (`HeldToItsReceipt`) ran without being handed over, by a Claude Code that
-skipped its prefix, and ends the launch failed at once, killed, a call run in the background - whose result comes back
-before its command is handed over - awaited for `ClaudeCodeClient.ReceiptBound` (20 s) and at the latest by its turn's
-end. Claude Code's own temporary directory (`CLAUDE_CODE_TMPDIR`) is the step's `claude-tmp`, beside the receipts and
+isolation file's handing (`IsolatedShellHanding`), where no command handed over writes - before the shell runs; the shell
+is then given the line without that mark (`IsolatedShell.Unmarked`), and the variables that hand commands over
+(`IsolatedShellHanding.Variables`, the isolation file's among them) are taken from the C library's own environment
+before the mechanism is become (`Containment.Become`'s `unsetenv`), so neither the command's environment and
+`$BASH_EXECUTION_STRING` nor the mechanism's own arguments and environment, which a process inside reads at
+`/proc/1`, name its receipt or the file that says where receipts are written. A call whose result comes back with no
+receipt of its command (`HeldToItsReceipt`) ran without being handed over, by a Claude Code that skipped its prefix, and
+ends the launch failed at once, killed; a call run in the background - whose result comes back before its command is
+handed over - is awaited for `ClaudeCodeClient.ReceiptBound` (20 s), however the launch goes on; a call Claude Code says
+did not run is held to none. However the launch's loop ends (`HeldToTheirReceiptsAsync`) - a turn's result, Claude
+Code gone, its output cut - before anything of it is ended, each receipt still awaited and each of a call allowed whose
+result never came is looked for again until it is there or `ReceiptBound` has passed, and one missing ends the launch
+failed in place of the ending it had; where the launch was stopped or ended at once nothing is waited for, and each
+missing receipt is said once it has gone (`SayUnreceiptedAsync`). A receipt proves only that Claude Code handed the
+command over, and only once it has run - it stops nothing: a command run without the prefix runs where Claude Code's own
+process runs, which writes the receipts, so it could write one of its own - the outer layer, never the receipt, is what
+holds it, and on macOS, or where bubblewrap starts none inside itself, nothing does. Claude Code's own temporary
+directory (`CLAUDE_CODE_TMPDIR`) is the step's `claude-tmp`, beside the receipts and
 equally beyond every command's writes, so nothing Claude Code writes or reads there in its own process - a task's
 output, a prompt's file - is a command's to replace with a link; each command ends by writing the working directory it
 ended in to a file there (`pwd -P >| <claude-tmp>/claude-<hex>-cwd`, the form Claude Code ends every handed command
@@ -2453,12 +2654,21 @@ the path the engine decided, the words policy alone between them. Claude
 Code's own Bash sandbox is not used: the tool's own mechanism holds every command, one mechanism for every client, and
 nothing rests on how that sandbox treats the network in print mode or weighs its own write rules against the profile -
 and the launch's settings turn it off (`ClaudeSettings.Render`'s `isolated`, `"sandbox": {"enabled": false}`) over any
-the user's own settings ask for, for no mechanism of the tool's nests another (macOS no sandbox inside a sandbox,
-bubblewrap no namespace inside its own) and each command would fail in it; on Windows Claude Code has none of its own.
-The machine stays readable as the user reads it: their `~/.ssh`, every credential outside the slots, and on macOS the
-login keychain, reached through the services that trust certificates, which are the keychain's; the network is theirs;
-and what no rule at a path reaches - a hard link made before the launch, another path bound to the same files - is
-reached. Inside the isolation a verb of this tool's that reads a slot or writes state or its install would fail part
+the user's own settings ask for, for no command's layer of the tool's nests another (macOS no sandbox inside a sandbox,
+bubblewrap no namespace inside a command's own) and each command would fail in it; on Windows Claude Code has none of
+its own.
+The machine stays readable as the user reads it but the hidden places - a credential kept anywhere else among it - and
+the system's own credential stores are services, not places: on macOS the login keychain is reached through the
+services that trust certificates, which are the keychain's; on Windows MXC's container shows the Credential Manager
+empty; on Linux the keyring sits behind the user's message bus, hidden with the runtime directory. Under MXC, which
+grants nothing beneath a denial, a hidden directory is hidden whole - `Reopened` is never handed to the container, so
+ssh's `known_hosts` and `config` are not read there. The network is theirs; and what no rule at a path reaches - a
+hard link made before the launch, another path bound to the same files - is reached; inside, no hard link can be made
+from the machine's files into a written place: under bubblewrap each place is a mount of its own and `link(2)` fails
+across mounts (`EXDEV`), macOS's sandbox denies every operation it does not allow and no rule of the profile's allows
+one, and MXC's container grants the machine read alone, which a hard link
+needs written - each held by a canary in its mechanism's real suite (`BubblewrapTests`, `SandboxExecTests`,
+`MxcProcessContainerTests`), whose failure would name the link allowed. Inside the isolation a verb of this tool's that reads a slot or writes state or its install would fail part
 way, so the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a
 step and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's
 own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one or the other.
@@ -2466,28 +2676,75 @@ own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one
 The same owner decides the isolation of the tool's own executions of what the agents wrote
 (`IAgentIsolation.ForExecutionAsync`, an `ExecutionIsolation`, from an `ExecutionGround` that `ExecutionGrounds` alone
 builds, `IsolationGround.Of` making the builder's ground of it): the profile a launch's is - the machine read-only,
-the slots and every Claude Code directory a launch hides (`ClaudeCodeDirectories.Of`) hidden, git's code-running files
+the slots, every Claude Code directory a launch hides (`ClaudeCodeDirectories.Of`) and every place the user keeps
+credentials in (`UserCredentials.Of`, asked of the tool's own home and environment) hidden, git's code-running files
 of each tree, the configuration directory and the tool's state under each written by nobody, the ground's own places,
 a temporary directory of its own and the declared tool caches written - a state place the execution writes whole, a
 sweep's workers' slot, left unsealed, for the profile keeps a place both sealed and written sealed. A hooks' ground
 alone reaches a socket outside, and only where git's own work needs it (`ExecutionGround.ReachesSshAgent`, set by
 `ExecutionGrounds.OfHooks` from what its caller asked of `GitSsh`: a push whose remote's push address is ssh's,
 `GitSsh.PushesOverSshAsync`, a commit the repository signs with an ssh key, `GitSsh.SignsCommitsWithSshAsync`): the
-user's SSH agent's (`SSH_AUTH_SOCK`, taken at its real path where it is there), bound alone under bubblewrap - inside
-the hidden runtime directory or the launch's own `/tmp` among them - and reached alone under macOS's sandbox
-(`IsolationProfile.Sockets`), so such a push or commit signs with the user's agent and nothing else outside is
-reached, and every other commit's, push's and leg's work reaches none; MXC is handed none. A commit signed with gpg or
-x509 reaches no gpg agent hidden with the runtime directory, and fails there. Its refusal, notice and record are a
+user's SSH agent's (`SSH_AUTH_SOCK`, taken at its real path where it is there, and named to the child at that path in
+the profile's `Environment`, for the name the user gives it may be a link inside ssh's hidden directory),
+bound alone under bubblewrap - inside the hidden runtime directory, ssh's hidden directory or the launch's own `/tmp`
+among them - and reached alone under macOS's sandbox
+(`IsolationProfile.Sockets`), so such a push or commit signs with the user's agent - their keys under `~/.ssh` are
+hidden - and nothing else outside is
+reached, and every other commit's, push's and leg's work reaches none; MXC is handed none, and as it hides `~/.ssh` whole
+a push over ssh inside it finds neither key nor `known_hosts` and fails, where a push over https is handed its
+credential as values. A commit signed with gpg or
+x509 reaches no gpg agent hidden with the runtime directory, and fails there; one signed with an ssh key whose
+`user.signingKey` names a file under `~/.ssh` reads no such file, and fails too, where `key::` and the public key's line
+sign through the agent. Its refusal, notice and record are a
 launch's, from one base (`IsolationDecision`),
 with words of their own. A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here
 under `required` ends the step 14, nothing run - and hands the leg service an `ILegIsolation`
 (`LegRunRequest.Isolation`, carried by each leg command's request) that asks it again for each leg this machine runs,
-of its own ground (`ExecutionGrounds.OfLeg`: the tree it works in, the run's records, and what
-`LegStepRunner.WritesBeside` names - a sweep's workers); `LegRunService` skips a leg whose own is refused
-(`skipped-unavailable`), says the notice on its line, and holds the rest for its work alone (`PhaseIsolation`, an
-ambient value each leg's flow holds), which `PhaseRunner` gives every phase that names none of its own and is not left
-running - a set-up's lines, run around the work, are never inside it. A leg another machine runs is that machine's,
-outside this one's isolation: the request never sends it. The step answers `isolation`
+of its own ground (`ExecutionGrounds.OfLeg`: the tree it works in, what `LegStepRunner.WritesBeside` names - a
+sweep's workers - and the build directory of the leg's run of each runner action its work runs, its runner's and its
+run checks' runners', under the sealed configuration directory, `LegWorkload.WritesIn`, which `LegRunService` hands
+`ILegIsolation.ForLegAsync` - never the run's records, every one of which the tool writes itself from what each phase
+prints, nor the configuration around those build directories);
+`LegRunService` skips a leg whose own is refused (`skipped-unavailable`), says the notice on its line, and holds the
+rest for its work alone (`PhaseIsolation`, an ambient value each leg's flow holds), which `PhaseRunner` gives every
+phase that names none of its own and is not left running - a set-up's lines, run around the work, are never inside
+it: under `required` (`SetUpConfinement`) each runs from an empty directory of the execution's own outside every tree
+(`ExecutionIsolation.Outside`, `outside/<id>` under the isolation's own beside `caches/` and `tmp/`, made with the
+held decision and removed with it), so a program that finds its project where it runs or above it finds none of the
+agents', and `LegSetUps` skips the leg before any set-up is held where a line, read by the policy's own reader
+(`CommandAnalysis.Commands`, every command it runs, `CommandAnalysis.PathsNamed` with each part of a `source:target`
+or a search path, a home at a word's start expanded by `AgentPolicy.HomeExpanded`, each against the directory it runs
+from and every whole directory an `AgentPolicy.Movers` command moves to), or a value of the leg's environment, names a
+place in the leg's tree, the run's or the main checkout, or a directory holding one, as spelt or as its links lead;
+names a place by an expansion its shell makes (`CommandAnalysis.Expansion`); moves to a directory that is no whole
+path; or cannot be read whole. A line that fails there says where it ran and that nothing of the tree is found there,
+with the remedy. A leg another machine runs is that machine's, outside this one's isolation: the request never
+sends it, but a leg placed in a WSL distribution, which reaches this machine's drives under `/mnt`, is decided there
+(`ILegIsolation.ForDistribution`, `ExecutionIsolation.InDistribution`): skipped under `required`, run saying so under
+`preferred`. An ssh host is taken to be another machine that reaches none of this one's files and is not decided: one
+that is this machine, or a WSL distribution, a virtual machine or a container reached over ssh that shares its drives,
+cannot be told from another by its name or its address - ssh's configuration (`HostName`, `ProxyJump`, `ProxyCommand`)
+may point a name anywhere, a loopback port may forward into a distribution, a virtual machine or a container, and a
+LAN address may be a virtual machine's mounting this machine's drives - so no test of one would hold, and a check that
+held for some would read as a guarantee for all; help says to name no such host where the agents' work must be held.
+What the tool reads out of, or writes into, a place such work writes - `RunnerRunService`'s step directories, made
+through `UnfollowedFiles.CreateDirectory`, a link where one goes failing the leg before its step runs, and its kept
+outputs, `KeptOnFailure`'s evidence, `WorkerSite`'s sites a sweep mutates and puts back in a worker, `LocalSyncTransport`'s
+every read, write, removal, listing and emptied directory in a copy - and the engine's own over an agent's places
+(`AgentEvidence`, `AgentFold`'s fold and hand-over, `AgentContinuation`'s and `AgentSkills`' copies, the tool runtime's
+writes) goes through `UnfollowedFiles`, over the one owner of a file operation relative to a held directory
+(`HeldDirectory`, reached through `IFileSystem.Hold`): the place's root opened as it is, then each name below it opened
+as itself relative to the directory before it - `openat` with `O_NOFOLLOW | O_DIRECTORY` and the other `*at` calls on
+Linux and macOS (`UnixHeld`), `NtCreateFile` relative to the parent's handle with `FILE_OPEN_REPARSE_POINT` and the
+entry's reparse tag on Windows (`WindowsHeld`) - so a link on the way, or one swapped in while the tool acts, is
+refused naming it (`LinkOnTheWayException`), and a link at the entry's own place is read as nothing, replaced or
+removed as itself. A write is a file made new in the held directory, then renamed over the one there, keeping its mode;
+a directory removed whole is emptied entry by entry relative to each held directory, a link among them removed as the
+link (every recursive removal the tool makes, `IFileSystem.DeleteDirectory` among them). A pull alone follows a link
+along the path it names, as it is spelt, and refuses one that leads into a place the isolation hides from every
+command, decided by where what it opened stands (`ISyncTransport.PullFileAsync`, `ListFilesAsync` given the hidden
+places of `IAgentIsolation.Hidden`, the one list the profiles hide, `IsolationHidden`); a host over ssh decides it
+against its own (`SyncServe.Pull`, `SyncServe.List`). The step answers `isolation`
 (`AgentIsolationRecord.ToOutput`, in `WorkflowStepTypes`' output of each leg step). The tool's own git runs none of
 the repository's hooks (`GitHooks`: every command `GitClient` runs is given `core.hooksPath` at the null device,
 `/dev/null`, `\\.\NUL` on Windows, through `GitOwnSettings.Apply` with the tool's other settings, but the subcommands
@@ -2645,8 +2902,8 @@ is made, so `AgentService.CreateAsync` makes an agent in a directory that holds 
 program a launch starts is found ready where the step starts (`ClaudeCodeUpdateService.ReadyAsync`, wired into the
 reason step runner, its answer carrying the program and the version it answered; a step's mask holding every form of
 each web-search key it was given, built of `Runners.ActionValues`); and the agent's scratch is the run's own
-`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), where the child is started and the continuation's copies and
-skills are put.
+`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), where the child is started; the continuation's copies and the
+skills are put in the step's own `handed/` (`OrchestratorLayout.HandedDirectory`), which no command writes.
 The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
 amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
 person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: its entries `u<n>` by order taken, cause
@@ -2824,8 +3081,11 @@ branch the run started on (`FlowRunPlace.OffItsBranch`, over `FlowRunContext.Bra
 and the pull request apply), every fold upstream settled (`FoldOwed.Unsettled`), an empty index, each path's digest and
 no path to stage the index marks assume-unchanged or skip-worktree checked before anything is
 staged; the staged set written to the ledger (`FlowCommitEntry`) before `IGitPublisher` stages it by explicit path and
-commits once, then held to what the commit changes against its parent - one that took more, or left a path of the set
-out, is left for a person and kept beside the set (`FlowCommitStray`) - and marked committed in it and in each fold path
+commits once, then held over the commit the branch named before it: its parents, as its own object names them
+(`IGitClient.ParentsOfAsync`, `git cat-file commit`, which no graft or shallow boundary stands in for), that commit
+alone - a hook could move the branch to a commit of its own, standing on one that carries anything - and what it
+changes against that commit the set alone; one that stands elsewhere, took more, or left a path of the set out, is
+left for a person and kept beside the set (`FlowCommitStray`, where it took more or less) - and marked committed in it and in each fold path
 it took (`FlowFoldPath.Committed`); a path git ignores marked `Ignored` and answered under `ignored`
 (`FoldLedger.IgnoredOf`); and a set an attempt before left staged settled first, committed only where the tree holds
 what it staged. Whether HEAD holds a fold's path as the tree does is one answer, `FoldLedger.DifferingAsync` - the blob
@@ -2843,7 +3103,10 @@ refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targe
 `OrchestrationRules.AgentNameOrder`, each claimed on its own tree (`FlowClaims.Of`), retried by its own count and ended
 on its own. `PushStepRunner` and `PullRequestStepRunner` read the main checkout as a run's start does (`FlowCheckout`),
 each refused where it is not on the run's branch (`FlowRunPlace.OffItsBranch`):
-the push sends HEAD to its branch on the step's remote, else `FlowCheckout.Remote` - one, which the definition's check
+the push sends the commit the run's commit steps recorded last in its ledger (`OrchestrationStore.ReadFolds`, the last
+`FlowCommitEntry.Committed` entry's `Sha`), else the one the run started on (`FlowRunPlace.StartCommit`) - never what
+HEAD names by then, which a hook or a build working in the main checkout's git directory, written whole, could have
+moved - to the main checkout's branch on the step's remote, else `FlowCheckout.Remote` - one, which the definition's check
 holds every push step that names a remote to - through `IGitPublisher.PushAsync` -
 `<sha>:refs/heads/<branch>` with `--porcelain`, never forced, its line read for whether the branch moved; the pull
 request is found - among those gh lists from the branch's name, never one from another repository (`isCrossRepository`)
@@ -3123,14 +3386,14 @@ ground (`SideTaskPolicy`) - no restriction list, no allow list of pages, all fou
 main checkout the writable root, the worktree rules and the protected paths off, this tool's own
 verbs open to it as the person's own session's are, but those that read a credential slot or write
 its state (`AgentPolicy.SlotOrStateVerbs`) - with the built-in refusals kept (root
-actions, every credential slot of the main checkout and every Claude Code directory its clients
-use, to its file tools and to every path a word of its commands names (`CommandAnalysis.PathsNamed`),
+actions, every credential slot of the main checkout, every Claude Code directory its clients
+use and every place the user keeps credentials in (`AgentPolicyGround.CredentialPlaces`), to its file tools and to every path a word of its commands names (`CommandAnalysis.PathsNamed`),
 a directory that holds one given whole to a program that may read it among them but the main tree
 it works in and those above it - a command over that tree whole, `.` or no path, is not told from
 one over its sources and reaches the slots' files: the policy decides what a command names, it is
 not a sandbox - `Write(.git/**)` and a command's write into `.git`, a removal or a move of a
-directory that holds the main tree's `.git`, the state, a slot or a Claude Code directory, the main
-tree itself among them
+directory that holds the main tree's `.git`, the state, a slot, a Claude Code directory or a place
+the user keeps credentials in, the main tree itself among them
 (`AgentPolicy.RemovalRefusal`), the tool's own state - each state path under the main tree,
 `HarnessLayout.StatePathsUnder`, never the tree itself - the commands that print a credential, a
 git or gh command called by a name none of its own commands is, and `run-side-task` itself,
@@ -3595,7 +3858,8 @@ one at a time, writes a node's lines through `EditedText.ReplaceLines` only wher
 handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. Every
 file `body` reads and `edit` writes is reached through the `ConfinedPaths` the tool is handed (`ConfinedPaths.Within` the
 tree where query-codebase-graph runs it), which resolves each link, so a link out of the tree is neither read nor written
-through - and read and written through `AgentFiles`, where the open file stands decided again by it. The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
+through - and read through `AgentFiles`, where the open file stands decided again by it, and written relative to its
+directory held from the root it was decided in (`AgentFiles.Write`). The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
 it needs, is a usage line (`CodebaseGraphTool.Misused`). No step is given the tool: the tool
 runtime's table does not hold it. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
@@ -5747,11 +6011,13 @@ directory here cannot drift apart.
   adopt list — would quietly delete the rest with nobody asked at all. So a stopped takeover is its
   own state: it still needs `--adopt <host>`, and its refusal says plainly that what the earlier run
   removed is not in the list.
-- **A link the copy holds is named too.** A link sits in no manifest — the walk refuses to follow
-  one — so a file written at its name replaces it and reads as an ordinary write, and everything
-  behind a linked directory is outside any list a plan can build. Reported rather than guarded
-  against: a build directory pointed at another volume is ordinary, and refusing to write through
-  one would refuse `--pull build/...` — a path the reader named, inside the tree they named.
+- **A link the copy holds is named too, and never gone through.** A link sits in no manifest — the
+  walk refuses to follow one — so a file written at its name replaces it, and everything behind a
+  linked directory is outside any list a plan can build. A copy is a place a leg's work writes, and a
+  link there says nothing of what anybody meant, so no read, write, removal or listing of a sync goes
+  through one below the copy's root (`UnfollowedFiles`): each is refused naming the link, and a
+  directory reached through one is never emptied. A `--pull` alone follows a link along the path it
+  names, as it is spelt, and never into a place the isolation hides from every command.
 - **`--dry-run` shows the plan, and exits as the sync would.** For a directory the tool did not
   create, for one whose deletions are over the bound, and for a worktree's copy another worktree
   of the same name still holds, the dry run lists what the sync would do - the bound's own message
@@ -5939,7 +6205,11 @@ directory here cannot drift apart.
   the host's tree for them. A path ending with `/` names a directory instead: the host that holds it
   lists every file below it with its size (`ISyncTransport.ListFilesAsync`, served as `sync-serve
   list`), never following a link below it, and each file then crosses as a file named does, in a
-  request of its own. The side that holds the directory bounds it before a file of it is read - 256
+  request of its own (`ISyncTransport.PullFileAsync`, served as `sync-serve pull`). A link along the
+  path named - to a file or a directory - is followed as it is spelt, a build directory pointed at
+  another volume being ordinary, but a pull that leads into a place the isolation hides from every
+  command - decided by where what it opened stands, as the system names it - fails naming that place,
+  nothing read; on a host the places are the host's own. The side that holds the directory bounds it before a file of it is read - 256
   files, 1 GiB together, no file past what one request carries - and one that is not there, is a
   file, or holds no file fails the pull by name (`SyncService.ListedForPullAsync`), every directory
   before any file has crossed. A directory that cannot be read where it is fails the pull by name

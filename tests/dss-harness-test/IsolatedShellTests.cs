@@ -32,11 +32,12 @@ public sealed class IsolatedShellTests
             Sockets = ["/tmp/ssh-x/agent.1"],
         };
 
-        var handing = new IsolatedShellHanding("/r/.orchestrators/r1/s1/claude-receipts", "/r/.orchestrators/r1/s1/claude-tmp");
+        var handing = new IsolatedShellHanding("/r/.orchestrators/r1/s1/claude-receipts", "/r/.orchestrators/r1/s1/claude-tmp") { Variables = ["CLAUDE_CODE_SHELL_PREFIX", IsolatedShell.FileVariable] };
         var (read, handed, problem) = IsolatedShell.Read(IsolatedShell.Written(new ProcessIsolation(mechanism, profile), handing));
 
         Assert.Null(problem);
-        Assert.Equal(handing, handed);
+        Assert.Equal((handing.Receipts, handing.ProgramTemp), (handed!.Receipts, handed.ProgramTemp));
+        Assert.Equal(handing.Variables, handed.Variables);
         Assert.Null(IsolatedShell.Read(IsolatedShell.Written(new ProcessIsolation(mechanism, profile))).Handing);
 
         var bubblewrap = Assert.IsType<Bubblewrap>(read!.Mechanism);
@@ -156,6 +157,24 @@ public sealed class IsolatedShellTests
         Assert.Equal(receipt, IsolatedShell.ReceiptOf(Line(marked, "/t/claude-1-cwd")));
         Assert.Null(IsolatedShell.ReceiptOf(Line("echo hi", "/t/claude-1-cwd")));
         Assert.Throws<ArgumentException>(() => IsolatedShell.Marked("echo hi", "ABC"));
+    }
+
+    /// <summary>
+    /// A command is run without the mark of its receipt - the first, where the line quotes it, and the one blank after it -
+    /// so it finds its receipt in nothing it was started with; a receipt the command itself spells later stays as written,
+    /// and a line with no mark is run as it is.
+    /// </summary>
+    [Fact]
+    public void ACommand_IsRunWithoutTheMarkOfItsReceipt()
+    {
+        var receipt = IsolatedShell.NewReceipt();
+        var other = IsolatedShell.NewReceipt();
+
+        Assert.Equal(
+            Line($"echo ': dssharness-receipt {other};'", "/t/claude-1-cwd"),
+            IsolatedShell.Unmarked(Line(IsolatedShell.Marked($"echo ': dssharness-receipt {other};'", receipt), "/t/claude-1-cwd")));
+        Assert.Equal("echo hi", IsolatedShell.Unmarked(IsolatedShell.Marked("echo hi", receipt)));
+        Assert.Equal(Line("echo hi", "/t/claude-1-cwd"), IsolatedShell.Unmarked(Line("echo hi", "/t/claude-1-cwd")));
     }
 
     /// <summary>

@@ -93,7 +93,7 @@ public interface IRepositoryTrees
 {
     /// <summary>
     /// The trees of <paramref name="context"/>'s repository on this machine: where this machine holds the repository, the
-    /// main checkout and every worktree git records; on a host running legs another machine sent it, the main checkout's
+    /// main checkout, every worktree git records and every agent's repository below the worktrees root; on a host running legs another machine sent it, the main checkout's
     /// copy, where the configuration says this host keeps it, and each worktree's copy beside it
     /// (<see cref="HostCopies.KeptAs"/>).
     /// </summary>
@@ -121,8 +121,9 @@ public interface IRepositoryTrees
 /// <remarks>
 /// A consumer's leg was placed on a host whose disk could not hold its build, filled the disk and died, with two other legs
 /// building there: neither its own tree's copy nor the main checkout's had built its variant on that host, though three
-/// worktrees' copies beside them had, each recording about 11.4 GiB. Nothing is walked: each list is git's record, a look
-/// at the directory a host keeps its copies in, or this machine's record of the copies it made.
+/// worktrees' copies beside them had, each recording about 11.4 GiB. Nothing is walked deeper than an agent's repository
+/// sits: each list is git's record, a look two directories down the worktrees root, a look at the directory a host keeps
+/// its copies in, or this machine's record of the copies it made.
 /// </remarks>
 /// <param name="gitClient">Reads git's record of the worktrees.</param>
 /// <param name="localTransport">Finds the worktrees' copies a host keeps beside its main copy.</param>
@@ -170,18 +171,20 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
         }
 
         var mainCheckout = new RepositoryTree(context.Layout.MainCheckoutRoot, RepositoryTree.MainCheckout);
+        var worktreesDirectory = context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
         IReadOnlyList<GitWorktree> listed;
+        IReadOnlyList<AgentRepositoryFound> agents;
 
         try
         {
             listed = await _gitClient.ListWorktreesAsync(context.Layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
+            agents = await new AgentRepositories(_gitClient, _fileSystem, _platform).ListUnderAsync(context.Layout.MainCheckoutRoot, worktreesDirectory, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
             return new RepositoryTreesFound([mainCheckout], ex.Message.TrimEnd('.'));
         }
 
-        var worktreesDirectory = context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
         var comparison = _platform.PathComparison;
 
         // A worktree under the root is spelt as its address puts it there, as a leg naming it spells its tree, not as git
@@ -192,6 +195,7 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
             .Select(path => new RepositoryTree(
                 HostCopies.AddressOf(worktreesDirectory, path, comparison)?.PathUnder(worktreesDirectory) ?? path,
                 RepositoryTree.WorktreeAt(worktreesDirectory, path, comparison)))
+            .Concat(agents.Select(agent => new RepositoryTree(agent.Address.PathUnder(worktreesDirectory), RepositoryTree.Worktree(agent.Address.CopyName))))
             .Prepend(mainCheckout)
             .ToList();
 

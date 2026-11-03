@@ -155,6 +155,7 @@ public sealed class AdvisorRunner(
             workspace,
             webSearchGiven: false,
             launch.ClaudeDirectories(context.Config, context.Layout),
+            launch.CredentialPlaces(context.Config),
             readsOnly: true);
 
         // The advice's agent may run commands that only read: where agentPolicy.isolation is required and this machine has

@@ -444,6 +444,16 @@ public interface IGitClient
     Task<string?> ResolveCommitAsync(string directory, string reference, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The parents <paramref name="commit"/>'s own object names, in its order - none for a root commit - as the object
+    /// holds them: no graft, no shallow boundary and no replacement stands in their place.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="commit">A commit id, as <see cref="ResolveCommitAsync"/> returns.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not read the commit: one this repository does not hold, for one.</exception>
+    Task<IReadOnlyList<string>> ParentsOfAsync(string directory, string commit, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Where the history of <paramref name="first"/> parts from that of <paramref name="others"/>: the full id, as
     /// <see cref="ResolveCommitAsync"/> returns one, of the best common ancestor <c>git merge-base</c> names - which is
     /// <paramref name="first"/> itself where it is an ancestor of them - or <see langword="null"/> where they share no

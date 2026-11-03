@@ -1466,7 +1466,7 @@ public sealed class SyncServiceTests
             await File.WriteAllTextAsync(produced, "measured\n", cancellationToken);
 
             var brought = await service.PullAsync(
-                SyncKit.Transport(harness), copy, landing, ["out/report.txt"], cancellationToken);
+                SyncKit.Transport(harness), copy, landing, ["out/report.txt"], [], cancellationToken);
 
             Assert.Equal("out/report.txt", Assert.Single(brought.Files));
             Assert.Empty(brought.Links);
@@ -1504,7 +1504,7 @@ public sealed class SyncServiceTests
             TestLinks.DirectoryLink(Path.Combine(copy, "out", "linked"), elsewhere.Path);
 
             var brought = await service.PullAsync(
-                SyncKit.Transport(harness), copy, landing, ["beside.txt", "out/", "out/report.txt"], cancellationToken);
+                SyncKit.Transport(harness), copy, landing, ["beside.txt", "out/", "out/report.txt"], [], cancellationToken);
 
             Assert.Equal(["beside.txt", "out/deep/tool.bin", "out/report.txt"], brought.Files);
             Assert.Equal(["out/linked/"], brought.Links);
@@ -1550,7 +1550,7 @@ public sealed class SyncServiceTests
             }
 
             var failure = await Assert.ThrowsAsync<HarnessException>(() => service.PullAsync(
-                SyncKit.Transport(harness), copy, landing, ["beside.txt", path], cancellationToken));
+                SyncKit.Transport(harness), copy, landing, ["beside.txt", path], [], cancellationToken));
 
             Assert.Equal(exit, failure.ExitCode);
             Assert.StartsWith(starts, failure.Message, StringComparison.Ordinal);
@@ -1561,6 +1561,44 @@ public sealed class SyncServiceTests
         {
             SyncKit.DeleteIfPresent(copy);
         }
+    }
+
+    /// <summary>
+    /// A link a copy holds - one a leg's work could have put there, leading to a place hidden from that work - is never
+    /// gone through: a file read through it, a directory listed through it, a file written or removed through it and a
+    /// directory emptied through it are each refused or passed by, and what it leads to is neither carried back nor touched.
+    /// </summary>
+    [Fact]
+    public async Task ALinkACopyHolds_IsNeverGoneThrough_ByARead_AListing_AWriteOrARemoval()
+    {
+        using var copy = new TempDirectory();
+        using var hidden = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var transport = SyncKit.Transport(new HarnessFactory());
+        hidden.WriteFile("key.txt", "a credential");
+        Directory.CreateDirectory(hidden.Combine("empty"));
+
+        if (!TryLink(copy.Combine("out"), hidden.Path))
+        {
+            Assert.Skip("Creating a link needs a privilege this machine did not grant.");
+        }
+
+        var read = await Assert.ThrowsAsync<HarnessException>(() => transport.ReadFileAsync(copy.Path, "out/key.txt", cancellationToken));
+        var listed = await Assert.ThrowsAsync<HarnessException>(() => transport.ListFilesAsync(copy.Path, "out", null, cancellationToken));
+        var written = await Assert.ThrowsAsync<HarnessException>(() => transport.WriteFileAsync(copy.Path, "out/key.txt", "planted"u8.ToArray(), cancellationToken));
+        var deleted = await Assert.ThrowsAsync<DssHarness.Core.FileSystem.LinkOnTheWayException>(() => transport.DeleteFileAsync(copy.Path, "out/key.txt", cancellationToken));
+
+        Assert.Equal($"'{copy.Combine("out", "key.txt")}' is reached through the link '{copy.Combine("out")}', which the tool never follows in a place an isolated process writes", deleted.Message);
+        var emptied = await transport.RemoveEmptyDirectoriesAsync(copy.Path, ["out/empty"], cancellationToken);
+
+        Assert.Equal(
+            $"'out/key.txt' could not be read in '{copy.Path}': '{copy.Combine("out", "key.txt")}' is reached through the link '{copy.Combine("out")}', which the tool never follows in a place an isolated process writes.",
+            read.Message);
+        Assert.Equal($"'out/' is reached through the link '{copy.Combine("out")}' in '{copy.Path}', which a pull never follows: a copy is a place a leg's work writes.", listed.Message);
+        Assert.StartsWith($"'out/key.txt' could not be written to '{copy.Path}': '{copy.Combine("out", "key.txt")}' is reached through the link", written.Message, StringComparison.Ordinal);
+        Assert.Empty(emptied);
+        Assert.Equal("a credential", File.ReadAllText(hidden.Combine("key.txt")));
+        Assert.True(Directory.Exists(hidden.Combine("empty")));
     }
 
     /// <summary>
@@ -1581,7 +1619,7 @@ public sealed class SyncServiceTests
             await File.WriteAllTextAsync(temp.Combine("out", $"{index:000}.txt"), "x", cancellationToken);
         }
 
-        var listing = await SyncKit.Transport(harness).ListFilesAsync(temp.Path, "out", cancellationToken);
+        var listing = await SyncKit.Transport(harness).ListFilesAsync(temp.Path, "out", null, cancellationToken);
 
         Assert.Equal(SyncServe.MostFilesPulledFromADirectory, listing.Files.Count);
         Assert.Equal(new SyncListedFile("out/000.txt", 1), listing.Files[0]);
@@ -1590,14 +1628,14 @@ public sealed class SyncServiceTests
         // Each file one a request carries, and all of them together past what a directory brings back.
         var each = (SyncServe.LargestDirectoryPulled / SyncServe.MostFilesPulledFromADirectory) + 1;
         var sized = new SizedFiles(harness.FileSystem, file: null, each);
-        var heavy = await Assert.ThrowsAsync<HarnessException>(() => SyncKit.Transport(harness, sized).ListFilesAsync(temp.Path, "out", cancellationToken));
+        var heavy = await Assert.ThrowsAsync<HarnessException>(() => SyncKit.Transport(harness, sized).ListFilesAsync(temp.Path, "out", null, cancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, heavy.ExitCode);
         Assert.StartsWith($"'out/' holds {each * SyncServe.MostFilesPulledFromADirectory} bytes in '", heavy.Message, StringComparison.Ordinal);
         Assert.Contains($"past the {SyncServe.LargestDirectoryPulled} a pull brings back from one directory", heavy.Message, StringComparison.Ordinal);
 
         var huge = new SizedFiles(harness.FileSystem, temp.Combine("out", "000.txt"), SyncServe.LargestFile + 1);
-        var large = await Assert.ThrowsAsync<HarnessException>(() => SyncKit.Transport(harness, huge).ListFilesAsync(temp.Path, "out", cancellationToken));
+        var large = await Assert.ThrowsAsync<HarnessException>(() => SyncKit.Transport(harness, huge).ListFilesAsync(temp.Path, "out", null, cancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, large.ExitCode);
         Assert.StartsWith($"'out/000.txt' is {SyncServe.LargestFile + 1} bytes, past the {SyncServe.LargestFile} one request can hold", large.Message, StringComparison.Ordinal);
@@ -1620,7 +1658,7 @@ public sealed class SyncServiceTests
         TestLinks.DirectoryLink(temp.Combine("out", "linked"), elsewhere.Path);
 
         var served = await CliRunner.RunAsync(["sync-serve", SyncServe.List, SyncServe.OperandsFollow, temp.Path, "out"], cancellationToken);
-        var asked = await SyncKit.AgentHere(new HarnessFactory()).ListFilesAsync(temp.Path, "out", cancellationToken);
+        var asked = await SyncKit.AgentHere(new HarnessFactory()).ListFilesAsync(temp.Path, "out", null, cancellationToken);
 
         Assert.Equal(0, served.ExitCode);
         Assert.Equal(
@@ -1650,7 +1688,7 @@ public sealed class SyncServiceTests
 
         var unreadable = new Unreadable(harness.FileSystem, (Exception)Activator.CreateInstance(raised, "Access to the path is denied.")!);
         var failure = await Assert.ThrowsAsync<HarnessException>(
-            () => SyncKit.Transport(harness, unreadable).ListFilesAsync(temp.Path, "out", TestContext.Current.CancellationToken));
+            () => SyncKit.Transport(harness, unreadable).ListFilesAsync(temp.Path, "out", null, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
         Assert.Equal($"'out/' could not be listed in '{temp.Path}': Access to the path is denied.", failure.Message);
@@ -1682,7 +1720,7 @@ public sealed class SyncServiceTests
         await File.WriteAllTextAsync(temp.Combine("out", "elsewhere.txt"), "not the copy's\n", cancellationToken);
 
         var listing = await SyncKit.Transport(harness, new LinkedFile(harness.FileSystem, temp.Combine("out", "elsewhere.txt")))
-            .ListFilesAsync(temp.Path, "out", cancellationToken);
+            .ListFilesAsync(temp.Path, "out", null, cancellationToken);
 
         Assert.Equal([new SyncListedFile("out/report.txt", 9)], listing.Files);
         Assert.Equal(["out/elsewhere.txt"], listing.Links);
@@ -1739,7 +1777,7 @@ public sealed class SyncServiceTests
             await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
             Directory.CreateDirectory(Path.Combine(copy, "out"));
 
-            var pull = await service.PullAsync(SyncKit.Transport(harness), copy, landing, [path], cancellationToken);
+            var pull = await service.PullAsync(SyncKit.Transport(harness), copy, landing, [path], [], cancellationToken);
             var refusal = Assert.IsType<SyncPullStop>(pull.Stopped);
 
             Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
@@ -2483,12 +2521,13 @@ public sealed class SyncServiceTests
 
     /// <summary>
     /// A copy this tool made can gain a link afterwards — a build script pointing a directory at
-    /// scratch space is the ordinary way — and from then on every build and every test writes
-    /// through it, to somewhere outside the directory anybody named, reported as an ordinary write.
-    /// The takeover list covers the first sync into somebody else's directory; this covers the rest.
+    /// scratch space is the ordinary way, and a leg's work may put one there to lead anywhere — and a
+    /// sync never writes through it: the write is refused naming the link, nothing lands where it
+    /// leads, and the warning says why. The takeover list covers the first sync into somebody else's
+    /// directory; this covers the rest.
     /// </summary>
     [Fact]
-    public async Task AWriteThroughALink_IsSaidOnAnOrdinarySyncToo_NotOnlyWhenTakingOver()
+    public async Task AWriteThroughALink_IsRefusedOnAnOrdinarySyncToo_NotOnlyWhenTakingOver()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -2509,20 +2548,22 @@ public sealed class SyncServiceTests
                 Assert.Skip("Creating a link needs a privilege this machine did not grant.");
             }
 
-            // The writes land wherever the link points, so afterwards the copy does not hold what
-            // this tree holds and the verification says so. The warning is what explains why.
+            // No write goes through the link: the first one is refused, naming it. The warning is what explains why.
             var failure = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
                 temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken));
 
-            Assert.Contains("does not match this tree", failure.Message, StringComparison.Ordinal);
+            Assert.Contains(
+                $"is reached through the link '{Path.Combine(copy, "src")}', which the tool never follows in a place an isolated process writes",
+                failure.Message,
+                StringComparison.Ordinal);
 
             var said = harness.StandardError.ToString();
 
-            Assert.Contains("writing through 'src'", said, StringComparison.Ordinal);
+            Assert.Contains("'src' is a link, which a sync never writes through", said, StringComparison.Ordinal);
             Assert.Contains("is not in any list", said, StringComparison.Ordinal);
 
-            // And what the link points at holds the files, outside the directory anybody named.
-            Assert.True(File.Exists(Path.Combine(elsewhere, "a.c")));
+            // And nothing landed where the link points, outside the directory anybody named.
+            Assert.Empty(Directory.EnumerateFileSystemEntries(elsewhere));
         }
         finally
         {

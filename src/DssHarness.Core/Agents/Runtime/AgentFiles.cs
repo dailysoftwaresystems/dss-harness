@@ -13,10 +13,11 @@ namespace DssHarness.Core.Agents.Runtime;
 /// lists nothing - a directory git ignores, or none of git's - the files the directory holds, walked without following a
 /// link. A search reads text alone: a binary file, one past <see cref="MostSearchedBytes"/> and one that is no text this
 /// tool reads are passed over and counted, and one that could not be read is counted apart, with why the first was not.
-/// The one way the tools read and write a file's bytes besides (<see cref="ReadAsync"/>, <see cref="Write"/>): through
-/// the file as it was opened, where it stands decided again before a byte passes. A directory is listed by its path, so
-/// what a link put in place of one since leads to is what it lists - names, never a byte of a file, each file read through
-/// its own open.
+/// The one way the tools read and write a file's bytes besides (<see cref="ReadAsync"/>, <see cref="Write"/>): a read
+/// through the file as it was opened, where it stands decided again before a byte passes; a write relative to its
+/// directory held from its writable root with no link on the way (<see cref="HeldDirectory"/>). A directory is listed by
+/// its path, so what a link put in place of one since leads to is what it lists - names, never a byte of a file, each file
+/// read through its own open.
 /// </summary>
 /// <param name="git">Lists a work tree's files.</param>
 /// <param name="fileSystem">Walks a directory git does not list, and reads and writes each file.</param>
@@ -176,7 +177,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
 
                 // Read through the file as it was opened, where it stands decided again as it was before the open: one a
                 // link put on its way since leads to a place the reader may not read is left out as one it may not.
-                var read = await ReadAsync(file, place => mayRead(place) ? null : NotToBeRead, cancellationToken).ConfigureAwait(false);
+                var read = await ReadAsync(file, MostSearchedBytes, place => mayRead(place) ? null : NotToBeRead, cancellationToken).ConfigureAwait(false);
 
                 if (read.Bytes is not { } held)
                 {
@@ -244,19 +245,23 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
     /// The bytes of the file at <paramref name="file"/>, read through the file as it was opened - never by its path again -
     /// once the place the open file stands at (<see cref="IFileSystem.FinalPathOf"/>) is decided again by
     /// <paramref name="refusal"/>, as the path was decided before the open: a link put in place of the file, or of a
-    /// directory on its way, after that decision reaches nothing the decision refuses. The one way an agent's file tools
-    /// read a file's bytes. A second name of the same file - a hard link - is a place of its own, and decided as one.
+    /// directory on its way, after that decision reaches nothing the decision refuses. Opened never to wait - a pipe put
+    /// there is refused before a byte is read (<see cref="IFileSystem.OpenRead"/>) - and read to <paramref name="most"/>
+    /// bytes at most, however much it grew since it was measured. The one way an agent's file tools read a file's bytes. A
+    /// second name of the same file - a hard link - is a place of its own, and decided as one.
     /// </summary>
     /// <param name="file">The file, absolute, as it was decided.</param>
+    /// <param name="most">The most bytes read; a file holding more is refused, nothing of it given.</param>
     /// <param name="refusal">Why a place may not be read, by its absolute path; null where it may.</param>
     /// <param name="cancellationToken">Stops the read.</param>
     /// <returns>The bytes; or, where the open file stands at a place <paramref name="refusal"/> refuses, why - nothing read.</returns>
-    /// <exception cref="IOException">The file could not be opened, named or read.</exception>
+    /// <exception cref="IOException">The file could not be opened, named or read, is no regular file, or holds more than <paramref name="most"/> bytes.</exception>
     /// <exception cref="UnauthorizedAccessException">This process may not read it.</exception>
-    public async Task<AgentFileRead> ReadAsync(string file, Func<string, AgentPolicyAnswer.Denied?> refusal, CancellationToken cancellationToken)
+    public async Task<AgentFileRead> ReadAsync(string file, long most, Func<string, AgentPolicyAnswer.Denied?> refusal, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(file);
         ArgumentNullException.ThrowIfNull(refusal);
+        ArgumentOutOfRangeException.ThrowIfNegative(most);
 
         var stream = _fileSystem.OpenRead(file);
 
@@ -272,62 +277,77 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
                 });
             }
 
-            using var copy = new MemoryStream();
-            await stream.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
+            // One byte past the bound is asked for, so a file grown past it since it was measured is told, never cut.
+            var buffer = new byte[(int)Math.Min(most + 1, int.MaxValue)];
+            var read = await stream.ReadAtLeastAsync(buffer, buffer.Length, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
 
-            return new AgentFileRead(copy.ToArray(), null);
+            return read > most
+                ? throw new IOException($"'{file}' holds more than {DiskSpace.Size(most)} now, past what it held when it was measured, and nothing of it was read")
+                : new AgentFileRead(buffer[..read], null);
         }
     }
 
     /// <summary>
-    /// Writes <paramref name="bytes"/> to <paramref name="file"/> whole and atomically (<see cref="IFileSystem.WriteAtomic"/>),
-    /// once the place it lands at - the file's name in the directory the file it is written in was opened in, read from
-    /// that open file (<see cref="IFileSystem.FinalPathOf"/>) before a byte is written - is decided again by
-    /// <paramref name="refusal"/>, as the path was decided before: a link put in place of a directory on its way after that
-    /// decision reaches nothing the decision refuses, and the file begun there is removed with nothing in it. The rename
-    /// that then puts the written file in place goes by the path, the one step a link put on the way in the instant after
-    /// the check still reaches. The one way an agent's file tools write a file's bytes.
+    /// Writes <paramref name="bytes"/> to <paramref name="file"/> whole and atomically, relative to its directory held from
+    /// <paramref name="root"/> - the writable root it was decided in - with no link on the way (<see cref="HeldDirectory"/>),
+    /// the directories missing on the way made: a file made new in that directory, then renamed over the file there, a link
+    /// at its place replaced as itself. Before a byte is written, the place it lands at - the file's name in the directory
+    /// held, as the system names it - is decided again by <paramref name="refusal"/>, as the path was decided before. A link
+    /// put on the way after that decision, or swapped in while it writes, reaches nothing. The one way an agent's file tools
+    /// write a file's bytes.
     /// </summary>
+    /// <param name="root">The writable root <paramref name="file"/> was decided in, as the decision spells it.</param>
     /// <param name="file">The file, absolute, as it was decided.</param>
     /// <param name="bytes">What it is to hold.</param>
     /// <param name="refusal">Why a place may not be written, by its absolute path; null where it may.</param>
     /// <returns>Null where it was written; else why not, the file as it was.</returns>
     /// <exception cref="IOException">The file could not be written.</exception>
     /// <exception cref="UnauthorizedAccessException">This process may not write it.</exception>
-    public AgentPolicyAnswer.Denied? Write(string file, byte[] bytes, Func<string, AgentPolicyAnswer.Denied?> refusal)
+    public AgentPolicyAnswer.Denied? Write(string root, string file, byte[] bytes, Func<string, AgentPolicyAnswer.Denied?> refusal)
     {
+        ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(file);
         ArgumentNullException.ThrowIfNull(bytes);
         ArgumentNullException.ThrowIfNull(refusal);
 
-        AgentPolicyAnswer.Denied? refused = null;
+        HeldDirectory held;
 
         try
         {
-            _fileSystem.WriteAtomic(file, stream =>
-            {
-                var begun = _fileSystem.FinalPathOf(stream);
-                var landing = Path.Join(Path.GetDirectoryName(begun), Path.GetFileName(file));
-
-                if (refusal(landing) is { } denied)
-                {
-                    refused = denied with
-                    {
-                        Reason = $"'{file}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: {denied.Reason}",
-                    };
-
-                    // Called off before a byte is written: the atomic write removes the file it began, and the target stays as it was.
-                    throw new OperationCanceledException(refused.Reason);
-                }
-
-                stream.Write(bytes);
-            });
+            held = _fileSystem.Hold(root, Path.GetDirectoryName(Path.GetFullPath(file))!, make: true, file);
         }
-        catch (OperationCanceledException) when (refused is not null)
+        catch (LinkOnTheWayException link)
         {
+            return Linked(link);
         }
 
-        return refused;
+        using (held)
+        {
+            var landing = Path.Join(held.FinalPath(), Path.GetFileName(file));
+
+            if (refusal(landing) is { } denied)
+            {
+                return denied with
+                {
+                    Reason = $"'{file}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: {denied.Reason}",
+                };
+            }
+
+            held.Write(Path.GetFileName(file), stream => stream.Write(bytes));
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The refusal of a write or a removal a link put on its way since it was decided stopped (<see cref="LinkOnTheWayException"/>):
+    /// by the rule that refuses a write through a link, nothing done.
+    /// </summary>
+    /// <param name="link">What stopped it.</param>
+    public static AgentPolicyAnswer.Denied Linked(LinkOnTheWayException link)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+
+        return new AgentPolicyAnswer.Denied(ConfinedPaths.LinksRule, AgentPolicySource.Builtin, $"{link.Message}; nothing was done");
     }
 }
 

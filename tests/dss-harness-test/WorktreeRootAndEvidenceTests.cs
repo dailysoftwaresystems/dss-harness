@@ -185,7 +185,7 @@ public sealed class WorktreeRootAndEvidenceTests
         // commit an earlier one started from.
         var record = await harness.GitClient.RunAsync(
             temp.Path,
-            ["rev-parse", "--verify", "--quiet", WorktreeService.BaseCommitRefPrefix + "feature"],
+            ["rev-parse", "--verify", "--quiet", WorktreeKeepalive.BasePrefix + "feature"],
             cancellationToken: cancellationToken);
 
         Assert.True(string.IsNullOrWhiteSpace(record.StandardOutput), "The base commit record outlived its worktree.");

@@ -100,6 +100,33 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
+    /// A launch over a linked worktree an earlier version of this tool made says so at its start, in its own stream, right
+    /// after the run starts - each tree one saying - for inside the isolation git add and git fetch fail there, and the
+    /// remedy names the verbs that give the agent a repository of its own.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchOverALegacyLinkedWorktree_SaysSoAtItsStart()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Script = (run, _, _) => Task.FromResult(Completed(run)) };
+        var isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation(
+            "required",
+            new PassThroughMechanism("bubblewrap", "0.9.0"),
+            DssHarness.Core.Processes.IsolationProfile.Nothing,
+            null,
+            null)
+        {
+            LegacyWorktrees = [$"'{Path.Combine(temp.Path, "wt")}' is a linked worktree an earlier version made: git add and fetch fail there; delete-agent and a new agent give it a repository of its own"],
+        };
+        var seen = new List<AgentEvent>();
+
+        await Runner(client).RunAsync(Step(temp) with { Isolation = isolation }, new Collecting(seen), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["runStarted", "notice", "runFinished"], seen.Select(Kind));
+        Assert.Equal(new Notice(isolation.LegacyWorktrees[0]) { At = seen[1].At, Seq = 2 }, seen[1]);
+    }
+
+    /// <summary>
     /// A launch under a mechanism that leaves something reached says what at its start, as one under none does; and what its
     /// agent's commands made in the trees' git directories that no git may go on over fails its run, saying it, in its
     /// result and its record's end.
@@ -115,7 +142,7 @@ public sealed class AgentRunnerTests
             new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" },
             DssHarness.Core.Processes.IsolationProfile.Nothing,
             null,
-            null) { After = () => Made };
+            null) { After = _ => Task.FromResult<string?>(Made) };
         var seen = new List<AgentEvent>();
 
         var result = await Runner(client).RunAsync(Step(temp) with { Isolation = leaving }, new Collecting(seen), TestContext.Current.CancellationToken);

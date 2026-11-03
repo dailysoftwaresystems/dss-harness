@@ -178,8 +178,8 @@ public sealed class GitClientListingTests
         Assert.Equal((false, true, null, true), Facts(working["new dir/new.txt"]));
         Assert.Equal((false, false, "100644", true), Facts(working["both.txt"]));
         Assert.Equal(
-            ["--no-optional-locks", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames"],
-            Assert.Single(processes.Started).Arguments.TakeLast(6));
+            ["--no-optional-locks", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=dirty"],
+            Assert.Single(processes.Started).Arguments.TakeLast(7));
     }
 
     /// <summary>

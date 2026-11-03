@@ -156,11 +156,20 @@ public sealed class SandboxExec(string version, Func<string, string> realPath) :
     /// <summary>Nothing: each anchor's own removal alone is refused - a rename removes its name - and what it holds is written as its rule says.</summary>
     public string? AnchorCost => null;
 
+    /// <summary>The sandbox denies every write at the path a rule stands at, there or not, so a file that is not there is held against its creation.</summary>
+    public bool HoldsAnAbsentFile => true;
+
     /// <summary>The launch's own temporary directory is written and named to the child; the system's stays read-only.</summary>
     public bool OwnTemp => false;
 
     /// <summary>The isolated shell becomes the sandbox in a command's place.</summary>
     public bool TakesHandedCommands => true;
+
+    /// <summary>What a record says of why a program that hands its commands to the sandbox runs outside it.</summary>
+    public const string NoSandboxInside = "macOS starts no sandbox inside another";
+
+    /// <summary>macOS starts no sandbox inside another, so a program that hands its commands over runs outside every one.</summary>
+    public string? Unnested => NoSandboxInside;
 
     /// <inheritdoc/>
     public (string Program, IReadOnlyList<string> Arguments) Command(IsolationProfile profile, string program, IReadOnlyList<string> arguments)

@@ -2419,7 +2419,8 @@ public sealed class HostCopiesTests
             harness.FileSystem,
             harness.Platform,
             harness.Identity,
-            harness.Output);
+            harness.Output,
+            new TestIsolation());
 
     private static RemoteSyncTransport Remote(IHostCommandRunner commands)
         => new(

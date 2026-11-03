@@ -1,4 +1,5 @@
 using NSubstitute;
+using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
@@ -155,7 +156,8 @@ internal static class SyncKit
         ISyncTransport? local = null,
         IFileSystem? fileSystem = null,
         IGitClient? git = null,
-        IProcessIdentity? identity = null)
+        IProcessIdentity? identity = null,
+        IAgentIsolation? isolation = null)
     {
         var files = fileSystem ?? harness.FileSystem;
         var contexts = loader ?? harness.ContextLoader;
@@ -170,6 +172,7 @@ internal static class SyncKit
             files,
             harness.Platform,
             identity ?? harness.Identity,
-            harness.Output);
+            harness.Output,
+            isolation ?? new TestIsolation());
     }
 }

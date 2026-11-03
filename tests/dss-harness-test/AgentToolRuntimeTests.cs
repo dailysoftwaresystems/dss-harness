@@ -309,6 +309,25 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
+    /// A file grown past the bound since the look that measured it - by a command still running, in the instant between
+    /// the look and the read - is refused with nothing of it read, never read past the bound the read was given.
+    /// </summary>
+    [Fact]
+    public async Task AFileGrownPastTheBoundSinceItWasMeasured_IsRefusedWithNothingOfItRead()
+    {
+        Write("a.txt", new string('x', (int)AgentTools.MostViewedBytes + 1));
+        var full = Path.Combine(_worktree, "a.txt");
+        var runtime = Open(fileSystem: new Understated(_harness.FileSystem, full));
+
+        var viewed = await View(runtime, "a.txt");
+
+        Assert.Equal(
+            (false, $"view_file failed: '{full}' holds more than {DiskSpace.Size(AgentTools.MostViewedBytes)} now, past what it held when it was measured, and nothing of it was read"),
+            (viewed.Ok, viewed.Text));
+        Assert.Equal((int)AgentTools.MostViewedBytes + 1, new FileInfo(full).Length);
+    }
+
+    /// <summary>
     /// A file link out of the roots - a tracked notes.md leading to a key under the home - is read, written and searched by
     /// no tool: a view, a replace, an insert and an overwrite refuse it by where it leads, nothing written, and a search and
     /// a find never list a link, so the text it leads to is in no answer.
@@ -503,8 +522,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
     /// <summary>
     /// A file whose open stands somewhere its path did not lead when it was decided - a link put on its way between the
     /// check and the open - is decided again where the open file stands before a byte passes: a view, an edit and a search
-    /// read nothing outside the roots or in a Claude Code directory, and a write lands nothing outside the writable roots,
-    /// the file it began removed and the target as it was. Each refusal is recorded as every denial is.
+    /// read nothing outside the roots or in a Claude Code directory; and a write whose directory, held, stands outside the
+    /// writable roots - moved there since it was decided - lands nothing there, the target as it was. Each refusal is
+    /// recorded as every denial is.
     /// </summary>
     [Fact]
     public async Task AFileWhoseOpenStandsElsewhere_IsDecidedAgain_BeforeAByte()
@@ -549,8 +569,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
     /// <summary>
     /// A directory made a real link at the moment a file under it is opened - after the file's path was decided - is met
-    /// by where the open file stands, as the system names it: a view of the file reads nothing from where the link leads,
-    /// and a file written under it lands nothing there, the file it began removed.
+    /// by where the open file stands, as the system names it, for a view of the file, which reads nothing from where the
+    /// link leads; and by the write's own walk to its directory, which opens each directory on the way as itself and meets
+    /// the link, so a file written under it is refused naming the link and lands nothing there.
     /// </summary>
     [Fact]
     public async Task ADirectoryMadeALink_AtAFilesOpen_LeadsNoReadOrWriteOutOfTheRoots()
@@ -575,10 +596,97 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var written = await Call(runtime, AgentTools.CreateFile, ("path", "docs/b.txt"), ("content", "x"));
 
         Assert.Equal(
-            (false, $"'{Path.Combine(docs, "b.txt")}' would be written as '{landing}', where a link put on its way after it was decided leads; nothing was written: '{landing}' is where the open file stands, outside the writable roots of this agent: {_worktree}"),
+            (false, $"'{Path.Combine(docs, "b.txt")}' is reached through the link '{docs}', which the tool never follows in a place an isolated process writes; nothing was done"),
             (written.Ok, written.Text));
+        Assert.False(File.Exists(landing));
         Assert.Equal(["a.txt"], Directory.GetFiles(_outside).Select(Path.GetFileName));
         Assert.Equal("SECRET", File.ReadAllText(opened));
+    }
+
+    /// <summary>
+    /// A command left running in the background that swaps a directory of the worktree for a link to a place outside every
+    /// root, back and forth, while the agent's tools delete in it, move into it and write in it, leads no tool outside: each
+    /// acts relative to the directory held from the writable root it was decided in, opened as itself, so a call decided
+    /// while the directory was one and acting once the link is there is refused, and the user's file outside stays, nothing
+    /// landing beside it.
+    /// </summary>
+    [Fact]
+    public async Task ALinkSwappedOnTheWayWhileTheToolsAct_LeadsNoToolOutOfTheRoots()
+    {
+        var runtime = Open();
+        var x = Path.Combine(_worktree, "x");
+        var real = Path.Combine(_worktree, "x-dir");
+        var link = Path.Combine(_worktree, "x-link");
+        var victim = Path.Combine(_outside, "victim.txt");
+        Directory.CreateDirectory(real);
+        TestLinks.DirectoryLink(link, _outside);
+        File.WriteAllText(victim, "the user's own file");
+
+        using var stop = new CancellationTokenSource();
+        var swapper = Task.Run(
+            () =>
+            {
+                static void Try(Action act)
+                {
+                    try
+                    {
+                        act();
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // Held by a call at that instant: the swap goes on with the next step.
+                    }
+                }
+
+                while (!stop.IsCancellationRequested)
+                {
+                    Try(() => Directory.Move(real, x));
+                    Try(() => Directory.Move(x, real));
+                    Try(() => Directory.Move(link, x));
+                    Try(() => Directory.Move(x, link));
+
+                    // A directory a call made at x while nothing stood there goes, so the swap can go on.
+                    Try(() =>
+                    {
+                        if (Directory.Exists(real) && Directory.Exists(link) && new DirectoryInfo(x) is { Exists: true, LinkTarget: null })
+                        {
+                            Directory.Delete(x, recursive: true);
+                        }
+                    });
+                }
+            },
+            Token);
+
+        var calls = 0;
+
+        try
+        {
+            for (var until = Environment.TickCount64 + 4000; Environment.TickCount64 < until && Directory.GetFiles(_outside).Length == 1; calls++)
+            {
+                try
+                {
+                    File.WriteAllText(Path.Combine(real, "victim.txt"), "the agent's");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Moved at that instant: the delete has its own file to find another time.
+                }
+
+                File.WriteAllText(Path.Combine(_worktree, "payload.txt"), "payload");
+                await Call(runtime, AgentTools.DeleteFile, ("path", "x/victim.txt"));
+                await Call(runtime, AgentTools.MovePath, ("from", "payload.txt"), ("to", "x/landed.txt"), ("overwrite", true));
+                await Call(runtime, AgentTools.CreateFile, ("path", "x/written.txt"), ("content", "planted"), ("overwrite", true));
+            }
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await swapper;
+        }
+
+        Assert.True(calls > 0);
+        Assert.Equal(["victim.txt"], Directory.GetFiles(_outside).Select(Path.GetFileName));
+        Assert.Equal("the user's own file", File.ReadAllText(victim));
     }
 
     /// <summary>
@@ -1881,13 +1989,22 @@ public sealed class AgentToolRuntimeTests : IDisposable
             => unread.Contains(Path.GetFileName(path)) ? throw new IOException("it is held by another process.") : base.OpenRead(path);
     }
 
+    /// <summary>A file system whose standing of one file understates its length, as one grown past the bound since it was measured.</summary>
+    private sealed class Understated(IFileSystem inner, string file) : PassThroughFileSystem(inner)
+    {
+        public override FileStanding? StandingOf(string path)
+            => Path.GetFullPath(path) == Path.GetFullPath(file) && base.StandingOf(path) is { } standing ? standing with { Length = 1 } : base.StandingOf(path);
+    }
+
     /// <summary>
     /// A file system whose open files stand elsewhere than their paths led, as a link put on their way after the check
-    /// would make them: a file named in <paramref name="opened"/> stands at the place it maps it to, and a file an atomic
-    /// write begins stands in <paramref name="begun"/>.
+    /// would make them: a file named in <paramref name="opened"/> stands at the place it maps it to, and a directory a write
+    /// holds stands at <paramref name="begun"/>, as one moved there since would.
     /// </summary>
     private sealed class OpenedElsewhere(IFileSystem inner, IReadOnlyDictionary<string, string> opened, string begun) : PassThroughFileSystem(inner)
     {
+        public override HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null) => base.Hold(begun, begun, make, asked);
+
         public override string FinalPathOf(Stream stream)
         {
             var real = base.FinalPathOf(stream);
@@ -1911,10 +2028,10 @@ public sealed class AgentToolRuntimeTests : IDisposable
             return base.OpenRead(path);
         }
 
-        public override void WriteAtomic(string path, Action<Stream> write)
+        public override HeldDirectory Hold(string anchor, string held, bool make, string? asked = null)
         {
-            Link(path);
-            base.WriteAtomic(path, write);
+            Link(asked ?? held);
+            return base.Hold(anchor, held, make, asked);
         }
 
         private void Link(string path)

@@ -27,7 +27,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// answers the isolation under <c>isolation</c>. Where this machine has none, <c>agentPolicy.isolation: required</c> fails
 /// the step 14 with nothing run, and <c>preferred</c> runs its legs outside, each leg's line saying so. A leg another
 /// machine runs - an ssh host, a WSL distribution - runs there as that machine's tool runs any leg, outside this machine's
-/// isolation.
+/// isolation: a WSL distribution, which reaches this machine's drives, is decided as the isolation's own absence
+/// (<see cref="ExecutionIsolation.InDistribution"/>), and an ssh host is taken to be another machine, for one that is
+/// this machine or shares its drives cannot be told by its name or its address.
 /// </remarks>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -246,8 +248,11 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
     private sealed class StepLegIsolation(IAgentIsolation isolation, HarnessConfig config, string mainCheckout, string tree, Func<string, IReadOnlyList<string>> besides) : ILegIsolation
     {
         /// <inheritdoc/>
-        public Task<ExecutionIsolation> ForLegAsync(string legTree, string runDirectory, CancellationToken cancellationToken)
-            => isolation.ForExecutionAsync(config, ExecutionGrounds.OfLeg(config, mainCheckout, tree, legTree, runDirectory, besides(legTree)), mainCheckout, cancellationToken);
+        public Task<ExecutionIsolation> ForLegAsync(string legTree, IReadOnlyList<string> writes, CancellationToken cancellationToken)
+            => isolation.ForExecutionAsync(config, ExecutionGrounds.OfLeg(config, mainCheckout, tree, legTree, [.. besides(legTree), .. writes]), mainCheckout, cancellationToken);
+
+        /// <inheritdoc/>
+        public ExecutionIsolation ForDistribution(string distribution) => ExecutionIsolation.InDistribution(AgentIsolationMode.Of(config), distribution);
     }
 
     /// <summary>Tells the engine what the leg service says of the step's legs, in the engine's words, and keeps the legs placed.</summary>

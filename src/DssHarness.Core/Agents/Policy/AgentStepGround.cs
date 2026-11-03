@@ -19,7 +19,8 @@ public static class AgentStepGround
     /// always - or, for an agent with none, the main checkout, which it only reads. The tool's own state under each tree
     /// it touches - its worktree, and always the main checkout, whose run records and other worktrees a command reaches
     /// from the worktree - git's own files beneath both under the worktree rules, and every credential slot of the main
-    /// checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), no action of the agent's reaches.
+    /// checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), every Claude Code directory and every place the
+    /// user keeps credentials in, no action of the agent's reaches.
     /// </summary>
     /// <param name="config">The configuration, whose <c>agentPolicy</c> restricts and whose state paths are guarded.</param>
     /// <param name="definition">The agent definition the step works by, where there is one; null where it names none.</param>
@@ -27,9 +28,14 @@ public static class AgentStepGround
     /// <param name="workspace">Where the run works, as the step's agent answers it.</param>
     /// <param name="webSearchGiven">Whether the run is given a web search, which without it the agent has not.</param>
     /// <param name="claudeDirectories">Every Claude Code directory a client of this run uses, and the tool's own.</param>
+    /// <param name="credentialPlaces">Every place the user keeps credentials in on this machine (<see cref="Isolation.UserCredentials.Of"/>).</param>
     /// <param name="readsOnly">
     /// Whether the run only reads whatever its definition gives it - the run's advisor, which works where the asking step
     /// works and writes nothing there, and its reporter: its own work directory is all it writes.
+    /// </param>
+    /// <param name="handed">
+    /// Where the step's agent is handed what it reads - its skills, its continuation record's copies
+    /// (<see cref="OrchestratorLayout.HandedDirectory"/>) - a root it reads and never writes; null where it is handed none.
     /// </param>
     public static AgentPolicyGround Of(
         HarnessConfig config,
@@ -38,12 +44,15 @@ public static class AgentStepGround
         AgentWorkspace workspace,
         bool webSearchGiven,
         IReadOnlyList<string> claudeDirectories,
-        bool readsOnly = false)
+        IReadOnlyList<Isolation.HiddenPlace> credentialPlaces,
+        bool readsOnly = false,
+        string? handed = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(step);
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(claudeDirectories);
+        ArgumentNullException.ThrowIfNull(credentialPlaces);
 
         var policy = config.AgentPolicy ?? new AgentPolicyConfig();
 
@@ -81,6 +90,11 @@ public static class AgentStepGround
             reads.Add(workspace.MainCheckout);
         }
 
+        if (handed is not null)
+        {
+            reads.Add(handed);
+        }
+
         // A worktree is written only where the agent writes: a definition's `writes: false`, and a run that only reads,
         // leave it to be read, and the work directory is all the agent writes.
         var writable = workspace.Worktree is { Length: > 0 } && definition?.Writes != false && !readsOnly
@@ -93,6 +107,7 @@ public static class AgentStepGround
             writable,
             HarnessLayout.SecretSlotDirectoriesUnder(workspace.MainCheckout),
             Distinct([.. claudeDirectories]),
+            credentialPlaces,
             restrictions,
             capabilities,
             policy.WebDomains is { Count: > 0 } domains ? [.. domains] : null,
