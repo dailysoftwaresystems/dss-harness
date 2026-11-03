@@ -9,12 +9,15 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 {
     /// <summary>
     /// Attempts at the final rename before a transient refusal is reported. A virus scanner on a busy machine held a
-    /// just-written file past the half second ten attempts once gave, and past the three seconds twenty-five gave under
-    /// a full test suite, so the whole bound is about five and a half seconds (<see cref="ReplaceWait"/>) - a holder
-    /// past that is outside this process, and its refusal is reported rather than outwaited at the cost of everything
-    /// that waits on the write.
+    /// just-written file past the half second ten attempts once gave, past the three seconds twenty-five gave under a
+    /// full test suite, and past the five and a half seconds thirty-five gave under the suite the tree has grown to - the
+    /// same machine, twice in one run, on the engine's own state file - for the scanner's hold is transient and scales
+    /// with the machine's load, not with any bound this process picks. The whole bound is about thirty seconds
+    /// (<see cref="ReplaceWait"/>), the common sub-second hold still recovered in the first three: a holder past that is
+    /// outside this process and no scanner this machine ran, and its refusal is reported rather than outwaited at the
+    /// cost of everything that waits on the write.
     /// </summary>
-    private const int ReplaceAttempts = 35;
+    private const int ReplaceAttempts = 128;
 
     private readonly IFilePermissions _filePermissions = filePermissions;
 
@@ -662,9 +665,9 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     /// the caller does.
     /// </summary>
     /// <remarks>
-    /// The synchronous form blocks a thread-pool thread for up to three seconds per file while it waits.
-    /// A tree sync writes thousands of files, and the parallel legs above it are sharing that pool:
-    /// sleeping in it makes a transient lock on one file look like a stall in every other leg.
+    /// The synchronous form blocks a thread-pool thread for up to the rename's whole bound (<see cref="ReplaceAttempts"/>,
+    /// about thirty seconds) while it waits. A tree sync writes thousands of files, and the parallel legs above it are
+    /// sharing that pool: sleeping in it makes a transient lock on one file look like a stall in every other leg.
     /// </remarks>
     private static async Task ReplaceWithAsync(string source, string destination, CancellationToken cancellationToken)
     {
