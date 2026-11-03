@@ -157,6 +157,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file a step's own record is kept in, in its directory.</summary>
     public const string StepRecordFileName = "step.json";
 
+    /// <summary>The step's policy as it started under it: the agents' configuration as resolved - agentPolicy, the web search it asks, what it runs on - read when the step starts, as its prompts are.</summary>
+    public const string PolicyFileName = "policy.json";
+
     /// <summary>The name of the file a step's output is kept in, validated, in its directory.</summary>
     public const string StepOutputFileName = "output.json";
 

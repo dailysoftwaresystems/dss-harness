@@ -3207,7 +3207,11 @@ orchestrator's own, so no claim comes between its look at the owner and its remo
 
 The run's records are written in one order at every change - a step's own files (its `handoff.md`
 where it handed off, its `output.json`, then the `step.json` that names them - a refresh's or a rebase's of `others`
-with each target and where it stands), then `flow.json` (the
+with each target and where it stands; a reason step's `policy.json`, written as the step starts: the
+agents' configuration is read when each step starts, as its prompts are, so an edit of `config.json` -
+a side-task's among them - reaches the steps that start after it and never one under way, and each
+keeps the policy it started under - the ground as resolved, the web search it asks, what it runs on
+with the key's name alone), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
 in `events.jsonl` - each read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is

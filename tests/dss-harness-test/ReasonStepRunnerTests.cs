@@ -176,6 +176,125 @@ public sealed class ReasonStepRunnerTests
             ?? throw new InvalidOperationException(problem);
 
     /// <summary>
+    /// The agents' configuration is read when each step starts, as its prompts are, and kept in that step's policy.json:
+    /// the ground as resolved - its restrictions from every source at once, the worktree rules and the protected paths -
+    /// the web search it asks, and what it runs on, each entry of its order with the key's name alone and never a value.
+    /// </summary>
+    [Fact]
+    public async Task AStepsPolicy_KeptInItsRecords_AsTheConfigurationStoodWhenItStarted()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+
+        var result = await Runner(kit, agents).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9" }, Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var policyFile = Assert.Single(Directory.EnumerateFiles(kit.Layout.Directory, "policy.json", SearchOption.AllDirectories));
+        var kept = File.ReadAllText(policyFile);
+
+        Assert.True(kept.Length > 0 && kept[0] == '{', $"{policyFile}: {kept[..Math.Min(200, kept.Length)]}");
+
+        var policy = JsonNode.Parse(kept)!;
+
+        // The configuration holds the worktree rules and the protected paths on where nothing is said: the record says
+        // the policy as resolved, the configuration's own defaults among it.
+        Assert.True(policy["agentPolicy"]!["worktreeRules"]!.GetValue<bool>());
+        Assert.True(policy["agentPolicy"]!["protectedPaths"]!.GetValue<bool>());
+        Assert.Equal([], new JsonArray([.. policy["agentPolicy"]!["restrictions"]!.AsArray().Select(one => one!.GetValue<string>())]));
+        // The search the step asks, as its search names it: with none named, every source the configuration holds on.
+        Assert.IsType<JsonArray>(policy["agentWebSearch"]!["sources"]);
+
+        var runsOn = policy["runsOn"]!.AsArray();
+
+        Assert.Equal(["anthropic"], runsOn.Select(entry => entry!["provider"]!.GetValue<string>()).ToArray());
+        Assert.Equal(["claude-opus-5-5"], runsOn.Select(entry => entry!["model"]!.GetValue<string>()).ToArray());
+    }
+
+    /// <summary>
+    /// A step's search names the sources its web_search asks: an edit of the configuration that takes a source it names
+    /// away refuses the step's start with V55's words, as a configuration that no longer reads does - and the step runs
+    /// again once the configuration names the source.
+    /// </summary>
+    [Fact]
+    public async Task ASearchThatNoLongerReads_RefusesTheStepsStart_WithTheValidatorsWords()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+
+        OrchestrationKit.Write(
+            kit.Main,
+            Path.Combine(".harness-config", "config.json"),
+            """
+            {
+              "worktrees": { "root": ".worktrees" },
+              "providers": [
+                {
+                  "name": "anthropic",
+                  "type": "anthropic",
+                  "api": "https://api.anthropic.com",
+                  "apiKeyNames": ["ANTHROPIC_KEY"],
+                  "client": "claude-api",
+                  "models": [
+                    { "code": "claude-opus-5-5", "name": "Opus", "tiers": ["best"], "efforts": ["high"], "contextTokens": 200000, "maxOutputTokens": 32000 }
+                  ]
+                }
+              ],
+              "tierConfig": { "best": ["claude-opus-5-5"] },
+              "defaults": { "agentTier": "best" },
+              "agentWebSearch": {
+                "sources": {
+                  "alpha": { "kind": "json-api", "description": "Alpha's answers", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }
+                }
+              }
+            }
+            """);
+
+        var step = Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with
+        {
+            WorksIn = "a9",
+            Step = new WorkflowStep { Name = "think", Type = "reason", Prompt = "prompts/plan.md", Search = ["alpha"] },
+        };
+
+        Assert.True((await Runner(kit, agents).RunAsync(step, Token)).Passed);
+
+        // The side-task's edit: the source taken away, the rest of the configuration whole.
+        OrchestrationKit.Write(
+            kit.Main,
+            Path.Combine(".harness-config", "config.json"),
+            """
+            {
+              "worktrees": { "root": ".worktrees" },
+              "providers": [
+                {
+                  "name": "anthropic",
+                  "type": "anthropic",
+                  "api": "https://api.anthropic.com",
+                  "apiKeyNames": ["ANTHROPIC_KEY"],
+                  "client": "claude-api",
+                  "models": [
+                    { "code": "claude-opus-5-5", "name": "Opus", "tiers": ["best"], "efforts": ["high"], "contextTokens": 200000, "maxOutputTokens": 32000 }
+                  ]
+                }
+              ],
+              "tierConfig": { "best": ["claude-opus-5-5"] },
+              "defaults": { "agentTier": "best" },
+              "agentWebSearch": {
+                "sources": {
+                  "beta": { "kind": "json-api", "description": "Beta's answers", "url": "https://beta.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }
+                }
+              }
+            }
+            """);
+
+        var refused = await Runner(kit, agents).RunAsync(step with { Attempt = 2 }, Token);
+
+        Assert.False(refused.Passed);
+        Assert.Equal(HarnessExit.ConfigInvalid, refused.Exit);
+        Assert.StartsWith("'think' searches 'alpha', which is no source or tag of agentWebSearch", refused.Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A step the engine named a read-only agent for is given one - made, with no worktree - and worked as: its
     /// workspace reads the main tree, writes its work directory, and the request carries the agent's name. The engine
     /// stores the agent it named as the one the step works in, so the run hands both: the making answers an agent

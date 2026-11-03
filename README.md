@@ -256,7 +256,7 @@ in `config.json`.
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
 .orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence
-.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it
+.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it, and for a reason step the policy.json it started under - the agents' configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps that start after it and never one under way
 .orchestrators/<o>/agents/<agent>/sessions/<id>/ ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
 .orchestrators/<o>/.../<instance>/children/<session>.json ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once its starter has gone

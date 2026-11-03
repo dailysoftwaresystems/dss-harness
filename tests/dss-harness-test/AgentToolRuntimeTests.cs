@@ -1848,6 +1848,37 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Empty(_events.All.OfType<Notice>());
     }
 
+    /// <summary>
+    /// A side-task's edit of config.json, where a run is working over the tree, says in the chat where the edit reaches:
+    /// the run's steps that start after it, and never one under way - for the agents' configuration is read when each
+    /// step starts, as its prompts are. Where no run is live, or the file edited is another, nothing is said.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksEditOfTheConfiguration_SaysInTheChatWhereItReaches_WhereARunIsLive()
+    {
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Write], sideTask: true, liveRun: () => "r1");
+
+        var edited = await Call(runtime, AgentTools.CreateFile, ("path", ".harness-config/config.json"), ("content", "{}\n"), ("overwrite", true));
+
+        Assert.True(edited.Ok, edited.Text);
+        Assert.Equal(
+            "run 'r1' is working over this tree: the edit of config.json reaches its steps that start after it, and never one under way",
+            Assert.Single(_events.All.OfType<Notice>()).Text);
+
+        var other = await Call(runtime, AgentTools.CreateFile, ("path", "plain.txt"), ("content", "x\n"));
+
+        Assert.True(other.Ok, other.Text);
+        Assert.Single(_events.All.OfType<Notice>());
+
+        runtime.Dispose();
+        var none = Open(capabilities: [AgentCapability.Read, AgentCapability.Write], sideTask: true);
+
+        var unsaid = await Call(none, AgentTools.CreateFile, ("path", ".harness-config/config.json"), ("content", "{}\n"), ("overwrite", true));
+
+        Assert.True(unsaid.Ok, unsaid.Text);
+        Assert.Empty(_events.All.OfType<Notice>().Skip(1));
+    }
+
     private static Task<AgentToolCallResult> Call(AgentToolRuntime runtime, string tool, params (string Name, object? Value)[] members)
         => Call(runtime, tool, "call_1", members);
 
@@ -1887,7 +1918,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
         AgentWebSearch? webSearch = null,
         AgentNativeAsk? native = null,
         DssHarness.Core.Agents.Isolation.LaunchIsolation? isolation = null,
-        bool sideTask = false)
+        bool sideTask = false,
+        Func<string?>? liveRun = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -1903,7 +1935,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         if (sideTask)
         {
-            ground = ground with { SideTask = true };
+            ground = ground with { SideTask = true, LiveRun = liveRun, WorktreeRules = false, ProtectedPaths = false };
         }
 
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, endpoint ?? new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));

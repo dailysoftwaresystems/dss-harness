@@ -2537,7 +2537,10 @@ public static class HelpTopics
             + "move HEAD, the index or the stash are refused with the run's name - commit, stash, reset, clean, checkout, "
             + "switch, restore, rebase, merge, cherry-pick, revert, pull, am, worktree, branch, tag and update-ref - checked "
             + "at each call, so a run that starts while the chat is open is held to from its first step and one that ends "
-            + "releases it; the git that moves nothing stays open, and the person may do any of it by hand. Its web_search asks one more source beside the configured ones: native, the provider's "
+            + "releases it; the git that moves nothing stays open, and the person may do any of it by hand. An edit of "
+            + "config.json - a search source added, a provider changed - reaches the run's steps that start after it and "
+            + "never one under way, for the agents' configuration is read when each step starts, as its prompts are; the "
+            + "chat says so where a run is live. Its web_search asks one more source beside the configured ones: native, the provider's "
             + "own search - on the Claude API a request of the harness's own whose only tool is the provider's search, asked "
             + "with the model and key serving the side-task when the agent asks and through that key's gate as every request "
             + "is, what it costs counted then to that model and key, a failure of it - a gate held past the longest wait "
@@ -5519,7 +5522,9 @@ public static class HelpTopics
             "ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
             "ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its "
-            + $"{OrchestratorLayout.HandoffFileName} where one stopped it"),
+            + $"{OrchestratorLayout.HandoffFileName} where one stopped it, and for a reason step the {OrchestratorLayout.PolicyFileName} it started under - the agents' "
+            + "configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps "
+            + "that start after it and never one under way"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",

@@ -154,7 +154,17 @@ public sealed class ReasonStepRunner(
         }
 
         var workspace = launch.Workspace(agentRecord, context.Layout, layout.WorkDirectory(agent), layout.Directory);
-        var (webSearch, webMask) = await WebSearchOf(context, providers, root, cancellationToken).ConfigureAwait(false);
+        var sources = Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild);
+
+        // The step's search names what it asks: an edit of the configuration that takes a source it names away refuses
+        // the step's start with V55's words, as a configuration that no longer reads does - the step does not start on
+        // it, and the run goes on once the configuration names the source again or the step's search names what reads.
+        if (sources.ListProblems(root.Search, $"the search of '{run.Instance}'", $"'{run.Instance}' searches") is [_, ..] noLongerReads)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, string.Join("; ", noLongerReads));
+        }
+
+        var (webSearch, webMask) = await WebSearchOf(context, providers, sources, root, cancellationToken).ConfigureAwait(false);
 
         // What the step's agent is handed to read - its skills, its continuation record's copies - the tool writes in the
         // launch's own directory, which no command of the agent's writes, and the agent reads as a root of its own.
@@ -178,6 +188,11 @@ public sealed class ReasonStepRunner(
         {
             return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, unisolated);
         }
+
+        // The policy the step runs under, kept in its records as the configuration stood when it started: the agents'
+        // configuration is read when each step starts, as its prompts are, so an edit of config.json - a side-task's
+        // among them - reaches the steps that start after it and never one under way.
+        KeptPolicy(fileSystem, layout, run.Instance, agent, ground, webSearch, order);
 
         // The prompt with each skill it names handed over: the folder copied into what the step's agent is handed, the
         // block put in the prompt's place, and what cannot be handed refused here - the step-start half of the skill's
@@ -610,12 +625,11 @@ public sealed class ReasonStepRunner(
     /// </summary>
     /// <param name="context">The repository's context, whose configuration names the sources.</param>
     /// <param name="providers">The configuration's providers and tiers, resolved, whose appointed names the slot holds.</param>
+    /// <param name="sources">The configuration's web search, already read and held to V55's names by the caller.</param>
     /// <param name="step">The step at the root of the step's chain of work (<see cref="ResumeChain.Root"/>), whose <c>search</c> picks its sources.</param>
     /// <param name="cancellationToken">Stops the reading of keys.</param>
-    private async Task<(AgentWebSearch? Search, Runners.ActionValues? Mask)> WebSearchOf(HarnessContext context, AgentProviders providers, WorkflowStep step, CancellationToken cancellationToken)
+    private async Task<(AgentWebSearch? Search, Runners.ActionValues? Mask)> WebSearchOf(HarnessContext context, AgentProviders providers, Web.Search.WebSearchSources sources, WorkflowStep step, CancellationToken cancellationToken)
     {
-        var sources = Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild);
-
         if (sources.Chosen(step.Search) is not [_, ..] chosen)
         {
             return (null, null);
@@ -624,6 +638,46 @@ public sealed class ReasonStepRunner(
         var read = await new Web.Search.WebSearchKeys(keys, gh).ReadAsync(context.Layout, providers.Appointed(), chosen, cancellationToken).ConfigureAwait(false);
 
         return (AgentWebSearch.Of(sources, step.Search, read), Web.Search.WebSearchKeys.Mask(chosen, read));
+    }
+
+    /// <summary>
+    /// The step's policy kept in its records (<see cref="OrchestratorLayout.PolicyFileName"/>): the ground as resolved - its
+    /// restrictions from every source at once - the web search it asks, and what it runs on, each entry of its order with
+    /// the key's name alone. The whole configuration's state as the step started under it, never a key's value.
+    /// </summary>
+    /// <param name="fileSystem">The file system the records are written with.</param>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="instance">The step's instance.</param>
+    /// <param name="agent">The agent the step works as.</param>
+    /// <param name="ground">The ground the step's agent is decided against.</param>
+    /// <param name="webSearch">The web search the step's agent is given; null where it searches none.</param>
+    /// <param name="order">The running order the step starts on.</param>
+    private static void KeptPolicy(IFileSystem fileSystem, OrchestratorLayout layout, string instance, string agent, Agents.Policy.AgentPolicyGround ground, AgentWebSearch? webSearch, IReadOnlyList<AgentRunEntry> order)
+    {
+        var policy = new JsonObject
+        {
+            ["agentPolicy"] = new JsonObject
+            {
+                ["restrictions"] = new JsonArray([.. ground.Restrictions.Select(one => (JsonNode?)$"{one.Text} ({one.Source.ToString().ToLowerInvariant()})")]),
+                ["worktreeRules"] = ground.WorktreeRules,
+                ["protectedPaths"] = ground.ProtectedPaths,
+            },
+            ["agentWebSearch"] = webSearch is null ? null : new JsonObject
+            {
+                ["sources"] = new JsonArray([.. webSearch.Sources.Select(source => (JsonNode?)source.Name)]),
+                ["resultsPerSource"] = webSearch.ResultsPerSource,
+            },
+            ["runsOn"] = new JsonArray([.. order.Select(entry => (JsonNode?)new JsonObject
+            {
+                ["provider"] = entry.Provider,
+                ["model"] = entry.Model,
+                ["client"] = entry.Client,
+                ["key"] = entry.Key,
+                ["effort"] = entry.Effort,
+            })]),
+        };
+
+        fileSystem.WriteAllTextAtomic(Path.Combine(StepDirectoryOf(layout, instance, agent), OrchestratorLayout.PolicyFileName), policy.ToJsonString(JsonStateFile.Options));
     }
 
     /// <summary>
