@@ -437,14 +437,14 @@ public sealed class CodebaseGraphQueryServiceTests
         Assert.Equal(before, Snapshot(tree));
     }
 
-    /// <summary>The topic says what the tool and the verb do, from the code: the operations' bounds, that no step is given the tool yet, and the verb's exits.</summary>
+    /// <summary>The topic says what the tool and the verb do, from the code: the operations' bounds, who is offered the tool, and the verb's exits.</summary>
     [Fact]
     public void TheCodebaseGraphTopic_SaysWhatTheToolAndTheVerbDo()
     {
         var topic = Prose.Words(HelpTopics.Render("codebase-graph"));
 
         Assert.Contains($"find - the nodes a query's words match, best first, generated code after every other, a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id, at most {CodebaseGraphTool.FindLines} ({CodebaseGraphTool.FindMost} with limit);", topic, StringComparison.Ordinal);
-        Assert.Contains("No step is given the tool yet - the API clients will offer it - and query-codebase-graph below runs its read operations;", topic, StringComparison.Ordinal);
+        Assert.Contains("A step whose graph is tools is offered the tool - the API clients among their own, Claude Code through the engine's tool server - with the read operations, wholeFile only where its reads are narrowed and edit only on the API clients (the probe measured Claude Code takes an Edit after a ranged Read, so an agent that means to change a body reads its lines and Edits them), its schema naming those alone, and query-codebase-graph below runs its read operations by hand.", topic, StringComparison.Ordinal);
         Assert.Contains($"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand", topic, StringComparison.Ordinal);
         Assert.Contains($"It ends 0, {HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.", topic, StringComparison.Ordinal);
         Assert.Contains($"at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word", topic, StringComparison.Ordinal);
