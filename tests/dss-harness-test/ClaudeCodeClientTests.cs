@@ -484,6 +484,127 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// A launch of a step that has a codebase graph (<c>graph: tools</c>) is served the graph tool by the engine's own
+    /// MCP server, from the same owner the API clients' tool comes from: the tool beside <c>--tools</c> with an ask rule
+    /// in the launch's settings, taken by <c>system/init</c> (so its listing ends no launch), each call asked of the
+    /// engine and answered by the tool runtime, its lines recorded where the run's graph lines are kept.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatHasAGraph_IsServedItsToolByTheEngineServer_EachCallAskedAndRecorded()
+    {
+        using var kit = new Kit();
+        var big = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
+        Directory.CreateDirectory(Path.Combine(kit.Worktree, "src"));
+        File.WriteAllText(Path.Combine(kit.Worktree, "src", "Big.cs"), big);
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", big));
+        var tool = CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree));
+        var lines = new List<DssHarness.Core.Agents.Runtime.GraphStepLine>();
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject
+        {
+            ["tool"] = "mcp__dssharness__graph",
+            ["input"] = new JsonObject { ["op"] = "outline", ["path"] = "src/Big.cs" },
+        }) }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with
+        {
+            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Narrow: true),
+        }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+
+        // The ask rule beside --tools, and the tool taken by the launch's init.
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
+        Assert.Contains(
+            "mcp__dssharness__graph",
+            settings["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()).ToArray());
+
+        var started = Assert.Single(sink.Of<SessionStarted>());
+        Assert.Contains("mcp__dssharness__graph", started.Tools);
+
+        // The call was asked of the engine and answered by the server, its line recorded.
+        Assert.Equal(1, result.ToolCalls);
+        Assert.DoesNotContain(sink.Of<PermissionDenied>(), denial => denial.Tool == "mcp__dssharness__graph");
+        var call = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphCallLine>(Assert.Single(lines));
+        Assert.Equal("outline", call.Op);
+
+        // The tool's answer reached the model: the outline of the file it asked for.
+        var served = File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName))
+            .Select(line => JsonNode.Parse(line)!)
+            .Where(line => line["response"]?["response"]?["mcp_response"]?["result"]?["content"] is JsonArray)
+            .SelectMany(line => line["response"]!["response"]!["mcp_response"]!["result"]!["content"]!.AsArray().Select(block => block!["text"]?.GetValue<string>() ?? ""))
+            .ToList();
+        Assert.Contains(served, text => text.Contains("Demo", StringComparison.Ordinal) && text.Contains("Big.cs", StringComparison.Ordinal));
+
+        // The tool's edit operation is not given on this client: the probe measured an Edit taken after a ranged Read
+        // on every version taken, so an agent that means to change a body reads its lines and Edits them - the schema
+        // the launch was served holds every other operation and not it.
+        var schema = File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName))
+            .Select(line => JsonNode.Parse(line)!)
+            .Where(line => line["response"]?["response"]?["mcp_response"]?["result"]?["tools"] is JsonArray)
+            .SelectMany(line => line["response"]!["response"]!["mcp_response"]!["result"]!["tools"]!.AsArray().OfType<JsonObject>())
+            .Single(toolNamed => toolNamed["name"]?.GetValue<string>() == AgentGraphSupport.ToolName);
+
+        Assert.Equal(
+            ["find", "node", "related", "outline", "body", "wholeFile"],
+            [.. schema["inputSchema"]!.AsObject()["properties"]!.AsObject()["op"]!.AsObject()["enum"]!.AsArray().Select(one => one!.GetValue<string>())]);
+    }
+
+    /// <summary>
+    /// A whole <c>Read</c> of a file the graph holds parsed over the narrowing bound is denied on Claude Code as a whole
+    /// <c>view_file</c> is on the APIs (<c>graphReads: narrow</c>): by the same owner, with the same words, recorded as
+    /// every denial is and as a line of the step's graph; a ranged read of the same file passes, and a file the graph is
+    /// not sure of passes whole, an escape <c>lowConfidence</c> recorded.
+    /// </summary>
+    [Fact]
+    public async Task AWholeReadOfAParsedFileOverNarrowLines_IsDeniedOnClaudeCode_AsViewFileIsOnTheAPIs()
+    {
+        using var kit = new Kit();
+        var big = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
+        var generated = "// <auto-generated/>\n" + string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the generated file")]) + "\n";
+        Directory.CreateDirectory(Path.Combine(kit.Worktree, "src"));
+        File.WriteAllText(Path.Combine(kit.Worktree, "src", "Big.cs"), big);
+        File.WriteAllText(Path.Combine(kit.Worktree, "src", "Generated.g.cs"), generated);
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", big), ("src/Generated.g.cs", generated));
+        var tool = CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree));
+        var lines = new List<DssHarness.Core.Agents.Runtime.GraphStepLine>();
+        var bigPath = Path.Combine(kit.Worktree, "src", "Big.cs");
+        var generatedPath = Path.Combine(kit.Worktree, "src", "Generated.g.cs");
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(
+            new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = bigPath } },
+            new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = bigPath, ["offset"] = 3, ["limit"] = 4 } },
+            new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = generatedPath } },
+            new JsonObject { ["tool"] = "Edit", ["input"] = new JsonObject { ["file_path"] = bigPath, ["old_string"] = "RANGE-4", ["new_string"] = "EDITED-AFTER-THE-RANGE" }, ["result"] = "edited" }) }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with
+        {
+            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Narrow: true),
+        }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+
+        // The whole read was denied with the way to the graph, the same words as on the APIs, and recorded as every
+        // denial is; the ranged read of the same file and the whole read of a file the graph is not sure of passed.
+        var denied = sink.Of<PermissionDenied>().ToList();
+        var narrow = Assert.Single(denied, denial => denial.Rule == "graphReads: narrow");
+        Assert.Equal(
+            "'src/Big.cs' is 222 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile",
+            narrow.Reason);
+
+        var deniedLine = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphDeniedLine>(Assert.Single(lines.OfType<DssHarness.Core.Agents.Runtime.GraphDeniedLine>()));
+        Assert.Equal(("src/Big.cs", 222), (deniedLine.Path, deniedLine.Lines));
+
+        var escaped = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphEscapeLine>(Assert.Single(lines.OfType<DssHarness.Core.Agents.Runtime.GraphEscapeLine>()));
+        Assert.Equal(("src/Generated.g.cs", DssHarness.Core.Agents.Runtime.GraphEscapeLine.LowConfidence), (escaped.Path, escaped.Escape));
+
+        // An Edit after the ranged read is taken as the probe measured it: asked of the engine and allowed, a write
+        // decided as every write is - the fake claude taking the flow the launch recorded.
+        Assert.DoesNotContain(sink.Of<PermissionDenied>(), denial => denial.Tool == "Edit");
+        Assert.Equal(4, result.ToolCalls);
+    }
+
+    /// <summary>
     /// An answer that does not read against its schema is sent back to the same launch with each problem by its path, as
     /// a repair message, and the answer that then reads completes the step.
     /// </summary>

@@ -1411,17 +1411,28 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "the tools of the agent's capabilities and no other - read: Read, Grep, Glob; write: Write, Edit, NotebookEdit; run: Bash; web: "
-                + "none of Claude Code's, but mcp__dssharness__web_fetch and mcp__dssharness__web_search of the engine's tool server beside them "
+                + "none of Claude Code's, but mcp__dssharness__web_fetch and mcp__dssharness__web_search of the engine's tool server beside them; and "
+                + "a step that has a codebase graph (graph: tools) takes mcp__dssharness__graph of the engine's tool server beside them, only where its "
+                + "step is given one "
                 + "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "A step with the web takes the harness's own web_fetch - and web_search, where it has a source to search - from the engine's tool "
-                + "server: the one MCP server, of type sdk, named dssharness, that the launch's --mcp-config names beside --strict-mcp-config (the "
+                + "server, and a step that has a codebase graph (graph: tools) takes its one tool, mcp__dssharness__graph, from the same: the one MCP server, of type sdk, named dssharness, that the launch's --mcp-config names beside --strict-mcp-config (the "
                 + "step's claude-mcp.json), served in the engine's own process over the launch's control channel - its initialize, its tool list "
                 + "and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask rule, and run by the "
-                + "tool runtime below as on the API clients, each address decided and recorded. A launch whose init does not show that server "
+                + "tool runtime below as on the API clients, each address decided and recorded, the graph's calls answered by the same owner that "
+                + "answers them on the API clients and each recorded as a line of the step's graph - but its edit operation is not given on this "
+                + "client: the probe measured an Edit taken after a ranged Read, inside the range and outside it, on every version taken, so an "
+                + "agent that means to change a body reads its lines with Read and Edits them. A launch whose init does not show that server "
                 + "connected with its tools taken, or that connects another, never started;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A step whose reads are narrowed (graphReads: narrow, 'help codebase-graph') is denied a whole Read - one with no offset and no "
+                + "limit - of a file its graph holds parsed over the narrowing bound, by the same owner that narrows view_file on the API clients "
+                + "and with the same words, a range passing and the same two escapes counted and recorded as the graph's lines.",
             prose,
             StringComparison.Ordinal);
 

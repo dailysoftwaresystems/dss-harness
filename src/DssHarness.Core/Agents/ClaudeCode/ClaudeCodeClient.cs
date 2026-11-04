@@ -190,13 +190,36 @@ public sealed class ClaudeCodeClient(
         var tools = ClaudeCodeTools.Of(ground.Given, ground.SideTask, ownFiles);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
 
-        // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web, and the
-        // file tools where Claude Code's own are not given.
+        // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web, the
+        // file tools where Claude Code's own are not given, and the graph tool, on a step that has one (graph: tools) -
+        // served beside --tools with an ask rule, as part 03's table gives it, from the same owner the API clients'
+        // tool comes from: the tool runtime.
         var served = ClaudeCodeTools.Served(AgentTools.Offered(ground, run.Commands, run.WebSearch), ownFiles);
+
+        if (run.Graph is not null && !served.Contains(AgentGraphSupport.ToolName, StringComparer.Ordinal))
+        {
+            served = [.. served, AgentGraphSupport.ToolName];
+        }
 
         if (served.Count > 0 && _tools is null)
         {
             return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"the launch takes {string.Join(", ", served)} from the engine's tool server, and this client was given no tool runtime to serve them with", run);
+        }
+
+        // The probe measured an Edit taken after a ranged Read, inside the range and outside it, on every version
+        // taken (the probe's ranged-edit launch, 2026-11-04): an agent that means to change a body reads its lines
+        // with Read and Edits them, and the graph tool's edit operation is not given on this client - the one
+        // change made here to the operations the run's step was given, the same owner serving it as on the APIs.
+        if (run.Graph is { } support)
+        {
+            run = run with
+            {
+                Graph = support with
+                {
+                    Operations = new HashSet<Runtime.GraphOp>((support.Operations ?? Runtime.CodebaseGraphTool.Operations(write: true, narrow: support.Narrow))
+                        .Where(operation => operation != Runtime.GraphOp.Edit)),
+                },
+            };
         }
 
         for (var entry = 0; ; entry++)
@@ -402,6 +425,7 @@ public sealed class ClaudeCodeClient(
         private readonly List<Task> _calling = [];
         private readonly Dictionary<string, string?> _servedFiles = new(StringComparer.Ordinal);
         private AgentToolServer? _server;
+        private Runtime.AgentToolRuntime? _servedBy;
         private CancellationToken _ending;
 
         private readonly Channel<Arrival> _arrivals = Channel.CreateUnbounded<Arrival>(new UnboundedChannelOptions { SingleReader = true });
@@ -556,6 +580,7 @@ public sealed class ClaudeCodeClient(
             using var stderr = AppendLog.Open(files, Path.Combine(directory, ClaudeLaunch.ErrorFileName));
             using var ending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _server = runtime is null ? null : new AgentToolServer(runtime);
+            _servedBy = runtime;
             _ending = ending.Token;
 
             var request = new ProcessRequest
@@ -1414,8 +1439,12 @@ public sealed class ClaudeCodeClient(
         /// <summary>
         /// The engine's answer to a call of <paramref name="tool"/>: its policy's, or, in the handoff turn, that turn's
         /// refusal. A fault of the engine's own while deciding is a denial too, by <see cref="AgentPolicy.UndecidedRule"/> - recorded as
-        /// every denial is, and never a failure that escapes - for nothing runs that was not decided.
+        /// every denial is, and never a failure that escapes - for nothing runs that was not decided. A whole read of a
+        /// file the graph holds parsed is narrowed here too (<c>graphReads: narrow</c>), by the same owner that narrows
+        /// <c>view_file</c> on the APIs, its denial and its two escapes recorded as the graph's own lines.
         /// </summary>
+        /// <param name="tool">The tool, as Claude Code names it.</param>
+        /// <param name="input">The call's input, as asked.</param>
         private AgentPolicyAnswer Decide(string tool, JsonNode? input)
         {
             if (_handing != Handing.No)
@@ -1425,7 +1454,14 @@ public sealed class ClaudeCodeClient(
 
             try
             {
-                return ClaudeToolDecider.Decide(policy, _given, tool, input, run.Workspace.WorkingDirectory);
+                var decided = ClaudeToolDecider.Decide(policy, _given, tool, input, run.Workspace.WorkingDirectory);
+
+                return tool == ClaudeCodeTools.Read && input is JsonObject holding && decided is AgentPolicyAnswer.Allowed
+                    && holding["offset"] is null && holding["limit"] is null
+                    && holding["file_path"] is JsonValue named && named.TryGetValue<string>(out var path) && path.Length > 0
+                    && _servedBy?.NarrowedRead(path) is { } narrowed
+                    ? narrowed
+                    : decided;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

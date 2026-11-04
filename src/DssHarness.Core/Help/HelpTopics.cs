@@ -3640,7 +3640,8 @@ public static class HelpTopics
             "; ",
             Agents.ClaudeCode.ClaudeCodeTools.Table.Select(row =>
                 $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"
-                + (Agents.ClaudeCode.ClaudeCodeTools.ServedOf(row.Capability) is [_, ..] served ? $", but {string.Join(" and ", served)} of the engine's tool server beside them" : string.Empty)));
+                + (Agents.ClaudeCode.ClaudeCodeTools.ServedOf(row.Capability) is [_, ..] served ? $", but {string.Join(" and ", served)} of the engine's tool server beside them" : string.Empty)))
+            + $"; and a step that has a codebase graph (graph: tools) takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentGraphSupport.ToolName)} of the engine's tool server beside them, only where its step is given one";
         var controlled = string.Join(", ", Agents.Policy.ClaudeSettings.Controlled.Select(name => $"{name.Key}={name.Value}"));
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
@@ -3656,16 +3657,24 @@ public static class HelpTopics
             + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.ServedOf(Agents.AgentCapability.Write, ownFiles: false))} in place of "
             + "Claude Code's own, each call asked of the engine and run by the tool runtime below as on the API clients. The run's reporter is given "
             + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. A step with the web takes the harness's own "
-            + $"{Agents.Runtime.AgentTools.WebFetch} - and {Agents.Runtime.AgentTools.WebSearch}, where it has a source to search - from the engine's tool server: the one MCP "
+            + $"{Agents.Runtime.AgentTools.WebFetch} - and {Agents.Runtime.AgentTools.WebSearch}, where it has a source to search - from the engine's tool server, and a step that has "
+            + $"a codebase graph (graph: tools) takes its one tool, {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentGraphSupport.ToolName)}, from the same: the one MCP "
             + $"server, of type sdk, named {Agents.ClaudeCode.ClaudeCodeTools.Server}, that the launch's --mcp-config names beside --strict-mcp-config (the step's "
             + $"{Agents.ClaudeCode.ClaudeLaunch.McpFileName}), served in the engine's own process over the launch's control channel - its initialize, "
             + "its tool list and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask "
-            + "rule, and run by the tool runtime below as on the API clients, each address decided and recorded. A launch whose init "
+            + "rule, and run by the tool runtime below as on the API clients, each address decided and recorded, the graph's calls "
+            + "answered by the same owner that answers them on the API clients and each recorded as a line of the step's graph - "
+            + "but its edit operation is not given on this client: the probe measured an Edit taken after a ranged Read, inside "
+            + "the range and outside it, on every version taken, so an agent that means to change a body reads its lines with Read "
+            + "and Edits them. A launch whose init "
             + "does not show that server connected with its tools taken, or that connects another, never started; a call of it the "
             + "engine was not asked about and did not allow runs nothing and fails the step. Every call its own deny rules do not "
             + "refuse first is asked of the engine before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
             + $"reads, and is a line of the step's {Agents.AgentCallRecords.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
-            + "cannot read, is denied by name. An answer sent back (below) and a message the engine gives an agent at work are "
+            + "cannot read, is denied by name. A step whose reads are narrowed (graphReads: narrow, 'help codebase-graph') is "
+            + "denied a whole Read - one with no offset and no limit - of a file its graph holds parsed over the narrowing bound, "
+            + "by the same owner that narrows view_file on the API clients and with the same words, a range passing and the same "
+            + "two escapes counted and recorded as the graph's lines. An answer sent back (below) and a message the engine gives an agent at work are "
             + "written to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
             + "interrupts the turn and asks the agent for its handoff in the same launch once every message it was given was "
             + "taken or dropped, no tool running in that turn, a "
@@ -4994,7 +5003,7 @@ public static class HelpTopics
             + $"{CodebaseGraphTool.NameOf(GraphOp.Edit)} - a node's lines replaced where the hash given is its hash now - a node spread over files in the part that hash names - the file's encoding, line endings and final newline kept, and nothing written where it changed; "
             + $"{CodebaseGraphTool.NameOf(GraphOp.WholeFile)} - the narrowing of reads lifted for one file, with why. "
             + "body and edit reach a file only inside the tree, each link resolved, never through a link out of it. "
-            + "A step whose graph is tools is offered the tool - the API clients among their own - with the read operations, edit only where its agent may write and wholeFile only where its reads are narrowed, its schema naming those alone, and query-codebase-graph below runs its read operations by hand. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
+            + "A step whose graph is tools is offered the tool - the API clients among their own, Claude Code through the engine's tool server - with the read operations, wholeFile only where its reads are narrowed and edit only on the API clients (the probe measured Claude Code takes an Edit after a ranged Read, so an agent that means to change a body reads its lines and Edits them), its schema naming those alone, and query-codebase-graph below runs its read operations by hand. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
             + "Every node an answer names carries path:start-end - a declaration # with the first eight characters of its digest too, a file its lines - every answer ends naming the files whose extract the graph no longer holds, if any, and every answer is cut at a whole line past "
             + $"{(CodebaseGraphTool.MostCharacters / 1024).ToString(CultureInfo.InvariantCulture)} KB, saying how to ask for the rest with offset. Where the graph is not sure - no node matched, a name it does not hold, "
             + $"an edge of {CodeConfidences.Candidates}, a node named with external or unresolved callees or in a file dynamic or generated - the answer adds text: at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word, "

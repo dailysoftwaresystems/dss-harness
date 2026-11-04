@@ -298,6 +298,23 @@ So `ClaudeLine.CallResult.RefusedByRule` reads a refusal by its result's words o
 not run - which the `reject` stamp says from 2.1.308, and the input-error mark on 2.1.287 - and the
 client counts and records it once as Claude Code's own denial, however many lines tell it.
 
+## An Edit after a ranged Read
+
+The launch `ranged-edit`, run on 2026-11-04 for slice 27e against the `stable` tag's 2.1.311 and
+`latest` 2.1.318, with `--tools Read,Edit`, a file of eight lines and a host that allows every
+ask. Not in the record of 2026-10-19, which settled the asks; the oldest version taken is not
+asked, for it changes nothing here. Every answer below held identically on both versions.
+
+- **An `Edit` is taken after a `Read` with `offset` and `limit`, inside the range that read
+  reached and outside it.** The ranged read (offset 2, limit 3) was asked about and allowed; both
+  edits - one whose old string stood on a line the read reached, one whose stood well past it -
+  were each asked of the host, neither refused by itself, no `permission_denied` line, and both
+  writes ran. Claude Code enforces no read-before-edit of its own for a ranged read.
+
+So the graph tool's `edit` operation is not given on Claude Code (part 08, "Symbol-scoped
+edits"): an agent that means to change a body reads its lines with `Read` and the range the
+answer gave, and Edits them - which costs the lines, not the file.
+
 ## Not settled by this run
 
 - **What `apiKeySource` says under a key from the slot**: no key was in any launch's

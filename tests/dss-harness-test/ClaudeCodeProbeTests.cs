@@ -469,6 +469,58 @@ public sealed class ClaudeCodeProbeTests
         launch.Findings["wroteWritten"] = File.Exists(scratch.Outside("written.txt"));
     });
 
+    /// <summary>
+    /// An <c>Edit</c> after a ranged <c>Read</c> (slice 27e; part 08, "Symbol-scoped edits"): whether Claude Code takes an
+    /// <c>Edit</c> of a file whose only read was a <c>Read</c> with <c>offset</c> and <c>limit</c> - one whose edited text
+    /// stands inside the range that read reached, and one outside it - each asked of the host or refused by itself, and
+    /// whether each write ran. Not in the probe's record of 2026-10-19, which settled the asks; the stable channel and
+    /// <c>latest</c> alone are asked, for the oldest version taken changes nothing here.
+    /// </summary>
+    [Fact]
+    public Task AnEditAfterARangedRead_IsRecordedOnStableAndLatest() => EveryChannelAsync(async probe =>
+    {
+        using var scratch = await Scratch.CreateAsync(Token);
+        File.WriteAllText(Path.Combine(scratch.Repository, "ranged.txt"), string.Join("\n", Enumerable.Range(1, 8).Select(at => $"RANGE-{at}")) + "\n");
+
+        await using var launch = Launch.Start(probe, "ranged-edit", scratch, new LaunchOptions { Tools = ["Read", "Edit"] });
+        await launch.InitializeAsync(Token);
+        await launch.TurnAsync(
+            "Use the Read tool to read the file ranged.txt with offset 2 and limit 3 - only that range. Then use the Edit tool to replace the exact text RANGE-3 with EDITED-INSIDE. Say only: done.",
+            Allow,
+            Token);
+        await launch.TurnAsync(
+            "Now use the Edit tool, without reading the file again, to replace the exact text RANGE-6 with EDITED-OUTSIDE. Say only: done.",
+            Allow,
+            Token);
+
+        var lines = launch.Lines(0).Select(line => JsonNode.Parse(line) as JsonObject).OfType<JsonObject>().ToList();
+        var edits = new JsonArray();
+
+        foreach (var use in lines.Where(line => (string?)line["type"] == "assistant").SelectMany(line => line["message"]?["content"] as JsonArray ?? []).OfType<JsonObject>().Where(block => (string?)block["type"] == "tool_use" && (string?)block["name"] == "Edit"))
+        {
+            var id = (string?)use["id"];
+            var user = lines.FirstOrDefault(line => (string?)line["type"] == "user" && (line["message"]?["content"] as JsonArray ?? []).OfType<JsonObject>().Any(block => (string?)block["tool_use_id"] == id));
+            var result = (user?["message"]?["content"] as JsonArray ?? []).OfType<JsonObject>().FirstOrDefault(block => (string?)block["tool_use_id"] == id);
+
+            edits.Add(new JsonObject
+            {
+                ["edited"] = (string?)use["input"]?["old_string"],
+                ["asked"] = lines.Any(line => (string?)line["request"]?["subtype"] == "can_use_tool" && (string?)line["request"]?["tool_use_id"] == id),
+                ["permissionDenied"] = lines.FirstOrDefault(line => (string?)line["subtype"] == "permission_denied" && (string?)line["tool_use_id"] == id)?["message"]?.DeepClone(),
+                ["isError"] = result?["is_error"]?.DeepClone(),
+                ["result"] = result?["content"] is JsonValue text ? (string?)text : result?["content"]?.ToJsonString(),
+            });
+        }
+
+        var ranged = File.ReadAllText(Path.Combine(scratch.Repository, "ranged.txt"));
+
+        launch.Findings["edits"] = edits;
+        launch.Findings["rangedReadGiven"] = lines.Any(line => (string?)line["request"]?["subtype"] == "can_use_tool" && (string?)line["request"]?["tool_name"] == "Read"
+            && (int?)line["request"]?["input"]?["offset"] is 2 && (int?)line["request"]?["input"]?["limit"] is 3);
+        launch.Findings["editedInside"] = ranged.Contains("EDITED-INSIDE", StringComparison.Ordinal);
+        launch.Findings["editedOutside"] = ranged.Contains("EDITED-OUTSIDE", StringComparison.Ordinal);
+    });
+
     /// <summary>The probe's own server's search tool, as Claude Code names it.</summary>
     private const string ProbeSearch = "mcp__dssharness__web_search";
 
