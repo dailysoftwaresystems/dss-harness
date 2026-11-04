@@ -489,7 +489,14 @@ that fails again comes back by its own `onFailure`, until it passes or a person 
 failed agent is tried again (`retries`, waiting `backoffSeconds`, twice as long each time) and on
 each model of its fallback, quota or a provider that fails pauses the run where it can resume, and
 what still fails is asked (`onFailure: pause`). The implementation workflow says all of it on its steps, so a run of it
-ends done or asks only what it must.
+ends done or asks only what it must. It builds first: its baseline is split in two - a `build` step, which fails red
+and is taken by the recovery and built again - and the `test` step it was, which waits for the build - and the flow
+makes its codebase graph after that build, beside the baseline's tests and the CI read, passed over where it cannot be
+made. Every reason step after it is served from the graph as its type of work needs: the steps that read code for
+their task say nothing and are given the tool and their task's seeds by default, the reviewers, the self-audit, the
+diagnosis and the steps that verify and fix start their packs from their changes (`graphFrom: changes`), the
+prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the run's records, ask
+none of it (`dssharness help codebase-graph`).
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That

@@ -5192,10 +5192,18 @@ public sealed partial class HelpTests
             key => Assert.Contains($"{key.Meaning}; required", result.StandardOutput, StringComparison.Ordinal));
 
         // What init writes of the implementation workflow, and where: the one owner of that rule is InitService, held to it by
-        // InitServiceTests, and this sentence says what those hold.
+        // InitServiceTests, and this sentence says what those hold. The flow's own head and graph serving are said with it:
+        // the build first, the graph after it, and each type of reason step's keys.
         Assert.Contains(
             "init writes one - the implementation workflow, from a request to a pull request whose checks are green - and declares it in "
-                + $"the config it creates. Where config.json declares {WorkflowTemplates.ShippedWorkflowName}, init writes each of its "
+                + "the config it creates. It builds first: the baseline is split in two - a build step, which fails red and is taken by the "
+                + "recovery and built again - and the test step it was, which waits for the build - and the flow makes its codebase graph "
+                + "after that build, beside the baseline's tests and the CI read, passed over where it cannot be made; every reason step "
+                + "after it is served from the graph as its type of work needs: the steps that read code for their task say nothing and are "
+                + "given the tool and their task's seeds by default, the reviewers, the self-audit, the diagnosis and the steps that verify "
+                + "and fix say graphFrom: changes, the prioritiser and a review's scope are given the map alone, and the scribe's steps, "
+                + "which write the run's records, ask none of it. Where config.json declares "
+                + $"{WorkflowTemplates.ShippedWorkflowName}, init writes each of its "
                 + "files that is missing - the whole set where the repository has no definition of it yet, and where it has one only "
                 + "the shipped files that definition names, so a file taken out with its step stays out - and keeps each one that is "
                 + "there, whatever it holds, so an init that stopped part way is "

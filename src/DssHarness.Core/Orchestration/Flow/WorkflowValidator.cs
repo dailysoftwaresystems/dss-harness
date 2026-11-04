@@ -1183,43 +1183,16 @@ public static class WorkflowValidator
             => WorkflowStep.GraphOf(entry.Step, WorksAs(entry).Definition, GraphifyUpstream(entry));
 
         /// <summary>
-        /// Whether a <c>graphify-codebase</c> step is upstream of <paramref name="entry"/> - a step its
-        /// <c>dependsOn</c> closure reaches - or, where the step is the recovery's own, one is declared, for a graph
-        /// made anywhere has ended by the time the recovery runs.
+        /// Whether a <c>graphify-codebase</c> step is upstream of <paramref name="entry"/> - a step its waits reach,
+        /// through its own dependencies and those of every group around it (<see cref="FlowGraph.Waits"/>) - or, where
+        /// the step is the recovery's own, one is declared, for a graph made anywhere has ended by the time the
+        /// recovery runs.
         /// </summary>
         /// <param name="entry">The step.</param>
         private bool GraphifyUpstream(Entry entry)
-        {
-            if (InRecovery(entry))
-            {
-                return _entries.Any(other => other.Step.Type == "graphify-codebase");
-            }
-
-            var seen = new HashSet<Entry> { entry };
-            var waiting = new Queue<Entry>([entry]);
-
-            while (waiting.Count > 0)
-            {
-                var current = waiting.Dequeue();
-
-                foreach (var name in current.Step.DependsOn)
-                {
-                    if (Sibling(current, name) is not { } dependency || !seen.Add(dependency))
-                    {
-                        continue;
-                    }
-
-                    if (dependency.Step.Type == "graphify-codebase")
-                    {
-                        return true;
-                    }
-
-                    waiting.Enqueue(dependency);
-                }
-            }
-
-            return false;
-        }
+            => InRecovery(entry)
+                ? _entries.Any(other => other.Step.Type == "graphify-codebase")
+                : _entries.Where(other => other.Step.Type == "graphify-codebase").Any(other => FlowGraph.Waits(_definition, entry.Path, other.Path));
 
         /// <summary>
         /// The chain of reason steps a step that goes on with another's work is part of, its root first and itself

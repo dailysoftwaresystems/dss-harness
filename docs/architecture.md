@@ -1566,7 +1566,14 @@ still fails is asked. The implementation workflow writes `onFailure: recover` on
 checks, commits, pushes or waits - itself or through its group - and `onFailure: pause` on every
 reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
 the visits), asks a person only for what only a person can give (`direction`), and builds, tests,
-folds and reviews its fix as a round's work items are.
+folds and reviews its fix as a round's work items are. The flow builds first: its baseline is split
+in two - a `build` step, which fails red and is taken by the recovery and built again - and the
+`test` step it was, which waits for the build - and it makes its codebase graph after that build,
+beside the baseline's tests and the CI read (`onFailure: continue`, for a run goes on without a map);
+every reason step after it is served from the graph as its type of work needs, its steps saying the
+graph keys only where a type is served otherwise than by default (`graphFrom: changes` on the
+reviewers, the self-audit, the diagnosis and the steps that verify and fix; `graph: map` on the
+prioritiser and a review's scope; `graph: off` on the scribe's).
 
 Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may
 say `timeoutMinutes` (`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole

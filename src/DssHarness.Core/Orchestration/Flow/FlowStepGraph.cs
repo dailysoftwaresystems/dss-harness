@@ -473,51 +473,21 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
         };
 
     /// <summary>
-    /// Whether a <c>graphify-codebase</c> step is upstream of the step at <paramref name="path"/> - one its
-    /// <c>dependsOn</c> closure, sibling by sibling, reaches - or, where the step is the recovery's own, one is declared,
-    /// for a graph made anywhere has ended by the time the recovery runs. The definition's check (V53) holds the same
-    /// question over its own shape; this holds it as the run stands.
+    /// Whether a <c>graphify-codebase</c> step is upstream of the step at <paramref name="path"/> - one its waits reach,
+    /// through its own dependencies and those of every group around it (<see cref="FlowGraph.Waits"/>) - or, where the
+    /// step is the recovery's own, one is declared, for a graph made anywhere has ended by the time the recovery runs.
+    /// The definition's check (V53) holds the same question over its own shape; this holds it as the run stands.
     /// </summary>
     private static bool GraphifyUpstream(WorkflowDefinition definition, string path)
     {
-        var declared = FlowScope.Declared(definition).ToList();
-
         if (path.StartsWith(FlowScope.Recovery + ".", StringComparison.Ordinal))
         {
-            return declared.Any(one => one.Step.Type == "graphify-codebase");
+            return FlowScope.Declared(definition).Any(one => one.Step.Type == "graphify-codebase");
         }
 
-        var prefix = path.LastIndexOf('.') is > 0 and var dot ? path[..(dot + 1)] : string.Empty;
-        var seen = new HashSet<string>(StringComparer.Ordinal) { path };
-        var waiting = new Queue<string>([path]);
-
-        while (waiting.Count > 0)
-        {
-            var currentPath = waiting.Dequeue();
-            var current = declared.FirstOrDefault(one => one.Path == currentPath);
-
-            if (current.Step is null)
-            {
-                continue;
-            }
-
-            foreach (var name in current.Step.DependsOn)
-            {
-                if (!seen.Add(prefix + name))
-                {
-                    continue;
-                }
-
-                if (declared.FirstOrDefault(one => one.Path == prefix + name) is { Step.Type: "graphify-codebase" })
-                {
-                    return true;
-                }
-
-                waiting.Enqueue(prefix + name);
-            }
-        }
-
-        return false;
+        return FlowScope.Declared(definition)
+            .Where(one => one.Step.Type == "graphify-codebase")
+            .Any(one => FlowGraph.Waits(definition, path, one.Path));
     }
 
     /// <summary>

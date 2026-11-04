@@ -4994,7 +4994,7 @@ public static class HelpTopics
             + $"{CodebaseGraphTool.NameOf(GraphOp.Edit)} - a node's lines replaced where the hash given is its hash now - a node spread over files in the part that hash names - the file's encoding, line endings and final newline kept, and nothing written where it changed; "
             + $"{CodebaseGraphTool.NameOf(GraphOp.WholeFile)} - the narrowing of reads lifted for one file, with why. "
             + "body and edit reach a file only inside the tree, each link resolved, never through a link out of it. "
-            + "No step is given the tool yet - the API clients will offer it - and query-codebase-graph below runs its read operations; a step is to be given the read operations, edit only where it may write and wholeFile only where its reads are narrowed, its schema naming those alone. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
+            + "A step whose graph is tools is offered the tool - the API clients among their own - with the read operations, edit only where its agent may write and wholeFile only where its reads are narrowed, its schema naming those alone, and query-codebase-graph below runs its read operations by hand. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
             + "Every node an answer names carries path:start-end - a declaration # with the first eight characters of its digest too, a file its lines - every answer ends naming the files whose extract the graph no longer holds, if any, and every answer is cut at a whole line past "
             + $"{(CodebaseGraphTool.MostCharacters / 1024).ToString(CultureInfo.InvariantCulture)} KB, saying how to ask for the rest with offset. Where the graph is not sure - no node matched, a name it does not hold, "
             + $"an edge of {CodeConfidences.Candidates}, a node named with external or unresolved callees or in a file dynamic or generated - the answer adds text: at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word, "
@@ -5002,7 +5002,7 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "A reason step is to be given, at its start, its context pack - the API clients will give it - the part of the graph its work touches, made from its view and what the step says alone, "
+            "A reason step is given, at its start, its context pack - the part of the graph its work touches, made from its view and what the step says alone, "
             + "so the same step on the same tree is given the same pack. Its seeds are what its prompt names exactly - a symbol or a path in backquotes, a qualified name or its last parts (Order.Total), "
             + $"a handle, a path:line as a stack frame or a compiler writes one - the working sets it is given, the declarations of the files its writes covers, and the {CodebaseContextPack.WordSeeds} nodes its words match best. "
             + $"The walk goes {CodebaseContextPack.NamedHops} hops from a node named or worked with and {CodebaseContextPack.OtherHops} from the others, over calls both ways, the type relations, tests and the types a node names, each node scored by its seed's weight "
@@ -5017,7 +5017,7 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"When a reason step that has a graph ends, the engine is to write its working set, {OrchestratorLayout.StepWorkingSetFileName} - the API clients will - never the model: "
+            $"When a reason step that has a graph ends, the engine writes its working set, {OrchestratorLayout.StepWorkingSetFileName} - never the model: "
             + $"each node it {string.Join(", ", WorkingSetUses.All.SkipLast(1))} or {WorkingSetUses.All[^1]}, with its handle, file, lines and hash at the step's end, at most {CodebaseWorkingSet.MostNodes}, "
             + "edited first, then by how often each was touched; a node the view no longer holds kept by its id, marked gone. It is made from the step's "
             + $"{OrchestratorLayout.StepGraphFileName} - each node a graph call asked about by name (found), a line of which body gave (served), or an edit wrote, by its lines - and the tool calls its stored stream holds, "
@@ -5058,7 +5058,15 @@ public static class HelpTopics
         builder.AppendLine("are relative to its own directory (see 'help runners'). So two workflows never read");
         builder.AppendLine("each other's files, and a repository can hold as many as it has ways of working. init");
         builder.AppendLine("writes one - the implementation workflow, from a request to a pull request whose checks are");
-        builder.AppendLine($"green - and declares it in the config it creates. Where config.json declares {WorkflowTemplates.ShippedWorkflowName},");
+        builder.AppendLine($"green - and declares it in the config it creates. It builds first: the baseline is split in two - a build");
+        builder.AppendLine("step, which fails red and is taken by the recovery and built again - and the test step it was, which");
+        builder.AppendLine("waits for the build - and the flow makes its codebase graph after that build, beside the baseline's");
+        builder.AppendLine("tests and the CI read, passed over where it cannot be made; every reason step after it is served from");
+        builder.AppendLine("the graph as its type of work needs: the steps that read code for their task say nothing and are");
+        builder.AppendLine("given the tool and their task's seeds by default, the reviewers, the self-audit, the diagnosis and the");
+        builder.AppendLine("steps that verify and fix say graphFrom: changes, the prioritiser and a review's scope are given the map");
+        builder.AppendLine("alone, and the scribe's steps, which write the run's records, ask none of it. Where");
+        builder.AppendLine($"config.json declares {WorkflowTemplates.ShippedWorkflowName},");
         builder.AppendLine("init writes each of its files that is missing - the whole set where the repository has no");
         builder.AppendLine("definition of it yet, and where it has one only the shipped files that definition names,");
         builder.AppendLine("so a file taken out with its step stays out - and keeps each one that is there,");
