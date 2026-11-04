@@ -1,6 +1,7 @@
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
+using DssHarness.Core.Application.Hosting;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
 using DssHarness.Core.Ci;
@@ -378,6 +379,7 @@ public static class ServiceRegistration
         services.AddSingleton<ITestLegs, TestLegs>();
         services.AddSingleton<IRunnerLegs, RunnerLegs>();
         services.AddSingleton<IMutationLegs, MutationLegs>();
+        services.AddSingleton<IShowLegs, ShowLegs>();
 
         // Leg machinery. Shared by build, test, run and check-mutations, so the isolation rules cannot hold for one
         // command and not another.
@@ -433,6 +435,7 @@ public static class ServiceRegistration
             provider.GetRequiredService<IProcessIdentity>()));
         services.AddSingleton<LocalSyncTransport>();
         services.AddSingleton<ISyncTransport>(provider => provider.GetRequiredService<LocalSyncTransport>());
+        services.AddSingleton<SyncServeHandler>();
         services.AddSingleton<ISyncTransportFactory, SyncTransportFactory>();
         services.AddSingleton<ISyncService, SyncService>();
         services.AddSingleton<IHostCopyRemover, HostCopyRemover>();
