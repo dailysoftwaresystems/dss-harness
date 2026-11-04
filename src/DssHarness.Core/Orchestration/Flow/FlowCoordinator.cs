@@ -6886,6 +6886,18 @@ public sealed class FlowCoordinator
             // One visit for each handler raised: the one a when that could not be read failed is that visit, and so is
             // one an earlier raise of this ending made.
             var raised = RaisedFor(instance, handler, scope) ?? NewVisit(scope, handler, FlowInstanceState.NotStarted, made: raised => raised.RaisedBy = instance);
+
+            // A handler that is a group is a block of its own in the scope its source stands in, its steps scheduled as
+            // any scope's are - the admission walk starts no group, so its block is made here, as the recovery's own
+            // raise makes its (TakeRecoveryOf).
+            if (handler.IsGroup && raised.OwnScope is null && raised.State is FlowInstanceState.NotStarted)
+            {
+                raised.State = FlowInstanceState.Running;
+                raised.OwnScope = NewScope(raised.Id, PathOf(scope, handler), scope, handler, FlowValue.Missing, null, null, null);
+                raised.OwnScope.OwnGroupInstance = raised;
+                Record(FlowChangeKind.Step, raised, to: FlowInstanceState.Running);
+            }
+
             raisedFor.Add(raised);
             SetHandlerState(instance, handler.Name, "raised");
 
@@ -9197,7 +9209,11 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The facts a handler or a recovery reads of its source: its output beside the engine's own facts of how it ended
     /// - outcome, code, error, question - and, for a recovery, the step as the report names it and the fix a person
-    /// gave where its bound was answered direct - for the visit it was given to, and empty on every other.
+    /// gave where its bound was answered direct - for the visit it was given to, and empty on every other. What the
+    /// source's prompts read beside them is answered whatever the source is: the issue a recovery over a pre-existing
+    /// issue triages, with its proof - empty where the source is a step's failure, whose own output stands - the red
+    /// its output holds, its findings and where its run kept its records - empty where it holds none - and the text of
+    /// the answer its question was given, which a handler that goes on with a person's words reads.
     /// </summary>
     private static JsonObject SourceFacts(FlowInstance source, FlowInstance? raised)
     {
@@ -9211,6 +9227,27 @@ public sealed class FlowCoordinator
             }
         }
 
+        // The issue the recovery fixes at its root, as its diagnose prompt reads it: its own facts, standing over the
+        // output's members, for the visit is the issue's; empty where the source is a step's failure.
+        if (source.Issue is { } issue)
+        {
+            facts["title"] = issue.Title;
+            facts["description"] = issue.Description;
+            facts["where"] = issue.Where;
+            facts["proof"] = issue.Evidence;
+        }
+        else
+        {
+            facts.TryAdd("title", string.Empty);
+            facts.TryAdd("description", string.Empty);
+            facts.TryAdd("where", string.Empty);
+            facts.TryAdd("proof", string.Empty);
+        }
+
+        facts.TryAdd("red", new JsonArray());
+        facts.TryAdd("findings", new JsonArray());
+        facts.TryAdd("runDirectory", string.Empty);
+        facts.TryAdd("text", source.Answers.LastOrDefault()?.Text ?? string.Empty);
         facts["outcome"] = source.State switch
         {
             FlowInstanceState.Done => "done",
@@ -10555,6 +10592,15 @@ public sealed class FlowCoordinator
             if (declared.Type != "reason" || declared.Resume is null || !ResumesTransitively(declarations, path, makerPath))
             {
                 continue;
+            }
+
+            // A raised step - a handler, or a step of the recovery - can always be raised again while the run goes
+            // on, for what would stop it is a bound the run asks a person about, and a run that asks is not going
+            // on: its agent is kept for the visit that goes on with its work, the recovery's diagnose resuming
+            // itself across the recovery's visits among them.
+            if (declared.On is not null || path.StartsWith(FlowScope.Recovery + ".", StringComparison.Ordinal))
+            {
+                return true;
             }
 
             var drawn = _created.Where(one => string.Equals(one.Path, path, StringComparison.Ordinal)).ToList();

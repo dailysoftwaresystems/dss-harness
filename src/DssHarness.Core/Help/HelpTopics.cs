@@ -5537,6 +5537,201 @@ public static class HelpTopics
             + $"refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
             + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it is "
             + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");
+        builder.AppendLine();
+        builder.AppendLine("Worked examples, each a whole workflow as a file holds it: the two ways a step is raised");
+        builder.AppendLine("by another step's ending - a repair that goes back to what failed, and a check that runs");
+        builder.AppendLine("whenever a builder ends - and two loops a repository can build its own work around. Each");
+        builder.AppendLine("holds as it is printed, read by the same reader that reads a workflow's own file.");
+
+        AppendExample(
+            builder,
+            """
+            # example: repair
+            name: example-repair
+            steps:
+              - name: builder
+                type: create-agent
+                agent: implementer
+              - name: implement
+                type: reason
+                agent: implementer
+                access: write
+                in: builder
+                dependsOn: [builder]
+                prompt: prompts/implement.md
+                outputs: schemas/implement.schema.json
+              - name: build
+                type: build
+                in: builder
+                dependsOn: [implement]
+                onFailure: recover
+              - name: fix
+                type: reason
+                resume: implement
+                on:
+                  step: build
+                  outcome: failure
+                  codes: [20]
+                then: build
+                maxVisits: 3
+                answers:
+                  visitBound: fail
+                prompt: prompts/fix.md
+                outputs: schemas/implement.schema.json
+            """,
+            "When the build fails because a leg is red (20), fix goes on with the implementer's work and the run goes",
+            "back to build. After three such visits the configuration answers for the run: the build's failure stands,",
+            "and its onFailure decides. Without the answers line the run asks a person there.");
+
+        AppendExample(
+            builder,
+            """
+            # example: smoke
+            name: example-smoke
+            steps:
+              - name: builder
+                type: create-agent
+                agent: implementer
+              - name: implement
+                type: reason
+                agent: implementer
+                access: write
+                in: builder
+                dependsOn: [builder]
+                prompt: prompts/implement.md
+                outputs: schemas/implement.schema.json
+              - name: smoke
+                type: test
+                in: builder
+                on:
+                  step: implement
+                  outcome: end
+            """,
+            "Whenever implement ends, done or failed, its tests are run in its worktree - a check on the work whatever",
+            "became of it.");
+
+        AppendExample(
+            builder,
+            """
+            # example: issues
+            name: example-issues
+            maxOpenAgents: 1
+            steps:
+              - name: issues
+                steps:
+                  - name: find
+                    type: reason
+                    agent: prioritizer
+                    tier: high
+                    effort: high
+                    prompt: prompts/find-issues.md
+                    outputs: schemas/issues.schema.json
+                  - name: each
+                    dependsOn: [find]
+                    forEach: find.issues
+                    steps:
+                      - name: builder
+                        type: create-agent
+                        agent: implementer
+                      - name: fix
+                        type: reason
+                        agent: implementer
+                        tier: balanced
+                        effort: high
+                        access: write
+                        in: builder
+                        dependsOn: [builder]
+                        prompt: prompts/fix-issue.md
+                        outputs: schemas/implement.schema.json
+                      - name: test
+                        type: test
+                        in: builder
+                        dependsOn: [fix]
+                        onFailure: continue
+                      - name: fold
+                        type: fold
+                        of: builder
+                        dependsOn: [test]
+                        when: test.outcome == 'done'
+                      - name: commit
+                        type: commit
+                        dependsOn: [fold]
+                        message: '{item.title}'
+                      - name: done
+                        type: delete-agent
+                        of: builder
+                        discardUncommitted: true
+                        dependsOn: [commit]
+            """,
+            "find answers a list of issues, the most pressing first, from wherever its prompt sends it: a backlog",
+            "file, the repository's tracker read with the forge's own command line, what is red. each runs its steps",
+            "once for every one. The workflow's maxOpenAgents: 1 lets one worktree be open at a time, so the issues",
+            "are taken one after another, in the order of the list; it is a limit of the whole run, and no group",
+            "takes it. The agent's step is named builder, since work is a name the engine keeps for a run fact. An",
+            "issue whose test stays red is not folded, its worktree discarded, and the next is taken: the run ends",
+            "done and lists the one it passed over.");
+
+        AppendExample(
+            builder,
+            """
+            # example: review
+            name: example-review
+            steps:
+              - name: builder
+                type: create-agent
+                agent: implementer
+              - name: implement
+                type: reason
+                agent: implementer
+                access: write
+                in: builder
+                dependsOn: [builder]
+                prompt: prompts/implement.md
+                outputs: schemas/implement.schema.json
+              - name: polish
+                dependsOn: [implement]
+                repeat:
+                  until: empty(review.findings)
+                  maxIterations: 3
+                  leftover: review.findings
+                answers:
+                  loopBound: accept
+                steps:
+                  - name: review
+                    type: reason
+                    agent: reviewer-correctness
+                    tier: high
+                    effort: high
+                    independent: true
+                    prompt: prompts/review.md
+                    outputs: schemas/review.schema.json
+                  - name: rework
+                    type: reason
+                    resume: implement
+                    dependsOn: [review]
+                    when: '!empty(review.findings)'
+                    prompt: prompts/rework.md
+                    outputs: schemas/implement.schema.json
+                  - name: retest
+                    type: test
+                    in: builder
+                    dependsOn: [rework]
+                    when: '!empty(review.findings)'
+                  - name: refold
+                    type: fold
+                    of: builder
+                    dependsOn: [retest]
+                    when: '!empty(review.findings)'
+                  - name: recommit
+                    type: commit
+                    dependsOn: [refold]
+                    when: '!empty(review.findings)'
+                    message: '{item.title}: review fixes'
+            """,
+            "Each iteration reviews what is in the tree; where the review found something, the author's agent",
+            "reworks it, it is tested, folded and committed, and the next iteration reviews it again. The loop ends",
+            "when a review finds nothing. At three iterations the configuration ends it as it stands and what is",
+            "left is the loop's leftover.");
 
         return builder.ToString();
 
@@ -6078,6 +6273,31 @@ public static class HelpTopics
         builder.AppendLine("until that command arrives.");
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// One worked example of the workflows topic: its yml printed whole, indented as the topic's examples are and
+    /// opened by a comment line naming it, and the sentences that say what it does - the example readable where it
+    /// is printed and holdable by a test that reads it back.
+    /// </summary>
+    /// <param name="builder">The topic's text.</param>
+    /// <param name="yaml">The example, as a workflow's own file holds it.</param>
+    /// <param name="says">What it does, one sentence each.</param>
+    private static void AppendExample(StringBuilder builder, string yaml, params string[] says)
+    {
+        builder.AppendLine();
+
+        foreach (var line in yaml.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n'))
+        {
+            builder.AppendLine($"  {line}");
+        }
+
+        builder.AppendLine();
+
+        foreach (var said in says)
+        {
+            builder.AppendLine(said);
+        }
     }
 
     /// <summary>One reference topic.</summary>

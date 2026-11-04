@@ -1819,7 +1819,10 @@ cannot ask, and each command a step runs on the forge or to publish - a read of 
 request's - is ended after its step's `timeoutMinutes` where the step says one, else its own (5 minutes for `gh` and
 a push, 15 minutes for a commit's), and is not done (21). A step of any other type fails, saying no runner serves its type;
 the rest are the next thing the tool grows. A step that works in or on an agent
-waits for the create-agent step that makes it, and is not run where that step did not make it. Run
+waits for the create-agent step that makes it, and is not run where that step did not make it. The topic carries its
+worked examples besides - each printed as a whole workflow that holds as it is printed: a repair raised by a failed
+build that goes back to what failed, a check raised whenever a builder ends, issues found and fixed one by one under
+`maxOpenAgents: 1`, and a review loop that reworks what it finds until it finds nothing. Run
 `dssharness help workflows` for the whole of it.
 
 ## Anchors

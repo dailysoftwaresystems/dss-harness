@@ -5112,6 +5112,62 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The workflows topic carries its worked examples - the two ways a step is raised by another step's ending, and
+    /// the loops a repository can build its own work around - each printed as a whole workflow and each holding as it
+    /// is printed, read by the same reader that reads a workflow's own file.
+    /// </summary>
+    [Fact]
+    public void TheWorkflowsTopic_CarriesItsWorkedExamples_EachHoldingAsPrinted()
+    {
+        var topic = HelpText.Of("workflows").StandardOutput;
+
+        Assert.Contains(
+            "Worked examples, each a whole workflow as a file holds it: the two ways a step is raised by another step's ending - a repair that goes back to what failed, and a check that runs whenever a builder ends - and two loops a repository can build its own work around. Each holds as it is printed, read by the same reader that reads a workflow's own file.",
+            Prose.Words(topic),
+            StringComparison.Ordinal);
+
+        // Each example is opened by a comment naming it and ends at the first line the file's own text takes; what
+        // the topic prints is what the reader reads.
+        var examples = new Dictionary<string, string>(StringComparer.Ordinal);
+        string? open = null;
+        var held = new List<string>();
+
+        foreach (var line in topic.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            if (line.StartsWith("  # example: ", StringComparison.Ordinal))
+            {
+                if (open is not null)
+                {
+                    examples[open] = string.Join('\n', held);
+                }
+
+                open = line["  # example: ".Length..].Trim();
+                held = [];
+            }
+            else if (open is not null && line.StartsWith("  ", StringComparison.Ordinal))
+            {
+                held.Add(line[2..]);
+            }
+            else if (open is not null && held.Count > 0)
+            {
+                examples[open] = string.Join('\n', held);
+                open = null;
+                held = [];
+            }
+        }
+
+        Assert.Equal(["issues", "repair", "review", "smoke"], [.. examples.Keys.Order(StringComparer.Ordinal)]);
+
+        foreach (var (slug, yaml) in examples)
+        {
+            var definition = WorkflowFileParser.Parse($"workflows/example-{slug}/example-{slug}.yml", yaml + "\n");
+
+            Assert.Equal($"example-{slug}", definition.Name);
+            Assert.NotEmpty(definition.Steps);
+        }
+    }
+
+    /// <summary>
     /// The workflows topic says what a workflow is, where it lives, what this build does with one and what it does not,
     /// and lists every key from the tables the reader itself reads - so what is listed is what is read.
     /// </summary>
