@@ -1119,6 +1119,30 @@ public sealed class FlowService(
     }
 
     /// <summary>
+    /// A run fact a template reads that the run's own state does not hold (part 03): where the step's instance works -
+    /// its agent's worktree, the scratch and plans the run keeps for that agent, the rows it files - and this machine.
+    /// Null for every other name, which reads nothing as it did.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="layout">The run's own places.</param>
+    /// <param name="instance">The instance whose template is filled.</param>
+    /// <param name="fact">The fact's name.</param>
+    private string? RunFactOf(HarnessContext context, OrchestratorLayout layout, FlowInstance instance, string fact)
+    {
+        var agent = instance.WorksIn ?? instance.Made;
+
+        return fact switch
+        {
+            "os" => _platform.PlatformKey,
+            "worktree" when agent is not null => _store.ReadAgent(layout, agent)?.WorktreePath(context.Layout),
+            "work" when agent is not null => layout.WorkDirectory(agent),
+            "plans" when agent is not null => layout.PlansDirectory(agent),
+            "rows" when agent is not null => layout.RowsDirectory(agent),
+            _ => null,
+        };
+    }
+
+    /// <summary>
     /// One session of a run, from its owner claimed to its end: the engine built over the run's records, the answer it
     /// begins with, what was handed to an engine that ended before it took it, then driven - again, where an answer
     /// handed over as it ended settles the question it paused on - and the report written. However it ends - a
@@ -1214,7 +1238,8 @@ public sealed class FlowService(
                 },
                 new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, updates),
                 updates: () => _store.ReadFlowUpdates(layout),
-                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"));
+                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
+                runFacts: (instance, fact) => RunFactOf(context, layout, instance, fact));
             var before = _store.ReadFlowQuestions(layout);
 
             // What a session before this one recorded and left queued - an amendment given while no engine ran - is

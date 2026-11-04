@@ -834,9 +834,9 @@ public sealed record FlowRepeat(
 /// <param name="AcceptOver">Cells of rows an earlier fold applied that both the agent and the registries changed since. A person's answer, written out only.</param>
 public sealed record FlowAllow(
     IReadOnlyList<string> Settled,
-    FlowList? New,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowList? New,
     IReadOnlyList<string> AcceptLost,
-    FlowList? Merge,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowList? Merge,
     IReadOnlyList<string> AcceptOver);
 
 /// <summary>
@@ -846,7 +846,11 @@ public sealed record FlowAllow(
 /// <param name="Answer">The answer it gives.</param>
 /// <param name="Text">A text the answer carries, where the question's option takes one.</param>
 /// <param name="Quote">Words looked for in the run's input before the answer counts, quoted in the report.</param>
-public sealed record FlowPreAnswer(string When, string Answer, string? Text, FlowQuote? Quote);
+public sealed record FlowPreAnswer(
+    string When,
+    string Answer,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Text,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowQuote? Quote);
 
 /// <summary>The words a pre-answer quotes from the run's input, looked for there before the answer counts.</summary>
 /// <param name="Text">An expression yielding the words to look for.</param>

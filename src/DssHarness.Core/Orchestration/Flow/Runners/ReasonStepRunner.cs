@@ -209,10 +209,12 @@ public sealed class ReasonStepRunner(
         // The prompt the attempt sends: an answer that goes on with this attempt sends its own message - the person's
         // words, or what a granted bound tells the agent - in the attempt's own conversation; a compaction sends the
         // engine's record as the run's first message and the filled prompt stands for the files that read it; every
-        // other start fills the step's prompt, the resume prompt where the step goes on with earlier work and names one.
+        // other start fills the step's prompt, the resume prompt - what a step that goes on with earlier work is asked
+        // with when it runs again - only where earlier work there is: its own attempt before this one, work another
+        // step began, or a handoff. A step that resumes its own work is asked with its prompt the first time it runs.
         IReadOnlyList<FlowTemplate.Piece>? resume = null;
 
-        if (goingOn is null && run.Step.ResumePrompt is not null && GoesOnWithEarlierWork(run)
+        if (goingOn is null && run.Step.ResumePrompt is not null && (run.Attempt > 1 || run.Handoff is not null || run.WorkedFrom is [_, ..])
             && run.Prompts.TryGetValue("resumePrompt", out var readResume))
         {
             resume = readResume;

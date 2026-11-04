@@ -163,7 +163,11 @@ public sealed class FlowQuestionsTests
         Assert.Equal(["retry", "accept", "fail", "abort"], FlowQuestions.OptionsOf("noChecks", plain));
         Assert.Equal(["retry", "abort", "skip"], FlowQuestions.OptionsOf("failure", skippable));
         Assert.Equal(["retry", "abort"], FlowQuestions.OptionsOf("failure", plain));
-        Assert.Equal(["approve", "revise"], FlowQuestions.OptionsOf("pause", new WorkflowStep { Name = "s", Options = ["approve", "revise"] }));
+
+        // A pause's options are its step's own, with abort - a first answer's - among them, so even a pause of one
+        // option takes two.
+        Assert.Equal(["approve", "revise", "abort"], FlowQuestions.OptionsOf("pause", new WorkflowStep { Name = "s", Options = ["approve", "revise"] }));
+        Assert.Equal(["continue", "abort"], FlowQuestions.OptionsOf("pause", new WorkflowStep { Name = "s", Options = ["continue"] }));
     }
 
     /// <summary>A dry run that lacks consents raises the question of the first it lacks, a person's first among them.</summary>

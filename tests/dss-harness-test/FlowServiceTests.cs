@@ -1260,6 +1260,9 @@ public sealed class FlowServiceTests
               - name: mode
                 options: [fast, slow]
                 default: slow
+              - name: choice
+                options: [yes, 'no']
+                default: ''
               - name: notes
             steps:
               - name: only
@@ -1267,12 +1270,18 @@ public sealed class FlowServiceTests
             """);
 
         Assert.Equal(
-            new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "do it", ["mode"] = "slow" },
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "do it", ["mode"] = "slow", ["choice"] = "" },
             FlowInputs.Resolve(definition, new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "do it" }));
         Assert.Equal("input 'request' is required, and nothing gave the run a value for it", Assert.Throws<HarnessException>(() => FlowInputs.Resolve(definition, null)).Message);
         Assert.Equal(
             "input 'mode' takes one of fast, slow, and the run was given 'quick'",
             Assert.Throws<HarnessException>(() => FlowInputs.Resolve(definition, new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "do it", ["mode"] = "quick" })).Message);
+
+        // An input with options may default empty - no choice made, as the shipped workflow's preapproved does - and an
+        // empty value given reads the same.
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "do it", ["mode"] = "slow", ["choice"] = "" },
+            FlowInputs.Resolve(definition, new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "do it", ["choice"] = "" }));
     }
 
     /// <summary>A start whose inputs its workflow does not take is refused (13) before anything of the run is made.</summary>
@@ -1324,7 +1333,7 @@ public sealed class FlowServiceTests
         Assert.Equal("open", asked.State);
         Assert.Equal("pause", asked.Kind);
         Assert.Equal("what now?", asked.ProblemShown!.Happened);
-        Assert.Equal(["stay", "go"], asked.Options.Select(option => option.Answer));
+        Assert.Equal(["stay", "go", "abort"], asked.Options.Select(option => option.Answer));
     }
 
     /// <summary>
@@ -1385,7 +1394,7 @@ public sealed class FlowServiceTests
         var wrong = await service.AnswerAsync(repository.Path, "r1", "nope", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
 
         Assert.Equal(HarnessExit.UsageError, wrong.ExitCode);
-        Assert.Equal("'nope' is not one of the answers 'q1' takes: stay, go", wrong.Message);
+        Assert.Equal("'nope' is not one of the answers 'q1' takes: stay, go, abort", wrong.Message);
 
         var text = await service.AnswerAsync(repository.Path, "r1", "stay", question: null, text: "a text nobody takes", textFile: null, again: false, json: false, cancellationToken: Token);
 

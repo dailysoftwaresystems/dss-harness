@@ -180,6 +180,24 @@ public static class FlowTemplate
     /// <see cref="PieceKind.Placeholder"/> piece for each skill, holding what its braces hold; null where it could not be.
     /// </returns>
     public static IReadOnlyList<Piece>? FillAroundSkills(string template, Func<FlowExpression.Path, FlowExpression.PathRead> read, out string? problem)
+        => FillAroundSkills(template, read, spell: null, out problem);
+
+    /// <summary>
+    /// Fills <paramref name="template"/> as the overload beside it does, with one case spelled rather than refused: a
+    /// placeholder that reads nothing where <paramref name="spell"/> says what it names - a step that left no output in
+    /// this run, as a prompt's placeholder is filled for its agent (part 03), so the agent is told what it does not
+    /// have - fills with the sentence <paramref name="spell"/> gives it. A name that reads nothing and is spelled
+    /// nothing says why, in <paramref name="problem"/>, and fills nothing.
+    /// </summary>
+    /// <param name="template">The template, as the definition spells it.</param>
+    /// <param name="read">Reads one path of a name, as the run's expressions read it.</param>
+    /// <param name="spell">What a placeholder that reads nothing is filled with, where what it names left no output; null where nothing is.</param>
+    /// <param name="problem">Why it could not be filled; null where it was.</param>
+    /// <returns>
+    /// The text filled, in order: each <see cref="PieceKind.Text"/> piece holding what was filled, and a
+    /// <see cref="PieceKind.Placeholder"/> piece for each skill, holding what its braces hold; null where it could not be.
+    /// </returns>
+    public static IReadOnlyList<Piece>? FillAroundSkills(string template, Func<FlowExpression.Path, FlowExpression.PathRead> read, Func<string, string?>? spell, out string? problem)
     {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(read);
@@ -230,8 +248,16 @@ public static class FlowTemplate
 
                 if (value.IsMissing)
                 {
-                    problem = $"'{{{name}}}' reads nothing";
-                    return null;
+                    var sentence = spell?.Invoke(name);
+
+                    if (sentence is null)
+                    {
+                        problem = $"'{{{name}}}' reads nothing";
+                        return null;
+                    }
+
+                    filled.Append(sentence);
+                    continue;
                 }
 
                 filled.Append(value.AsTemplateText());
@@ -254,7 +280,7 @@ public static class FlowTemplate
     }
 
     /// <summary>
-    /// Filled pieces (<see cref="FillAroundSkills"/>) as one text: each filled text as it is, and each skill's
+    /// Filled pieces (<see cref="FillAroundSkills(string, Func{FlowExpression.Path, FlowExpression.PathRead}, Func{string, string?}, out string?)"/>) as one text: each filled text as it is, and each skill's
     /// placeholder written back in its braces, where nothing hands its skill over.
     /// </summary>
     /// <param name="pieces">The pieces, in order.</param>

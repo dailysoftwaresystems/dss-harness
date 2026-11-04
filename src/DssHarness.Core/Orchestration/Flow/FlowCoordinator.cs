@@ -428,6 +428,13 @@ public sealed class FlowCoordinator
     /// <summary>Reads the text of a file the run's workflow may hold and owes none of; null where it is not there, and null itself where the run reads none.</summary>
     private readonly Func<string, string?>? _workflowFileIfThere;
 
+    /// <summary>
+    /// Answers a run fact a template reads that the run's own state does not hold - where the step's agent works, and
+    /// this machine - for the instance whose template is filled; null where the session answers none, and every such
+    /// fact then reads nothing.
+    /// </summary>
+    private readonly Func<FlowInstance, string, string?>? _runFacts;
+
     /// <summary>Deletes a read-only agent of the run whose work is over, as the engine is to (<c>DeleteAsync</c>, applied); null where the run deletes none.</summary>
     private readonly Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? _deleteAgent;
 
@@ -648,6 +655,11 @@ public sealed class FlowCoordinator
     /// (<see cref="WorkflowNamedFiles.ReadTextIfThere"/>). Null where the run reads none, and the folder is taken to hold
     /// no bar.
     /// </param>
+    /// <param name="runFacts">
+    /// Answers a run fact a template reads that the run's own state does not hold - where the step's agent works, and
+    /// this machine - for the instance whose template is filled; null where the session answers none, and every such
+    /// fact then reads nothing.
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -665,7 +677,8 @@ public sealed class FlowCoordinator
         IFlowAdvisorRunner? advisor = null,
         IFlowStreamAccount? streamAccount = null,
         Func<FlowUpdatesFile?>? updates = null,
-        Func<string, string?>? workflowFileIfThere = null)
+        Func<string, string?>? workflowFileIfThere = null,
+        Func<FlowInstance, string, string?>? runFacts = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -682,6 +695,7 @@ public sealed class FlowCoordinator
         _agentModels = agentModels ?? new Dictionary<string, string>(StringComparer.Ordinal);
         _workflowFile = workflowFile;
         _workflowFileIfThere = workflowFileIfThere;
+        _runFacts = runFacts;
         _deleteAgent = deleteAgent;
         _advisor = advisor;
         _streamAccount = streamAccount ?? (runner as IFlowStreamAccount);
@@ -5956,7 +5970,7 @@ public sealed class FlowCoordinator
                             continue;
                         }
 
-                        if (FlowTemplate.FillAroundSkills(readFile(promptFileNamed), path => Read(path, instance.DeclaredScope!, reader: instance), out var promptBroken) is not { } promptPieces)
+                        if (FlowTemplate.FillAroundSkills(readFile(promptFileNamed), path => Read(path, instance.DeclaredScope!, reader: instance), name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
                         {
                             _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
                             return;
@@ -7760,7 +7774,8 @@ public sealed class FlowCoordinator
             Record: null,
             bar,
             _place,
-            BudgetLeftUsd());
+            BudgetLeftUsd(),
+            RunValues());
 
         var cancel = CancellationTokenSource.CreateLinkedTokenSource(_sessionToken, _adviceStop.Token);
         var task = Task.Run(() => _advisor!.AdviseAsync(call, cancel.Token), CancellationToken.None);
@@ -9043,11 +9058,39 @@ public sealed class FlowCoordinator
             case "param":
                 return new(FlowValue.Of(Params()), 0);
             case "item":
-                return new(scope.Item, 0);
+                // The work item of the nearest loop that bound one: a step inside a repeat within a work item - a review
+                // loop - reads the item its whole pipeline is one of.
+                for (var at = scope; at is not null; at = at.Parent)
+                {
+                    if (!at.Item.IsMissing)
+                    {
+                        return new(at.Item, 0);
+                    }
+                }
+
+                return new(FlowValue.Missing, 0);
             case "index":
-                return new(scope.Index is { } index ? FlowValue.Of((long)index) : FlowValue.Missing, 0);
+                for (var at = scope; at is not null; at = at.Parent)
+                {
+                    if (at.Index is { } found)
+                    {
+                        return new(FlowValue.Of((long)found), 0);
+                    }
+                }
+
+                return new(FlowValue.Missing, 0);
             case "iteration":
-                return new(scope.Iteration is { } iteration ? FlowValue.Of((long)iteration) : FlowValue.Missing, 0);
+                // The round of the nearest loop that is in one: a step inside a block within a repeat - a review - reads
+                // the round its loop is working.
+                for (var at = scope; at is not null; at = at.Parent)
+                {
+                    if (at.Iteration is { } round)
+                    {
+                        return new(FlowValue.Of((long)round), 0);
+                    }
+                }
+
+                return new(FlowValue.Missing, 0);
             case "visit":
                 // A raised step's own visit - raised by an ending or by a plan update; inside a handler that is a
                 // group, or a visit of the recovery, that visit; else the reader's, or - read in a when as it is
@@ -9103,6 +9146,18 @@ public sealed class FlowCoordinator
                 // The piece of a plan update this work item carries, read by every step of the work-item group; in an
                 // instance no update made, the kind is 'added' and the texts are empty.
                 return new(FlowValue.Of(PieceValues(scope)), 0);
+            case var fact when WorkflowExpressions.RunFacts.Contains(fact, StringComparer.Ordinal) && path.Steps.Count == 0:
+                // A run fact, text a template reads: the three of the run's own state answered here, the rest - the
+                // places its agent works in, and this machine - by the session, which owns them.
+                return new(
+                    FlowValue.Of(fact switch
+                    {
+                        "agent" => reader?.WorksIn ?? reader?.Made,
+                        "step" => reader?.Id,
+                        "orchestrator" => _definition.Name,
+                        _ => _runFacts is null || reader is null ? null : _runFacts(reader, fact),
+                    }),
+                    0);
             default:
                 return StepRead(path, keysFrom: -1, scope, scope);
         }
@@ -9223,6 +9278,58 @@ public sealed class FlowCoordinator
             return instance;
         }
     }
+
+    /// <summary>
+    /// The sentence a prompt's placeholder is filled with where it names a step that left no output in this run -
+    /// skipped, or failed and passed over - as part 03 rules: the agent is told what it does not have, in one sentence
+    /// naming the step and why it left nothing. Null where the name is spelled nothing: a name no declared step answers,
+    /// or a member of a step that did leave an output, keeps the failure a template's read of nothing is.
+    /// </summary>
+    /// <param name="name">The placeholder's name, as the prompt spells it.</param>
+    /// <param name="reader">The instance whose prompt is filled, whose scope the name is read in.</param>
+    private string? Spelled(string name, FlowInstance reader)
+    {
+        if (FlowExpression.Parse(name) is not FlowExpression.Path path)
+        {
+            return null;
+        }
+
+        var keysFrom = path.Root == "previous" ? 0 : -1;
+        var leading = path.Steps.Skip(keysFrom + 1).TakeWhile(step => step.IsKey).Select(step => step.Key!).ToList();
+
+        if (keysFrom >= 0 && !path.Steps[keysFrom].IsKey)
+        {
+            return null;
+        }
+
+        IReadOnlyList<string> names = keysFrom < 0 ? [path.Root, .. leading] : [path.Steps[keysFrom].Key!, .. leading];
+        var scope = reader.DeclaredScope!;
+        var at = keysFrom < 0 ? scope : PreviousOf(scope) ?? scope;
+
+        if (FlowScope.Read(names, _definition, scope.GroupPath.Length == 0 ? null : scope.GroupPath, out _) is not { } located)
+        {
+            return null;
+        }
+
+        var instance = Locate(located.Step.Path, at);
+
+        return instance is null || instance.Output is null || instance.PassedOver
+            ? $"(step '{string.Join(".", keysFrom < 0 ? names : names.Skip(1))}' left no output: {WhyNoOutputOf(instance)})"
+            : null;
+    }
+
+    /// <summary>Why a step that left no output left none, as the sentence for it says: not run, skipped, stopped, or failed.</summary>
+    private static string WhyNoOutputOf(FlowInstance? instance)
+        => instance is null ? "it has not run"
+            : instance.State switch
+            {
+                FlowInstanceState.Skipped => $"skipped: {instance.SkippedBecause ?? "its when read false"}",
+                FlowInstanceState.Failed when instance.PassedOver => $"it failed and was passed over: {instance.Error ?? "it failed"}",
+                FlowInstanceState.Failed => $"it failed: {instance.Error ?? "it failed"}",
+                FlowInstanceState.Stopped => "it was stopped by a pause before it ended",
+                FlowInstanceState.NotRun => $"the run never reached it: {instance.NotRunBecause ?? "its when read false"}",
+                _ => "it has not ended",
+            };
 
     /// <summary>The value an instance's name yields: its output alone, or its output's members beside the engine's facts of it. A step whose failure the run passed over is read as Missing - its output, not its facts, which stay what they were.</summary>
     private FlowValue ValueOf(FlowInstance? instance, bool whole)

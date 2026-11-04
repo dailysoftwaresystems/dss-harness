@@ -1812,7 +1812,9 @@ on the repository the remote's address names, its body the workflow's file fille
 open one as it is (`created` false) so a step run again opens no second, and never one from a fork's branch of the same
 name; the run never merges it, and its end leaves each pull request, and each folded path git ignores, for a person. A check that finds red
 fails its step under `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it
-starts, and one that reads nothing fails the step (12). Every call of `gh` and every git command is started so it
+starts, and one that reads nothing fails the step (12) - a reason step's prompt alone is filled further: a placeholder in
+it naming a step the run left no output is filled with a sentence saying so and why, so the agent knows what it does not
+have. Every call of `gh` and every git command is started so it
 cannot ask, and each command a step runs on the forge or to publish - a read of CI, a commit's, a push, a pull
 request's - is ended after its step's `timeoutMinutes` where the step says one, else its own (5 minutes for `gh` and
 a push, 15 minutes for a commit's), and is not done (21). A step of any other type fails, saying no runner serves its type;

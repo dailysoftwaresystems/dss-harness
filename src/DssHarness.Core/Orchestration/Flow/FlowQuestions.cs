@@ -249,7 +249,9 @@ public static class FlowQuestions
                 case "failure":
                     return step?.Skippable == true ? ["retry", "abort", "skip"] : ["retry", "abort"];
                 case "pause":
-                    return [.. (step?.Options ?? [])];
+                    // The step's own options, and abort with them: a first answer is always allowed to end the run
+                    // instead, as every question's is, so even a pause of one option holds two.
+                    return [.. (step?.Options ?? []).Where(option => option != "abort"), "abort"];
                 case "ask":
                     // An agent's questions are answered with a text or left to the agent, which goes on with what it
                     // recommended; abort is every question's.

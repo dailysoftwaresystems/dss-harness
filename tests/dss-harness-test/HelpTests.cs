@@ -5239,7 +5239,11 @@ public sealed partial class HelpTests
                 + "a prompt does; one in any other key is refused, and a pull request's base reads nothing but the run's inputs and "
                 + "run.name, the same for every pull request. A brace meant literally is written twice, {{ and }} alike, another "
                 + "expander's ${...} is left as written, and a placeholder that names nothing is refused. Every template key of a step "
-                + $"is filled where the step starts, and one that reads nothing fails it ({HarnessExit.ConfigInvalid}) before its runner is asked.",
+                + $"is filled where the step starts, and one that reads nothing fails it ({HarnessExit.ConfigInvalid}) before its runner is asked. "
+                + "A prompt alone is filled further: a placeholder in it that names a step this run left no output - it was skipped, or "
+                + "failed and was passed over - is filled with a sentence that says so and why, as (step 'ci' left no output: it failed "
+                + "and was passed over: no run of the matrix was found), so the agent is told what it does not have; a member of a step "
+                + "that did leave an output is not that case, and reads nothing as any other name does.",
             prose,
             StringComparison.Ordinal);
 
