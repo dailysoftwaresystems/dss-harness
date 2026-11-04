@@ -5,14 +5,14 @@ namespace DssHarness.Core.Codebase;
 /// <summary>
 /// The shape of a run's one graph, as the workflow's <c>codebaseGraph</c> says it once for the run - every default held
 /// where it says nothing: which paths are graphed, which implementations read them, the largest file read, what becomes
-/// of generated code, and the cap of a repository map a later slice makes, which nothing reads yet.
+/// of generated code, and the cap of the repository map.
 /// </summary>
 /// <param name="Include">Only paths one of these matches are graphed; every path where none is given.</param>
 /// <param name="Exclude">Paths one of these matches are not graphed.</param>
 /// <param name="Languages">The implementations used, by name; every one the registry holds where <see langword="null"/>. A file whose claimant is left out is read by the fallback.</param>
 /// <param name="MaxFileBytes">The largest file read; one larger is listed <c>tooLarge</c>.</param>
 /// <param name="ExcludeGenerated">Whether a generated file's declarations are left out (<c>exclude</c>) rather than kept, its file's entry naming why it is generated (<c>low</c>).</param>
-/// <param name="MapTokens">The cap, in tokens, of a repository map a later slice makes; 0 asks for none. Nothing reads it yet.</param>
+/// <param name="MapTokens">The cap, in tokens, of the run's repository map; 0 asks for none.</param>
 public sealed record CodebaseGraphShape(
     IReadOnlyList<GlobPattern> Include,
     IReadOnlyList<GlobPattern> Exclude,
@@ -30,7 +30,7 @@ public sealed record CodebaseGraphShape(
     /// <summary>The most <c>maxFileBytes</c> may say.</summary>
     public const int MostMaxFileBytes = 16_777_216;
 
-    /// <summary>The cap of a later slice's repository map where the workflow says nothing; nothing reads it yet.</summary>
+    /// <summary>The cap of the run's repository map where the workflow says nothing.</summary>
     public const int DefaultMapTokens = 1_500;
 
     /// <summary>The most <c>mapTokens</c> may say.</summary>

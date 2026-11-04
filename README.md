@@ -1582,9 +1582,14 @@ request sends the model, the system prompt as one block, the tools - each stream
 is written - and the messages as the conversation stored them; adaptive thinking, its summary
 shown; the step's effort as `output_config.effort`; old tool uses cleared by the server as the
 context fills (`clear_tool_uses_20250919`, under the `context-management-2025-06-27` beta), each
-clearing said in a notice; and the system prompt and the conversation cached for
-`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the
-model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
+clearing said in a notice; and three cache marks of the client's lifetime for
+`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said) - on the system text,
+covering the tools and it, the same for every step of that agent with the same tools; on the run's
+repository map, the first block of the conversation's first user message, covering the tools, the
+system text and the map, the same for every such step of the run; and the top-level mark, which
+moves with the conversation's last block - so a step's second request on reads the map from the
+cache, and so does the first request of the run's next step of the same agent - and a budget needs
+the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
 step with a fallback that can go on here sends the `fallback-credit-2026-07-01` beta, and a request
 the model declines moves the step to its next model of the same provider and client - the same
 request sent again with the model changed and the credit the API gave sent back as its
@@ -1621,7 +1626,10 @@ message as the conversation stored it - the engine's as a user message of text, 
 each answered by a tool message, in order; the tools as functions, their calls' arguments streamed
 (`tool_stream`); the model's thinking on, the step's effort as `reasoning_effort` (`low`, `medium`,
 `high`, `xhigh`, `max`); and `max_tokens` - no sampling parameter or tool choice of the tool's own,
-which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own. Z.AI caches what a request repeats by itself
+which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own. A first
+message that holds the run's repository map holds it first, ahead of the step's context pack and its
+task - the same bytes for every step of the run, so the longest prefix the steps of an agent share
+begins with it. Z.AI caches what a request repeats by itself
 and bills no write, so a budget needs the model's input, cached-input and output prices. Each
 answer's reasoning is stored with it and sent back; Z.AI leaves it out of what the model reads in
 later turns unless `agentClients.glm.preserveThinking` is true (false where nothing is said), which

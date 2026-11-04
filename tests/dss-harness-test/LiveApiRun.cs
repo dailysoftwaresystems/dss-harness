@@ -99,7 +99,8 @@ internal sealed class LiveApiRun : IDisposable
     /// <param name="entry">The client's entry under <c>agentClients</c>; null where the configuration declares none.</param>
     /// <param name="cancellationToken">Ends the step.</param>
     /// <param name="output">The output the step is to produce, held to its envelope; null for an answer of text.</param>
-    public Task<AgentRunResult> StepAsync(string step, string model, string effort, string prompt, string? session, AgentClientConfig? entry, CancellationToken cancellationToken, AgentOutput? output = null)
+    /// <param name="map">The run's repository map, carried as the step's first message's own part; null where the step is given none.</param>
+    public Task<AgentRunResult> StepAsync(string step, string model, string effort, string prompt, string? session, AgentClientConfig? entry, CancellationToken cancellationToken, AgentOutput? output = null, string? map = null)
     {
         var request = new AgentStepRequest(
             "r1",
@@ -125,6 +126,7 @@ internal sealed class LiveApiRun : IDisposable
             Ground = PolicyGrounds.Of(_tree, [_tree, _work], [_tree, _work], [], [], [], capabilities: [AgentCapability.Read]),
             Credential = new AgentCredential(AgentAuth.ApiKey, [Key]),
             Entries = new AgentEntries(Provider, Provider.Models.Single(each => each.Code == model), entry),
+            Map = map,
         };
 
         return _runner.RunAsync(request, new RecordedEvents(), cancellationToken);

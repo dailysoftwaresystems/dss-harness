@@ -291,6 +291,11 @@ public sealed class ReasonStepRunner(
         var continuation = ownContinuation ?? await ContinuationOfAsync(run, layout, agent, handed, context, cancellationToken).ConfigureAwait(false);
         var compaction = goingOn is { Compact: true } ? CompactedFrom(stream, run.Attempt, context) : null;
 
+        // The changes of the codebase the conversation this attempt goes on with is told: what its view changed since
+        // that conversation's last pack or delta, and the nodes of its own pack it was not given - in the one new user
+        // message, never a map or a pack again whole, for the conversation's prefix is never changed.
+        var codebaseChanges = conversation is null ? null : stepGraph?.ChangesSince(LastCodebaseOf(stream));
+
         var request = new AgentStepRequest(
             place.Run,
             agent,
@@ -334,9 +339,12 @@ public sealed class ReasonStepRunner(
             Skills = skills,
             SessionId = conversation is null ? session : null,
 
-            // The step's codebase graph: its pack the <codebase> part of its first message, and the graph tool offered
+            // The step's codebase graph: a conversation this attempt goes on with is told what changed and no map; a
+            // conversation of its own is given the run's repository map ahead of its pack, and the graph tool offered
             // with the operations and the narrowing of reads its step says.
-            Codebase = stepGraph?.Section,
+            Codebase = codebaseChanges is null ? stepGraph?.Section : null,
+            CodebaseChanges = codebaseChanges,
+            Map = conversation is null ? stepGraph?.Map : null,
             Graph = stepGraph?.Support,
 
             // What the engine tells the attempt's agent while it works - a plan update's message into the
@@ -929,6 +937,34 @@ public sealed class ReasonStepRunner(
         return fileSystem.FileExists(Path.Combine(OrchestratorLayout.SessionDirectoryIn(layout.AgentSessionsDirectory(agent), id), "conversation.jsonl"))
             ? new AgentSessionRef(last.Client, last.Provider ?? string.Empty, id)
             : null;
+    }
+
+    /// <summary>
+    /// The codebase part the conversation the step's own stream holds was given last - its pack, or the delta it was
+    /// told before this one - read from the stream's first messages as they were sent; null where it was given none.
+    /// </summary>
+    /// <param name="stream">The step's own events, every attempt's.</param>
+    private static string? LastCodebaseOf(IReadOnlyList<AgentEvent> stream)
+    {
+        foreach (var sent in stream.OfType<MessageSent>().Reverse())
+        {
+            if (sent.Which != AgentMessageKind.FirstPrompt)
+            {
+                continue;
+            }
+
+            if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseChangesTag) is { Length: > 0 } changes)
+            {
+                return changes;
+            }
+
+            if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseTag) is { Length: > 0 } pack)
+            {
+                return pack;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

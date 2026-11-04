@@ -108,7 +108,7 @@ public sealed record WorkflowDefinition(
 /// <param name="Languages">The implementations used, by name.</param>
 /// <param name="MaxFileBytes">The largest file read.</param>
 /// <param name="Generated">What becomes of generated code: <c>low</c> or <c>exclude</c>.</param>
-/// <param name="MapTokens">The cap, in tokens, of a repository map a later slice makes; nothing reads it yet.</param>
+/// <param name="MapTokens">The cap, in tokens, of the run's repository map, made once and read as it is by every step after; 0 asks for none.</param>
 public sealed record FlowCodebaseGraph(
     IReadOnlyList<string>? Include,
     IReadOnlyList<string>? Exclude,

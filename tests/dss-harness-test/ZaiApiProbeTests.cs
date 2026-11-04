@@ -106,6 +106,53 @@ public sealed class ZaiApiProbeTests
         Assert.Equal(4, probe.Kept());
     }
 
+    /// <summary>
+    /// The glm client's map smoke (slice 27f): a step whose first message begins with the run's repository map and
+    /// whose turn calls a tool, so a second request follows, and the first request of the run's second step of the same
+    /// agent. Z.AI caches a stable prefix itself - the engine sets no mark of its own - and says what the cache served
+    /// of each request: from the step's second request on, and on the second step's first, the cache reads cover the map.
+    /// </summary>
+    [Fact]
+    public async Task ARepositoryMap_IsServedByTheCache_FromAStepsSecondRequestOn()
+    {
+        var root = Environment.GetEnvironmentVariable(SlotVariable);
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(root), $"{SlotVariable} is not set: the live smoke runs only where the person said it might.");
+
+        using var run = new LiveApiRun(root!, "zai", DssHarness.Core.Agents.ZaiApi.ZaiApiClient.ClientName, (harness, tools, connection) => new DssHarness.Core.Agents.ZaiApi.ZaiApiClient(harness.FileSystem, tools, TimeProvider.System, connection));
+
+        var map = string.Join('\n', Enumerable.Range(0, 60).Select(index => $"at{index:D3} member void Member{index}() | src/File{index:D2}.cs:{index + 1}-{index + 9} #a1b2c{index:D3} | it does what member {index} does, and nothing else"));
+        var tokens = DssHarness.Core.Codebase.EstimatedTokens.Of(map);
+
+        var first = await run.StepAsync("s1", "glm-5.3", "low", ReadIt, null, null, Token, map: map);
+        var second = await run.StepAsync("s2", "glm-5.3", "low", "Give as your answer the one word the file a.txt holds.", null, null, Token, map: map);
+
+        run.Keep();
+        var served = ServedByTheCache(run).ToList();
+        TestContext.Current.SendDiagnosticMessage($"glm map of {tokens} tokens: {served.Count} requests over two steps, the cache served {string.Join(", ", served)}");
+
+        Assert.True(first.Status == AgentRunStatus.Completed, $"{first.Status}: {first.Error}");
+        Assert.True(first.ToolCalls >= 1, "the step made no call: the smoke needs a second request for the cache to serve");
+        Assert.True(second.Status == AgentRunStatus.Completed, $"{second.Status}: {second.Error}");
+
+        Assert.True(served.Count >= 3, $"the smoke made only {served.Count} requests");
+        Assert.All(served[1..], servedOf => Assert.True(servedOf >= tokens, $"a request after the first had {servedOf} of the map's {tokens} tokens served by the cache"));
+    }
+
+    /// <summary>What the cache served of each request, as the last chunk of each answer on the wire says it, in the order sent.</summary>
+    private static IEnumerable<long> ServedByTheCache(LiveApiRun run)
+        => run.Requests().Select(request => ServedOf(Path.Combine(run.Wire, $"{Path.GetFileNameWithoutExtension(request)}-answer.sse")));
+
+    /// <summary>What the cache served of the request whose answer is <paramref name="answer"/>, where there is one; 0 where there is not.</summary>
+    private static long ServedOf(string answer)
+        => File.Exists(answer)
+            ? File.ReadLines(answer)
+                .Where(line => line.StartsWith("data:", StringComparison.Ordinal) && line.Trim() != "data: [DONE]")
+                .Select(line => JsonNode.Parse(line["data:".Length..]))
+                .Where(data => data?["usage"] is not null)
+                .Select(data => data!["usage"]!["prompt_tokens_details"] is { } details && details["cached_tokens"] is { } cached ? cached.GetValue<long>() : 0L)
+                .FirstOrDefault()
+            : 0L;
+
     private static JsonObject System() => new() { ["role"] = "system", ["content"] = "You are a careful agent. Do exactly what you are asked, and nothing more." };
 
     private static JsonObject User(string text) => new() { ["role"] = "user", ["content"] = text };

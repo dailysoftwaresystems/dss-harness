@@ -18,13 +18,15 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// A reason step's serving of the run's codebase graph (part 08, "Serving it"): the view the engine syncs at the step's
 /// start - the agent's it works in, the base for one that reads - read whole, its context pack made at its start and
-/// given as the <c>&lt;codebase&gt;</c> part of its first user message, the one tool <c>graph</c> offered with the
-/// operations and the narrowing of reads its step says, each call and each escape of the narrowing recorded in its
+/// given as the <c>&lt;codebase&gt;</c> part of its first user message, the run's repository map - made once from the
+/// base as it stands when the first graphed reason step is given its prompt, and read as it is by every step after - as
+/// the <c>&lt;repository-map&gt;</c> part ahead of it, the one tool <c>graph</c> offered with the operations and the
+/// narrowing of reads its step says, each call and each escape of the narrowing recorded in its
 /// <c>graph.jsonl</c>, and its working set written and its figures gathered when it ends. Where the run's graph was
 /// never built - every graphify step upstream failed, was skipped or was passed over - the pack is the sentence for a
 /// step that left no output, and the tool answers the same.
 /// </summary>
-public sealed class FlowStepGraph(string mode, string from, string view, int tokens, ContextPack? pack, string? missing)
+public sealed class FlowStepGraph(string mode, string from, string view, int tokens, string? map, ContextPack? pack, string? missing)
 {
     /// <summary>The pack's seed of a step that names none: what its task names.</summary>
     public const string FromTask = "task";
@@ -115,7 +117,7 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
         if (read is null)
         {
             var missing = MissingOutputOf(store, layout, place.Definition, run.Instance);
-            var gone = new FlowStepGraph(mode, from, viewName ?? CodebaseGraphService.BaseView, tokens, null, missing)
+            var gone = new FlowStepGraph(mode, from, viewName ?? CodebaseGraphService.BaseView, tokens, map: null, null, missing)
             {
                 section = missing,
                 support = mode == "tools" ? new AgentGraphSupport(Tool: null) { Gone = missing } : null,
@@ -129,6 +131,10 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
         var tree = read.Tree;
         var policy = new AgentPolicy(fileSystem, platform, ground);
         var request = new CodebaseGraphSync(context.Layout, layout, place.Definition.CodebaseGraph?.Shape ?? CodebaseGraphShape.Default, context.Config.Worktrees.Root, Rebuild: false, $"{run.Instance}:graph");
+
+        // The run's repository map: made once, from the base as it stands, and read as it is by every step after - a
+        // resumed run's included, for the base moves as folds land and the map does not (part 08, "The repository map").
+        var map = await MapOfAsync(graph, store, fileSystem, layout, run, request.Shape.MapTokens, cancellationToken).ConfigureAwait(false);
 
         // The pack's seeds: the working sets of the work the run holds - or, where the step names one, that step's in
         // their place - and what the work changed, under graphFrom: changes, leading the pack.
@@ -168,9 +174,10 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
                 })
             : null;
 
-        var made = new FlowStepGraph(mode, from, read.View, tokens, pack, missing: null)
+        var made = new FlowStepGraph(mode, from, read.View, tokens, map, pack, missing: null)
         {
             section = pack is { Text.Length: > 0 } given ? $"{CodebaseOpen}{given.Text}\n{CodebaseClose}" : string.Empty,
+            view = queries,
         };
 
         if (mode == "tools" && git is not null)
@@ -216,8 +223,29 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
     /// <summary>The pack's cap, in estimated tokens.</summary>
     public int Tokens { get; } = tokens;
 
+    /// <summary>
+    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of the
+    /// step's first user message: made once from the base as it stood when the run's first graphed reason step was given
+    /// its prompt, and read as it is by every step after; null where the workflow's <c>mapTokens</c> is 0 or the run's
+    /// graph was never built.
+    /// </summary>
+    public string? Map { get; } = map;
+
+    /// <summary>The map's estimated tokens; 0 where none was given.</summary>
+    public int MapTokens => Map is null ? 0 : EstimatedTokens.Of(Map);
+
     /// <summary>The pack the step was given; null where none was.</summary>
     public ContextPack? Pack { get; } = pack;
+
+    /// <summary>
+    /// The changes the conversation the step goes on with is told of the codebase (part 08, "Deltas, never a rewrite of
+    /// what was sent"): the declarations its view changed since that conversation's last pack or delta, and the nodes of
+    /// its own pack the conversation was not given - in the one new user message, never a map or a pack again whole.
+    /// Null where the step was given no pack.
+    /// </summary>
+    /// <param name="last">The codebase part the conversation held last - its pack, or the delta before this one; null where it held none.</param>
+    public string? ChangesSince(string? last)
+        => view is null || Pack is null ? null : CodebaseConversationChanges.Make(view, Pack, last, Tokens);
 
     /// <summary>Why no pack was given, where none was - the sentence for a step that left no output; null where one was.</summary>
     public string? Missing { get; } = missing;
@@ -226,6 +254,9 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
     public AgentGraphSupport? Support => support;
 
     private AgentGraphSupport? support;
+
+    /// <summary>The view the step is served, as its start's sync left it; null where the run's graph did not read.</summary>
+    private CodebaseGraphQueries? view;
 
     /// <summary>
     /// The step's codebase section, the <c>&lt;codebase&gt;</c> part of its first user message: its context pack, or the
@@ -236,11 +267,11 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
     private string section = string.Empty;
 
     /// <summary>
-    /// The step's prompt line, the first line of its <c>graph.jsonl</c>: what the pack it was given cost, or why none was.
-    /// The repository map is the run's, made once (part 08), and names no line of a step's until it is.
+    /// The step's prompt line, the first line of its <c>graph.jsonl</c>: what the map and the pack it was given cost, or
+    /// why none was.
     /// </summary>
     public GraphPromptLine PromptLine()
-        => new(MapTokens: 0, Pack?.Seeds.Count ?? 0, Pack?.Nodes.Count ?? 0, Pack?.Tokens ?? 0, Pack?.LeftOut ?? 0, Missing is null ? null : Missing);
+        => new(MapTokens, Pack?.Seeds.Count ?? 0, Pack?.Nodes.Count ?? 0, Pack?.Tokens ?? 0, Pack?.LeftOut ?? 0, Missing is null ? null : Missing);
 
     /// <summary>
     /// What the step's graph gave and what it saved, said as its <c>step.json</c> holds it (part 08): its mode, its view,
@@ -316,7 +347,7 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
             ["mode"] = Mode,
             ["from"] = From,
             ["view"] = View,
-            ["mapTokens"] = 0,
+            ["mapTokens"] = MapTokens,
             ["pack"] = new JsonObject
             {
                 ["seeds"] = Pack?.Seeds.Count ?? 0,
@@ -488,6 +519,76 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
         return FlowScope.Declared(definition)
             .Where(one => one.Step.Type == "graphify-codebase")
             .Any(one => FlowGraph.Waits(definition, path, one.Path));
+    }
+
+    /// <summary>
+    /// The run's repository map: <c>graph/map.md</c> read as it stands where it is there, made from the base as it stands
+    /// where it is not - once, whatever the steps after find, for the base moves as folds land and the map does not - and
+    /// null where the workflow asks for no map. What it was made from is kept beside it in <c>graph/map.json</c>.
+    /// </summary>
+    /// <param name="graph">The one graph service every graph is read and written by, for the base as it stands.</param>
+    /// <param name="store">Reads the run's records, for the run's task terms.</param>
+    /// <param name="fileSystem">The file system the map is kept on.</param>
+    /// <param name="layout">The run's own paths.</param>
+    /// <param name="run">The step, whose issue names terms where it triages one.</param>
+    /// <param name="mapTokens">The workflow's <c>codebaseGraph.mapTokens</c>; 0 asks for no map.</param>
+    /// <param name="cancellationToken">Stops the reading of the base.</param>
+    private static async Task<string?> MapOfAsync(ICodebaseGraphService graph, OrchestrationStore store, IFileSystem fileSystem, OrchestratorLayout layout, FlowStepRun run, int mapTokens, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(run);
+
+        if (mapTokens <= 0)
+        {
+            return null;
+        }
+
+        if (fileSystem.FileExists(layout.GraphMapFile))
+        {
+            return fileSystem.ReadAllText(layout.GraphMapFile);
+        }
+
+        CodebaseGraphRead? @base = null;
+
+        try
+        {
+            @base = await graph.ReadOnlyAsync(layout, null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException)
+        {
+            // A base that does not read beside a view that does gives this step no map: the pack and the tool say what
+            // the tree is, and the step after this one makes the map where the base reads again.
+        }
+
+        if (@base is null)
+        {
+            return null;
+        }
+
+        // The run's task terms: the words of its inputs - the request, a plan it was given - and of the issue it triages,
+        // split as a name is inside the maker.
+        IReadOnlyDictionary<string, string> inputs = new Dictionary<string, string>();
+
+        try
+        {
+            inputs = store.ReadFlow(layout)?.Inputs ?? inputs;
+        }
+        catch (HarnessException)
+        {
+            // A run whose state does not read is refused elsewhere; its map is made of the tree alone.
+        }
+
+        var terms = string.Join("\n", inputs.Values.Append(run.Issue is { } issue ? $"{issue.Title}\n{issue.Description}" : string.Empty).Where(text => text.Length > 0));
+        var (text, meta) = CodebaseRepositoryMap.Make(new CodebaseGraphQueries(@base), terms, mapTokens);
+
+        fileSystem.CreateDirectory(layout.GraphDirectory);
+        fileSystem.WriteAllTextAtomic(layout.GraphMapFile, text);
+        fileSystem.WriteAllTextAtomic(layout.GraphMapMetaFile, meta.ToJsonString(JsonStateFile.Options));
+
+        return text;
     }
 
     /// <summary>

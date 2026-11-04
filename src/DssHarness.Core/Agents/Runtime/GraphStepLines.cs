@@ -40,7 +40,7 @@ public sealed record GraphPromptLine(int MapTokens, int Seeds, int Nodes, int To
     public override string? Problem()
         => MapTokens < 0 || Seeds < 0 || Nodes < 0 || Tokens < 0 || LeftOut < 0 ? "a count is never below 0"
             : Why is null && Nodes == 0 && Tokens == 0 && Seeds == 0 && MapTokens == 0 ? "a prompt line names a pack or why none was given"
-            : Why is not null && (Seeds > 0 || Nodes > 0 || Tokens > 0 || LeftOut > 0) ? "a prompt line that says why no pack was given names no pack"
+            : Why is not null && (Seeds > 0 || Nodes > 0 || Tokens > 0 || LeftOut > 0 || MapTokens > 0) ? "a prompt line that says why no pack was given names no pack"
             : null;
 }
 

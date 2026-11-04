@@ -538,6 +538,22 @@ public sealed record AgentStepRequest(
     public string? Codebase { get; init; }
 
     /// <summary>
+    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of its
+    /// first user message (<see cref="AgentPromptParts"/>): the run's own, made once from the base as it stood when the
+    /// run's first graphed reason step was given its prompt - the same bytes for every step of the run, so a client that
+    /// caches a prefix reads it from the cache; null where the run was given none.
+    /// </summary>
+    public string? Map { get; init; }
+
+    /// <summary>
+    /// The changes of the codebase a stored conversation the run goes on with is told, the
+    /// <c>&lt;codebase-changes&gt;</c> part of its one new user message in the place of a pack - the declarations its
+    /// view changed since that conversation's last pack or delta, and the nodes of its own pack the conversation was
+    /// not given; null where the run was given none, and the run's own pack sent as every new conversation's is.
+    /// </summary>
+    public string? CodebaseChanges { get; init; }
+
+    /// <summary>
     /// The operating system's isolation the launch's agent runs under - the mechanism and what it denies each command, or
     /// why there is none - as the engine decided it from the ground; null where none was decided, and every command then
     /// runs on the words policy alone.
@@ -768,6 +784,20 @@ public sealed record AgentRun(
     /// null where the run was given none.
     /// </summary>
     public string? Codebase { get; init; }
+
+    /// <summary>
+    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of its
+    /// first user message (<see cref="AgentPromptParts"/>): the run's own, made once - the same bytes for every step of
+    /// the run, so a client that caches a prefix reads it from the cache; null where the run was given none.
+    /// </summary>
+    public string? Map { get; init; }
+
+    /// <summary>
+    /// The changes of the codebase a stored conversation the run goes on with is told, the
+    /// <c>&lt;codebase-changes&gt;</c> part of its one new user message in the place of a pack; null where the run was
+    /// given none.
+    /// </summary>
+    public string? CodebaseChanges { get; init; }
 
     /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
     public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;

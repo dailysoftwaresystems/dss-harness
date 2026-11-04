@@ -505,6 +505,38 @@ public sealed class ClaudeApiProviderTests : IDisposable
     }
 
     /// <summary>
+    /// A first message that begins with the run's repository map carries it as its own block with the client's cache
+    /// mark on it alone: three marks the request holds - on the system text, covering tools and system, the same for
+    /// every step of that agent with the same tools; on the map's block, covering tools, system and the map, the same
+    /// for every such step of the run; and the conversation's own, the top-level mark that moves with its last block -
+    /// and the rest of the first message carries none.
+    /// </summary>
+    [Fact]
+    public async Task AFirstMessageThatBeginsWithTheRunMap_CarriesTheThreeCacheMarksWhereTheyBelong()
+    {
+        var provider = Provider();
+        const string Map = "<repository-map>\nthe run's repository map\n</repository-map>\n\n";
+        const string Rest = "<codebase>\nthe pack of the step's work\n</codebase>\n\n<task>\ndo the work\n</task>";
+        string[] messages = [provider.UserMessage(Map, Rest), """{"role":"assistant","content":[{"type":"text","text":"Oké"}]}""", provider.UserMessage("Go on.")];
+        _endpoint.Then(ApiReply.Fixture("answer.sse"));
+
+        await Sent(Request(messages.Length) with { Messages = messages });
+
+        var body = JsonNode.Parse(_endpoint.Asked[0].Body)!;
+        var first = body["messages"]![0]!;
+        var blocks = first["content"]!.AsArray();
+
+        Assert.Equal("user", first["role"]!.GetValue<string>());
+        Assert.Equal([Map, Rest], blocks.Select(block => block!["text"]!.GetValue<string>()));
+        Assert.Equal(("ephemeral", "5m"), (blocks[0]!["cache_control"]!["type"]!.GetValue<string>(), blocks[0]!["cache_control"]!["ttl"]!.GetValue<string>()));
+        Assert.Null(blocks[1]!["cache_control"]);
+        Assert.Equal(
+            ("ephemeral", "ephemeral", "ephemeral"),
+            (body["system"]![0]!["cache_control"]!["type"]!.GetValue<string>(), blocks[0]!["cache_control"]!["type"]!.GetValue<string>(), body["cache_control"]!["type"]!.GetValue<string>()));
+        Assert.Equal(3, body.ToJsonString().Split("cache_control").Length - 1);
+    }
+
+    /// <summary>
     /// A step that names an output sends its envelope as <c>output_config.format</c>, beside the effort where it has one and
     /// alone where it has none, in the copy the API takes: a bound it does not take moved into the description.
     /// </summary>
