@@ -1787,8 +1787,11 @@ public sealed partial class CliEndToEndTests
         await harness.RunGitAsync(temp.Path, ["worktree", "add", "--quiet", "--detach", worktree], token);
 
         // A shared tool at work in that tree's build of the leg - a test binary there - for as long as the commands run.
+        // The sleep has to outlast the whole test on the slowest machine that runs it, not the seconds it takes here:
+        // once the tool has died, the sampling reports the machine's other dotnet processes instead, and the assertion
+        // below fails - as it did on a runner slow enough to spend two minutes on the first command alone.
         var theirs = Path.Combine(VariantKey.For(config, config.Legs["native"], platform.PlatformKey).DirectoryUnder(worktree), "tests", "suite");
-        var start = TestHost.StartOf(TestHost.ChildRequest("sleep", "120000", theirs));
+        var start = TestHost.StartOf(TestHost.ChildRequest("sleep", "600000", theirs));
         start.CreateNoWindow = true;
         using var tool = System.Diagnostics.Process.Start(start)!;
 
