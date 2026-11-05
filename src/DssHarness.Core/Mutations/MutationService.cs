@@ -94,6 +94,7 @@ public sealed class MutationService(
     IGitClient gitClient,
     LegRunService legRuns,
     ISyncService syncService,
+    ArmListingReader listings,
     LocalSyncTransport localTransport,
     IBuildService buildService,
     IProcessRunner processRunner,
@@ -146,6 +147,7 @@ public sealed class MutationService(
     private readonly IGitClient _gitClient = gitClient;
     private readonly LegRunService _legRuns = legRuns;
     private readonly ISyncService _syncService = syncService;
+    private readonly ArmListingReader _listings = listings;
     private readonly LocalSyncTransport _localTransport = localTransport;
     private readonly IBuildService _buildService = buildService;
     private readonly IProcessRunner _processRunner = processRunner;
@@ -190,7 +192,7 @@ public sealed class MutationService(
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
         var arms = request.SelfTest
             ? SelfTestArms(request.ArmNames)
-            : await ReadAsync(context, request.ArmNames, cancellationToken).ConfigureAwait(false);
+            : await _listings.ReadAsync(context, request.ArmNames, cancellationToken).ConfigureAwait(false);
         var legs = LegSelection.Resolve(context.Config, request.LegNames).Legs;
 
         RequireSweepable(context.Config, legs, request.SelfTest);
@@ -363,6 +365,18 @@ public sealed class MutationService(
     };
 
     /// <summary>
+    /// Reads and verifies the registry <paramref name="context"/>'s configuration names, with every text it cites, and
+    /// selects the arms <paramref name="armNames"/> names - as the one reader of the arms registry reads it
+    /// (<see cref="ArmListingReader.ReadAsync"/>), which a listing and a gate over anchor rows' arm claims share.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="armNames">What <c>--arms</c> was given, or <see langword="null"/> for every arm.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    /// <param name="sweeps">Whether the arms must be sweepable as a sweep needs them, which a listing does not.</param>
+    internal Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, CancellationToken cancellationToken, bool sweeps = true)
+        => _listings.ReadAsync(context, armNames, cancellationToken, sweeps);
+
+    /// <summary>
     /// Lists, without sweeping, each selected arm's last verdict on each selected leg its S row names, and whether anything
     /// it was judged on that this machine reads has moved since: the registry is read and verified as a sweep reads it,
     /// each leg's tree is read once, and each leg's record. It asks no host, takes no lock, begins no run and writes nothing,
@@ -382,62 +396,17 @@ public sealed class MutationService(
         ArgumentNullException.ThrowIfNull(request);
 
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
-        var config = context.Config;
-        var arms = await ReadAsync(context, request.ArmNames, cancellationToken, sweeps: false).ConfigureAwait(false);
-        var legs = LegSelection.Resolve(config, request.LegNames).Legs;
-        var unsweepable = Unsweepable(config, legs);
-        var record = new ArmVerdictRecord(_fileSystem, context.Layout);
-        var trees = new Dictionary<string, TreeFiles>(StringComparer.FromComparison(_platform.PathComparison));
-        var listed = new List<ListedLeg>();
-
-        foreach (var leg in legs)
-        {
-            var tree = LegTrees.Here(context, leg.Leg, null);
-
-            if (!trees.TryGetValue(tree, out var files))
-            {
-                using var reading = await _syncService.ReadSourceAsync(tree, cancellationToken).ConfigureAwait(false);
-
-                trees[tree] = files = new TreeFiles(reading.Files, PathCase.In(_fileSystem, tree));
-            }
-
-            var named = LegPlacement.Named(config, leg.Leg);
-            var project = VariantKey.ProjectFor(config, leg.Leg);
-
-            // One read of a table to a digest, for the whole listing, however many arms and entries name it.
-            var tables = new Dictionary<string, RecordedTable>(StringComparer.Ordinal);
-
-            RecordedTable TableOf(string digest)
-                => tables.TryGetValue(digest, out var read) ? read : tables[digest] = record.Table(leg.Name, digest);
-
-            listed.Add(MutationListing.Of(new ListingInput(
-                leg.Name,
-                ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes).Driven,
-                unsweepable.GetValueOrDefault(leg.Name),
-                record.Read(leg.Name),
-                TableOf,
-                files,
-                named?.ToString(),
-
-                // Asked of the host the leg names, or of the one an entry was judged on where it names none: which host a
-                // sweep would place it on is not read here, so it is read as it was, and the environment its build is
-                // given with it - what that host declares, as the sweep that judged it was given what it declared.
-                host => SweepSettings.Of(config, leg.Leg, config.Hosts.SettingsFor(host)),
-                config.Mutations,
-                project is null ? null : JudgedCauses.GenerationOf(config, VariantKey.For(config, leg.Leg, leg.Leg.Os), project))));
-        }
-
-        var registry = config.Mutations.Registry!;
-
-        // The facts the table and the document are made of, from the same locals, so the three cannot drift.
-        var listing = new ArmListing(listed, registry, record.Directory);
+        var read = await _listings.ReadListingAsync(context, request.ArmNames, request.LegNames, cancellationToken).ConfigureAwait(false);
+        var listing = read.Listing;
+        var listed = listing.Legs;
+        var registry = listing.Registry;
 
         // Said under --json too: a warning is for whoever reads the document, and no row of it names the file.
         foreach (var leg in listed)
         {
             if (leg.RecordUnread is { } unread)
             {
-                _output.Warn(CommandName, unread.Warning(record.FileOf(leg.Leg), leg.Leg, sweep: false));
+                _output.Warn(CommandName, unread.Warning(new ArmVerdictRecord(_fileSystem, context.Layout).FileOf(leg.Leg), leg.Leg, sweep: false));
             }
         }
 
@@ -453,9 +422,9 @@ public sealed class MutationService(
 
         _output.Info(
             CommandName,
-            $"listing {ReportText.Counted(arms.Selected.Count, "arm")} of '{registry}' on {ReportText.Counted(legs.Count, "leg")}; nothing is swept "
+            $"listing {ReportText.Counted(read.Arms.Selected.Count, "arm")} of '{registry}' on {ReportText.Counted(listed.Count, "leg")}; nothing is swept "
             + "and no host is asked");
-        _output.Info(CommandName, $"the record is '{record.Directory}'");
+        _output.Info(CommandName, $"the record is '{listing.RecordDirectory}'");
 
         foreach (var leg in listed)
         {
@@ -710,101 +679,6 @@ public sealed class MutationService(
             && fileSystem.FileExists(TreeRegistryFiles.In(context.Layout.RepositoryRoot, registry));
     }
 
-    /// <summary>
-    /// Reads and verifies the registry <paramref name="context"/>'s configuration names, with every text it cites, and
-    /// selects the arms <paramref name="armNames"/> names.
-    /// </summary>
-    /// <exception cref="HarnessException">
-    /// No registry is configured, it or a text it cites cannot be read whole, it or a text it cites is one a sync
-    /// withholds from every copy of the tree - by the configuration's rules or by git's - a scope names no leg, or a
-    /// selected arm runs a binary with no report arguments configured where <paramref name="sweeps"/> - a listing runs
-    /// none, and needs none (<see cref="HarnessExit.ConfigInvalid"/>); or
-    /// <c>--arms</c> names an arm it does not declare (<see cref="HarnessExit.UsageError"/>); or git could not be asked
-    /// what it ignores in the tree (<see cref="HarnessExit.CommandFailed"/>), which no sync of it could be made without.
-    /// </exception>
-    internal async Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, CancellationToken cancellationToken, bool sweeps = true)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-
-        var settings = context.Config.Mutations;
-        var root = context.Layout.RepositoryRoot;
-
-        if (!Declares(context, _fileSystem))
-        {
-            throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                settings.Registry is { } configured
-                    ? $"mutations.registry names '{configured}', which is not a file in '{root}'."
-                    : $"{CommandName} has no arms registry to sweep: set mutations.registry to the registry's path, relative to the repository root.");
-        }
-
-        var registry = settings.Registry!;
-        var file = TreeRegistryFiles.In(root, registry);
-
-        string rows;
-
-        try
-        {
-            rows = _fileSystem.ReadAllText(file);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // There, and not read: the registry's refusal, as one that is not there is - never a defect of this tool.
-            throw new HarnessException(HarnessExit.ConfigInvalid, $"mutations.registry names '{registry}', which could not be read: {ex.Message}");
-        }
-
-        // What a sync withholds is in no copy of the tree, and a worker is such a copy, as a host's is: by the rules the
-        // configuration names, which the registry and the text directory are held to as it is read, and by git's - what
-        // git ignores a sync leaves behind as well, and only the tree says which that is. So it is asked here, as the
-        // tree's view is made.
-        var files = await TreeRegistryFiles.OfAsync(_syncService, _fileSystem, context, cancellationToken).ConfigureAwait(false);
-
-        if (files.IsWithheld(PathPatterns.Normalize(registry)))
-        {
-            throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                $"mutations.registry names '{registry}', which a sync withholds from every copy of the tree - {MutationRegistryValidation.Withholders} - so no "
-                + "host sweeping a leg would hold it: keep it where a sync carries it.");
-        }
-
-        // Every problem of the registry in one refusal, and before --arms is weighed against it: a scope naming no leg is
-        // the registry's whatever else is wrong with it, and whichever arms the command names - one it does not declare
-        // among them, which is a mistake of the command and is said once the registry itself can be swept.
-        var validation = await MutationRegistryValidation.ValidateAsync(rows, files, settings, context.Config, cancellationToken).ConfigureAwait(false);
-
-        if (!validation.Valid)
-        {
-            throw new HarnessException(HarnessExit.ConfigInvalid, string.Join(Environment.NewLine, validation.Refusal(registry)));
-        }
-
-        var selected = ArmSelection.Resolve(validation.Registry, armNames);
-
-        if (sweeps && selected.Any(arm => arm.Kind == RedKind.TestRed) && settings.ReportArgs is not { Count: > 0 })
-        {
-            throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                $"{MutationReport.Setting} is not set, and the sweep runs {MutationRegistryParser.TestRed} arms, whose binaries it "
-                + "judges by the JUnit report each run writes: set it to the arguments that make the binary write one to "
-                + $"{{{MutationReport.Placeholder}}}, such as [\"--gtest_output=xml:{{{MutationReport.Placeholder}}}\"].");
-        }
-
-        // A runner runReads names that no TEST-RED row names covers nothing: an entry for a runner that was renamed, or
-        // spelled otherwise, would silently keep every key of the runner it meant to name.
-        var named = validation.Registry.Arms
-            .Where(arm => arm.Kind == RedKind.TestRed)
-            .Select(arm => arm.Runner)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        if (settings.RunReads?.Keys.FirstOrDefault(runner => !named.Contains(runner)) is { } unnamed)
-        {
-            throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                $"{MutationSettings.RunReadsSetting} names runner '{unnamed}', which no {MutationRegistryParser.TestRed} row of '{registry}' names: "
-                + "an entry no arm runs covers nothing. Name the runner as its A row does, or leave it out.");
-        }
-
-        return new SweepArms(validation.Registry, selected, validation.Scopes);
-    }
 
     /// <summary>
     /// Refuses every one of <paramref name="legs"/> whose build a sweep cannot read: one that cannot be built, or is built

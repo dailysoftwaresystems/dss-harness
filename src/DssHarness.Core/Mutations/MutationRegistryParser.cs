@@ -103,6 +103,18 @@ public static partial class MutationRegistryParser
         => [.. RegistryText.Of(text).Lines.Select(line => line.Text)];
 
     /// <summary>
+    /// Every id an A row of <paramref name="text"/> declares, in the order declared, whatever else its rows hold or
+    /// refuse: the ids a history of the registry held, read by the same row rule that reads the registry now.
+    /// </summary>
+    /// <param name="text">The registry's text, at any commit it was held.</param>
+    public static IReadOnlyList<string> ArmIdsOf(string text)
+        => [.. Lines(text)
+            .Select(line => new RegistryLine(line))
+            .Where(line => line.Row?.Kind == "A")
+            .Select(line => line.Row!.Arm)
+            .OfType<string>()];
+
+    /// <summary>
     /// What is wrong with <paramref name="path"/> as a path a row names, or <see langword="null"/> where nothing is: a
     /// file relative to the repository root, spelled one way on every platform.
     /// </summary>

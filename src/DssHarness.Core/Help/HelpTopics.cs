@@ -1709,8 +1709,8 @@ public static class HelpTopics
         }
 
         builder.AppendLine();
-        builder.AppendLine("  read-anchor, read-anchors --lint, check-anchor-balance, check-anchor-citations");
-        builder.AppendLine($"    {AnchorExit.Findings,3}  an id was not found, the registries have problems, or the balance did not hold");
+        builder.AppendLine("  read-anchor, read-anchors --lint, check-anchor-balance, check-anchor-arms, check-anchor-citations");
+        builder.AppendLine($"    {AnchorExit.Findings,3}  an id was not found, the registries have problems, the balance did not hold, or a row's claim about a mutation arm does not hold");
         builder.AppendLine();
         builder.AppendLine("  legs, sync");
         builder.AppendLine($"    {LegsExit.Unavailable,3}  a leg named with --legs cannot run, or no selected leg can");
@@ -4087,6 +4087,7 @@ public static class HelpTopics
         builder.AppendLine("  check-anchor-balance [--base REF] [--json]        compare with a commit");
         builder.AppendLine("  check-anchor-citations --current-commit|--current-tree|--current-pr [--json]");
         builder.AppendLine("                                                    check every cited id resolves");
+        builder.AppendLine("  check-anchor-arms [--legs LEG ...] [--json]       check rows' claims about arms");
         builder.AppendLine();
         builder.AppendLine("--pending or --done limits set-anchor, read-anchor and a read-anchors listing to");
         builder.AppendLine("one registry; read-anchors --lint always checks both, and takes no filter.");
@@ -4147,6 +4148,24 @@ public static class HelpTopics
         builder.AppendLine("names a family of ids and is no citation, but an id in bold is one. Keep every id");
         builder.AppendLine("whole on one line.");
         builder.AppendLine();
+        builder.AppendLine("check-anchor-arms checks what rows say about mutation arms against the mutation");
+        builder.AppendLine("record, reading both registries and the arms registry mutations.registry names, as");
+        builder.AppendLine("check-mutations --list reads it: no host is asked, nothing swept, nothing written. A");
+        builder.AppendLine("row names an arm by a backticked token equal to an A row's id, ignoring case. An arm");
+        builder.AppendLine("a done row names must be unmoved here with a recorded passed on each leg its S row");
+        builder.AppendLine("names - every selected leg where it names none, --legs selecting as --list selects -");
+        builder.AppendLine("and a pending one is reported with the listing's own reason, a leg that cannot be");
+        builder.AppendLine("swept among them. A pass word followed by only whitespace and brackets or");
+        builder.AppendLine($"punctuation and then a run id - the words are anchors.passWords, '{AnchorSettings.DefaultPassWord}' where it names");
+        builder.AppendLine("none - is a citation of one sweep's judgement, true only of the bytes that run read:");
+        builder.AppendLine("it is reported wherever it does not sit inside a span matching a form of");
+        builder.AppendLine("anchors.historyForms, whose {commit} and {run} placeholders stand for a commit and a");
+        builder.AppendLine("run id. A backticked id no A row holds is reported where git history shows an A row");
+        builder.AppendLine("declared it once - renamed, or retired; where more commits changed the registry than");
+        builder.AppendLine("were read, or the clone is shallow, that is noted, for an id may have been declared");
+        builder.AppendLine("before either cut. 'Unmoved here' is not 'holds': the listing's closing note is said");
+        builder.AppendLine("here too.");
+        builder.AppendLine();
         builder.AppendLine("Every change holds a machine-wide lock on its two registries. A change that cannot");
         builder.AppendLine($"take it within {NamedMutexAnchorRegistryLock.DefaultTimeout.TotalSeconds:0} seconds writes nothing and exits {HarnessExit.Refused}. A read takes it");
         builder.AppendLine("too, while it reads both files, so a row being moved between them is never read in");
@@ -4156,7 +4175,8 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("Exit codes");
         builder.AppendLine($"  {AnchorExit.Findings,3}  an id was not found, --lint found problems, the balance did not hold,");
-        builder.AppendLine("       or a citation resolves to no row or is cut");
+        builder.AppendLine("       a citation resolves to no row or is cut, or a row's claim about a mutation arm");
+        builder.AppendLine("       does not hold");
         builder.AppendLine($"  {HarnessExit.UsageError,3}  a value is not valid (an id, a priority, a status, an empty trigger, a");
         builder.AppendLine("       cell it would store cut), options that cannot be combined, or set-anchor with nothing");
         builder.AppendLine("       to change");

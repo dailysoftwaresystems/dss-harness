@@ -17,7 +17,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
 `answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
-`read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
+`read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-arms`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
 `down` and `help`.
@@ -4015,8 +4015,9 @@ A registry is an introduction and exactly one anchor table, recognised by its he
 anchor table or a second one, or with an anchor row outside the table or inside some other
 table, is malformed: where a new row belongs would be a guess, and a stray row is counted by
 nothing. Every command that reads or changes anchors refuses a malformed registry (exit 20)
-rather than answer from rows it cannot trust, while `read-anchors --lint` and
-`check-anchor-balance` report the problem among their findings (exit 1). A directory where a
+rather than answer from rows it cannot trust, while `read-anchors --lint`,
+`check-anchor-balance` and `check-anchor-arms` report the problem among their findings
+(exit 1). A directory where a
 registry's file belongs, or a file that cannot be read, is refused by every command, `init`
 included (exit 20): taken for no registry, a directory sent its reader to `init`, which then failed
 to write over it.
@@ -4153,6 +4154,45 @@ behind. A row is judged lost only where both registries were read whole, since e
 missing or malformed registry hides would read as lost; and one whose Anchor cell did not name
 one id there is noted rather than failed, since repairing that cell changes the id its row
 reads as. Every problem is reported at once.
+
+### The arms
+
+`check-anchor-arms` holds what anchor rows say about mutation arms to the mutation record. It
+reads no host, takes no lock and writes nothing, as `check-mutations --list` reads none: both
+anchor registries through the read-together read, and the arms registry `mutations.registry`
+names through the one reading a listing is made of (the registry and its texts verified as a
+sweep verifies them, every selected leg listed, each arm's scopes beside them), so that what it
+says of an arm on a leg is what `--list` says of it, from one owner.
+
+A row names an arm by a backticked token equal to an A row's id, ignoring case as the arms
+registry compares ids. An arm a done row names must be unmoved here with a recorded passed on
+each leg its S row names - every selected leg where it names none, `--legs` selecting as
+`--list` selects - so a close always rests on bytes that were judged. Anything else is a
+finding that fails the check, worded as the listing words its first reason: a leg that cannot
+be swept makes every arm on it pending, its refusal the reason. "Unmoved here" is never
+"holds", and the listing's closing note is said here too.
+
+A pass word followed by only whitespace and brackets or punctuation and then a run id - the
+words are `anchors.passWords`, `passed` where the configuration names none, matched ignoring
+case - is a citation of one sweep's judgement, true only of the bytes that run read and stale
+the first time what it judged moves. It is a finding wherever its whole span does not sit
+inside one matching a form of `anchors.historyForms`, whose `{commit}` and `{run}` placeholders
+stand for a commit's hex and a run id: history is where a row may state a pass, and the forms
+say what its history looks like. A citation is judged in every row of both registries, a done
+row's no less than a pending one's.
+
+A backticked id no A row holds is reported only where git history shows an A row declared it
+once - the newest 512 commits that changed the registry, each version read for its ids - so one
+renamed or retired is a finding while an id that never was an arm is left alone, whatever else
+a row may cite in backticks. Where more commits changed the registry than were read, or the
+clone is shallow, that is noted rather than failed, for an id may have been declared before
+either cut and no change can repair the history; the note fails nothing, as the balance notes a
+registry malformed at the base.
+
+Exit codes and `--json` follow the balance: a finding exits 1 in the anchor commands' own
+range, every exit answers in the command's own document, and an early one - a directory that is
+not there, a usage error, an arms registry a listing refuses - answers with the same document
+reading nothing.
 
 ### Citations
 
@@ -5272,7 +5312,7 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `check-anchor-arms`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document
   holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
   (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
   `stop-orchestrator`) with the flow document - the session they would have run, empty

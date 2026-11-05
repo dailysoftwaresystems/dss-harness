@@ -285,6 +285,39 @@ public static partial class HarnessConfigValidator
         RequireAtLeastOne(anchors.MinimumIdSegments, "anchors.minimumIdSegments", problems);
 
         RequireRelativePaths(anchors.CitationRoots, "anchors.citationRoots", problems);
+
+        // A pass word is matched as a word, so one that is only punctuation or whitespace can match nothing a person
+        // wrote; and each is matched alone, so two differing only in case are one word reported twice.
+        if (anchors.PassWords.Count == 0)
+        {
+            problems.Add("anchors.passWords names none; leave it out to check for the word 'passed', or name the words a row states a pass with");
+        }
+
+        foreach (var word in anchors.PassWords)
+        {
+            if (string.IsNullOrWhiteSpace(word))
+            {
+                problems.Add("anchors.passWords names a word that is empty or whitespace; a pass word is a word, as a row states it");
+            }
+        }
+
+        if (anchors.PassWords.GroupBy(word => word.Trim(), StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1))
+        {
+            problems.Add("anchors.passWords names a word twice, ignoring case; each is matched alone");
+        }
+
+        foreach (var form in anchors.HistoryForms)
+        {
+            if (string.IsNullOrWhiteSpace(form))
+            {
+                problems.Add("anchors.historyForms names a form that is empty or whitespace; a form is a pattern with {commit} and {run} placeholders");
+            }
+
+            foreach (var placeholder in Regex.Matches(form, @"\{([^}]*)\}", RegexOptions.CultureInvariant).Select(match => match.Groups[1].Value).Where(name => name != "commit" && name != "run"))
+            {
+                problems.Add($"anchors.historyForms names '{{{placeholder}}}', which is no placeholder: '{{commit}}' for a commit and '{{run}}' for a run id are the two a form takes");
+            }
+        }
     }
 
     /// <summary>

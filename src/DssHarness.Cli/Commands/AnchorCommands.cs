@@ -466,3 +466,46 @@ internal static class CheckAnchorBalanceCommand
         return command;
     }
 }
+
+/// <summary>Wires <c>DssHarness check-anchor-arms</c>.</summary>
+internal static class CheckAnchorArmsCommand
+{
+    internal const string Name = "check-anchor-arms";
+
+    private static readonly Option<string[]> LegsOption = new("--legs")
+    {
+        Description = "Only these legs or leg sets, judged as check-mutations --list judges them: --legs a,b or --legs a b. Without it, every declared leg.",
+    };
+
+    private static readonly Option<bool> JsonOption = new("--json")
+    {
+        Description = "Write the findings as JSON.",
+    };
+
+    internal static Command Create()
+    {
+        var command = new Command(
+            Name,
+            "Check what anchor rows say about mutation arms against the mutation record: an arm a done row names must be unmoved with a recorded passed, a pass citation must be spelled as history, and a retired arm id is reported.");
+
+        command.Options.Add(LegsOption);
+        command.Options.Add(JsonOption);
+        GlobalOptions.AddTo(command);
+
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
+        {
+            var arguments = context.ParseResult;
+
+            var report = await context.Get<IAnchorArmsService>()
+                .CheckAsync(
+                    context.Directory,
+                    arguments.GetResult(LegsOption) is { Implicit: false } ? arguments.GetValue(LegsOption) ?? [] : null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return AnchorReports.Arms(report, context.Json);
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => AnchorReports.ArmsStopped(exitCode, summary)));
+
+        return command;
+    }
+}

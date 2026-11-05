@@ -96,6 +96,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `read-anchor <id>...` | Show anchors in full |
 | `read-anchors` | List anchors, or check the registries with `--lint` |
 | `check-anchor-balance` | Fail a change that creates more anchors than its work closes |
+| `check-anchor-arms` | Hold anchor rows' claims about mutation arms to the mutation record |
 | `check-anchor-citations` | Check every anchor cited in the declared roots resolves to a row |
 | `fix-line-endings [--all \| --changed]` | Apply the line-ending policy `.gitattributes` declares; `--check` refuses instead |
 | `check-ci-legs` | Report each CI leg, separating a real failure from a budget overrun, by the job and step names `ci` declares (`help ci`) |
@@ -1845,13 +1846,19 @@ dssharness set-anchor D-AUTH-TOKEN-REFRESH --status closed   # moves it to the d
 dssharness read-anchor D-AUTH-TOKEN-REFRESH
 dssharness read-anchors --open --band P0 P1
 dssharness check-anchor-balance --base main
+dssharness check-anchor-arms
 ```
 
 The Status cell (`🟠 OPEN`, `⏳ GATED`, `🔵 DISCLOSED`, `✅ CLOSED`) is the only verdict that
 decides whether a row is closed. Closing an anchor moves its row to the done registry, and
 `check-anchor-balance` fails a change that creates more anchors than its work closes. A row is
 one line, so a value's line breaks are stored as spaces: a value that would be stored with an
-id or a path cut in two is refused, and so is one that newly cites an id no row holds. Run
+id or a path cut in two is refused, and so is one that newly cites an id no row holds. A row
+names a mutation arm with a backticked id, and `check-anchor-arms` holds a done row's named
+arms to the mutation record - each must be unmoved with a recorded passed on the legs its S
+row names, a pass cited beside a run id must be spelled as history (`anchors.passWords`,
+`anchors.historyForms`), and a backticked id no A row holds any more is reported where git
+history shows it was declared once. Run
 `dssharness help anchors` for the rules.
 
 ## Building from source

@@ -152,6 +152,7 @@ public static class ServiceRegistration
             NamedMutexAnchorRegistryLock.DefaultTimeout));
         services.AddSingleton<IAnchorRegistryService, AnchorRegistryService>();
         services.AddSingleton<IAnchorBalanceService, AnchorBalanceService>();
+    services.AddSingleton<IAnchorArmsService, AnchorArmsService>();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<OrchestrationStore>();
         services.AddSingleton<OrchestrationLog>();
@@ -456,6 +457,7 @@ public static class ServiceRegistration
         // self-test's fixture is kept among this user's own data, as the slots are, whichever tree the command is typed in.
         services.AddSingleton(provider => new MutationFixtureStore(provider.GetRequiredService<IFileSystem>(), MutationFixtureStore.DefaultDirectory));
         services.AddSingleton<MutationService>();
+        services.AddSingleton<ArmListingReader>();
 
         // Guards that became commands.
         services.AddSingleton<IRootLitterService, RootLitterService>();

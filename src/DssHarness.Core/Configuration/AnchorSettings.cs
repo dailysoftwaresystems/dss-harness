@@ -57,4 +57,22 @@ public sealed class AnchorSettings
     /// reporting success.
     /// </remarks>
     public List<string> CitationRoots { get; init; } = [];
+
+    /// <summary>
+    /// The words a row's cells may state a pass of a sweep with, matched ignoring case. A pass word followed by only
+    /// whitespace and brackets or punctuation and then a run id is a citation of that run, which check-anchor-arms
+    /// reports wherever it does not sit inside a span matching one of <see cref="HistoryForms"/>: a pass holds only of
+    /// the bytes its run read, so it goes stale as what it judged moves, and history is where a row may state one.
+    /// </summary>
+    public List<string> PassWords { get; init; } = [DefaultPassWord];
+
+    /// <summary>The pass word a repository names none of.</summary>
+    public const string DefaultPassWord = "passed";
+
+    /// <summary>
+    /// The forms of history a row's cells may state a pass in, each a pattern with <c>{commit}</c> and <c>{run}</c>
+    /// placeholders - a commit is hex, a run id as runs spell them - such as <c>closed at {commit} on sweep {run}</c>.
+    /// A pass citation inside a span matching one of them is history and is not reported; empty, no form is history.
+    /// </summary>
+    public List<string> HistoryForms { get; init; } = [];
 }

@@ -257,7 +257,7 @@ public sealed partial class AgentPolicy
     [
         "help", "verify-git", Worktrees.WorktreeService.ListCommand, OrchestratorService.ListCommand, SideTasks.SideTaskService.ListCommand,
         WorkflowValidationService.CommandName, WorkflowExportService.CommandName, "write-anchor", "set-anchor",
-        "read-anchor", "read-anchors", "check-anchor-balance", "check-anchor-citations", Worktrees.RootLitterService.CommandName,
+        "read-anchor", "read-anchors", "check-anchor-balance", "check-anchor-arms", "check-anchor-citations", Worktrees.RootLitterService.CommandName,
         "fix-line-endings", "check-ci-legs", Codebase.CodebaseGraphQueryService.CommandName,
     ];
 
