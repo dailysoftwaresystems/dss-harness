@@ -53,35 +53,36 @@ public sealed class ImplementationFlowTests
     /// of both providers - over the engine's own step runners with every machine step the flow's mechanics do not
     /// reach answered by <see cref="MachineSteps"/>.
     /// </summary>
-    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null)
+    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null)
     {
         var harness = new HarnessFactory();
         var template = AgentProviderTemplates.Read();
         var platform = new DssHarness.Core.Platform.HostPlatform();
         var groundHeld = ground ?? new Ground();
 
-        await harness.InitializeHarnessAsync(
-            temp.Path,
-            Token,
-            new HarnessConfig
-            {
-                Workflows = [WorkflowTemplates.ShippedWorkflowName],
-                Worktrees = new WorktreeSettings { Root = ".worktrees", PathLimit = groundHeld.Legs ? 480 : 260 },
-                Defaults = new HarnessDefaults { AgentTier = template.AgentTier },
-                Providers = [.. template.Providers],
-                TierConfig = new Dictionary<string, List<string>>(template.TierConfig, StringComparer.OrdinalIgnoreCase),
-                Legs = groundHeld.Legs
-                    ? new Dictionary<string, LegConfig>(StringComparer.Ordinal)
-                    {
-                        ["local"] = new() { Os = platform.PlatformKey, Processor = platform.Processor, Toolchain = "dotnet", Config = "debug" },
-                    }
-                    : [],
-                BuildConfigs = groundHeld.Legs ? new Dictionary<string, BuildConfiguration>(StringComparer.Ordinal) { ["debug"] = new() { DotnetConfiguration = "Debug" } } : [],
-                Toolchains = groundHeld.Legs ? new Dictionary<string, ToolchainConfig>(StringComparer.Ordinal) { ["dotnet"] = new() } : [],
-                Ci = groundHeld.Ci ? new CiSettings { LegJobPattern = "build-(?<leg>.+)", BuildStep = "Build", TestStep = "Test" } : new(),
-                Anchors = groundHeld.Anchors ? new AnchorSettings { CitationRoots = ["src"] } : new(),
-                Mutations = groundHeld.Mutations ? new MutationSettings { Registry = "arms.md" } : new(),
-            });
+        var config = new HarnessConfig
+        {
+            Workflows = [WorkflowTemplates.ShippedWorkflowName],
+            Worktrees = new WorktreeSettings { Root = ".worktrees", PathLimit = groundHeld.Legs ? 480 : 260 },
+            Defaults = new HarnessDefaults { AgentTier = template.AgentTier },
+            Providers = [.. template.Providers],
+            TierConfig = new Dictionary<string, List<string>>(template.TierConfig, StringComparer.OrdinalIgnoreCase),
+            Legs = groundHeld.Legs
+                ? new Dictionary<string, LegConfig>(StringComparer.Ordinal)
+                {
+                    ["local"] = new() { Os = platform.PlatformKey, Processor = platform.Processor, Toolchain = "dotnet", Config = "debug" },
+                }
+                : [],
+            BuildConfigs = groundHeld.Legs ? new Dictionary<string, BuildConfiguration>(StringComparer.Ordinal) { ["debug"] = new() { DotnetConfiguration = "Debug" } } : [],
+            Toolchains = groundHeld.Legs ? new Dictionary<string, ToolchainConfig>(StringComparer.Ordinal) { ["dotnet"] = new() } : [],
+            Ci = groundHeld.Ci ? new CiSettings { LegJobPattern = "build-(?<leg>.+)", BuildStep = "Build", TestStep = "Test" } : new(),
+            Anchors = groundHeld.Anchors ? new AnchorSettings { CitationRoots = ["src"] } : new(),
+            Mutations = groundHeld.Mutations ? new MutationSettings { Registry = "arms.md" } : new(),
+        };
+
+        adjust?.Invoke(config);
+
+        await harness.InitializeHarnessAsync(temp.Path, Token, config);
 
         OrchestrationKit.Write(temp.Path, Path.Combine(".harness-config", "workflows", ".env", "a.env"), keys ?? "ANTHROPIC_API_KEY=sk-test-one\nZAI_API_KEY=sk-test-two\n");
         harness.FilePermissions.ProtectSecret(Path.Combine(temp.Path, ".harness-config", "workflows", ".env", "a.env"));
@@ -182,20 +183,32 @@ public sealed class ImplementationFlowTests
     /// <summary>The run's open questions and its last steps, as a diagnostic an assertion carries when it fails.</summary>
     private static string Shown(Kit kit)
     {
-        var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
+        var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf());
         var open = string.Join(
             " | ",
-            questions.Open.Select(question => $"{question.Id} kind {question.Kind} by {question.RaisedBy?.Step}: {question.ProblemShown?.Happened}"));
+            (questions?.Open ?? []).Select(question => $"{question.Id} kind {question.Kind} by {question.RaisedBy?.Step}: {question.ProblemShown?.Happened}"));
         var steps = string.Join(
             " | ",
-            kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps
+            (kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Steps ?? [])
                 .OrderByDescending(step => step.StartedAt ?? DateTimeOffset.MinValue)
                 .Take(14)
                 .Select(step => $"{step.Instance} {step.State}{(step.WaitsOn.Count > 0 ? $" waits[{string.Join(",", step.WaitsOn)}]" : string.Empty)} {(step.Exit is { } exit ? exit.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty)} {step.Error ?? string.Empty}"));
         var eventsPath = Path.Combine(kit.RunOf().Directory, "events.jsonl");
-        var events = System.IO.File.Exists(eventsPath)
-            ? string.Join(" | ", System.IO.File.ReadAllLines(eventsPath).TakeLast(6))
-            : "no events";
+        var events = "no events";
+
+        if (System.IO.File.Exists(eventsPath))
+        {
+            try
+            {
+                using var shared = new FileStream(eventsPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var read = new StreamReader(shared);
+                events = string.Join(" | ", (read.ReadToEnd() ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(6));
+            }
+            catch (IOException)
+            {
+                events = "the events file was being written";
+            }
+        }
 
         return $"open: {open} || steps: {steps} || events: {events}";
     }
@@ -1224,6 +1237,506 @@ public sealed class ImplementationFlowTests
         Assert.True(kit.Steps.Of("check-mutations").Single().Step.Pending);
     }
 
+    /// <summary>
+    /// A question the engine raises is answered mid-run, while the run's own asking of an advisor still runs on beside
+    /// it: a review loop at its bound in a copy of the entry that does not answer it is open at once with its
+    /// recommendation sought - the advisor's run a branch the question does not stop - and answered before the advisor
+    /// ends, which ends the advisor's asking; the loop takes the answer and the run goes on to its end, the
+    /// recommendation said as cancelled by the answer that ended it.
+    /// </summary>
+    [Fact]
+    public async Task AQuestionRaisedWhileTheAdvisorStillRunsOn_IsAnsweredMidRun_AndEndsTheAdvisor()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            script: agents => agents.Queue(
+                "reviewer-correctness",
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false)))));
+
+        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+
+        OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
+        await kit.Harness.CommitAllAsync(kit.Tree.Path, "the backlog the run files what it leaves in", Token);
+
+        // The advisor, held mid-asking: a branch of the run still working while the question is open.
+        var advising = kit.Agents.Hold("advisor");
+
+        var run = StartAsync(kit, "request=Ship the orders report.", "preapproved=yes", "backlog=docs/backlog.md");
+
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())?.Open.Any(question => question.Kind == "loopBound") == true
+                && kit.Agents.Of("advisor").Count > 0,
+            () =>
+            {
+                var asked = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf());
+                return $"{(run.IsCompletedSuccessfully ? $"{run.Result.ExitCode} {run.Result.Message}" : run.Status.ToString())}"
+                    + $" | bound open: {asked?.Open.Any(question => question.Kind == "loopBound")} | advisor asked: {kit.Agents.Of("advisor").Count} | {Shown(kit)}";
+            });
+
+        var open = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open.Single(question => question.Kind == "loopBound");
+
+        // The advisor was sought and is still running - held, its asking not ended: what the answer will end.
+        Assert.Single(kit.Agents.Of("advisor"));
+
+        _ = await AnswerOneAsync(kit, open.Id, "accept");
+
+        var done = await run;
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+        // The question carries the person's answer, and the advisor's asking was ended by it - a recommendation that
+        // never arrived, said as cancelled with the answer that ended it.
+        var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
+        var bound = questions.Questions.Single(question => question.Kind == "loopBound");
+
+        Assert.Equal(("answered", "accept", "person"), (bound.State, bound.Answers.Single().Answer, bound.Answers.Single().By!.Who));
+        Assert.Equal("cancelled", bound.Recommendation!.State);
+        Assert.Contains("answered by a person while the advisor ran", bound.Recommendation.Why, StringComparison.Ordinal);
+
+        // What the loop left was filed in the backlog, as the bound's answer says.
+        var handoff = kit.Agents.Of("scribe").Single();
+
+        Assert.Contains("The report ships without its frame", handoff.Prompt, StringComparison.Ordinal);
+        Assert.Contains("docs/backlog.md", handoff.Prompt, StringComparison.Ordinal);
+        Assert.Empty(questions.Open);
+    }
+
+    /// <summary>
+    /// The advisor's recommendation arrives while the question is still open: it is in the record with who gave it, and
+    /// in list-orchestrator's saying of the open question; an advisor that ends without an answer leaves the question
+    /// saying one was sought and not obtained, and the bound is still asked of the person, who answers it; and an entry
+    /// that names no advisor at all says none was sought.
+    /// </summary>
+    [Fact]
+    public async Task TheAdvisorsRecommendationArrivesIntoTheOpenQuestion_AnAdvisorWithoutAnAnswerIsSoughtAndNotObtained_AndAnEntryThatNamesNone_SaysSo()
+    {
+        using var withAdvice = new TempDirectory();
+        var kit = await PrepareAsync(
+            withAdvice,
+            script: agents => agents.Queue(
+                "reviewer-correctness",
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false)))));
+
+        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+
+        OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
+        await kit.Harness.CommitAllAsync(kit.Tree.Path, "the backlog the run files what it leaves in", Token);
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+        var open = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open.Single(question => question.Kind == "loopBound");
+        var given = open.Recommendation!;
+
+        Assert.True(("given", "advisor", "more") == (given.State, given.By, given.Answer), $"{given.State}: {given.Why}");
+
+        // The listing says the open question, with the recommendation in it.
+        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Tree.Path, "r1", steps: false, questions: true, json: false, Token);
+        var lines = string.Join("\n", listed.Details ?? []);
+
+        Assert.Contains($"open question {open.Id} (loopBound)", lines, StringComparison.Ordinal);
+        Assert.Contains("recommended: 'more'", lines, StringComparison.Ordinal);
+
+        var answered = await AnswerOneAsync(kit, open.Id, "accept");
+
+        Assert.True(HarnessExit.Success == answered.ExitCode, $"{answered.Message} | {string.Join(" | ", answered.Details ?? [])} | {Shown(kit)}");
+
+        // The report of the ended run holds the recommendation, with who gave it.
+        var report = File.ReadAllText(kit.RunOf().ReportFile);
+
+        Assert.Contains("recommended: 'more', the repository's bar decides it", report, StringComparison.Ordinal);
+
+        // An advisor whose every attempt fails leaves the question saying one was sought and not obtained, and the
+        // person is still asked.
+        using var withoutAnAnswer = new TempDirectory();
+        var other = await PrepareAsync(
+            withoutAnAnswer,
+            script: agents =>
+            {
+                agents.Queue(
+                    "advisor",
+                    [.. Enumerable.Repeat(new AgentRunResult(AgentRunStatus.Failed, Error: "the launch ran past its 00:10:00"), 48)]);
+                agents.Queue(
+                    "reviewer-correctness",
+                    Completed(Review(Finding(severity: "high", production: false))),
+                    Completed(Review(Finding(severity: "high", production: false))),
+                    Completed(Review(Finding(severity: "high", production: false))),
+                    Completed(Review(Finding(severity: "high", production: false))),
+                    Completed(Review(Finding(severity: "high", production: false))),
+                    Completed(Review(Finding(severity: "high", production: false))));
+            });
+
+        await EditWorkflowAsync(other, WithoutConfiguredLoopBounds);
+        OrchestrationKit.Write(other.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
+        await other.Harness.CommitAllAsync(other.Tree.Path, "the backlog the run files what it leaves in", Token);
+
+        var held = await StartAsync(other, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.Equal(FlowExit.Paused, held.ExitCode);
+        var notObtained = other.Harness.OrchestrationStore.ReadFlowQuestions(other.RunOf())!.Open.Single(question => question.Kind == "loopBound");
+
+        Assert.Equal(("notObtained", null), (notObtained.Recommendation!.State, notObtained.Recommendation.Answer));
+        Assert.Contains("one was sought and not obtained", notObtained.Recommendation.Why, StringComparison.Ordinal);
+        Assert.Contains("the launch ran past its 00:10:00", notObtained.Recommendation.Why, StringComparison.Ordinal);
+
+        _ = await AnswerOneAsync(other, notObtained.Id, "accept");
+
+        Assert.Equal(nameof(FlowRunStatus.Done), other.Harness.OrchestrationStore.ReadFlow(other.RunOf())!.Status);
+
+        // An entry that names no advisor says none was sought, and asks the person all the same.
+        using var withoutAdvisor = new TempDirectory();
+        var third = await PrepareAsync(withoutAdvisor);
+
+        await EditWorkflowAsync(third, lines => lines.TakeWhile(line => !line.Equals("advisor:", StringComparison.Ordinal))
+            .Concat(lines.SkipWhile(line => !line.Equals("reporter:", StringComparison.Ordinal))).ToArray());
+
+        var asked = await StartAsync(third, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, asked.ExitCode);
+        var approval = third.Harness.OrchestrationStore.ReadFlowQuestions(third.RunOf())!.Open.Single(question => question.RaisedBy?.Step?.EndsWith(".approval", StringComparison.Ordinal) == true);
+
+        Assert.Equal(("notSought", null), (approval.Recommendation!.State, approval.Recommendation.Answer));
+        Assert.Contains("orchestrator 'implementation' names no advisor", approval.Recommendation.Why, StringComparison.Ordinal);
+        Assert.Empty(third.Agents.Of("advisor"));
+
+        _ = await AnswerAsync(third, "approve");
+
+        Assert.Equal(nameof(FlowRunStatus.Done), third.Harness.OrchestrationStore.ReadFlow(third.RunOf())!.Status);
+    }
+
+    /// <summary>
+    /// The repository's bar for a recommendation is read as each question is raised, never kept by the run: the advisor
+    /// of the first question is given the file as it stands, and one edited between two questions of one run - the plan
+    /// sent back and approved again - reaches only the second, whose advisor follows the new text.
+    /// </summary>
+    [Fact]
+    public async Task TheRepositorysBar_IsReadAsEachQuestionIsRaised_AnEditHoldingFromTheNext()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            script: agents => agents.Queue("planner", Completed(Plan(One())), Completed(Plan(One(), One(name: "two", owned: "src/two/**")))));
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+        var first = kit.Agents.Of("advisor").Single();
+
+        Assert.Contains("Recommend the solution that is best for the long term", first.Prompt, StringComparison.Ordinal);
+
+        // With the first question still open, the repository's bar is edited: the run keeps no copy of it, and the
+        // question the plan's return raises reads the file as it stands then.
+        var bar = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "recommendations.md");
+        File.WriteAllLines(
+            bar,
+            [
+                "# How recommendations are made in this repository",
+                string.Empty,
+                "## The bar",
+                string.Empty,
+                "1. Recommend nothing that ships without a frame; the frame is the repository's own.",
+            ]);
+
+        var revised = await AnswerAsync(kit, "revise", "Make it two items.");
+
+        Assert.Equal(FlowExit.Paused, revised.ExitCode);
+
+        var second = kit.Agents.Of("advisor")[1];
+
+        Assert.Contains("Recommend nothing that ships without a frame", second.Prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Recommend the solution that is best for the long term", second.Prompt, StringComparison.Ordinal);
+
+        _ = await AnswerAsync(kit, "approve");
+
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+    }
+
+    /// <summary>
+    /// A run with a budget in dollars counts each step's cost at the configuration's prices - its steps on the fallback
+    /// model among them, every turn reported - and its report says the whole of it, of the budget; the same run with no
+    /// budget counts what it can and says the rest is not known, naming the model and the keys to fill; and where the
+    /// budget needs a price the configuration does not hold, the run is refused before it starts, naming them too.
+    /// </summary>
+    [Fact]
+    public async Task TheUsdBudget_CountsEachStepsCostAtTheConfigurationsPrices_AndSaysWhatItCannotCount()
+    {
+        using var budgeted = new TempDirectory();
+        var kit = await PrepareAsync(budgeted, keys: "ZAI_API_KEY=sk-test-two\n");
+
+        kit.Agents.DefaultUsage = new AgentUsage(InputTokens: 1_000_000, OutputTokens: 500_000, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
+        kit.Agents.ServingModel = "glm-5.3";
+
+        await EditWorkflowAsync(
+            kit,
+            lines =>
+            {
+                var at = Array.IndexOf(lines, "answers:");
+                return [.. lines[..at], "budget:", "  usd: 500", .. lines[at..]];
+            });
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+        var spent = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Spent!;
+
+        Assert.True(spent.Usd > 0, $"{spent.Usd}");
+        Assert.Null(spent.Uncounted);
+
+        var report = File.ReadAllLines(kit.RunOf().ReportFile).Single(line => line.Contains(" USD", StringComparison.Ordinal));
+
+        Assert.StartsWith("- ", report, StringComparison.Ordinal);
+        Assert.DoesNotContain("not known", report, StringComparison.Ordinal);
+
+        // With the fallback's prices taken out, the run under the budget is refused before it starts, naming the model
+        // and the keys to fill.
+        using var priceless = new TempDirectory();
+        var other = await PrepareAsync(priceless, keys: "ZAI_API_KEY=sk-test-two\n", adjust: WithoutGlmPrices);
+
+        await EditWorkflowAsync(
+            other,
+            lines =>
+            {
+                var at = Array.IndexOf(lines, "answers:");
+                return [.. lines[..at], "budget:", "  usd: 500", .. lines[at..]];
+            });
+
+        var refused = await StartAsync(other, "request=Ship the orders report.", "preapproved=yes");
+
+        var said = $"{refused.Message} | {string.Join(" | ", refused.Details ?? [])}";
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
+        Assert.Contains("runs under a budget in dollars through client 'glm'", said, StringComparison.Ordinal);
+        Assert.Contains("no price for 'glm-5.3' (providers 'zai', model 'glm-5.3'", said, StringComparison.Ordinal);
+        Assert.Contains("and a budget is charged with the cost counted from them", said, StringComparison.Ordinal);
+
+        // With no budget at all, the same unpriced model is worked and its cost is said as not known, the run going on.
+        using var unbudgeted = new TempDirectory();
+        var third = await PrepareAsync(unbudgeted, keys: "ZAI_API_KEY=sk-test-two\n", adjust: WithoutGlmPrices);
+
+        third.Agents.DefaultUsage = new AgentUsage(InputTokens: 1_000_000, OutputTokens: 500_000, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0);
+        third.Agents.ServingModel = "glm-5.3";
+
+        var gone = await StartAsync(third, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == gone.ExitCode, $"{gone.Message} | {string.Join(" | ", gone.Details ?? [])} | {Shown(third)}");
+
+        var unknown = third.Harness.OrchestrationStore.ReadFlow(third.RunOf())!.Spent!;
+
+        Assert.Equal(0, unknown.Usd);
+        Assert.Contains("no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceInputMiss, priceOutput)", unknown.Uncounted, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The independent audit of a plan: one that refuses - the item builds what the repository already has - loops the
+    /// planning with the finding given to the planner, and the plan that passes is the one approved; and what the
+    /// request itself asks to have built again is no duplicate: triage's list of it reaches the auditor, and the item
+    /// that replaces exactly that passes the audit first time.
+    /// </summary>
+    [Fact]
+    public async Task TheAuditThatRefuses_LoopsThePlanningWithTheFinding_AndWhatTheRequestAsksToHaveBuiltAgain_IsNoDuplicate()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue("planner", Completed(Plan(One())), Completed(Plan(One())));
+                agents.Queue(
+                    "plan-auditor",
+                    Completed(Audit(go: false, "the item builds what the repository already has: the orders report is already src/report.cs")),
+                    Completed(Audit()));
+            });
+
+        OrchestrationKit.Write(kit.Tree.Path, Path.Combine("src", "report.cs"), "namespace Report;\n");
+        await kit.Harness.CommitAllAsync(kit.Tree.Path, "the report the repository already has", Token);
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+        var plans = kit.Agents.Of("planner");
+
+        Assert.Equal(2, plans.Count);
+        Assert.Contains("the item builds what the repository already has", plans[1].Prompt, StringComparison.Ordinal);
+
+        // What the request asks to have built again is the auditor's own list: the item replacing exactly that is no
+        // duplicate, and the audit passes first time.
+        using var rebuilt = new TempDirectory();
+        var other = await PrepareAsync(
+            rebuilt,
+            script: agents =>
+            {
+                agents.Queue(
+                    "triage",
+                    Completed(Triage(
+                        rebuilds: [Rebuild("the orders report", "src/report.cs")],
+                        sentence: "This plan is approved beforehand; build it without showing it for approval.")));
+                agents.Queue("planner", Completed(Plan(One(replaces: "src/report.cs"))));
+            });
+
+        OrchestrationKit.Write(other.Tree.Path, Path.Combine("src", "report.cs"), "namespace Report;\n");
+        await other.Harness.CommitAllAsync(other.Tree.Path, "the report the request asks to have built again", Token);
+
+        var through = await StartAsync(other, "request=Ship the orders report again, as its own code. This plan is approved beforehand; build it without showing it for approval.");
+
+        Assert.True(HarnessExit.Success == through.ExitCode, $"{through.Message} | {string.Join(" | ", through.Details ?? [])} | {Shown(other)}");
+
+        var audit = other.Agents.Of("plan-auditor").Single();
+
+        Assert.Contains("src/report.cs", audit.Prompt, StringComparison.Ordinal);
+        Assert.Contains("the orders report", audit.Prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An agent at its turn limit: the configuration answers retry twice and fail the third - each answer recorded with
+    /// where it was configured - and the failed step is put to the person as a failure question that says what happened
+    /// (the step reached its turns); answered retry, the step runs again and passes. A reasoning step is never
+    /// recovered: no diagnostician is asked for it.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentAtItsTurnLimit_IsAnsweredByItsConfiguration_RetryTwiceThenFail_AndThePersonRetriesIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue(
+                    "implementer",
+                    Completed(Implement()),
+                    new AgentRunResult(AgentRunStatus.MaxTurns),
+                    new AgentRunResult(AgentRunStatus.MaxTurns),
+                    new AgentRunResult(AgentRunStatus.MaxTurns),
+                    Completed(Implement()));
+                agents.Queue("reviewer-correctness", Completed(Review(Finding())), Completed(Review()));
+            });
+
+        await EditWorkflowAsync(
+            kit,
+            lines =>
+            {
+                var list = lines.ToList();
+                var at = list.FindIndex(line => line.Trim().Equals("turnLimit:", StringComparison.Ordinal));
+                var times = list.FindIndex(at + 1, line => line.Trim().Equals("times: 2", StringComparison.Ordinal));
+
+                return times >= 0 ? [.. list[..(times + 1)], "    then: fail", .. list[(times + 1)..]] : [.. list];
+            });
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        // The failed step is put to the person, its question saying what happened.
+        var failure = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open.Single(question => question.Kind == "failure");
+
+        Assert.Contains("reached its turns", failure.ProblemShown!.Happened, StringComparison.Ordinal);
+
+        var retried = await AnswerOneAsync(kit, failure.Id, "retry");
+
+        Assert.True(HarnessExit.Success == retried.ExitCode, $"{retried.Message} | {string.Join(" | ", retried.Details ?? [])} | {Shown(kit)}");
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+        // The implementer ran the item, hit its limit three times, and passed on the person's retry.
+        Assert.Equal(5, kit.Agents.Of("implementer").Count);
+
+        var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
+
+        Assert.Empty(questions.Open);
+        var limits = questions.Questions.Where(question => question.Kind == "turnLimit").ToList();
+
+        Assert.Equal(["retry", "retry", "fail"], [.. limits.SelectMany(question => question.Answers).Select(answer => answer.Answer)]);
+        Assert.All(
+            limits.SelectMany(question => question.Answers),
+            answer => Assert.Equal(("configuration", "the orchestrator's answers"), (answer.By!.Who, answer.By!.Where)));
+
+        var answered = questions.Questions.Single(question => question.Id == failure.Id);
+
+        Assert.Equal(("answered", "retry", "person"), (answered.State, answered.Answers.Single().Answer, answered.Answers.Single().By!.Who));
+
+        // A reasoning step is never recovered: no diagnostician was asked for it.
+        Assert.Empty(kit.Agents.Of("diagnostician"));
+
+        // The report lists each answer with where it was configured.
+        var report = File.ReadAllText(kit.RunOf().ReportFile);
+
+        Assert.Contains("answered 'retry' by the configuration, the orchestrator's answers", report, StringComparison.Ordinal);
+    }
+
+    /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
+    private static async Task EditWorkflowAsync(Kit kit, Func<string[], string[]> edit)
+    {
+        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "implementation.yml");
+        File.WriteAllLines(workflow, edit([.. File.ReadAllLines(workflow)]));
+        await kit.Harness.CommitAllAsync(kit.Tree.Path, "the workflow as this run reads it", Token);
+    }
+
+    /// <summary>
+    /// The workflow's lines with every configured answer a loop's bound takes out: a loop at its bound is asked of a
+    /// person, the whole <c>answers</c> block gone with the entry - an empty one is no mapping at all.
+    /// </summary>
+    private static string[] WithoutConfiguredLoopBounds(string[] lines)
+    {
+        var kept = new List<string>();
+
+        for (var at = 0; at < lines.Length; at++)
+        {
+            var bound = lines[at].Trim().Equals("loopBound: accept", StringComparison.Ordinal);
+            var answers = !bound && lines[at].Trim().Equals("answers:", StringComparison.Ordinal)
+                && at + 1 < lines.Length && lines[at + 1].Trim().Equals("loopBound: accept", StringComparison.Ordinal);
+
+            if (!bound && !answers)
+            {
+                kept.Add(lines[at]);
+            }
+        }
+
+        return [.. kept];
+    }
+
+    /// <summary>Takes the fallback model's prices out of the configuration: a model whose cost cannot be counted.</summary>
+    private static void WithoutGlmPrices(HarnessConfig config)
+    {
+        var provider = config.Providers.Single(entry => entry.Name == "zai");
+        var glm = provider.Models.Single(model => model.Code == "glm-5.3");
+
+        provider.Models.Remove(glm);
+        provider.Models.Add(
+            new AgentModelConfig
+            {
+                Code = glm.Code,
+                Name = glm.Name,
+                Tiers = glm.Tiers,
+                Efforts = glm.Efforts,
+                ContextTokens = glm.ContextTokens,
+                MaxOutputTokens = glm.MaxOutputTokens,
+                LargePrompt = glm.LargePrompt,
+            });
+    }
+
+    /// <summary>Waits, a little at a time, for <paramref name="done"/>, and fails the test when it never comes.</summary>
+    private static async Task WhenAsync(Func<bool> done, Func<string>? said = null)
+    {
+        for (var waited = 0; waited < 3000 && !done(); waited++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(100), Token);
+        }
+
+        Assert.True(done(), $"{said?.Invoke() ?? "what was waited for did not happen"} within five minutes");
+    }
+
     /// <summary>The scripted agents: every request kept, answering by the definition each step works as.</summary>
     private sealed class Scripted : IAgentRunner
     {
@@ -1248,24 +1761,85 @@ public sealed class ImplementationFlowTests
         /// <summary>The answers a test queues for a definition, taken before the standard answer.</summary>
         private readonly Dictionary<string, Queue<AgentRunResult>> _queued = new(StringComparer.Ordinal);
 
+        /// <summary>The agents a test holds mid-run, each standing in for work slow enough to span a question.</summary>
+        private readonly List<(string Definition, Func<AgentStepRequest, bool> When, Held Hold)> _held = [];
+
+        /// <summary>What every completed agent of the script reports it used, where a test sets it; null where none does.</summary>
+        public AgentUsage? DefaultUsage { get; set; }
+
+        /// <summary>
+        /// The model the script's agents serve on, where a test names it: the walk the script stands in for moves a step
+        /// to the first entry whose key the slot holds, and the script cannot see the slot. Null where the first usable
+        /// entry is the model that serves.
+        /// </summary>
+        public string? ServingModel { get; set; }
+
         /// <summary>Queues <paramref name="answers"/> for the definition <paramref name="definition"/>, in order.</summary>
         public void Queue(string definition, params AgentRunResult[] answers)
             => _queued[definition] = new Queue<AgentRunResult>(answers);
+
+        /// <summary>
+        /// Holds every agent of <paramref name="definition"/> - or those <paramref name="when"/> names - until the hold is
+        /// opened: an agent whose work a test spans a question with, answered by its standard answer once opened.
+        /// </summary>
+        public Held Hold(string definition, Func<AgentStepRequest, bool>? when = null)
+        {
+            ArgumentNullException.ThrowIfNull(definition);
+
+            var held = new Held();
+
+            lock (_asked)
+            {
+                _held.Add((definition, when ?? (static _ => true), held));
+            }
+
+            return held;
+        }
 
         /// <summary>The requests the definition <paramref name="definition"/> was asked with, in order.</summary>
         public IReadOnlyList<AgentStepRequest> Of(string definition)
             => [.. Asked.Where(step => string.Equals(step.AgentDefinition, definition, StringComparison.Ordinal))];
 
         /// <inheritdoc/>
-        public Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
+        public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
+            Held? held;
+
             lock (_asked)
             {
                 _askedFor.Add(step);
+                held = _held.FirstOrDefault(entry => string.Equals(entry.Definition, step.AgentDefinition, StringComparison.Ordinal) && entry.When(step)).Hold;
             }
 
-            return Task.FromResult(
-                _queued.TryGetValue(step.AgentDefinition ?? string.Empty, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standard(step));
+            var result = held is { } waiting
+                ? await HeldAnswerAsync(waiting, step, cancellationToken)
+                : _queued.TryGetValue(step.AgentDefinition ?? string.Empty, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standard(step);
+
+            if (DefaultUsage is { } usage && events is not null && result.Status == AgentRunStatus.Completed)
+            {
+                // What the run's budget is charged with, as each turn reports it: the model the step serves on - the one
+                // the test names, the walk's own choice where the script bypasses it - then one turn per answer.
+                var serving = (step.Order ?? []).FirstOrDefault(entry => entry.Usable);
+                var model = ServingModel ?? serving?.Model ?? step.Model ?? (step.Order is [{ } first, ..] ? first.Model : null) ?? "scripted";
+
+                await events.EmitAsync(new SessionStarted(serving?.Client ?? step.Client ?? "scripted", model, string.Empty, [], [], false));
+                await events.EmitAsync(new UsageReported(usage, usage));
+            }
+
+            return result;
+        }
+
+        /// <summary>The held agent's answer: its standard one once the hold is opened, and nothing where what ended it was cancelled.</summary>
+        private static async Task<AgentRunResult> HeldAnswerAsync(Held held, AgentStepRequest step, CancellationToken cancellationToken)
+        {
+            var ended = await Task.WhenAny(held.Answer, Task.Delay(Timeout.Infinite, cancellationToken));
+
+            if (ended != held.Answer)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            return await held.Answer ?? Standard(step);
         }
 
         /// <inheritdoc/>
@@ -1319,6 +1893,25 @@ public sealed class ImplementationFlowTests
     private static AgentRunResult Completed(JsonObject output)
         => new(AgentRunStatus.Completed, StructuredOutput: output.ToJsonString());
 
+    /// <summary>
+    /// An agent a test holds mid-run, its answer waiting until the test opens it: work slow enough to span a question,
+    /// ended by what ends the run's asking of it where that comes first.
+    /// </summary>
+    private sealed class Held
+    {
+        private readonly TaskCompletionSource<AgentRunResult?> _opened = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Ends the hold, the agent answered by its standard answer - or by <paramref name="with"/>, where one is given.</summary>
+        public void Open(AgentRunResult? with = null) => _opened.TrySetResult(with);
+
+        /// <summary>The held agent's answer, once it is opened; null stands for its standard answer.</summary>
+        public Task<AgentRunResult?> Answer => _opened.Task;
+    }
+
+    
+
+
+
     /// <summary>A run that asks the person one question, with two choices and one recommended.</summary>
     private static AgentRunResult Asked(string question)
         => new(AgentRunStatus.Asked)
@@ -1336,8 +1929,8 @@ public sealed class ImplementationFlowTests
             ],
         };
 
-    /// <summary>The triage of a request that ships the orders report, with the stops and the pre-approval a test gives.</summary>
-    private static JsonObject Triage(IReadOnlyList<JsonObject>? stops = null, string? sentence = null)
+    /// <summary>The triage of a request that ships the orders report, with the stops, the pre-approval and the rebuilds a test gives.</summary>
+    private static JsonObject Triage(IReadOnlyList<JsonObject>? stops = null, string? sentence = null, IReadOnlyList<JsonObject>? rebuilds = null)
         => new()
         {
             ["title"] = "Ship the orders report",
@@ -1345,12 +1938,20 @@ public sealed class ImplementationFlowTests
             ["summary"] = "The orders report, shipped.",
             ["touches"] = new JsonArray("src/**"),
             ["plan"] = new JsonObject { ["found"] = false, ["where"] = "none", ["file"] = "", ["text"] = "" },
-            ["rebuilds"] = new JsonArray(),
+            ["rebuilds"] = new JsonArray([.. rebuilds ?? []]),
             ["preapproval"] = new JsonObject { ["given"] = sentence is not null, ["sentence"] = sentence ?? "" },
             ["ambiguities"] = new JsonArray(),
             ["blockers"] = new JsonArray(),
             ["stops"] = new JsonArray([.. stops ?? []]),
             ["preExisting"] = new JsonArray(),
+        };
+
+    /// <summary>One thing triage says the request itself asks to have built again.</summary>
+    private static JsonObject Rebuild(string what, string path)
+        => new()
+        {
+            ["what"] = what,
+            ["path"] = path,
         };
 
     /// <summary>The one stop triage puts to the person: a question with its choices and the one recommended.</summary>
@@ -1379,8 +1980,8 @@ public sealed class ImplementationFlowTests
             ["preExisting"] = new JsonArray(),
         };
 
-    /// <summary>One work item, on the paths it owns, reusing the tool the tree holds.</summary>
-    private static JsonObject One(string name = "one", string owned = "src/one/**", string reuses = "src/tool.cs")
+    /// <summary>One work item, on the paths it owns, reusing the tool the tree holds - replacing what a test names, where it does.</summary>
+    private static JsonObject One(string name = "one", string owned = "src/one/**", string reuses = "src/tool.cs", string? replaces = null)
         => new()
         {
             ["name"] = name,
@@ -1391,16 +1992,16 @@ public sealed class ImplementationFlowTests
             ["forbiddenPaths"] = new JsonArray(),
             ["reuses"] = new JsonArray(new JsonObject { ["path"] = reuses, ["what"] = "the tool" }),
             ["creates"] = new JsonArray(),
-            ["replaces"] = new JsonArray(),
+            ["replaces"] = replaces is null ? new JsonArray() : new JsonArray(new JsonObject { ["path"] = replaces, ["what"] = "the report, built again" }),
             ["testFilter"] = "",
         };
 
-    /// <summary>An audit that passes, with what it checked.</summary>
-    private static JsonObject Audit()
+    /// <summary>An audit that passes or refuses, with its findings and what it checked.</summary>
+    private static JsonObject Audit(bool go = true, params string[] findings)
         => new()
         {
-            ["go"] = true,
-            ["findings"] = new JsonArray(),
+            ["go"] = go,
+            ["findings"] = new JsonArray([.. findings]),
             ["checked"] = new JsonArray("each item's reused path is in the tree"),
             ["preExisting"] = new JsonArray(),
         };

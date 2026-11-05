@@ -1933,6 +1933,11 @@ public static class QuestionsText
         {
             yield return $"question {question.Id} ({question.Kind}, {question.State}): {question.ProblemShown?.Happened ?? question.Kind}";
 
+            if (question.Recommendation is { } said)
+            {
+                yield return $"  {RecommendationOf(said)}";
+            }
+
             foreach (var option in question.Options)
             {
                 yield return $"  {option.Answer}: {option.Does}";
@@ -1944,6 +1949,17 @@ public static class QuestionsText
             }
         }
     }
+
+    /// <summary>
+    /// A question's recommendation as the listing says it: what is recommended and why, with who gave it - or, where none
+    /// was obtained, why. The report's own saying of it stays the one in <see cref="FlowReports"/>; this is the listing's,
+    /// beside the answers a reader may still give.
+    /// </summary>
+    /// <param name="said">The recommendation, as the question holds it.</param>
+    private static string RecommendationOf(FlowRecommendation said)
+        => said.State == "given"
+            ? $"recommended: '{said.Answer}'{(said.Why is { } why ? $", {why}" : string.Empty)}{(said.By is { } by ? $" (by {by})" : string.Empty)}"
+            : said.Why ?? "no recommendation was sought";
 
     /// <summary>Who gave an answer, in words: a person and how, the configuration and where, the input it came from.</summary>
     /// <param name="by">Who gave it, as the answer records it; null where it records nobody.</param>
