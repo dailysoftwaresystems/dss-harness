@@ -7360,7 +7360,9 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Takes one thing to the workflow's recovery, as <see cref="RecoveryOf"/> says what it is: a failure, or an issue a
-    /// triage answered <c>fix</c> for.
+    /// triage answered <c>fix</c> for. The visit is made in the scope the source stands in - its id nests there, and its
+    /// steps read that scope's chain - while its steps are declared at the flow's root, so their names resolve as the
+    /// definition holds them wherever the failure was taken from.
     /// </summary>
     /// <param name="source">The step whose failure it takes, or the triage instance whose issue it fixes: what its steps read as <c>source</c>.</param>
     /// <param name="direction">The fix a person gave this visit, answering the bound direct; null for none.</param>
@@ -7400,8 +7402,9 @@ public sealed class FlowCoordinator
         });
 
         // A block of its own in the scope the source stands in: its steps are scheduled as any scope's are, and read
-        // the source - the failed step, or the triage instance and its issue - as source and {issue}.
-        instance.OwnScope = NewScope(instance.Id, PathOf(scope, declaration), scope, declaration, FlowValue.Missing, null, null, null);
+        // the source - the failed step, or the triage instance and its issue - as source and {issue}. Its names are the
+        // flow's own, read from the root where its steps are declared, however deep the failure it was taken for.
+        instance.OwnScope = NewScope(instance.Id, PathOf(_top, declaration), scope, declaration, FlowValue.Missing, null, null, null);
         instance.OwnScope.OwnGroupInstance = instance;
         Record(FlowChangeKind.Step, instance, detail: issue is null
             ? $"the failure of '{source.Id}' is given to the recovery (visit {visits.ToString(System.Globalization.CultureInfo.InvariantCulture)})"
@@ -10888,9 +10891,10 @@ public sealed class FlowCoordinator
                 else if (recovery || declaration.IsGroup && declaration.ForEach is null && declaration.Repeat is null)
                 {
                     // A block: its own scope holds its members, keyed by its instance's id - in whatever state it
-                    // ended, for a block that failed or was left holds the records of its members too.
+                    // ended, for a block that failed or was left holds the records of its members too. The recovery's
+                    // scope is read from the flow's root, where its steps are declared, wherever its visit was taken.
                     instance = Create(declaring, declaration, StateOf(record), memberId: record.Instance);
-                    instance.OwnScope = NewScope(instance.Id, PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, null, null);
+                    instance.OwnScope = NewScope(instance.Id, recovery ? PathOf(_top, declaration) : PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, null, null);
                     instance.OwnScope.OwnGroupInstance = instance;
                     scopes[instance.Id] = instance.OwnScope;
                 }

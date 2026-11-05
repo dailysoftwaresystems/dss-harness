@@ -777,6 +777,411 @@ public sealed class ImplementationFlowTests
     }
 
     /// <summary>
+    /// A red verify raises the item's mender and nothing else: the builder's agent is resumed on the mend prompt, and
+    /// the verify runs again in the same item - green the second time, the run going on to its fold and its end.
+    /// </summary>
+    [Fact]
+    public async Task ARedVerify_RaisesItsMender_BackToVerify_GreenAgain()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            ground: new Ground(Legs: true),
+            machine: steps => steps.Queue(
+                "test",
+                MachineSteps.Green(),
+                MachineSteps.Red(HarnessExit.CommandFailed, "the report test fails on its frame"),
+                MachineSteps.Green()));
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+        // The builder's agent was resumed once, on the mend prompt; the verify ran twice - red, then green.
+        var implementer = kit.Agents.Of("implementer");
+
+        Assert.Equal(2, implementer.Count);
+        Assert.StartsWith("The engine built your work and ran its tests, and the result is red.", implementer[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("the report test fails on its frame", implementer[1].Prompt, StringComparison.Ordinal);
+
+        var verify = kit.Steps.Of("test").Where(run => run.Step.Name == "verify").ToList();
+
+        Assert.Equal(2, verify.Count);
+        Assert.False(verify[0].Result.Passed);
+        Assert.True(verify[1].Result.Passed);
+        Assert.Empty(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+    }
+
+    /// <summary>
+    /// A verify that stays red past its mender's three visits is left to the recovery: no fourth mend is raised, the
+    /// diagnostician reads the failure, and what stands in its way is put to the person - answered retry, the verify
+    /// runs again as it is and comes back green, the run reaching its end.
+    /// </summary>
+    [Fact]
+    public async Task AVerifyRedPastItsMendersThreeVisits_ReachesThePersonByTheRecovery_AndIsRetriedGreen()
+    {
+        using var temp = new TempDirectory();
+        var red = MachineSteps.Red(HarnessExit.CommandFailed, "the report test still fails on its frame");
+        var kit = await PrepareAsync(
+            temp,
+            ground: new Ground(Legs: true),
+            script: agents => agents.Queue(
+                "diagnostician",
+                Completed(Diagnosis(
+                    course: "person",
+                    summary: "The verify is still red after the mender ran three times",
+                    choices: [Choice("Retry the verify", "the step runs again as it is")]))),
+            machine: steps => steps.Queue("test", MachineSteps.Green(), red, red, red, red, MachineSteps.Green()));
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        // Three mends, no fourth: the builder's agent was resumed exactly three times on the mend prompt.
+        var implementer = kit.Agents.Of("implementer");
+
+        Assert.Equal(4, implementer.Count);
+        Assert.All(implementer.Skip(1), mend => Assert.StartsWith("The engine built your work and ran its tests, and the result is red.", mend.Prompt, StringComparison.Ordinal));
+
+        // The recovery's diagnostician read the red verify, and the person was asked.
+        var diagnoses = kit.Agents.Of("diagnostician");
+
+        Assert.True(diagnoses.Count == 1, Shown(kit));
+        Assert.Contains("verify", diagnoses[0].Prompt, StringComparison.Ordinal);
+        var direction = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+        Assert.True(direction.RaisedBy?.Step?.Contains("direction", StringComparison.Ordinal) == true, Shown(kit));
+        Assert.Contains("retry", direction.Options.Select(option => option.Answer));
+        Assert.Contains("The verify is still red after the mender ran three times", direction.ProblemShown!.Happened, StringComparison.Ordinal);
+
+        var done = await AnswerAsync(kit, "retry");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+        Assert.Equal(4, kit.Agents.Of("implementer").Count);
+        Assert.Equal(5, kit.Steps.Of("test").Count(run => run.Step.Name == "verify"));
+    }
+
+    /// <summary>
+    /// A verify whose inputs moved raises nothing and asks no builder: the retry table runs it again as the tree
+    /// settles, and past its retries the step fails as what it is - no verdict of its own - which no handler takes and
+    /// the recovery puts to the person.
+    /// </summary>
+    [Fact]
+    public async Task AVerifyWhoseInputsMoved_RaisesNothing_AndIsAskedOfThePerson()
+    {
+        using var temp = new TempDirectory();
+        var moved = MachineSteps.Moved("the leg's inputs moved while it ran");
+        var kit = await PrepareAsync(
+            temp,
+            ground: new Ground(Legs: true),
+            script: agents => agents.Queue(
+                "diagnostician",
+                Completed(Diagnosis(
+                    course: "person",
+                    summary: "The tree will not settle while the verify runs",
+                    choices: [Choice("Retry the verify", "the step runs again once the tree settles")]))),
+            machine: steps => steps.Queue("test", MachineSteps.Green(), moved, moved, moved, moved));
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        // No mend was raised: the builder's agent was asked once, for the item's implement alone.
+        Assert.Single(kit.Agents.Of("implementer"));
+        Assert.Equal(4, kit.Steps.Of("test").Count(run => run.Step.Name == "verify"));
+
+        var diagnoses = kit.Agents.Of("diagnostician");
+
+        Assert.True(diagnoses.Count == 1, Shown(kit));
+        Assert.Contains("verify", diagnoses[0].Prompt, StringComparison.Ordinal);
+
+        var asked = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+        Assert.True(asked.RaisedBy?.Step?.Contains("direction", StringComparison.Ordinal) == true, Shown(kit));
+        Assert.Contains("The tree will not settle while the verify runs", asked.ProblemShown!.Happened, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A review that still finds a low finding after three rounds ends the loop: nobody is asked - the bound is
+    /// accepted by the flow's own configuration, the answer recorded as the configuration's - and what the loop left
+    /// is kept in its record, named in the run's report and given to the scribe that writes the handoff.
+    /// </summary>
+    [Fact]
+    public async Task ALowFindingTheThirdRoundStillFinds_EndsTheLoop_Unasked_LeftInTheRecordAndGivenToTheScribe()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            script: agents => agents.Queue(
+                "reviewer-correctness",
+                Completed(Review(Finding(severity: "low"))),
+                Completed(Review(Finding(severity: "low"))),
+                Completed(Review(Finding(severity: "low")))));
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+        // Three rounds of review, each reworking the finding; the loop ended at its rounds with no question asked -
+        // nothing blocking stands, so the bound is not reached and nobody is asked.
+        Assert.Equal(3, kit.Agents.Of("reviewer-correctness").Count);
+        Assert.Equal(4, kit.Agents.Of("implementer").Count);
+
+        var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
+
+        Assert.Empty(questions.Open);
+        Assert.DoesNotContain(questions.Questions, question => question.Kind == "loopBound");
+
+        // What the loop left is kept in its record and given to the scribe.
+        var fix = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Leftover is not null);
+
+        Assert.True(fix.Instance.Contains("fix", StringComparison.Ordinal), fix.Instance);
+        Assert.Contains("The report ships without its frame", fix.Leftover!.ToJsonString(), StringComparison.Ordinal);
+        Assert.Contains("low", fix.Leftover!.ToJsonString(), StringComparison.Ordinal);
+        var handoff = kit.Agents.Of("scribe").Single();
+
+        Assert.Contains("The report ships without its frame", handoff.Prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A finding the loop counts - critical, high or medium, in production code or out of it - keeps the loop going
+    /// past its three rounds to the further three its blocking holds for; at the sixth the configuration accepts the
+    /// bound, and what is left is said in the record and to the scribe, which is told to file it in the run's backlog.
+    /// </summary>
+    [Fact]
+    public async Task ABlockingFindingStandsPastThreeRoundsToSix_ThenTheBoundIsAcceptedByTheConfiguration()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            script: agents => agents.Queue(
+                "reviewer-correctness",
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false))),
+                Completed(Review(Finding(severity: "high", production: false)))));
+
+        OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
+        await kit.Harness.CommitAllAsync(kit.Tree.Path, "the backlog the run files what it leaves in", Token);
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes", "backlog=docs/backlog.md");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+        // Six rounds, one rework each, the bound reached once - at the sixth, not asked of a person at the third.
+        Assert.Equal(6, kit.Agents.Of("reviewer-correctness").Count);
+        Assert.Equal(7, kit.Agents.Of("implementer").Count);
+
+        var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
+
+        Assert.Empty(questions.Open);
+        var bound = questions.Questions.Single(question => question.Kind == "loopBound");
+
+        Assert.Contains("6 iterations", bound.ProblemShown!.Happened, StringComparison.Ordinal);
+        Assert.Equal(("answered", "accept", "configuration"), (bound.State, bound.Answers.Single().Answer, bound.Answers.Single().By!.Who));
+
+        var fix = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Leftover is not null);
+
+        Assert.Contains("The report ships without its frame", fix.Leftover!.ToJsonString(), StringComparison.Ordinal);
+        Assert.Contains("high", fix.Leftover!.ToJsonString(), StringComparison.Ordinal);
+        var handoff = kit.Agents.Of("scribe").Single();
+
+        Assert.Contains("The report ships without its frame", handoff.Prompt, StringComparison.Ordinal);
+        Assert.Contains("docs/backlog.md", handoff.Prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A run given a plan: the items come from the file the person wrote, named to the planner and to the plan's
+    /// auditor - and a red CI leg is not the run's work: the prioritizer puts it to a person as a stop, and the
+    /// person's decision reaches the planner with it.
+    /// </summary>
+    [Fact]
+    public async Task ARunGivenAPlan_ReadsItsItemsFromIt_AuditsIt_AndPutsARedCiLegToThePersonNotThePriority()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(temp, ground: new Ground(Remote: true, Ci: true));
+
+        OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "plan.md"), "# Ship the orders report\n\nOne item: the report's code and its test.\n");
+        await kit.Harness.CommitAllAsync(kit.Tree.Path, "a plan a person wrote", Token);
+
+        kit.Steps.Queue(
+            "ci-read",
+            FlowStepResult.Ended(
+                passed: true,
+                HarnessExit.Success,
+                output: new JsonObject
+                {
+                    ["passed"] = false,
+                    ["branch"] = "trunk",
+                    ["matrixRan"] = true,
+                    ["legs"] = new JsonArray(),
+                    ["red"] = new JsonArray(new JsonObject { ["name"] = "build-reports", ["state"] = "red", ["conclusion"] = "failure", ["url"] = "https://forge/checks/1" }),
+                }));
+        kit.Agents.Queue(
+            "prioritizer",
+            Completed(Priority(stops:
+            [
+                new JsonObject
+                {
+                    ["question"] = "Does the plan go ahead while build-reports is red on trunk?",
+                    ["problem"] = "build-reports is red on trunk",
+                    ["tried"] = "the CI read of trunk, and the plan's items against it",
+                    ["means"] = "the plan's work would build beside a red leg",
+                    ["options"] = new JsonArray("go ahead, and the plan's first item mends the leg", "wait for the leg to be green"),
+                    ["recommended"] = "go ahead, and the plan's first item mends the leg",
+                    ["why"] = "the bar prefers the work that mends the red",
+                },
+            ])));
+
+        var paused = await StartAsync(kit, "plan=docs/plan.md", "preapproved=yes");
+
+        // The prioritizer read the plan and the red leg, and chose the plan's work - the red is a stop, not the work.
+        var priorityPrompt = kit.Agents.Of("prioritizer").Single().Prompt;
+
+        Assert.Contains("docs/plan.md", priorityPrompt, StringComparison.Ordinal);
+        Assert.True(priorityPrompt.Contains("build-reports", StringComparison.Ordinal), priorityPrompt);
+
+        var asked = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+        Assert.Equal("Does the plan go ahead while build-reports is red on trunk?", Assert.Single(asked.Questions).Question);
+
+        var done = await AnswerAsync(kit, "continue", "Go ahead; the plan's first item mends the leg.");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+        // The plan the person wrote was given to the planner and to its auditor, with the person's decision.
+        Assert.Contains("docs/plan.md", kit.Agents.Of("planner").Single().Prompt, StringComparison.Ordinal);
+        Assert.Contains("docs/plan.md", kit.Agents.Of("plan-auditor").Single().Prompt, StringComparison.Ordinal);
+        Assert.Contains("Go ahead; the plan's first item mends the leg.", kit.Agents.Of("planner").Single().Prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A red baseline stops nothing: the step holds its red under failOn never, the prioritizer is told it in the
+    /// prompt that chooses the work, its blocker reaches the planner, and the run builds its two items to its end.
+    /// </summary>
+    [Fact]
+    public async Task ARedBaseline_IsToldToThePrioritiser_AsItsBlocker_AndStopsNothing()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            ground: new Ground(Legs: true),
+            script: agents => agents.Queue("planner", Completed(Plan(One(), One(name: "two", owned: "src/two/**")))));
+
+        kit.Steps.Queue("test", MachineSteps.RedHeld("the baseline test of the report is red"));
+        kit.Agents.Queue("prioritizer", Completed(Priority(blockers: ["the baseline test of the report is red (the leg local, src/one/**)"])));
+
+        var done = await StartAsync(kit, "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+        // The baseline held its red - no failure, no question - and the prioritizer and the planner were told it.
+        var baseline = kit.Steps.Of("test").Single(run => run.Step.Name == "baseline");
+        var priority = kit.Agents.Of("prioritizer").Single().Prompt;
+
+        Assert.True(baseline.Result.Passed);
+        Assert.True(priority.Contains("the baseline test of the report is red", StringComparison.Ordinal), priority);
+        Assert.Contains("the baseline test of the report is red", kit.Agents.Of("planner").Single().Prompt, StringComparison.Ordinal);
+        Assert.Equal(2, kit.Agents.Of("implementer").Count);
+        Assert.Empty(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+    }
+
+    /// <summary>
+    /// The scope a review's round runs behind omits the aspects the change has nothing of: their reviewers are skipped
+    /// and start no agent, while the aspects it takes in are asked; a reviewer that answers that its aspect does not
+    /// apply decides nothing - no finding is gathered, no rework is run.
+    /// </summary>
+    [Fact]
+    public async Task TheScopeTheChangeNames_SkipsTheReviewersItOmits_AndAnAspectThatDoesNotApplyDecidesNothing()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue("review-scope", Completed(Scope(true, true, false, false, true)));
+                agents.Queue("reviewer-tests", Completed(Review(applies: false)));
+            });
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+        // The omitted aspects started no agent; the taken-in ones ran, tests answering that it does not apply.
+        Assert.Empty(kit.Agents.Of("reviewer-types"));
+        Assert.Empty(kit.Agents.Of("reviewer-comments"));
+        Assert.Single(kit.Agents.Of("reviewer-errors"));
+        Assert.Single(kit.Agents.Of("reviewer-tests"));
+        Assert.Single(kit.Agents.Of("reviewer-simplicity"));
+
+        // Nothing was found: the item's builder was asked once, for the implement alone.
+        Assert.Single(kit.Agents.Of("implementer"));
+        Assert.Empty(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+    }
+
+    /// <summary>
+    /// Findings of two aspects reach one rework as one list: the builder's agent is resumed once, on a prompt that
+    /// names each finding with the aspect that reported it.
+    /// </summary>
+    [Fact]
+    public async Task FindingsOfTwoAspects_ReachOneReworkAsOneList_EachWithItsAspect()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue("review-scope", Completed(Scope(true, false, true, false, false)));
+                agents.Queue("reviewer-errors", Completed(Review(Finding(aspect: "errors", text: "An error path ships each week of orders twice where the frame is late"))));
+                agents.Queue("reviewer-types", Completed(Review(Finding(aspect: "types", text: "Each week of orders is read as a date and written as a string"))));
+            });
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+        var rework = kit.Agents.Of("implementer")[1];
+
+        Assert.StartsWith("Your work was folded and reviewed, and the review found something.", rework.Prompt, StringComparison.Ordinal);
+        Assert.True(rework.Prompt.Contains("An error path ships each week of orders twice where the frame is late", StringComparison.Ordinal), rework.Prompt);
+        Assert.Contains("Each week of orders is read as a date and written as a string", rework.Prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An aspect's step taken out of the entry changes nothing else: the entry still validates - the run starts - and
+    /// its review runs with the aspects the entry holds, the taken-out aspect starting no agent however the scope
+    /// reads the change.
+    /// </summary>
+    [Fact]
+    public async Task AnAspectStepTakenOutOfTheEntry_TheEntryStillValidates_AndTheRunGoesWithoutIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(temp);
+
+        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "implementation.yml");
+        var lines = File.ReadAllLines(workflow).ToList();
+        var from = lines.FindIndex(line => line.Trim().Equals("- name: errors", StringComparison.Ordinal));
+        var to = lines.FindIndex(from + 1, line => line.Trim().Equals("- name: tests", StringComparison.Ordinal));
+
+        Assert.True(from >= 0 && to > from, $"{from} {to}");
+        lines.RemoveRange(from, to - from);
+        File.WriteAllLines(workflow, lines);
+        await kit.Harness.CommitAllAsync(kit.Tree.Path, "the entry without the errors reviewer", Token);
+
+        kit.Agents.Queue("review-scope", Completed(Scope(true, false, false, false, false)));
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+        Assert.Empty(kit.Agents.Of("reviewer-errors"));
+        Assert.Single(kit.Agents.Of("reviewer-correctness"));
+        Assert.Single(kit.Agents.Of("implementer"));
+    }
+
+    /// <summary>
     /// The wait for the pull request's checks: the run reads the CI of the branch its pull request goes to - the base
     /// branch the orientation found, filled into the read's branch - and after the pull request it waits for the
     /// checks of the commit it pushed, its pending answered more twice by its own configuration and never asked; and
@@ -1055,8 +1460,8 @@ public sealed class ImplementationFlowTests
             ["preExisting"] = new JsonArray(),
         };
 
-    /// <summary>A review that applies and finds nothing - or the finding a test gives.</summary>
-    private static JsonObject Review(JsonObject? finding = null)
+    /// <summary>A review that applies and finds nothing - or the finding a test gives, where it does not apply where a test says so.</summary>
+    private static JsonObject Review(JsonObject? finding = null, bool applies = true)
     {
         var findings = new JsonArray();
 
@@ -1067,21 +1472,21 @@ public sealed class ImplementationFlowTests
 
         return new JsonObject
         {
-            ["applies"] = true,
+            ["applies"] = applies,
             ["findings"] = findings,
             ["preExisting"] = new JsonArray(),
         };
     }
 
     /// <summary>One finding of a review: what goes wrong, where, how much it matters and whether the product ships it.</summary>
-    private static JsonObject Finding(string aspect = "correctness", string severity = "medium")
+    private static JsonObject Finding(string aspect = "correctness", string severity = "medium", string text = "The report ships without its frame, so a week of orders reads as one run", bool production = true)
         => new()
         {
             ["aspect"] = aspect,
             ["path"] = "src/one/one.cs:1",
-            ["text"] = "The report ships without its frame, so a week of orders reads as one run",
+            ["text"] = text,
             ["severity"] = severity,
-            ["production"] = true,
+            ["production"] = production,
         };
 
     /// <summary>The run's own audit: clean or not, with the next round's items where it is not.</summary>
@@ -1096,11 +1501,11 @@ public sealed class ImplementationFlowTests
         };
 
     /// <summary>A diagnosis: what course it takes, with the choices it offers a person and the remedy items it names where it fixes.</summary>
-    private static JsonObject Diagnosis(string course, JsonObject[]? items = null, JsonObject[]? choices = null)
+    private static JsonObject Diagnosis(string course, JsonObject[]? items = null, JsonObject[]? choices = null, string summary = "The check reads a job the workflow no longer runs")
         => new()
         {
             ["course"] = course,
-            ["summary"] = "The check reads a job the workflow no longer runs",
+            ["summary"] = summary,
             ["cause"] = "the workflow's file names a job that is gone",
             ["evidence"] = new JsonArray("the check's output: build-reports was not found"),
             ["items"] = new JsonArray([.. items ?? []]),
@@ -1130,6 +1535,18 @@ public sealed class ImplementationFlowTests
         {
             ["choice"] = what,
             ["leadsTo"] = leadsTo,
+        };
+
+    /// <summary>The prioritizer's choice of the work: the request it writes, why it comes first, its blockers and the stops it puts to a person.</summary>
+    private static JsonObject Priority(IReadOnlyList<string>? blockers = null, IReadOnlyList<JsonObject>? stops = null)
+        => new()
+        {
+            ["title"] = "Ship the orders report",
+            ["request"] = "Ship the orders report.",
+            ["rationale"] = "The handoff names it first, and nothing stands in its way the run cannot do.",
+            ["blockers"] = new JsonArray([.. blockers ?? []]),
+            ["stops"] = new JsonArray([.. stops ?? []]),
+            ["preExisting"] = new JsonArray(),
         };
 
     /// <summary>The scribe's summary.</summary>
@@ -1222,6 +1639,35 @@ public sealed class ImplementationFlowTests
                     ["exitCode"] = code,
                     ["verdicts"] = new JsonArray(new JsonObject { ["leg"] = "local", ["verdict"] = "red" }),
                     ["red"] = new JsonArray(new JsonObject { ["leg"] = "local", ["verdict"] = "red", ["phase"] = "test", ["detail"] = what, ["tail"] = new JsonArray("1 failed") }),
+                    ["runDirectory"] = string.Empty,
+                    ["isolation"] = new JsonObject { ["mode"] = "none" },
+                });
+
+        /// <summary>A leg step's answer that found red and holds it, as failOn never holds a check's: its work done, no failure, the red kept for the prompts after it.</summary>
+        internal static FlowStepResult RedHeld(string detail)
+            => Ended(
+                new JsonObject
+                {
+                    ["passed"] = false,
+                    ["exitCode"] = HarnessExit.CommandFailed,
+                    ["verdicts"] = new JsonArray(new JsonObject { ["leg"] = "local", ["verdict"] = "red" }),
+                    ["red"] = new JsonArray(new JsonObject { ["leg"] = "local", ["verdict"] = "red", ["phase"] = "test", ["detail"] = detail, ["tail"] = new JsonArray("1 failed") }),
+                    ["runDirectory"] = string.Empty,
+                    ["isolation"] = new JsonObject { ["mode"] = "none" },
+                });
+
+        /// <summary>A leg step's answer whose inputs moved: no verdict of its own, saying nothing about the code, held for the retry table to run again.</summary>
+        internal static FlowStepResult Moved(string what)
+            => FlowStepResult.Ended(
+                passed: false,
+                LegExit.InputsMoved,
+                what,
+                new JsonObject
+                {
+                    ["passed"] = false,
+                    ["exitCode"] = LegExit.InputsMoved,
+                    ["verdicts"] = new JsonArray(new JsonObject { ["leg"] = "local", ["verdict"] = "inputsMoved" }),
+                    ["red"] = new JsonArray(),
                     ["runDirectory"] = string.Empty,
                     ["isolation"] = new JsonObject { ["mode"] = "none" },
                 });
