@@ -95,7 +95,7 @@ public sealed record HostCopyListing
 }
 
 /// <summary>Lists the copies hosts keep of a repository's worktrees.</summary>
-public interface IHostCopyLister
+public interface IHostCopyLister : DssHarness.Core.Application.IUseCase
 {
     /// <summary>
     /// The copies this machine records hosts holding - of the worktrees <paramref name="worktrees"/> lists, of trees

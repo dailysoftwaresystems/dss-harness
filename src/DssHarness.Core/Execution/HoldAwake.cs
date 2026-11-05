@@ -109,7 +109,7 @@ public sealed class HoldAwakeStore(IFileSystem fileSystem, Func<string> path)
 /// <param name="keepAwake">Starts the machine's own <c>keepAwake</c>, filled in with this process.</param>
 /// <param name="clock">What measures the hold.</param>
 /// <param name="pollInterval">How often the hold's state is read again; production uses <see cref="PollInterval"/>.</param>
-public sealed class HoldAwakeService(HoldAwakeStore store, KeepAwake keepAwake, TimeProvider clock, TimeSpan pollInterval)
+public sealed class HoldAwakeService(HoldAwakeStore store, KeepAwake keepAwake, TimeProvider clock, TimeSpan pollInterval) : DssHarness.Core.Application.IUseCase
 {
     /// <summary>The hidden command that runs a hold, which a host is never asked to run through a request.</summary>
     public const string CommandName = "host-hold";

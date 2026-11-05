@@ -7,7 +7,7 @@ namespace DssHarness.Core.Commands;
 /// Answers whether this machine and this directory can be worked with at all:
 /// git installed, and a repository present.
 /// </summary>
-public sealed class VerifyGitService(IGitClient gitClient)
+public sealed class VerifyGitService(IGitClient gitClient) : DssHarness.Core.Application.IUseCase
 {
     private readonly IGitClient _gitClient = gitClient;
 

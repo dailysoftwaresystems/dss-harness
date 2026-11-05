@@ -17,7 +17,7 @@ using DssHarness.Core.Execution;
 namespace DssHarness.Core.Agents.SideTasks;
 
 /// <summary>Runs and lists the side-tasks of a repository: the two commands' use case.</summary>
-public interface ISideTaskService : Application.IUseCase
+public interface ISideTaskService : DssHarness.Core.Application.IUseCase
 {
     /// <summary>Begins a side-task - a chat in the terminal, or one message with <c>--prompt</c> - or opens one again.</summary>
     /// <param name="call">What the command line said and how its chat is driven.</param>
