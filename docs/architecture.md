@@ -40,10 +40,30 @@ project was not created.)
 ```
 
 `Core` is a library, so "no logic in Program.cs" is enforced by the assembly
-boundary rather than by discipline. The registrations are the core's own
+boundary rather than by discipline. The seam a front end reaches Core through is narrower
+still, and held by tests rather than discipline (`ArchitectureTests`, which read the
+command line's own assembly metadata): every Core type the command line references is in
+the application layer (`Application\`: the use cases, their requests and results, the
+session and pipeline every command shares), its help (`Help\`), its output (`Output\`) or
+its results (`Results\`); or is reached from a public member of a use case - a request, a
+result, and everything they are made of, computed from the assemblies themselves and never
+listed by hand; or is one of a few reviewed types, each with its reason on the list: a name
+Core's own sentences or wire say (a command's name, an option's, a cell's), the console's
+own pieces (a password prompt, a side-task's terminal, a run session's counted
+interrupts), the renderers of the reports the use cases answer, the composition root every
+front end calls once, and the hidden process commands the program runs for itself. A
+reviewed entry nothing references any more, or one a use case reaches, is taken off the
+list - the test demands both. The services a command only calls are marked as the use cases
+they are (`: IUseCase`) where they live, from verify-git's to the checks', so their requests
+and their reports are contracts a front end may read. Nothing in Core outside
+`Application\`, `Composition\` and `Help\` reaches into them: the layer below shares the
+layer's contracts but never its machinery - its sessions, its scopes, its document kinds,
+its pipeline. The command line builds no container: the registrations are the core's own
 (`ServiceRegistration.AddDssHarness`), so a front end other than the command line builds the
-same services; the core builds each operation's provider (`ServiceRegistration.Host`), and the command line supplies only how a
-password is asked at its terminal (`ConsoleHost`).
+same services; the core builds each operation's provider (`ServiceRegistration.Host`), and
+the command line supplies only how a password is asked at its terminal (`ConsoleHost`). And
+no command's wiring outgrows 220 lines but the two files that declare several commands'
+options, so a file under `Commands\` is wiring, and wiring is all a person reads in it.
 
 ### The platform layer
 

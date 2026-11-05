@@ -237,6 +237,13 @@ otherwise appears as compile errors in files the worktree never touched. It says
 long a name would fit instead. The name limit and both sides of the budget are set
 in `config.json`.
 
+**One seam to the behaviour.** The command line parses arguments, owns the console and
+reports the exit code; everything a command does lives in the Core library behind a use
+case - one interface per operation, its request and its report the contract - so the same
+behaviour is reachable from a terminal today and from a front end later, and the boundary
+is enforced by tests that read the built command line itself. The
+[architecture](docs/architecture.md) says the whole of it.
+
 ## Layout
 
 ```

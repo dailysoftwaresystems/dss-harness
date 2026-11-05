@@ -149,6 +149,55 @@ public sealed class ArchitectureTests
         "DssHarness.Core.Results",
     ];
 
+    /// <summary>
+    /// The documents say the boundaries these tests enforce, in the terms the tests hold: the seam a front end
+    /// reaches Core through, the reviewed few and why each stays, the layer below sharing only the layer's
+    /// contracts, the one composition root, the budget a command's wiring keeps - so a reader of the documents
+    /// and a reader of the tests are told the same thing.
+    /// </summary>
+    [Fact]
+    public void TheLayeringTheDocumentsState_IsTheOneTheTestsHold()
+    {
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "The seam a front end reaches Core through is narrower still, and held by tests rather than discipline",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "or is one of a few reviewed types, each with its reason on the list",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A reviewed entry nothing references any more, or one a use case reaches, is taken off the list - the test demands both",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The services a command only calls are marked as the use cases they are",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the layer below shares the layer's contracts but never its machinery",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains("The command line builds no container", architecture, StringComparison.Ordinal);
+        Assert.Contains(
+            "no command's wiring outgrows 220 lines but the two files that declare several commands' options",
+            architecture,
+            StringComparison.Ordinal);
+
+        var readme = Prose.Words(File.ReadAllText(Path.Combine(Prose.RepositoryRoot(), "README.md")));
+
+        Assert.Contains(
+            "everything a command does lives in the Core library behind a use case - one interface per operation, its request and its report the contract",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the boundary is enforced by tests that read the built command line itself",
+            readme,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>Lines a command's wiring takes; wiring past it has work hiding in it.</summary>
     private const int Budget = 220;
 
