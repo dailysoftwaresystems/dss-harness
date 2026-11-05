@@ -4997,6 +4997,22 @@ public sealed class FlowCoordinator
     /// <summary>Reads the end of a repeat's last iteration: a true <c>until</c> ends it, a false one makes the next iteration, and a false one at its bound asks.</summary>
     private bool Iterate(FlowInstance instance)
     {
+        if (instance.Children.Count == 0 && IterationScopeOf(instance) is { } body)
+        {
+            // The instance is an iteration of a repeat itself - the body a visit of it drew, which owns no iterations
+            // of its own. A plan update that found the repeat's last iteration ended reopens it, and it ends again as
+            // its body's work ends - by the session that drew it, through the loop around it, and by any that takes
+            // the run up from its records, here.
+            if (!ScopeEnded(body))
+            {
+                return false;
+            }
+
+            Gather(instance);
+            End(instance, FlowInstanceState.Done, null, null);
+            return true;
+        }
+
         if (instance.Children.Count == 0 || !ScopeEnded(instance.Children[^1]))
         {
             return false;
@@ -5494,7 +5510,7 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            if (instance.OwnScope is { } block && ScopeEnded(block))
+            if ((instance.OwnScope ?? IterationScopeOf(instance)) is { } block && ScopeEnded(block))
             {
                 Gather(instance);
                 End(instance, FlowInstanceState.Done, null, null);
@@ -8994,12 +9010,32 @@ public sealed class FlowCoordinator
         => BeingEndedAround(scope) is null
             && !_redirects.Any(redirect => redirect.Set.Any(entry => ReferenceEquals(entry.Scope, scope)))
             && !(_heldPlanner is { } planner && ReferenceEquals(planner.DeclaredScope, scope))
-            && DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name) || RunsAfterItsGroup(declaration, scope) || IsPlannerOf(scope, declaration))
+            && DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name) || RunsAfterItsGroup(declaration, scope) || IsPlannerOf(scope, declaration) || ResumedInstead(scope, declaration))
             && scope.Members.Values.All(member => member.State is FlowInstanceState.NotStarted && RunsAfterItsGroup(member.Step, scope)
                 || member.WaitingQuestion is null
                     && (member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped) || member.StoppedForAnUpdate)
                     && member.Failure is not FlowFailure.EndedRun
                     && member.NotRunCause is not FlowNotRunCause.RunEnded);
+
+    /// <summary>
+    /// Whether another step of <paramref name="scope"/> the scope instantiated resumes <paramref name="declaration"/>'s
+    /// conversation: a plan update's round runs the step the <c>amend</c> block names - which resumes the planner's own
+    /// step - in the place of a new visit of it, and a scope that ran the resuming step is not held open for one whose
+    /// conversation it took on.
+    /// </summary>
+    /// <param name="scope">The scope whose work may be over.</param>
+    /// <param name="declaration">A step of it that never ran.</param>
+    private bool ResumedInstead(Scope scope, WorkflowStep declaration)
+        => DeclarationsOf(scope).Any(other => string.Equals(other.Resume, declaration.Name, StringComparison.Ordinal) && scope.Instantiated.Contains(other.Name));
+
+    /// <summary>
+    /// The body scope an iteration of a repeat governs, where the instance is one: an iteration owns no scope of its
+    /// own - the body it drew names it as its group - and a session that takes the run up from its records finds it by
+    /// that naming, to end it as the session that drew it would have. Null for every other group.
+    /// </summary>
+    /// <param name="instance">A group instance of the run.</param>
+    private Scope? IterationScopeOf(FlowInstance instance)
+        => _scopes.FirstOrDefault(scope => ReferenceEquals(scope.GroupInstance, instance));
 
     /// <summary>
     /// Every scope under a group, at every level: its own (<see cref="ScopesOf"/>), then those of each group among their

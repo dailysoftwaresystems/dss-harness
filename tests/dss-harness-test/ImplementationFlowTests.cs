@@ -180,6 +180,24 @@ public sealed class ImplementationFlowTests
     private static Task<CommandOutcome> AnswerOneAsync(Kit kit, string question, string answer, string? text = null)
         => kit.Service.AnswerAsync(kit.Tree.Path, "r1", answer, question: question, text: text, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
+    /// <summary>An amendment to the run's request, within the bound: handed to the engine where one runs it.</summary>
+    private static Task<CommandOutcome> AmendAsync(Kit kit, string text)
+        => kit.Service.AmendAsync(kit.Tree.Path, "r1", text, textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+    /// <summary>The run's questions, as the store holds them now.</summary>
+    private static FlowQuestionsFile Questions(Kit kit)
+        => kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf()) ?? throw new InvalidOperationException("the run holds no questions file");
+
+    /// <summary>Waits within the bound until the run holds an open question the predicate names, and returns it.</summary>
+    private static async Task<FlowQuestionEntry> WhenOpenAsync(Kit kit, Func<FlowQuestionEntry, bool> which, Func<string>? said = null)
+    {
+        await WhenAsync(
+            () => (kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())?.Open ?? []).Any(which),
+            said ?? (() => Shown(kit)));
+
+        return Questions(kit).Open.Single(which);
+    }
+
     /// <summary>The run's open questions and its last steps, as a diagnostic an assertion carries when it fails.</summary>
     private static string Shown(Kit kit)
     {
@@ -1673,6 +1691,118 @@ public sealed class ImplementationFlowTests
         var report = File.ReadAllText(kit.RunOf().ReportFile);
 
         Assert.Contains("answered 'retry' by the configuration, the orchestrator's answers", report, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A request amended while its round builds: nothing new starts and the items go on; the planner is given the
+    /// request as it stood and the amendment in its own conversation, asks one question and is answered; the updated
+    /// plan is checked, audited and approved by a person, and the item the update adds is built as one more work item
+    /// of the round, to the run's end.
+    /// </summary>
+    [Fact]
+    public async Task ARequestAmendedWhileItsRoundBuilds_NothingNewStarts_ThePlannerAskedAndAnswered_AndTheAddedItemBuiltInTheRound()
+    {
+        using var temp = new TempDirectory();
+        Held building = null!;
+        var taken = 0;
+
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue(
+                    "planner",
+                    Completed(Plan(One(), One(name: "two", owned: "src/two/**"))),
+                    Asked("Which view does the amendment mean?"),
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Two items ship the report and the invoices view.",
+                            ["done"] = "the report ships; its view ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**"), One(name: "three", owned: "src/three/**", reuses: "src/tool.cs")),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "added",
+                                    ["item"] = One(name: "three", owned: "src/three/**", reuses: "src/tool.cs"),
+                                    ["changed"] = "the amendment adds the invoices view, as the item 'three'",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }));
+
+                building = agents.Hold("implementer", step => Interlocked.Increment(ref taken) <= 2);
+            });
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        // The round builds its two items, both builders held at their work.
+        var drive = AnswerAsync(kit, "approve");
+
+        await WhenAsync(
+            () => kit.Agents.Of("implementer").Count >= 2,
+            () => $"{Shown(kit)} | implementers asked: {kit.Agents.Of("implementer").Count}");
+
+        // The amendment lands while both builders are at work.
+        var amended = await AmendAsync(kit, "Also ship the invoices view.");
+
+        Assert.True(amended.ExitCode == HarnessExit.Success, $"{amended.Message} | {Shown(kit)}");
+
+        var update = await WhenOpenAsync(kit, question => question.Kind == "ask" && question.RaisedBy?.Step?.EndsWith(".plan-update", StringComparison.Ordinal) == true);
+
+        // Nothing new started: the round's two builders are those the run asked, both still at their work.
+        Assert.Equal(2, kit.Agents.Of("implementer").Count);
+
+        // The planner was given the request as it stood and the amendment, in its own conversation.
+        var resumed = kit.Agents.Of("planner")[^1];
+
+        Assert.Contains("Ship the orders report", resumed.Prompt, StringComparison.Ordinal);
+        Assert.Contains("Also ship the invoices view.", resumed.Prompt, StringComparison.Ordinal);
+
+        // The builders answer, the planner's question is answered - its command's outcome says where the run then
+        // stands, paused on the approval of the updated plan - and the updated plan is asked of the person.
+        building.Open();
+
+        _ = await AnswerOneAsync(kit, update.Id, "answer", "The monthly one.");
+
+        var approval = await WhenOpenAsync(
+            kit,
+            question => question.Options.Take(2).Select(option => option.Answer).SequenceEqual(["approve", "revise"]),
+            () => $"drive: {(drive.IsCompleted ? $"{drive.Status}" : "running")} | raw: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "questions.json"))} | {Shown(kit)}");
+
+        // The person approves the updated plan. The drive ends paused on the approval; the answer then drives the
+        // run itself - the added item is built as one more work item of the round, and the run ends done.
+        _ = await drive;
+        var approved = await AnswerOneAsync(kit, approval.Id, "approve");
+
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Done) },
+            () => $"approve said: {approved.ExitCode} {approved.Message} | updates: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "updates.json"))} | {Shown(kit)}");
+
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+        // The item the update adds was built as one more work item of the round.
+        Assert.Equal(3, kit.Agents.Of("implementer").Count);
+
+        var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+        Assert.Equal(3, flow.Steps.Count(step => step.Step.EndsWith(".implement", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done)));
+
+        // The update's entry: done, its added piece placed, nobody told.
+        var updates = kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())!;
+        var entry = Assert.Single(updates.Updates);
+
+        Assert.Equal(("amendment", "done"), (entry.Cause, entry.State));
+        Assert.Single(entry.Pieces!, piece => piece.Kind == "added" && piece.ItemName() == "three");
+        Assert.Empty(entry.Told ?? []);
+
+        // list-orchestrator says what runs next: nothing, the run ended done.
+        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Tree.Path, "r1", steps: false, questions: false, json: false, Token);
+
+        Assert.Contains("done", string.Join("\n", listed.Details ?? []), StringComparison.Ordinal);
     }
 
     /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
