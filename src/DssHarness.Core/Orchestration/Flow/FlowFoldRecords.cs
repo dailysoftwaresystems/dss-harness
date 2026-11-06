@@ -370,7 +370,8 @@ public sealed record FlowFoldGrant(string Kind, IReadOnlyList<string> Named, str
 /// <param name="Folded">What a fold wrote, removed, merged, handed and applied; null where it did none of it.</param>
 /// <param name="Planned">What its plan named, measured under its hold; null where none was measured.</param>
 /// <param name="Ledger">The id of the ledger entry it was recorded under; null for a refresh and a rebase.</param>
-public sealed record FlowFoldApplied(int ExitCode, string Summary, string? Standing = null, AgentFolded? Folded = null, AgentPlanned? Planned = null, string? Ledger = null)
+/// <param name="Waited">How long the apply waited for the main tree's lock, held by a side-task's write or command; zero where it did not wait.</param>
+ public sealed record FlowFoldApplied(int ExitCode, string Summary, string? Standing = null, AgentFolded? Folded = null, AgentPlanned? Planned = null, string? Ledger = null, TimeSpan Waited = default)
 {
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()

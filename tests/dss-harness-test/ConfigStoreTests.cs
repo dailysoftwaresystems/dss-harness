@@ -1226,6 +1226,11 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "anchors": { "pendingAnchorsPath": "plans/work.md", "doneAnchorsPath": "plans//work.md" } }""", "name the same file")]
     [InlineData("""{ "anchors": { "idPrefix": "D-" } }""", "anchors.idPrefix")]
     [InlineData("""{ "anchors": { "minimumIdSegments": 0 } }""", "anchors.minimumIdSegments")]
+    [InlineData("""{ "anchors": { "passWords": [] } }""", "anchors.passWords names none; leave it out to check for the word 'passed'")]
+    [InlineData("""{ "anchors": { "passWords": ["passed", " "] } }""", "anchors.passWords names a word that is empty or whitespace")]
+    [InlineData("""{ "anchors": { "passWords": ["passed", "PASSED"] } }""", "anchors.passWords names a word twice, ignoring case")]
+    [InlineData("""{ "anchors": { "historyForms": ["swept {sha}"] } }""", "'{sha}', which is no placeholder")]
+    [InlineData("""{ "anchors": { "historyForms": [" "] } }""", "anchors.historyForms names a form that is empty or whitespace")]
     public void Load_RejectsAnchorSettingsThatCannotWork(string json, string expected)
     {
         var exception = LoadInvalid(json);

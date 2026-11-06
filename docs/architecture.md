@@ -17,7 +17,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
 `answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
-`read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
+`read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-arms`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
 `down` and `help`.
@@ -40,10 +40,30 @@ project was not created.)
 ```
 
 `Core` is a library, so "no logic in Program.cs" is enforced by the assembly
-boundary rather than by discipline. The registrations are the core's own
+boundary rather than by discipline. The seam a front end reaches Core through is narrower
+still, and held by tests rather than discipline (`ArchitectureTests`, which read the
+command line's own assembly metadata): every Core type the command line references is in
+the application layer (`Application\`: the use cases, their requests and results, the
+session and pipeline every command shares), its help (`Help\`), its output (`Output\`) or
+its results (`Results\`); or is reached from a public member of a use case - a request, a
+result, and everything they are made of, computed from the assemblies themselves and never
+listed by hand; or is one of a few reviewed types, each with its reason on the list: a name
+Core's own sentences or wire say (a command's name, an option's, a cell's), the console's
+own pieces (a password prompt, a side-task's terminal, a run session's counted
+interrupts), the renderers of the reports the use cases answer, the composition root every
+front end calls once, and the hidden process commands the program runs for itself. A
+reviewed entry nothing references any more, or one a use case reaches, is taken off the
+list - the test demands both. The services a command only calls are marked as the use cases
+they are (`: IUseCase`) where they live, from verify-git's to the checks', so their requests
+and their reports are contracts a front end may read. Nothing in Core outside
+`Application\`, `Composition\` and `Help\` reaches into them: the layer below shares the
+layer's contracts but never its machinery - its sessions, its scopes, its document kinds,
+its pipeline. The command line builds no container: the registrations are the core's own
 (`ServiceRegistration.AddDssHarness`), so a front end other than the command line builds the
-same services; the core builds each operation's provider (`ServiceRegistration.Host`), and the command line supplies only how a
-password is asked at its terminal (`ConsoleHost`).
+same services; the core builds each operation's provider (`ServiceRegistration.Host`), and
+the command line supplies only how a password is asked at its terminal (`ConsoleHost`). And
+no command's wiring outgrows 220 lines but the two files that declare several commands'
+options, so a file under `Commands\` is wiring, and wiring is all a person reads in it.
 
 ### The platform layer
 
@@ -1384,10 +1404,25 @@ refused, since nothing was reconciled there and handing the main tree's copy wou
 sorted as any hand-over sorts what the main tree holds, asked what of the agent's own it would go over or through
 (`InTheWayOfHanding`), and measured in the agent's worktree; `ApplyAsync` hands it last, after every write of the main
 tree, through the one loop every hand-over takes - deletions, then files, each asked first to be what was weighed - and
-`FoldedAsync` records it through the ledger. Both trees and the seed then agree, so the agent's next fold starts from
+`FoldedAsync` records it through the ledger. Every write the engine makes in the main tree - a fold's apply, a
+deletion's, a refresh's and a rebase's apply, a commit step's staging and commit - takes the main tree's lock
+(`MainTreeWriteLock`, a `MachineWideMutex` named for the tree's path), which a side-task's writes and commands take
+for their duration too: each side waits the other out, for a long command holds the folds back for as long as it runs,
+and the step's output says how long it waited and for what. While a run's owner is live
+(`.orchestrators/<run>.owner.json`, asked at each call through `AgentPolicyGround.LiveRun`), a side-task's agent is
+refused the git verbs that move HEAD, the index or the stash (`AgentPolicy.HeadMovingGitVerbs`) with the run's name -
+a run that starts while the chat is open is held to from its first step, and one that ends releases it - and the run's
+own verbs and the agent verbs are refused it always, as every verb that writes the tool's state is. Both trees and the seed then agree, so the agent's next fold starts from
 the reconciliation, and delete-agent's proof that nothing is left to fold holds without being told which paths were
 settled. rebase-agent's `--settled` is another option: there the person reconciled the agent's copy, which stays as its
 change on the new base.
+
+A side-task may use the codebase graph beside all this, unlimited: a graph of its own under its records
+(`SideTaskGraph`), held in the one shape every graph's records take, seeded from the newest the repository holds - a
+run's or another side-task's - at its opening, then incremental and synced after each of its writes; the `graph`
+tool offered among its agent's own with every operation and no narrowing, the repository map
+(`CodebaseRepositoryMap`) given with its first message and the context pack made from each; `--no-graph` turns it
+off, and a graph that cannot be made takes nothing from the conversation.
 
 A path both trees changed - each holds a file there, neither is what the two last agreed on, and they differ - is
 resolved in one place, whichever command meets it (`TwoChanges`, made for each command with that command's
@@ -1551,7 +1586,14 @@ still fails is asked. The implementation workflow writes `onFailure: recover` on
 checks, commits, pushes or waits - itself or through its group - and `onFailure: pause` on every
 reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
 the visits), asks a person only for what only a person can give (`direction`), and builds, tests,
-folds and reviews its fix as a round's work items are.
+folds and reviews its fix as a round's work items are. The flow builds first: its baseline is split
+in two - a `build` step, which fails red and is taken by the recovery and built again - and the
+`test` step it was, which waits for the build - and it makes its codebase graph after that build,
+beside the baseline's tests and the CI read (`onFailure: continue`, for a run goes on without a map);
+every reason step after it is served from the graph as its type of work needs, its steps saying the
+graph keys only where a type is served otherwise than by default (`graphFrom: changes` on the
+reviewers, the self-audit, the diagnosis and the steps that verify and fix; `graph: map` on the
+prioritiser and a review's scope; `graph: off` on the scribe's).
 
 Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may
 say `timeoutMinutes` (`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole
@@ -3081,7 +3123,8 @@ branch the run started on (`FlowRunPlace.OffItsBranch`, over `FlowRunContext.Bra
 and the pull request apply), every fold upstream settled (`FoldOwed.Unsettled`), an empty index, each path's digest and
 no path to stage the index marks assume-unchanged or skip-worktree checked before anything is
 staged; the staged set written to the ledger (`FlowCommitEntry`) before `IGitPublisher` stages it by explicit path and
-commits once, then held over the commit the branch named before it: its parents, as its own object names them
+commits once under the main tree's lock (`MainTreeWriteLock`, shared with a side-task's writes and commands, the
+step's output saying what it waited out for it), then held over the commit the branch named before it: its parents, as its own object names them
 (`IGitClient.ParentsOfAsync`, `git cat-file commit`, which no graft or shallow boundary stands in for), that commit
 alone - a hook could move the branch to a commit of its own, standing on one that carries anything - and what it
 changes against that commit the set alone; one that stands elsewhere, took more, or left a path of the set out, is
@@ -3198,7 +3241,11 @@ orchestrator's own, so no claim comes between its look at the owner and its remo
 
 The run's records are written in one order at every change - a step's own files (its `handoff.md`
 where it handed off, its `output.json`, then the `step.json` that names them - a refresh's or a rebase's of `others`
-with each target and where it stands), then `flow.json` (the
+with each target and where it stands; a reason step's `policy.json`, written as the step starts: the
+agents' configuration is read when each step starts, as its prompts are, so an edit of `config.json` -
+a side-task's among them - reaches the steps that start after it and never one under way, and each
+keeps the policy it started under - the ground as resolved, the web search it asks, what it runs on
+with the key's name alone), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
 in `events.jsonl` - each read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is
@@ -3861,8 +3908,12 @@ tree where query-codebase-graph runs it), which resolves each link, so a link ou
 through - and read through `AgentFiles`, where the open file stands decided again by it, and written relative to its
 directory held from the root it was decided in (`AgentFiles.Write`). The schema a step is given holds the operations it may use alone (`CodebaseGraphTool.Operations`: `edit` with `write`,
 `wholeFile` with `narrow`), and a call given a member its operation does not read, one of the wrong type, or missing one
-it needs, is a usage line (`CodebaseGraphTool.Misused`). No step is given the tool: the tool
-runtime's table does not hold it. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
+it needs, is a usage line (`CodebaseGraphTool.Misused`). A reason step whose `graph` is `tools` is given the tool by the
+runtime among the harness's own, under `read`, with the operations its capabilities and its `graphReads` give
+(`FlowStepGraph`), a conversation that goes on keeping the tool and the operations it began with; an `edit` runs alone
+between the reads, held to the write rules as `replace_in_file` is and counted among the files written, and a body served
+and an edit made count as views of their files for the edit check. Where the run's graph was never built the tool stays
+offered and every call answers the sentence for a step that left no output. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
 
 The context pack (`CodebaseContextPack`) is the part of the graph a step's work touches, made at its start
 from the view and what the step says alone (`ContextPackRequest`: its filled prompt, `writes`, the working sets it is
@@ -3903,7 +3954,15 @@ its first line counts the lines the changes lead with, and with no base, its cha
 in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the run's start commit for the main
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
-No step's first message is given its pack, and no tool its `Near`.
+A reason step that has a graph (`FlowStepGraph`, its `graph` `map` or `tools` with its default resolved) is given its
+pack as the `<codebase>` part at the head of its first user message (`AgentPromptParts.CodebaseTag`, before
+`<run-context>`) - or, where the run's graph was never built, the sentence for a step that left no output in its place -
+and the tool its `Near`. Its reads narrowed (`graphReads: narrow`, the default) deny, on the two API clients, a whole
+`view_file` of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
+the refusal; a range, a search and a write pass; a file the graph is not sure of
+(`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its references `candidates`
+or unresolved) passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file for the
+rest of the step, an escape `stated` with the agent's reason.
 The working set (`CodebaseWorkingSet`) is what a reason step that has a graph worked with, kept in its
 directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
 (`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end, at most
@@ -3925,7 +3984,14 @@ depends on directly - its own `dependsOn` and `on` and each enclosing group's, a
 then its own earlier visits of the same work item (`FlowInstanceId.SameStep`: the same id but for the visits and
 iterations after its innermost item), newest first, each that began, once; `FlowWorkingSets.SeedsOf` reads their sets
 into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
-gone). No step writes either file as it ends, and no pack is given the seeds.
+gone). A reason step that has a graph writes both files as it ends (`FlowStepGraph.Ended`: the working set made from
+the view at the step's end, its `graph.jsonl` and its stored stream) and its pack is given the seeds; its `graph.jsonl`
+holds its prompt's line first (`GraphPromptLine`: the pack's seeds, nodes, tokens and what was left out, or why none was
+given), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
+one for each escape of its narrowing and each whole read the narrowing refused (`GraphEscapeLine`, `GraphDeniedLine`),
+and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used, calls, served tokens,
+bodies, text hits, edits made and refused, whole-file reads counted from the stored stream, denied reads and escapes -
+are held in its `step.json` under `graph` and summed for the run's report (`FlowReports`).
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in
@@ -3949,8 +4015,9 @@ A registry is an introduction and exactly one anchor table, recognised by its he
 anchor table or a second one, or with an anchor row outside the table or inside some other
 table, is malformed: where a new row belongs would be a guess, and a stray row is counted by
 nothing. Every command that reads or changes anchors refuses a malformed registry (exit 20)
-rather than answer from rows it cannot trust, while `read-anchors --lint` and
-`check-anchor-balance` report the problem among their findings (exit 1). A directory where a
+rather than answer from rows it cannot trust, while `read-anchors --lint`,
+`check-anchor-balance` and `check-anchor-arms` report the problem among their findings
+(exit 1). A directory where a
 registry's file belongs, or a file that cannot be read, is refused by every command, `init`
 included (exit 20): taken for no registry, a directory sent its reader to `init`, which then failed
 to write over it.
@@ -4087,6 +4154,45 @@ behind. A row is judged lost only where both registries were read whole, since e
 missing or malformed registry hides would read as lost; and one whose Anchor cell did not name
 one id there is noted rather than failed, since repairing that cell changes the id its row
 reads as. Every problem is reported at once.
+
+### The arms
+
+`check-anchor-arms` holds what anchor rows say about mutation arms to the mutation record. It
+reads no host, takes no lock and writes nothing, as `check-mutations --list` reads none: both
+anchor registries through the read-together read, and the arms registry `mutations.registry`
+names through the one reading a listing is made of (the registry and its texts verified as a
+sweep verifies them, every selected leg listed, each arm's scopes beside them), so that what it
+says of an arm on a leg is what `--list` says of it, from one owner.
+
+A row names an arm by a backticked token equal to an A row's id, ignoring case as the arms
+registry compares ids. An arm a done row names must be unmoved here with a recorded passed on
+each leg its S row names - every selected leg where it names none, `--legs` selecting as
+`--list` selects - so a close always rests on bytes that were judged. Anything else is a
+finding that fails the check, worded as the listing words its first reason: a leg that cannot
+be swept makes every arm on it pending, its refusal the reason. "Unmoved here" is never
+"holds", and the listing's closing note is said here too.
+
+A pass word followed by only whitespace and brackets or punctuation and then a run id - the
+words are `anchors.passWords`, `passed` where the configuration names none, matched ignoring
+case - is a citation of one sweep's judgement, true only of the bytes that run read and stale
+the first time what it judged moves. It is a finding wherever its whole span does not sit
+inside one matching a form of `anchors.historyForms`, whose `{commit}` and `{run}` placeholders
+stand for a commit's hex and a run id: history is where a row may state a pass, and the forms
+say what its history looks like. A citation is judged in every row of both registries, a done
+row's no less than a pending one's.
+
+A backticked id no A row holds is reported only where git history shows an A row declared it
+once - the newest 512 commits that changed the registry, each version read for its ids - so one
+renamed or retired is a finding while an id that never was an arm is left alone, whatever else
+a row may cite in backticks. Where more commits changed the registry than were read, or the
+clone is shallow, that is noted rather than failed, for an id may have been declared before
+either cut and no change can repair the history; the note fails nothing, as the balance notes a
+registry malformed at the base.
+
+Exit codes and `--json` follow the balance: a finding exits 1 in the anchor commands' own
+range, every exit answers in the command's own document, and an early one - a directory that is
+not there, a usage error, an arms registry a listing refuses - answers with the same document
+reading nothing.
 
 ### Citations
 
@@ -5206,7 +5312,7 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `check-anchor-arms`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document
   holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
   (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
   `stop-orchestrator`) with the flow document - the session they would have run, empty

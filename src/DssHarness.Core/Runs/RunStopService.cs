@@ -30,7 +30,7 @@ public sealed class RunStopService(
     RunStops stops,
     IProcessIdentity identity,
     IFileSystem fileSystem,
-    TimeProvider? clock = null)
+    TimeProvider? clock = null) : DssHarness.Core.Application.IUseCase
 {
     /// <summary>The command's name.</summary>
     public const string CommandName = "stop-run";

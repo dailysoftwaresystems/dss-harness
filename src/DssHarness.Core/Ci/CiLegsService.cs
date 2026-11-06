@@ -1,4 +1,5 @@
 using System.Globalization;
+using DssHarness.Core.Application;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
@@ -27,7 +28,7 @@ public sealed record CiLegsRequest(string? Branch, int Limit, IReadOnlyList<long
 }
 
 /// <summary>Reads the CI verdict of each leg, and separates a real failure from a budget overrun.</summary>
-public interface ICiLegsService
+public interface ICiLegsService : IUseCase
 {
     /// <summary>Reads the runs <paramref name="request"/> names and reports each leg.</summary>
     /// <param name="startDirectory">A directory inside the repository.</param>

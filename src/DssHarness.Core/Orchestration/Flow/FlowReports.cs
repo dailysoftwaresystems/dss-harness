@@ -126,6 +126,7 @@ public static class FlowReports
             ["endedAt"] = FlowTimeConverter.Written(endedAt),
             ["spent"] = SpentOf(flow.Spent),
             ["steps"] = new JsonArray([.. flow.Steps.Select(StepOf)]),
+            ["graph"] = GraphOf(flow.Steps),
             ["handoffs"] = new JsonArray([.. handoffs.Select(HandoffOf)]),
             ["questions"] = questions is null ? [] : new JsonArray([.. questions.Questions.Select(QuestionOf)]),
             ["updates"] = updates is null ? [] : new JsonArray([.. updates.Updates.Select(UpdateOf)]),
@@ -434,6 +435,46 @@ public static class FlowReports
                 : $"'{iteration}'";
     }
 
+    /// <summary>
+    /// The run's own figures of its codebase graph, as the report's JSON document holds them: what every reason step's
+    /// graph gave and saved, summed - the steps' own figures are on their steps. Null where no step was given a graph.
+    /// </summary>
+    /// <param name="steps">The run's step records.</param>
+    private static JsonObject? GraphOf(IReadOnlyList<FlowStepRecord> steps)
+    {
+        var served = steps.Where(step => step.Graph is not null).ToList();
+
+        return served.Count == 0
+            ? null
+            : new JsonObject
+            {
+                ["steps"] = served.Count,
+                ["packTokens"] = served.Sum(step => step.Graph?["pack"]?["tokens"]?.GetValue<int>() ?? 0),
+                ["calls"] = served.Sum(step => step.Graph?["calls"]?.GetValue<int>() ?? 0),
+                ["servedTokens"] = served.Sum(step => step.Graph?["servedTokens"]?.GetValue<int>() ?? 0),
+                ["bodies"] = served.Sum(step => step.Graph?["bodies"]?.GetValue<int>() ?? 0),
+                ["textHits"] = served.Sum(step => step.Graph?["textHits"]?.GetValue<int>() ?? 0),
+                ["edits"] = new JsonObject
+                {
+                    ["made"] = served.Sum(step => step.Graph?["edits"]?["made"]?.GetValue<int>() ?? 0),
+                    ["refused"] = served.Sum(step => step.Graph?["edits"]?["refused"]?.GetValue<int>() ?? 0),
+                },
+                ["wholeFileReads"] = new JsonObject
+                {
+                    ["count"] = served.Sum(step => step.Graph?["wholeFileReads"]?["count"]?.GetValue<int>() ?? 0),
+                    ["tokens"] = served.Sum(step => step.Graph?["wholeFileReads"]?["tokens"]?.GetValue<int>() ?? 0),
+                },
+                ["deniedReads"] = served.Sum(step => step.Graph?["deniedReads"]?.GetValue<int>() ?? 0),
+                ["escapes"] = new JsonObject
+                {
+                    ["count"] = served.Sum(step => step.Graph?["escapes"]?["count"]?.GetValue<int>() ?? 0),
+                    ["tokens"] = served.Sum(step => step.Graph?["escapes"]?["tokens"]?.GetValue<int>() ?? 0),
+                    ["lowConfidence"] = served.Sum(step => step.Graph?["escapes"]?["lowConfidence"]?.GetValue<int>() ?? 0),
+                    ["stated"] = served.Sum(step => step.Graph?["escapes"]?["stated"]?.GetValue<int>() ?? 0),
+                },
+            };
+    }
+
     /// <summary>One step as the report's JSON document holds it.</summary>
     private static JsonObject StepOf(FlowStepRecord step) => new()
     {
@@ -448,6 +489,7 @@ public static class FlowReports
         ["passedOver"] = step.Failure == "passedOver",
         ["handledBy"] = step.HandledBy,
         ["leftover"] = step.Leftover?.DeepClone(),
+        ["graph"] = step.Graph?.DeepClone(),
     };
 
     /// <summary>One question as the documents hold it: its problem, its options, its recommendation and every answer it was given.</summary>

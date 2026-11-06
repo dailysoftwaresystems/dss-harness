@@ -437,14 +437,19 @@ public sealed class ToolLoop(
                 Credential: new AgentCredentialSource(AgentCredentialSource.EnvironmentFile, Now.Key!.Name))).ConfigureAwait(false);
 
             // The first message: a compacted conversation begins with the engine's compaction record, whole; any
-            // other begins with the run's parts in their order, the continuation record only where the conversation
-            // is a new one, which on an API client a handed conversation never is - the message exactly as
-            // AgentPromptParts writes it, so its one reader takes it apart again.
+            // other begins with the run's parts in their order, the repository map only where the conversation is a
+            // new one and the continuation record only where it is, which on an API client a handed conversation never
+            // is - the message exactly as AgentPromptParts writes it, so its one reader takes it apart again. Where the
+            // message begins with the map, the provider is asked to carry it as its own part, a cache mark set on it
+            // alone where the provider sets one.
+            string? mapPart = run.Compaction is null && run.Conversation is null && run.Map is { Length: > 0 } map
+                ? AgentPromptParts.MapPart(map)
+                : null;
             var first = run.Compaction is { Length: > 0 } compacted
                 ? compacted
                 : AgentPromptParts.FirstMessage(run, newConversation: run.Conversation is null);
 
-            await SayAsync(first, AgentMessageKind.FirstPrompt).ConfigureAwait(false);
+            await SayAsync(first, AgentMessageKind.FirstPrompt, mapPart).ConfigureAwait(false);
 
             // A provider whose wire holds no answer to the schema is told it in words in a message of its own after the
             // first, as a provider that refuses the schema part way is: every conversation the run begins, a compacted
@@ -1720,17 +1725,18 @@ public sealed class ToolLoop(
             }
         }
 
-        /// <summary>
-        /// A message of the engine's, said as the event that records it and sent with the next request - masked, as the
-        /// system prompt is: the agent is never told a secret of the run's, and the stored conversation never holds one the
-        /// engine wrote.
-        /// </summary>
-        private async Task SayAsync(string text, AgentMessageKind kind)
-        {
-            var masked = Masked(text);
-            await Emit(new MessageSent(masked, kind)).ConfigureAwait(false);
-            _pending.Add(provider.UserMessage(masked));
-        }
+    /// <summary>
+    /// A message of the engine's, said as the event that records it and sent with the next request - masked, as the
+    /// system prompt is: the agent is never told a secret of the run's, and the stored conversation never holds one the
+    /// engine wrote. Where <paramref name="mapBreak"/> names the message's head as the run's repository map, the
+    /// provider is asked for that part of its own - a cache mark set on it alone where the provider sets one.
+    /// </summary>
+    private async Task SayAsync(string text, AgentMessageKind kind, string? mapBreak = null)
+    {
+        var masked = Masked(text);
+        await Emit(new MessageSent(masked, kind)).ConfigureAwait(false);
+        _pending.Add(mapBreak is null ? provider.UserMessage(masked) : provider.UserMessage(Masked(mapBreak), masked[mapBreak.Length..]));
+    }
 
         /// <summary>
         /// Whether the run is pausing: the handoff raised - seen at once, before its own continuation cuts what runs - and

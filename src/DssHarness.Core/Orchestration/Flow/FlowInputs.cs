@@ -87,7 +87,9 @@ public static class FlowInputs
     /// The values a run of <paramref name="definition"/> starts with: each input the workflow declares, given or its
     /// default - the one owner of what an input takes, which a start holds its inputs to before anything of the run is
     /// made, and the engine its run to. A required input nothing gave, a value outside an input's options and a required
-    /// param with no default are each refused (13).
+    /// param with no default are each refused (13). An input with options may default empty - no choice made, and the
+    /// run's expressions read it as it is - and a value given empty reads the same, for an empty value is the default's
+    /// own and never a slip of the keyboard.
     /// </summary>
     /// <param name="definition">The workflow the run runs.</param>
     /// <param name="given">The inputs given, by name; null where none was.</param>
@@ -112,7 +114,7 @@ public static class FlowInputs
                 continue;
             }
 
-            if (input.Options.Count > 0 && !input.Options.Contains(value, StringComparer.Ordinal))
+            if (input.Options.Count > 0 && value.Length > 0 && !input.Options.Contains(value, StringComparer.Ordinal))
             {
                 throw new HarnessException(HarnessExit.Refused, $"input '{input.Name}' takes one of {string.Join(", ", input.Options)}, and the run was given '{value}'");
             }

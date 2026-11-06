@@ -135,6 +135,42 @@ public sealed class CodebaseGraphQueries
     /// <summary>How many files the view holds.</summary>
     public int FileCount => _read.Files.Count;
 
+    /// <summary>How many declarations the view holds: its nodes that are code declarations, files and projects left out.</summary>
+    public int DeclarationCount => _symbols.Values.Count(symbol => CodeNodeKinds.Extracted.Contains(symbol.Kind, StringComparer.Ordinal));
+
+    /// <summary>
+    /// The view's most central declarations, most first: each by how many other files' references bind to it - over calls,
+    /// references, instantiations, inheritance, implementations and dispatches, tests never - raised one step of ten where
+    /// its name holds a word of <paramref name="terms"/>, ties broken by id; no file the view holds as generated.
+    /// </summary>
+    /// <param name="terms">The words of the task the centrality is raised for, split as a name is.</param>
+    public IReadOnlyList<GraphCard> Central(IReadOnlyCollection<string> terms)
+    {
+        ArgumentNullException.ThrowIfNull(terms);
+
+        IReadOnlyList<(GraphSide Side, string Kind)> binding =
+        [
+            (GraphSide.In, CodeEdgeKinds.Calls),
+            (GraphSide.In, CodeEdgeKinds.References),
+            (GraphSide.In, CodeEdgeKinds.Instantiates),
+            (GraphSide.In, CodeEdgeKinds.Inherits),
+            (GraphSide.In, CodeEdgeKinds.Implements),
+            (GraphSide.In, CodeEdgeKinds.Dispatches),
+        ];
+
+        return [.. _symbols.Keys
+            .Select(Card)
+            .Where(card => CodeNodeKinds.Extracted.Contains(card.Kind, StringComparer.Ordinal))
+            .Where(card => !Generated(card.Path))
+            .Select(card => (
+                Card: card,
+                Files: Steps(card.Id, binding).Select(step => Card(step.To).Path).Distinct(StringComparer.Ordinal).Count(),
+                Named: terms.Count(word => card.Qualified.Contains(word, StringComparison.OrdinalIgnoreCase))))
+            .OrderByDescending(scored => scored.Files + scored.Named * 10)
+            .ThenBy(scored => scored.Card.Id, StringComparer.Ordinal)
+            .Select(scored => scored.Card)];
+    }
+
     /// <summary>The files, by path, whose extract the view no longer holds - one that does not read, or no longer declares what the link names - their declarations in no answer.</summary>
     public IReadOnlyList<string> Unheld { get; }
 
@@ -496,6 +532,70 @@ public sealed class CodebaseGraphQueries
     /// <summary>Whether the file at <paramref name="path"/> holds a place its implementation could not bind: a text search where its nodes are named.</summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
     public bool Dynamic(string path) => (_extracts.TryGetValue(path, out var extract) ? extract : _read.Extract(path)) is { Dynamic.Count: > 0 };
+
+    /// <summary>
+    /// Whether the view holds the file at <paramref name="path"/> as one it parsed - the state the narrowing of a whole
+    /// read is held to, for a file the graph parsed is one it can serve an outline and bodies of instead.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
+    public bool Parsed(string path)
+        => HeldPath(path) is { } held && _read.Files.TryGetValue(held, out var entry)
+            && string.Equals(entry.State, CodeFileStates.Parsed, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Why the graph is not sure of the file at <paramref name="path"/> - a whole read of it is let past the narrowing
+    /// as an escape <c>lowConfidence</c> - or null where it is sure: the file carries a <c>dynamic</c> mark, is marked
+    /// <c>generated</c>, or more than a quarter of the references its nodes make are edges of <c>candidates</c> or were
+    /// left unresolved by the linker.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
+    public string? UnsureOfFile(string path)
+    {
+        if (HeldPath(path) is not { } held)
+        {
+            return null;
+        }
+
+        if (Dynamic(held))
+        {
+            return "the graph cannot bind part of it";
+        }
+
+        if (Generated(held))
+        {
+            return "the graph holds it as generated code";
+        }
+
+        var edges = 0;
+        var unsure = 0;
+
+        foreach (var id in _inFile.TryGetValue(held, out var own) ? own : [])
+        {
+            foreach (var edge in _out[id])
+            {
+                if (string.Equals(edge.Kind, CodeEdgeKinds.Contains, StringComparison.Ordinal)
+                    || string.Equals(edge.Kind, CodeEdgeKinds.Declares, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                edges++;
+
+                if (string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal))
+                {
+                    unsure++;
+                }
+            }
+
+            var unresolved = _read.Symbols.Unresolved.GetValueOrDefault(id);
+            edges += unresolved;
+            unsure += unresolved;
+        }
+
+        return edges > 0 && unsure * 4 > edges
+            ? $"more than a quarter of its {edges.ToString(CultureInfo.InvariantCulture)} references the linker left candidates or unresolved"
+            : null;
+    }
 
     /// <summary>The nodes in the file at <paramref name="path"/>, as a text hit is turned to a card where one covers its line.</summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>

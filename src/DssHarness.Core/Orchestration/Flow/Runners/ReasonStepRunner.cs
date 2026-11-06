@@ -38,6 +38,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
 /// <param name="configStore">Reads the repository's configuration, for the bounds of the engine's own account of a stream.</param>
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
+/// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
+/// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
 public sealed class ReasonStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -52,7 +54,9 @@ public sealed class ReasonStepRunner(
     Agents.Isolation.IAgentIsolation isolation,
     Git.IGitClient? gitClient = null,
     Configuration.IConfigStore? configStore = null,
-    ClaudeCodeUpdateService? updates = null) : IFlowStepTypeRunner, IFlowHandoffRunner
+    ClaudeCodeUpdateService? updates = null,
+    Codebase.ICodebaseGraphService? graphService = null,
+    TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
     /// <inheritdoc/>
     public string Type => "reason";
@@ -154,7 +158,17 @@ public sealed class ReasonStepRunner(
         }
 
         var workspace = launch.Workspace(agentRecord, context.Layout, layout.WorkDirectory(agent), layout.Directory);
-        var (webSearch, webMask) = await WebSearchOf(context, providers, root, cancellationToken).ConfigureAwait(false);
+        var sources = Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild);
+
+        // The step's search names what it asks: an edit of the configuration that takes a source it names away refuses
+        // the step's start with V55's words, as a configuration that no longer reads does - the step does not start on
+        // it, and the run goes on once the configuration names the source again or the step's search names what reads.
+        if (sources.ListProblems(root.Search, $"the search of '{run.Instance}'", $"'{run.Instance}' searches") is [_, ..] noLongerReads)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, string.Join("; ", noLongerReads));
+        }
+
+        var (webSearch, webMask) = await WebSearchOf(context, providers, sources, root, cancellationToken).ConfigureAwait(false);
 
         // What the step's agent is handed to read - its skills, its continuation record's copies - the tool writes in the
         // launch's own directory, which no command of the agent's writes, and the agent reads as a root of its own.
@@ -179,6 +193,11 @@ public sealed class ReasonStepRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, unisolated);
         }
 
+        // The policy the step runs under, kept in its records as the configuration stood when it started: the agents'
+        // configuration is read when each step starts, as its prompts are, so an edit of config.json - a side-task's
+        // among them - reaches the steps that start after it and never one under way.
+        KeptPolicy(fileSystem, layout, run.Instance, agent, ground, webSearch, order);
+
         // The prompt with each skill it names handed over: the folder copied into what the step's agent is handed, the
         // block put in the prompt's place, and what cannot be handed refused here - the step-start half of the skill's
         // failing loud twice, held to the capabilities the agent's own ground gives it. The resume prompt, where the
@@ -190,10 +209,12 @@ public sealed class ReasonStepRunner(
         // The prompt the attempt sends: an answer that goes on with this attempt sends its own message - the person's
         // words, or what a granted bound tells the agent - in the attempt's own conversation; a compaction sends the
         // engine's record as the run's first message and the filled prompt stands for the files that read it; every
-        // other start fills the step's prompt, the resume prompt where the step goes on with earlier work and names one.
+        // other start fills the step's prompt, the resume prompt - what a step that goes on with earlier work is asked
+        // with when it runs again - only where earlier work there is: its own attempt before this one, work another
+        // step began, or a handoff. A step that resumes its own work is asked with its prompt the first time it runs.
         IReadOnlyList<FlowTemplate.Piece>? resume = null;
 
-        if (goingOn is null && run.Step.ResumePrompt is not null && GoesOnWithEarlierWork(run)
+        if (goingOn is null && run.Step.ResumePrompt is not null && (run.Attempt > 1 || run.Handoff is not null || run.WorkedFrom is [_, ..])
             && run.Prompts.TryGetValue("resumePrompt", out var readResume))
         {
             resume = readResume;
@@ -228,6 +249,29 @@ public sealed class ReasonStepRunner(
         // at the head of its prompt, and is spent once the prompt holds it.
         filled = WithHandoff(run.Handoff, filled);
 
+        // The step's serving of the run's codebase graph: its pack made from the filled prompt and given as the
+        // <codebase> part of its first message, the graph tool offered where its step says tools, its view the one the
+        // engine syncs at the step's start. A step whose mode is off is served nothing.
+        var stepGraph = graphService is null
+            ? null
+            : await FlowStepGraph.OfAsync(
+                graphService,
+                store,
+                fileSystem,
+                platform,
+                gitClient,
+                graphClock ?? clock,
+                run,
+                place,
+                context,
+                definition,
+                root,
+                agent,
+                agentRecord,
+                ground,
+                filled,
+                cancellationToken).ConfigureAwait(false);
+
         // The conversation this attempt goes on with, where its answers gave it one to go on with: the session the
         // step's own stream names last, there for the handing only where the engine stored one. A client that renders
         // its conversations - Claude Code - is handed none, and the attempt's own continuation record stands in its
@@ -248,6 +292,11 @@ public sealed class ReasonStepRunner(
         var ownContinuation = goingOn is null || conversation is not null ? null : await OwnContinuationOfAsync(layout, agent, run, handed, context, cancellationToken).ConfigureAwait(false);
         var continuation = ownContinuation ?? await ContinuationOfAsync(run, layout, agent, handed, context, cancellationToken).ConfigureAwait(false);
         var compaction = goingOn is { Compact: true } ? CompactedFrom(stream, run.Attempt, context) : null;
+
+        // The changes of the codebase the conversation this attempt goes on with is told: what its view changed since
+        // that conversation's last pack or delta, and the nodes of its own pack it was not given - in the one new user
+        // message, never a map or a pack again whole, for the conversation's prefix is never changed.
+        var codebaseChanges = conversation is null ? null : stepGraph?.ChangesSince(LastCodebaseOf(stream));
 
         var request = new AgentStepRequest(
             place.Run,
@@ -292,6 +341,14 @@ public sealed class ReasonStepRunner(
             Skills = skills,
             SessionId = conversation is null ? session : null,
 
+            // The step's codebase graph: a conversation this attempt goes on with is told what changed and no map; a
+            // conversation of its own is given the run's repository map ahead of its pack, and the graph tool offered
+            // with the operations and the narrowing of reads its step says.
+            Codebase = codebaseChanges is null ? stepGraph?.Section : null,
+            CodebaseChanges = codebaseChanges,
+            Map = conversation is null ? stepGraph?.Map : null,
+            Graph = stepGraph?.Support,
+
             // What the engine tells the attempt's agent while it works - a plan update's message into the
             // conversation, its handoff where one ends the step in order - and what a plan update that told this
             // work said, in the part of its own the attempt's first message holds.
@@ -323,7 +380,11 @@ public sealed class ReasonStepRunner(
             // agent that never started, which was given nothing.
             var ended = Ended(result, run.Instance, stored, FlowRunBudget.RunsShareBinds(definition?.MaxBudgetUsd, run.BudgetLeftUsd));
 
-            return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills };
+            // The step's graph, where it was given one, ends with the step: its working set written beside its output,
+            // the seeds of the packs of the steps after it, and its figures gathered for its record.
+            var graphUse = stepGraph?.Ended(graphService!, store, fileSystem, platform.PathComparison, layout, run.Instance, agent, cancellationToken);
+
+            return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills, Graph = graphUse };
         }
         catch (HarnessException refused)
         {
@@ -610,12 +671,11 @@ public sealed class ReasonStepRunner(
     /// </summary>
     /// <param name="context">The repository's context, whose configuration names the sources.</param>
     /// <param name="providers">The configuration's providers and tiers, resolved, whose appointed names the slot holds.</param>
+    /// <param name="sources">The configuration's web search, already read and held to V55's names by the caller.</param>
     /// <param name="step">The step at the root of the step's chain of work (<see cref="ResumeChain.Root"/>), whose <c>search</c> picks its sources.</param>
     /// <param name="cancellationToken">Stops the reading of keys.</param>
-    private async Task<(AgentWebSearch? Search, Runners.ActionValues? Mask)> WebSearchOf(HarnessContext context, AgentProviders providers, WorkflowStep step, CancellationToken cancellationToken)
+    private async Task<(AgentWebSearch? Search, Runners.ActionValues? Mask)> WebSearchOf(HarnessContext context, AgentProviders providers, Web.Search.WebSearchSources sources, WorkflowStep step, CancellationToken cancellationToken)
     {
-        var sources = Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild);
-
         if (sources.Chosen(step.Search) is not [_, ..] chosen)
         {
             return (null, null);
@@ -624,6 +684,46 @@ public sealed class ReasonStepRunner(
         var read = await new Web.Search.WebSearchKeys(keys, gh).ReadAsync(context.Layout, providers.Appointed(), chosen, cancellationToken).ConfigureAwait(false);
 
         return (AgentWebSearch.Of(sources, step.Search, read), Web.Search.WebSearchKeys.Mask(chosen, read));
+    }
+
+    /// <summary>
+    /// The step's policy kept in its records (<see cref="OrchestratorLayout.PolicyFileName"/>): the ground as resolved - its
+    /// restrictions from every source at once - the web search it asks, and what it runs on, each entry of its order with
+    /// the key's name alone. The whole configuration's state as the step started under it, never a key's value.
+    /// </summary>
+    /// <param name="fileSystem">The file system the records are written with.</param>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="instance">The step's instance.</param>
+    /// <param name="agent">The agent the step works as.</param>
+    /// <param name="ground">The ground the step's agent is decided against.</param>
+    /// <param name="webSearch">The web search the step's agent is given; null where it searches none.</param>
+    /// <param name="order">The running order the step starts on.</param>
+    private static void KeptPolicy(IFileSystem fileSystem, OrchestratorLayout layout, string instance, string agent, Agents.Policy.AgentPolicyGround ground, AgentWebSearch? webSearch, IReadOnlyList<AgentRunEntry> order)
+    {
+        var policy = new JsonObject
+        {
+            ["agentPolicy"] = new JsonObject
+            {
+                ["restrictions"] = new JsonArray([.. ground.Restrictions.Select(one => (JsonNode?)$"{one.Text} ({one.Source.ToString().ToLowerInvariant()})")]),
+                ["worktreeRules"] = ground.WorktreeRules,
+                ["protectedPaths"] = ground.ProtectedPaths,
+            },
+            ["agentWebSearch"] = webSearch is null ? null : new JsonObject
+            {
+                ["sources"] = new JsonArray([.. webSearch.Sources.Select(source => (JsonNode?)source.Name)]),
+                ["resultsPerSource"] = webSearch.ResultsPerSource,
+            },
+            ["runsOn"] = new JsonArray([.. order.Select(entry => (JsonNode?)new JsonObject
+            {
+                ["provider"] = entry.Provider,
+                ["model"] = entry.Model,
+                ["client"] = entry.Client,
+                ["key"] = entry.Key,
+                ["effort"] = entry.Effort,
+            })]),
+        };
+
+        fileSystem.WriteAllTextAtomic(Path.Combine(StepDirectoryOf(layout, instance, agent), OrchestratorLayout.PolicyFileName), policy.ToJsonString(JsonStateFile.Options));
     }
 
     /// <summary>
@@ -839,6 +939,34 @@ public sealed class ReasonStepRunner(
         return fileSystem.FileExists(Path.Combine(OrchestratorLayout.SessionDirectoryIn(layout.AgentSessionsDirectory(agent), id), "conversation.jsonl"))
             ? new AgentSessionRef(last.Client, last.Provider ?? string.Empty, id)
             : null;
+    }
+
+    /// <summary>
+    /// The codebase part the conversation the step's own stream holds was given last - its pack, or the delta it was
+    /// told before this one - read from the stream's first messages as they were sent; null where it was given none.
+    /// </summary>
+    /// <param name="stream">The step's own events, every attempt's.</param>
+    private static string? LastCodebaseOf(IReadOnlyList<AgentEvent> stream)
+    {
+        foreach (var sent in stream.OfType<MessageSent>().Reverse())
+        {
+            if (sent.Which != AgentMessageKind.FirstPrompt)
+            {
+                continue;
+            }
+
+            if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseChangesTag) is { Length: > 0 } changes)
+            {
+                return changes;
+            }
+
+            if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseTag) is { Length: > 0 } pack)
+            {
+                return pack;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

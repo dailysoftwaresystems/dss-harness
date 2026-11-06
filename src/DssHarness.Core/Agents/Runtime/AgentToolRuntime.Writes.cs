@@ -19,7 +19,7 @@ public sealed partial class AgentToolRuntime
     /// <c>create_file</c>: a new file holding the content as given, in UTF-8 with no mark, the directories on its way made,
     /// where it lands decided again before a byte is written (<see cref="AgentFiles.Write"/>).
     /// </summary>
-    private Answer Create(JsonObject input)
+    private async Task<Answer> Create(JsonObject input)
     {
         var path = Text(input, "path")!;
         var place = WritePlace(path);
@@ -50,7 +50,7 @@ public sealed partial class AgentToolRuntime
 
         // The agent wrote what it holds, and knows it as well as one it viewed.
         _viewed[full] = Hash(bytes);
-        Tally.Wrote(full);
+        await WroteAsync(full).ConfigureAwait(false);
 
         return Answer.Done($"wrote '{Said(full)}' ({DiskSpace.Size(bytes.Length)})");
     }
@@ -178,9 +178,36 @@ public sealed partial class AgentToolRuntime
         }
 
         _viewed[full] = Hash(written);
-        Tally.Wrote(full);
+        await WroteAsync(full).ConfigureAwait(false);
 
         return Answer.Done($"edited '{Said(full)}': {ReportText.Counted(edited.LineCount, "line")} now");
+    }
+
+    /// <summary>
+    /// Counts a write, and says - for a side-task's edit of the configuration where a run is working over the tree -
+    /// where the edit reaches: the run's steps that start after it, and never one under way, for the agents'
+    /// configuration is read when each step starts, as its prompts are.
+    /// </summary>
+    /// <param name="file">The file written.</param>
+    /// <param name="count">How many files that was.</param>
+    private async Task WroteAsync(string file, int count = 1)
+    {
+        Tally.Wrote(file, count);
+
+        // The run's graph, where it is given one, is synced after each of its writes - a side-task's own, kept under its
+        // records, a reason step's the run's own, scoped to its view.
+        if (_run.Graph is { AfterWriteAsync: { } sync })
+        {
+            await sync(file, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        if (_run.Ground is { SideTask: true, LiveRun: { } liveRun }
+            && liveRun() is { } run
+            && string.Equals(file, new Repository.HarnessLayout(_run.Workspace.MainCheckout, _run.Workspace.MainCheckout).ConfigFile, _host.Platform.PathComparison))
+        {
+            await _events.EmitAsync(new Notice(
+                $"run '{run}' is working over this tree: the edit of config.json reaches its steps that start after it, and never one under way")).ConfigureAwait(false);
+        }
     }
 
     /// <summary><c>create_directory</c>: a directory made, with every one on its way; one that is there is no error.</summary>
@@ -208,7 +235,7 @@ public sealed partial class AgentToolRuntime
     }
 
     /// <summary><c>delete_file</c>: one file deleted; one that is not there is an error.</summary>
-    private Answer DeleteFile(JsonObject input)
+    private async Task<Answer> DeleteFile(JsonObject input)
     {
         var path = Text(input, "path")!;
         var place = WritePlace(path);
@@ -234,7 +261,7 @@ public sealed partial class AgentToolRuntime
         }
 
         _viewed.TryRemove(full, out _);
-        Tally.Wrote(full);
+        await WroteAsync(full).ConfigureAwait(false);
 
         return Answer.Done($"deleted '{Said(full)}'");
     }
@@ -323,7 +350,7 @@ public sealed partial class AgentToolRuntime
     /// <c>move_path</c>: a file or a directory moved inside the writable roots - every path it touches at both ends a
     /// write - the directories on the way made; a file at the end replaced only with <c>overwrite</c>, a directory never.
     /// </summary>
-    private Answer MovePath(JsonObject input)
+    private async Task<Answer> MovePath(JsonObject input)
     {
         var fromPath = Text(input, "from")!;
         var toPath = Text(input, "to")!;
@@ -432,8 +459,8 @@ public sealed partial class AgentToolRuntime
             }
         }
 
-        Tally.Wrote(source, moved.Count);
-        Tally.Wrote(destination, moved.Count);
+        await WroteAsync(source, moved.Count).ConfigureAwait(false);
+        await WroteAsync(destination, moved.Count).ConfigureAwait(false);
 
         return Answer.Done($"moved '{Said(source)}' to '{Said(destination)}'");
     }

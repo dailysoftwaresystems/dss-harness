@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Application;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Output;
@@ -83,7 +84,7 @@ public sealed record AnchorCitationReport(
 }
 
 /// <summary>Checks that every anchor id a scanned root cites resolves to a registry row.</summary>
-public interface IAnchorCitationService
+public interface IAnchorCitationService : IUseCase
 {
     /// <summary>Reads <paramref name="subject"/> and reports every citation that resolves nowhere.</summary>
     /// <param name="startDirectory">A directory inside the repository.</param>

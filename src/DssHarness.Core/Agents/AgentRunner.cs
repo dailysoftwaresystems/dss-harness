@@ -1406,6 +1406,10 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             step.Compaction is { BeforeItsTask: false } whole ? whole.Record : null)
         {
             Ground = step.Ground,
+            Graph = step.Graph,
+            Codebase = step.Codebase,
+            Map = step.Map,
+            CodebaseChanges = step.CodebaseChanges,
             Isolation = step.Isolation?.Processes,
             Credential = step.Credential,
             Program = step.Program,
@@ -1472,6 +1476,10 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             ProgramVersion = step.ProgramVersion,
             SessionId = session,
             Withheld = step.Withheld,
+            Graph = step.Graph,
+            Codebase = step.Codebase,
+            Map = step.Map,
+            CodebaseChanges = step.CodebaseChanges,
             Commands = step.Commands,
             WebSearch = step.WebSearch,
             SessionsDirectory = step.SessionsDirectory ?? Layout(step).AgentSessionsDirectory(step.Agent),

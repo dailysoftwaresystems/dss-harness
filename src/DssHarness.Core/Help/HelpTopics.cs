@@ -1709,8 +1709,8 @@ public static class HelpTopics
         }
 
         builder.AppendLine();
-        builder.AppendLine("  read-anchor, read-anchors --lint, check-anchor-balance, check-anchor-citations");
-        builder.AppendLine($"    {AnchorExit.Findings,3}  an id was not found, the registries have problems, or the balance did not hold");
+        builder.AppendLine("  read-anchor, read-anchors --lint, check-anchor-balance, check-anchor-arms, check-anchor-citations");
+        builder.AppendLine($"    {AnchorExit.Findings,3}  an id was not found, the registries have problems, the balance did not hold, or a row's claim about a mutation arm does not hold");
         builder.AppendLine();
         builder.AppendLine("  legs, sync");
         builder.AppendLine($"    {LegsExit.Unavailable,3}  a leg named with --legs cannot run, or no selected leg can");
@@ -2530,7 +2530,17 @@ public static class HelpTopics
             + "search over every configured source turned on with no maxPerStep, no cap on money, turns or time, all four "
             + "capabilities, the main tree its writable root, the worktree rules and the protected paths off - so it can "
             + "edit .harness-config/config.json to add a search source, commit, branch, and run this tool's own verbs that "
-            + "read no credential slot and write none of its state as the person could. Its web_search asks one more source beside the configured ones: native, the provider's "
+            + "read no credential slot and write none of its state as the person could. One write at a time: every write "
+            + "tool and every command of the side-task's agent holds the main tree's lock for its duration, as the engine's "
+            + "folds and commits do - each side waits the other out, a long command holding the folds back for as long as it "
+            + "runs - and the chat says when its command waited. While a run is working over the tree, the git verbs that "
+            + "move HEAD, the index or the stash are refused with the run's name - commit, stash, reset, clean, checkout, "
+            + "switch, restore, rebase, merge, cherry-pick, revert, pull, am, worktree, branch, tag and update-ref - checked "
+            + "at each call, so a run that starts while the chat is open is held to from its first step and one that ends "
+            + "releases it; the git that moves nothing stays open, and the person may do any of it by hand. An edit of "
+            + "config.json - a search source added, a provider changed - reaches the run's steps that start after it and "
+            + "never one under way, for the agents' configuration is read when each step starts, as its prompts are; the "
+            + "chat says so where a run is live. Its web_search asks one more source beside the configured ones: native, the provider's "
             + "own search - on the Claude API a request of the harness's own whose only tool is the provider's search, asked "
             + "with the model and key serving the side-task when the agent asks and through that key's gate as every request "
             + "is, what it costs counted then to that model and key, a failure of it - a gate held past the longest wait "
@@ -2562,6 +2572,15 @@ public static class HelpTopics
             + "every place the user keeps credentials in, from "
             + "each command - one over the main tree whole finds each slot empty, or is refused it - and keeps it from git's code-running "
             + "files and the tool's state.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "It may use the codebase graph, unlimited: a graph of its own under its records (graph/), seeded from the "
+            + "newest the repository holds - a run's or another side-task's - when it opens, then incremental, synced after "
+            + "each of its writes. The graph tool is offered among its agent's own with every operation - edit among them - "
+            + "and no narrowing of its reads; the repository map is given with its first message, made once from the base as "
+            + "it stands when it opens, and a context pack is made from each message the person types. --no-graph turns all "
+            + "of it off for one side-task; a graph that cannot be made takes nothing away from the conversation.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3621,7 +3640,8 @@ public static class HelpTopics
             "; ",
             Agents.ClaudeCode.ClaudeCodeTools.Table.Select(row =>
                 $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"
-                + (Agents.ClaudeCode.ClaudeCodeTools.ServedOf(row.Capability) is [_, ..] served ? $", but {string.Join(" and ", served)} of the engine's tool server beside them" : string.Empty)));
+                + (Agents.ClaudeCode.ClaudeCodeTools.ServedOf(row.Capability) is [_, ..] served ? $", but {string.Join(" and ", served)} of the engine's tool server beside them" : string.Empty)))
+            + $"; and a step that has a codebase graph (graph: tools) takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentGraphSupport.ToolName)} of the engine's tool server beside them, only where its step is given one";
         var controlled = string.Join(", ", Agents.Policy.ClaudeSettings.Controlled.Select(name => $"{name.Key}={name.Value}"));
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
@@ -3637,16 +3657,27 @@ public static class HelpTopics
             + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.ServedOf(Agents.AgentCapability.Write, ownFiles: false))} in place of "
             + "Claude Code's own, each call asked of the engine and run by the tool runtime below as on the API clients. The run's reporter is given "
             + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. A step with the web takes the harness's own "
-            + $"{Agents.Runtime.AgentTools.WebFetch} - and {Agents.Runtime.AgentTools.WebSearch}, where it has a source to search - from the engine's tool server: the one MCP "
+            + $"{Agents.Runtime.AgentTools.WebFetch} - and {Agents.Runtime.AgentTools.WebSearch}, where it has a source to search - from the engine's tool server, and a step that has "
+            + $"a codebase graph (graph: tools) takes its one tool, {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentGraphSupport.ToolName)}, from the same: the one MCP "
             + $"server, of type sdk, named {Agents.ClaudeCode.ClaudeCodeTools.Server}, that the launch's --mcp-config names beside --strict-mcp-config (the step's "
             + $"{Agents.ClaudeCode.ClaudeLaunch.McpFileName}), served in the engine's own process over the launch's control channel - its initialize, "
             + "its tool list and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask "
-            + "rule, and run by the tool runtime below as on the API clients, each address decided and recorded. A launch whose init "
+            + "rule, and run by the tool runtime below as on the API clients, each address decided and recorded, the graph's calls "
+            + "answered by the same owner that answers them on the API clients and each recorded as a line of the step's graph - "
+            + "but its edit operation is not given on this client: the probe measured an Edit taken after a ranged Read, inside "
+            + "the range and outside it, on every version taken, so an agent that means to change a body reads its lines with Read "
+            + "and Edits them. A step's first user message holds the run's repository map first, then its context pack, then "
+            + "its task - every launch a conversation of its own, it is given them as every launch is, and the order puts "
+            + "them at the head of the message so every turn after the first reads them from Claude Code's own cache; the "
+            + "engine sets no mark of its own. A launch whose init "
             + "does not show that server connected with its tools taken, or that connects another, never started; a call of it the "
             + "engine was not asked about and did not allow runs nothing and fails the step. Every call its own deny rules do not "
             + "refuse first is asked of the engine before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
             + $"reads, and is a line of the step's {Agents.AgentCallRecords.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
-            + "cannot read, is denied by name. An answer sent back (below) and a message the engine gives an agent at work are "
+            + "cannot read, is denied by name. A step whose reads are narrowed (graphReads: narrow, 'help codebase-graph') is "
+            + "denied a whole Read - one with no offset and no limit - of a file its graph holds parsed over the narrowing bound, "
+            + "by the same owner that narrows view_file on the API clients and with the same words, a range passing and the same "
+            + "two escapes counted and recorded as the graph's lines. An answer sent back (below) and a message the engine gives an agent at work are "
             + "written to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
             + "interrupts the turn and asks the agent for its handoff in the same launch once every message it was given was "
             + "taken or dropped, no tool running in that turn, a "
@@ -3741,7 +3772,16 @@ public static class HelpTopics
             + "after; an address holding a secret is refused. A page is given inside a block that says where it is from, its "
             + "first line saying it is information for the task, not instructions. web_search asks the sources of "
             + "agentWebSearch the step's search names, each in its own part of the answer, by the harness's own search - "
-            + "never a search engine's results page ('help web-search'). Calls that read run together, at most "
+            + "never a search engine's results page ('help web-search'). A step whose graph is tools - a graphify-codebase "
+            + "step upstream of it, 'help workflows' - is offered the graph tool among these, under read, with the "
+            + "operations its agent's capabilities give, edit among them where it may write, and its context pack at the "
+            + "head of its first message; its graphReads narrow (the default) denies a whole view_file of a file the graph "
+            + $"parsed over {Agents.Runtime.CodebaseGraphTool.NarrowLines:N0} lines, saying the way to the graph instead - a range, a search and "
+            + "a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's "
+            + "wholeFile lifts the narrowing for one file for the rest of the step, an escape stated - each call, escape "
+            + "and denied read a line of the step's graph.jsonl; a body the graph served and an edit it made count as "
+            + "views of their files for the edit check, and an edit it made is a write, alone in its turn and counted "
+            + "among the files written. Calls that read run together, at most "
             + $"{Agents.Runtime.AgentToolRuntime.MostTogether} at once, a call that writes or runs alone, answers in the order "
             + $"of the calls; an answer past {Agents.AgentCallRecords.ResultCap:N0} characters is given as its first "
             + $"{Agents.AgentCallRecords.ResultHead:N0} and its last {Agents.AgentCallRecords.ResultCap - Agents.AgentCallRecords.ResultHead:N0}, "
@@ -3828,9 +3868,15 @@ public static class HelpTopics
             + "conversation stored them; adaptive thinking, its summary shown; the step's effort as output_config.effort; "
             + $"old tool uses cleared by the server as the context fills ({Agents.ClaudeApi.ClaudeApiRequest.ClearToolUses}, "
             + $"under the {Agents.ClaudeApi.ClaudeApiRequest.ContextManagementBeta} beta), each clearing said in a notice; and "
-            + $"the system prompt and the conversation cached for agentClients.{Client}.cacheTtl "
+            + "three cache marks of the client's lifetime for agentClients."
+            + Client + ".cacheTtl "
             + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} "
-            + "where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or "
+            + "where nothing is said) - on the system text, covering the tools and it, the same for every step of that "
+            + "agent with the same tools; on the run's repository map, the first block of the conversation's first user "
+            + "message, covering the tools, the system text and the map, the same for every such step of the run; and the "
+            + "top-level mark, which moves with the conversation's last block - so a step's second request on reads the "
+            + "map from the cache, and so does the first request of the run's next step of the same agent - and a budget "
+            + "needs the model's price of that cache's writes too: priceCacheWrite, or "
             + "priceCacheWrite1h for an hour. A step with a fallback that can go on here sends the "
             + $"{Agents.ClaudeApi.ClaudeApiRequest.FallbackCreditBeta} beta, and a request the model declines moves the step "
             + $"to its next model of the same provider and client - the same request sent again with the model changed and "
@@ -3884,7 +3930,10 @@ public static class HelpTopics
             + "answer's calls each answered by a tool message, in order; the tools as functions, their calls' arguments "
             + "streamed (tool_stream); the model's thinking on, the step's effort as reasoning_effort "
             + $"({string.Join(", ", efforts)}); and max_tokens - no sampling parameter or tool choice of the tool's own, which "
-            + "requestExtras may add, and no tool of Z.AI's, for the web is the harness's own. Z.AI caches what a request repeats by itself and bills "
+            + "requestExtras may add, and no tool of Z.AI's, for the web is the harness's own. A first message that holds "
+            + "the run's repository map holds it first, ahead of the step's context pack and its task - the same bytes for "
+            + "every step of the run, so the longest prefix the steps of an agent share begins with it. Z.AI caches what a "
+            + "request repeats by itself and bills "
             + "no write, so a budget needs the model's input, cached-input and output prices. Each answer's reasoning is "
             + "stored with it and sent back; Z.AI leaves it out of what the model reads in later turns unless "
             + $"agentClients.{Client}.preserveThinking is true (false where nothing is said), which keeps it "
@@ -4038,6 +4087,7 @@ public static class HelpTopics
         builder.AppendLine("  check-anchor-balance [--base REF] [--json]        compare with a commit");
         builder.AppendLine("  check-anchor-citations --current-commit|--current-tree|--current-pr [--json]");
         builder.AppendLine("                                                    check every cited id resolves");
+        builder.AppendLine("  check-anchor-arms [--legs LEG ...] [--json]       check rows' claims about arms");
         builder.AppendLine();
         builder.AppendLine("--pending or --done limits set-anchor, read-anchor and a read-anchors listing to");
         builder.AppendLine("one registry; read-anchors --lint always checks both, and takes no filter.");
@@ -4098,6 +4148,24 @@ public static class HelpTopics
         builder.AppendLine("names a family of ids and is no citation, but an id in bold is one. Keep every id");
         builder.AppendLine("whole on one line.");
         builder.AppendLine();
+        builder.AppendLine("check-anchor-arms checks what rows say about mutation arms against the mutation");
+        builder.AppendLine("record, reading both registries and the arms registry mutations.registry names, as");
+        builder.AppendLine("check-mutations --list reads it: no host is asked, nothing swept, nothing written. A");
+        builder.AppendLine("row names an arm by a backticked token equal to an A row's id, ignoring case. An arm");
+        builder.AppendLine("a done row names must be unmoved here with a recorded passed on each leg its S row");
+        builder.AppendLine("names - every selected leg where it names none, --legs selecting as --list selects -");
+        builder.AppendLine("and a pending one is reported with the listing's own reason, a leg that cannot be");
+        builder.AppendLine("swept among them. A pass word followed by only whitespace and brackets or");
+        builder.AppendLine($"punctuation and then a run id - the words are anchors.passWords, '{AnchorSettings.DefaultPassWord}' where it names");
+        builder.AppendLine("none - is a citation of one sweep's judgement, true only of the bytes that run read:");
+        builder.AppendLine("it is reported wherever it does not sit inside a span matching a form of");
+        builder.AppendLine("anchors.historyForms, whose {commit} and {run} placeholders stand for a commit and a");
+        builder.AppendLine("run id. A backticked id no A row holds is reported where git history shows an A row");
+        builder.AppendLine("declared it once - renamed, or retired; where more commits changed the registry than");
+        builder.AppendLine("were read, or the clone is shallow, that is noted, for an id may have been declared");
+        builder.AppendLine("before either cut. 'Unmoved here' is not 'holds': the listing's closing note is said");
+        builder.AppendLine("here too.");
+        builder.AppendLine();
         builder.AppendLine("Every change holds a machine-wide lock on its two registries. A change that cannot");
         builder.AppendLine($"take it within {NamedMutexAnchorRegistryLock.DefaultTimeout.TotalSeconds:0} seconds writes nothing and exits {HarnessExit.Refused}. A read takes it");
         builder.AppendLine("too, while it reads both files, so a row being moved between them is never read in");
@@ -4107,7 +4175,8 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("Exit codes");
         builder.AppendLine($"  {AnchorExit.Findings,3}  an id was not found, --lint found problems, the balance did not hold,");
-        builder.AppendLine("       or a citation resolves to no row or is cut");
+        builder.AppendLine("       a citation resolves to no row or is cut, or a row's claim about a mutation arm");
+        builder.AppendLine("       does not hold");
         builder.AppendLine($"  {HarnessExit.UsageError,3}  a value is not valid (an id, a priority, a status, an empty trigger, a");
         builder.AppendLine("       cell it would store cut), options that cannot be combined, or set-anchor with nothing");
         builder.AppendLine("       to change");
@@ -4170,8 +4239,8 @@ public static class HelpTopics
                 ($"  <step>/{OrchestratorLayout.StepPullRequestBodyFileName}", "a pull-request step that opened one: the body it opened it with"),
                 ($"  <step>/{OrchestratorLayout.StepFoldFileName}", "a fold, delete-agent, refresh or rebase step: what its dry run named and stood, the question it asked, each consent given by name, how its apply ended"),
                 ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
-                ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: one line for each call of the graph tool - what it asked about, served and edited; the API clients will write it"),
-                ($"  <step>/{OrchestratorLayout.StepWorkingSetFileName}", "a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it ('help codebase-graph'); the API clients will write it"),
+                ($"  <step>/{OrchestratorLayout.StepGraphFileName}", "a reason step that has a codebase graph: the line of its prompt - what its pack cost, or why none was given - one line for each call of the graph tool, and one for each escape of its narrowing of reads and each whole read that narrowing refused"),
+                ($"  <step>/{OrchestratorLayout.StepWorkingSetFileName}", "a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it ('help codebase-graph')"),
                 ($"  <step>/{Agents.AgentCallRecords.WebFileName}", "a step whose agent asks the web: each address its web_fetch and web_search decided before it was asked, what each answered, and each search source's part ('help web-search'); written by every client whose step has the web"),
                 ($"  <step>/{Agents.AgentCallRecords.DenialsFileName}", "a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule"),
                 ($"  <step>/{Agents.AgentCallRecords.ToolResultsDirectoryName}/<id>.txt", "a step whose agent's calls the engine decides, on every client: an answer longer than the cap, whole"),
@@ -4966,7 +5035,7 @@ public static class HelpTopics
             + $"{CodebaseGraphTool.NameOf(GraphOp.Edit)} - a node's lines replaced where the hash given is its hash now - a node spread over files in the part that hash names - the file's encoding, line endings and final newline kept, and nothing written where it changed; "
             + $"{CodebaseGraphTool.NameOf(GraphOp.WholeFile)} - the narrowing of reads lifted for one file, with why. "
             + "body and edit reach a file only inside the tree, each link resolved, never through a link out of it. "
-            + "No step is given the tool yet - the API clients will offer it - and query-codebase-graph below runs its read operations; a step is to be given the read operations, edit only where it may write and wholeFile only where its reads are narrowed, its schema naming those alone. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
+            + "A step whose graph is tools is offered the tool - the API clients among their own, Claude Code through the engine's tool server - with the read operations, wholeFile only where its reads are narrowed and edit only on the API clients (the probe measured Claude Code takes an Edit after a ranged Read, so an agent that means to change a body reads its lines and Edits them), its schema naming those alone, and query-codebase-graph below runs its read operations by hand. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
             + "Every node an answer names carries path:start-end - a declaration # with the first eight characters of its digest too, a file its lines - every answer ends naming the files whose extract the graph no longer holds, if any, and every answer is cut at a whole line past "
             + $"{(CodebaseGraphTool.MostCharacters / 1024).ToString(CultureInfo.InvariantCulture)} KB, saying how to ask for the rest with offset. Where the graph is not sure - no node matched, a name it does not hold, "
             + $"an edge of {CodeConfidences.Candidates}, a node named with external or unresolved callees or in a file dynamic or generated - the answer adds text: at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word, "
@@ -4974,7 +5043,7 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "A reason step is to be given, at its start, its context pack - the API clients will give it - the part of the graph its work touches, made from its view and what the step says alone, "
+            "A reason step is given, at its start, its context pack - the part of the graph its work touches, made from its view and what the step says alone, "
             + "so the same step on the same tree is given the same pack. Its seeds are what its prompt names exactly - a symbol or a path in backquotes, a qualified name or its last parts (Order.Total), "
             + $"a handle, a path:line as a stack frame or a compiler writes one - the working sets it is given, the declarations of the files its writes covers, and the {CodebaseContextPack.WordSeeds} nodes its words match best. "
             + $"The walk goes {CodebaseContextPack.NamedHops} hops from a node named or worked with and {CodebaseContextPack.OtherHops} from the others, over calls both ways, the type relations, tests and the types a node names, each node scored by its seed's weight "
@@ -4989,7 +5058,25 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"When a reason step that has a graph ends, the engine is to write its working set, {OrchestratorLayout.StepWorkingSetFileName} - the API clients will - never the model: "
+            "The run's repository map is the tree at a glance: a header line - the commit it is of, how many files and "
+            + "declarations the graph holds, and that the graph tool answers for the tree as it is now - the projects and "
+            + "top directories with their counts, then the most central declarations one line each as find gives it, a "
+            + "declaration's centrality the number of other files whose references bind to it, raised where its name holds "
+            + $"the run's task terms, no test and nothing generated. It is made once, from the base as it stands when the run's first graphed reason step is given its prompt, kept in {OrchestratorLayout.GraphMapFileName} with what it was made from in "
+            + $"{OrchestratorLayout.GraphMapMetaFileName} under the run's graph, and never made again in the run, a resumed run included - the base moves as folds land and the map does not - cut at whole lines under "
+            + $"codebaseGraph.mapTokens ({Codebase.CodebaseGraphShape.DefaultMapTokens.ToString(CultureInfo.InvariantCulture)} by default; 0 gives no map). Every step that has a graph is given it as the <repository-map> part ahead of its "
+            + "context pack, the same bytes for every one of them, so a client that caches a prefix reads it from the "
+            + "cache ('help agent-clients' says where each client sets its marks). A step that goes on with a stored "
+            + "conversation on the API clients is told, in its one new user message, <codebase-changes> instead: the "
+            + "declarations its view changed since that conversation's last pack or delta - moved or changed with their new "
+            + "range and hash, removed - and the nodes of its own pack the conversation was not given; never a map or a "
+            + "pack again whole, for a conversation's prefix is never changed, and no earlier message, tool result, map or "
+            + "pack is ever sent changed. Claude Code, whose every launch begins a conversation of its own, is given the "
+            + "map and its own pack as every launch is.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"When a reason step that has a graph ends, the engine writes its working set, {OrchestratorLayout.StepWorkingSetFileName} - never the model: "
             + $"each node it {string.Join(", ", WorkingSetUses.All.SkipLast(1))} or {WorkingSetUses.All[^1]}, with its handle, file, lines and hash at the step's end, at most {CodebaseWorkingSet.MostNodes}, "
             + "edited first, then by how often each was touched; a node the view no longer holds kept by its id, marked gone. It is made from the step's "
             + $"{OrchestratorLayout.StepGraphFileName} - each node a graph call asked about by name (found), a line of which body gave (served), or an edit wrote, by its lines - and the tool calls its stored stream holds, "
@@ -5030,7 +5117,15 @@ public static class HelpTopics
         builder.AppendLine("are relative to its own directory (see 'help runners'). So two workflows never read");
         builder.AppendLine("each other's files, and a repository can hold as many as it has ways of working. init");
         builder.AppendLine("writes one - the implementation workflow, from a request to a pull request whose checks are");
-        builder.AppendLine($"green - and declares it in the config it creates. Where config.json declares {WorkflowTemplates.ShippedWorkflowName},");
+        builder.AppendLine($"green - and declares it in the config it creates. It builds first: the baseline is split in two - a build");
+        builder.AppendLine("step, which fails red and is taken by the recovery and built again - and the test step it was, which");
+        builder.AppendLine("waits for the build - and the flow makes its codebase graph after that build, beside the baseline's");
+        builder.AppendLine("tests and the CI read, passed over where it cannot be made; every reason step after it is served from");
+        builder.AppendLine("the graph as its type of work needs: the steps that read code for their task say nothing and are");
+        builder.AppendLine("given the tool and their task's seeds by default, the reviewers, the self-audit, the diagnosis and the");
+        builder.AppendLine("steps that verify and fix say graphFrom: changes, the prioritiser and a review's scope are given the map");
+        builder.AppendLine("alone, and the scribe's steps, which write the run's records, ask none of it. Where");
+        builder.AppendLine($"config.json declares {WorkflowTemplates.ShippedWorkflowName},");
         builder.AppendLine("init writes each of its files that is missing - the whole set where the repository has no");
         builder.AppendLine("definition of it yet, and where it has one only the shipped files that definition names,");
         builder.AppendLine("so a file taken out with its step stays out - and keeps each one that is there,");
@@ -5441,7 +5536,10 @@ public static class HelpTopics
             + "A brace meant literally is written twice, {{ and }} alike, another expander's ${...} is left as written, and a "
             + "placeholder that names nothing is refused. "
             + "Every template key of a step is filled where the step starts, and one that reads nothing fails it (12) before its runner "
-            + "is asked. "
+            + "is asked. A prompt alone is filled further: a placeholder in it that names a step this run left no output - it was "
+            + "skipped, or failed and was passed over - is filled with a sentence that says so and why, as (step 'ci' left no output: "
+            + "it failed and was passed over: no run of the matrix was found), so the agent is told what it does not have; a member "
+            + "of a step that did leave an output is not that case, and reads nothing as any other name does. "
             + "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the "
             + "advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own "
             + "recommendations.md, read live each time it is given so a change holds from the next question on, and a "
@@ -5459,6 +5557,201 @@ public static class HelpTopics
             + $"refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
             + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it is "
             + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");
+        builder.AppendLine();
+        builder.AppendLine("Worked examples, each a whole workflow as a file holds it: the two ways a step is raised");
+        builder.AppendLine("by another step's ending - a repair that goes back to what failed, and a check that runs");
+        builder.AppendLine("whenever a builder ends - and two loops a repository can build its own work around. Each");
+        builder.AppendLine("holds as it is printed, read by the same reader that reads a workflow's own file.");
+
+        AppendExample(
+            builder,
+            """
+            # example: repair
+            name: example-repair
+            steps:
+              - name: builder
+                type: create-agent
+                agent: implementer
+              - name: implement
+                type: reason
+                agent: implementer
+                access: write
+                in: builder
+                dependsOn: [builder]
+                prompt: prompts/implement.md
+                outputs: schemas/implement.schema.json
+              - name: build
+                type: build
+                in: builder
+                dependsOn: [implement]
+                onFailure: recover
+              - name: fix
+                type: reason
+                resume: implement
+                on:
+                  step: build
+                  outcome: failure
+                  codes: [20]
+                then: build
+                maxVisits: 3
+                answers:
+                  visitBound: fail
+                prompt: prompts/fix.md
+                outputs: schemas/implement.schema.json
+            """,
+            "When the build fails because a leg is red (20), fix goes on with the implementer's work and the run goes",
+            "back to build. After three such visits the configuration answers for the run: the build's failure stands,",
+            "and its onFailure decides. Without the answers line the run asks a person there.");
+
+        AppendExample(
+            builder,
+            """
+            # example: smoke
+            name: example-smoke
+            steps:
+              - name: builder
+                type: create-agent
+                agent: implementer
+              - name: implement
+                type: reason
+                agent: implementer
+                access: write
+                in: builder
+                dependsOn: [builder]
+                prompt: prompts/implement.md
+                outputs: schemas/implement.schema.json
+              - name: smoke
+                type: test
+                in: builder
+                on:
+                  step: implement
+                  outcome: end
+            """,
+            "Whenever implement ends, done or failed, its tests are run in its worktree - a check on the work whatever",
+            "became of it.");
+
+        AppendExample(
+            builder,
+            """
+            # example: issues
+            name: example-issues
+            maxOpenAgents: 1
+            steps:
+              - name: issues
+                steps:
+                  - name: find
+                    type: reason
+                    agent: prioritizer
+                    tier: high
+                    effort: high
+                    prompt: prompts/find-issues.md
+                    outputs: schemas/issues.schema.json
+                  - name: each
+                    dependsOn: [find]
+                    forEach: find.issues
+                    steps:
+                      - name: builder
+                        type: create-agent
+                        agent: implementer
+                      - name: fix
+                        type: reason
+                        agent: implementer
+                        tier: balanced
+                        effort: high
+                        access: write
+                        in: builder
+                        dependsOn: [builder]
+                        prompt: prompts/fix-issue.md
+                        outputs: schemas/implement.schema.json
+                      - name: test
+                        type: test
+                        in: builder
+                        dependsOn: [fix]
+                        onFailure: continue
+                      - name: fold
+                        type: fold
+                        of: builder
+                        dependsOn: [test]
+                        when: test.outcome == 'done'
+                      - name: commit
+                        type: commit
+                        dependsOn: [fold]
+                        message: '{item.title}'
+                      - name: done
+                        type: delete-agent
+                        of: builder
+                        discardUncommitted: true
+                        dependsOn: [commit]
+            """,
+            "find answers a list of issues, the most pressing first, from wherever its prompt sends it: a backlog",
+            "file, the repository's tracker read with the forge's own command line, what is red. each runs its steps",
+            "once for every one. The workflow's maxOpenAgents: 1 lets one worktree be open at a time, so the issues",
+            "are taken one after another, in the order of the list; it is a limit of the whole run, and no group",
+            "takes it. The agent's step is named builder, since work is a name the engine keeps for a run fact. An",
+            "issue whose test stays red is not folded, its worktree discarded, and the next is taken: the run ends",
+            "done and lists the one it passed over.");
+
+        AppendExample(
+            builder,
+            """
+            # example: review
+            name: example-review
+            steps:
+              - name: builder
+                type: create-agent
+                agent: implementer
+              - name: implement
+                type: reason
+                agent: implementer
+                access: write
+                in: builder
+                dependsOn: [builder]
+                prompt: prompts/implement.md
+                outputs: schemas/implement.schema.json
+              - name: polish
+                dependsOn: [implement]
+                repeat:
+                  until: empty(review.findings)
+                  maxIterations: 3
+                  leftover: review.findings
+                answers:
+                  loopBound: accept
+                steps:
+                  - name: review
+                    type: reason
+                    agent: reviewer-correctness
+                    tier: high
+                    effort: high
+                    independent: true
+                    prompt: prompts/review.md
+                    outputs: schemas/review.schema.json
+                  - name: rework
+                    type: reason
+                    resume: implement
+                    dependsOn: [review]
+                    when: '!empty(review.findings)'
+                    prompt: prompts/rework.md
+                    outputs: schemas/implement.schema.json
+                  - name: retest
+                    type: test
+                    in: builder
+                    dependsOn: [rework]
+                    when: '!empty(review.findings)'
+                  - name: refold
+                    type: fold
+                    of: builder
+                    dependsOn: [retest]
+                    when: '!empty(review.findings)'
+                  - name: recommit
+                    type: commit
+                    dependsOn: [refold]
+                    when: '!empty(review.findings)'
+                    message: '{item.title}: review fixes'
+            """,
+            "Each iteration reviews what is in the tree; where the review found something, the author's agent",
+            "reworks it, it is tested, folded and committed, and the next iteration reviews it again. The loop ends",
+            "when a review finds nothing. At three iterations the configuration ends it as it stands and what is",
+            "left is the loop's leftover.");
 
         return builder.ToString();
 
@@ -5512,11 +5805,16 @@ public static class HelpTopics
             "ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
             "ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its "
-            + $"{OrchestratorLayout.HandoffFileName} where one stopped it"),
+            + $"{OrchestratorLayout.HandoffFileName} where one stopped it, and for a reason step the {OrchestratorLayout.PolicyFileName} it started under - the agents' "
+            + "configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps "
+            + "that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (its "
+            + "pack's line, each call of the graph tool, each escape of its narrowed reads) and its working-set.json, the "
+            + "seeds of the packs of the steps after it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
-            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included"),
+            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included, with a reason "
+            + "step's graph.jsonl and working-set.json where it has a codebase graph"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/.../<instance>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}",
             "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
             + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what "
@@ -5540,8 +5838,9 @@ public static class HelpTopics
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the side-tasks' records, in the main checkout, "
             + $"and never sent to a host by sync ('{ToolPackage.Command} help side-tasks')"),
         ($"{HarnessLayout.SideTasksDirectoryName}/<task>/",
-            "ignored; one side-task: its task.json, stored stream, transcript, denials and web, and its conversation where "
-            + "its client stores one; <task>.owner.json beside it while a side-task holds it open"),
+            "ignored; one side-task: its task.json, stored stream, transcript, denials and web, its conversation where "
+            + "its client stores one, and its own codebase graph (graph/, its map and each call of the graph tool) where it "
+            + "was given one; <task>.owner.json beside it while a side-task holds it open"),
         ($"{HarnessLayout.MutationsDirectoryName}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the tree's mutation workers, in every tree, never "
             + $"sent to a host by sync ('{ToolPackage.Command} help mutations')"),
@@ -5994,6 +6293,31 @@ public static class HelpTopics
         builder.AppendLine("until that command arrives.");
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// One worked example of the workflows topic: its yml printed whole, indented as the topic's examples are and
+    /// opened by a comment line naming it, and the sentences that say what it does - the example readable where it
+    /// is printed and holdable by a test that reads it back.
+    /// </summary>
+    /// <param name="builder">The topic's text.</param>
+    /// <param name="yaml">The example, as a workflow's own file holds it.</param>
+    /// <param name="says">What it does, one sentence each.</param>
+    private static void AppendExample(StringBuilder builder, string yaml, params string[] says)
+    {
+        builder.AppendLine();
+
+        foreach (var line in yaml.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n'))
+        {
+            builder.AppendLine($"  {line}");
+        }
+
+        builder.AppendLine();
+
+        foreach (var said in says)
+        {
+            builder.AppendLine(said);
+        }
     }
 
     /// <summary>One reference topic.</summary>

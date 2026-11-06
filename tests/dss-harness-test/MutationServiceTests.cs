@@ -2115,6 +2115,7 @@ public sealed class MutationServiceTests
             git ?? harness.GitClient,
             legRuns,
             reading ?? SyncKit.Service(harness, loader, git: git),
+            new ArmListingReader(reading ?? SyncKit.Service(harness, loader, git: git), files ?? harness.FileSystem, harness.Platform),
             SyncKit.Transport(harness),
             builds,
             processes,

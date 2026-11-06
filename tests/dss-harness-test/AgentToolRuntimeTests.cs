@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
+using DssHarness.Core.Codebase;
 using DssHarness.Core.Composition;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
@@ -1790,6 +1791,162 @@ public sealed class AgentToolRuntimeTests : IDisposable
         return new AgentToolCallRequest(id, tool, input.ToJsonString());
     }
 
+    /// <summary>
+    /// A side-task's write holds the main tree's lock for its duration, as the engine's folds and commits do: it waits
+    /// out whatever holds the tree, saying so as the engine's step records say the same of theirs, and nothing it writes
+    /// reaches the tree before the other side lets go.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksWrite_TakesTheMainTreesLock_WaitingOutWhateverHoldsIt_AndSayingSo()
+    {
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Write], sideTask: true);
+
+        using var engine = DssHarness.Core.Platform.MachineWideMutex.TryHold(
+            DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(_worktree),
+            "a test as the engine");
+
+        Assert.NotNull(engine);
+
+        var writing = Task.Run(() => Call(runtime, AgentTools.CreateFile, ("path", "w.txt"), ("content", "written\n")));
+
+        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(3); DateTime.UtcNow < till; )
+        {
+            Assert.False(File.Exists(Path.Combine(_worktree, "w.txt")), "the side-task wrote while the engine held the main tree's lock");
+            await Task.Delay(50, Token);
+        }
+
+        engine!.Dispose();
+
+        var result = await writing;
+
+        Assert.True(result.Ok, result.Text);
+        Assert.Equal("written\n", Read("w.txt"));
+
+        var said = Assert.Single(_events.All.OfType<Notice>());
+        Assert.StartsWith("waited ", said.Text);
+        Assert.EndsWith($" s for {DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOnFromSideTask} to end", said.Text);
+    }
+
+    /// <summary>
+    /// A step's agent takes no hold of the main tree's lock: its tree is the run's own, held by the run's own means, and
+    /// its writes go straight through a lock another holds.
+    /// </summary>
+    [Fact]
+    public async Task AStepAgentsWrite_TakesNoHoldOfTheMainTreesLock()
+    {
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Write]);
+
+        using var engine = DssHarness.Core.Platform.MachineWideMutex.TryHold(
+            DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(_worktree),
+            "a test as the engine");
+
+        Assert.NotNull(engine);
+
+        var result = await Call(runtime, AgentTools.CreateFile, ("path", "w.txt"), ("content", "written\n"));
+
+        Assert.True(result.Ok, result.Text);
+        Assert.Equal("written\n", Read("w.txt"));
+        Assert.Empty(_events.All.OfType<Notice>());
+    }
+
+    /// <summary>
+    /// A side-task's edit of config.json, where a run is working over the tree, says in the chat where the edit reaches:
+    /// the run's steps that start after it, and never one under way - for the agents' configuration is read when each
+    /// step starts, as its prompts are. Where no run is live, or the file edited is another, nothing is said.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksEditOfTheConfiguration_SaysInTheChatWhereItReaches_WhereARunIsLive()
+    {
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Write], sideTask: true, liveRun: () => "r1");
+
+        var edited = await Call(runtime, AgentTools.CreateFile, ("path", ".harness-config/config.json"), ("content", "{}\n"), ("overwrite", true));
+
+        Assert.True(edited.Ok, edited.Text);
+        Assert.Equal(
+            "run 'r1' is working over this tree: the edit of config.json reaches its steps that start after it, and never one under way",
+            Assert.Single(_events.All.OfType<Notice>()).Text);
+
+        var other = await Call(runtime, AgentTools.CreateFile, ("path", "plain.txt"), ("content", "x\n"));
+
+        Assert.True(other.Ok, other.Text);
+        Assert.Single(_events.All.OfType<Notice>());
+
+        runtime.Dispose();
+        var none = Open(capabilities: [AgentCapability.Read, AgentCapability.Write], sideTask: true);
+
+        var unsaid = await Call(none, AgentTools.CreateFile, ("path", ".harness-config/config.json"), ("content", "{}\n"), ("overwrite", true));
+
+        Assert.True(unsaid.Ok, unsaid.Text);
+        Assert.Empty(_events.All.OfType<Notice>().Skip(1));
+    }
+
+    /// <summary>
+    /// A step whose reads are narrowed (<c>graphReads: narrow</c>) is denied a whole <c>view_file</c> of a file the view
+    /// holds as parsed over <see cref="CodebaseGraphTool.NarrowLines"/> lines, with the way to the graph, recorded as
+    /// every denial is and as a line of its graph's; a range passes; a file the graph is not sure of passes as an escape
+    /// <c>lowConfidence</c>; a <c>wholeFile</c> is an escape <c>stated</c> and lifts the narrowing for its file.
+    /// </summary>
+    [Fact]
+    public async Task AWholeViewOfAAFileOverNarrowLines_IsDeniedWithTheWayToTheGraph_WhileRangesPassAndEscapesAreLines()
+    {
+        var big = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
+        var generated = "// <auto-generated/>\n" + string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the generated file")]) + "\n";
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", big), ("src/Generated.g.cs", generated));
+        var queries = await CodebaseGraphToolTests.QueriesAsync(tree);
+        var tool = CodebaseGraphToolTests.Tool(tree, queries);
+        var lines = new List<GraphStepLine>();
+        var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
+        var host = new AgentToolHost(
+            tree.Harness.FileSystem,
+            tree.Harness.Platform,
+            tree.Harness.GitClient,
+            new PhaseRunner(tree.Harness.ProcessRunner, tree.Harness.FileSystem, tree.Harness.Output),
+            tree.Harness.ChildSessions,
+            fetch,
+            new RunningToolDouble("1.2.3"),
+            TimeProvider.System);
+        var ground = PolicyGrounds.Of(tree.Tree, [tree.Tree], [tree.Tree], [], [], [], [AgentCapability.Read, AgentCapability.Write]);
+        var runtime = host.Open(AgentRuns.Of(_step, tree.Tree, ground: ground) with
+        {
+            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Operations: CodebaseGraphTool.Operations(write: true, narrow: true), Narrow: true),
+        }, _events);
+
+        var denied = await View(runtime, "src/Big.cs");
+
+        Assert.False(denied.Ok);
+        Assert.Equal("'src/Big.cs' is 222 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile", denied.Text);
+        Assert.Equal((1, 1), (runtime.Tally.Calls, runtime.Tally.Denials));
+
+        var deniedLine = Assert.IsType<GraphDeniedLine>(Assert.Single(lines));
+        Assert.Equal(("src/Big.cs", 222), (deniedLine.Path, deniedLine.Lines));
+        Assert.True(deniedLine.Tokens > 0);
+        Assert.Single(_events.All.OfType<PermissionDenied>(), denied => denied.Rule == "graphReads: narrow");
+
+        // A range of the same file passes, narrowed by nothing.
+        var ranged = await Call(runtime, AgentTools.ViewFile, ("path", "src/Big.cs"), ("start_line", 1), ("end_line", 4));
+        Assert.True(ranged.Ok, ranged.Text);
+        Assert.Single(lines);
+
+        // A file the graph is not sure of passes whole, an escape lowConfidence with why.
+        var unsure = await View(runtime, "src/Generated.g.cs");
+        Assert.True(unsure.Ok, unsure.Text);
+        var escaped = Assert.IsType<GraphEscapeLine>(lines.OfType<GraphEscapeLine>().Single());
+        Assert.Equal(("src/Generated.g.cs", GraphEscapeLine.LowConfidence, "the graph holds it as generated code"), (escaped.Path, escaped.Escape, escaped.Why));
+
+        // A wholeFile is an escape stated with the agent's reason, and lifts the narrowing for its file.
+        Assert.True((await Call(runtime, AgentGraphSupport.ToolName, ("op", "wholeFile"), ("path", "src/Big.cs"), ("reason", "the move needs it whole"))).Ok);
+        var stated = lines.OfType<GraphEscapeLine>().Single(line => line.Escape == GraphEscapeLine.Stated);
+        Assert.Equal(("src/Big.cs", "the move needs it whole"), (stated.Path, stated.Why));
+
+        var lifted = await View(runtime, "src/Big.cs");
+        Assert.True(lifted.Ok, lifted.Text);
+        Assert.Single(lines.OfType<GraphDeniedLine>());
+        Assert.Equal(2, lines.OfType<GraphEscapeLine>().Count());
+
+        runtime.Dispose();
+        fetch.Dispose();
+    }
+
     private static Task<AgentToolCallResult> Call(AgentToolRuntime runtime, string tool, params (string Name, object? Value)[] members)
         => Call(runtime, tool, "call_1", members);
 
@@ -1828,7 +1985,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
         TimeProvider? clock = null,
         AgentWebSearch? webSearch = null,
         AgentNativeAsk? native = null,
-        DssHarness.Core.Agents.Isolation.LaunchIsolation? isolation = null)
+        DssHarness.Core.Agents.Isolation.LaunchIsolation? isolation = null,
+        bool sideTask = false,
+        Func<string?>? liveRun = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -1841,6 +2000,11 @@ public sealed class AgentToolRuntimeTests : IDisposable
             webDomains,
             writes,
             reporterRoot);
+
+        if (sideTask)
+        {
+            ground = ground with { SideTask = true, LiveRun = liveRun, WorktreeRules = false, ProtectedPaths = false };
+        }
 
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, endpoint ?? new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var files = fileSystem ?? _harness.FileSystem;

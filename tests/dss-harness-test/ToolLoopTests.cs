@@ -2123,6 +2123,28 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
+    /// A run that was given the run's repository map sends it as its own part of the conversation's first user message -
+    /// the provider asked for the map and the rest after it apart, so a provider that caches a prefix marks the map
+    /// alone - and the message the engine records reads as the two joined, its reader taking the task out of it as of
+    /// any other first message.
+    /// </summary>
+    [Fact]
+    public async Task ARunThatWasGivenTheRepositoryMap_SendsItAsItsOwnPartOfTheFirstMessage()
+    {
+        _chat.Answer(FakeChat.Said("done"));
+
+        var run = Run() with { Map = "the run's repository map", Codebase = "the pack of the step's work" };
+        var first = AgentPromptParts.FirstMessage(run, newConversation: true);
+        var mapPart = AgentPromptParts.MapPart("the run's repository map");
+
+        await Ran(run);
+
+        Assert.Equal([FakeChat.User(mapPart, first[mapPart.Length..])], _chat.Requests[0].Messages);
+        Assert.Equal(first, _events.All.OfType<MessageSent>().First().Text);
+        Assert.Equal(Asked, AgentPromptParts.TaskOf(_events.All.OfType<MessageSent>().First().Text));
+    }
+
+    /// <summary>
     /// The ask for JSON alone is the one request after an answer that read as no JSON: after an answer the engine told the
     /// agent something while it was written, the agent goes on as in any other request, and the handoff turn is asked as
     /// every turn is.

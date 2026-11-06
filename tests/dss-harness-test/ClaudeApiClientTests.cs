@@ -111,6 +111,47 @@ public sealed class ClaudeApiClientTests : IDisposable
     }
 
     /// <summary>
+    /// A step that goes on in a stored conversation is told what changed of the codebase - the <c>&lt;codebase-changes&gt;</c>
+    /// part of its one new user message, never a map or a pack again whole - and no earlier message, tool result, map or
+    /// pack is ever sent changed: the earlier requests a byte prefix, and the stored conversation's earlier lines the
+    /// same.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatGoesOn_IsToldWhatChangedOfTheCodebase_InItsOneNewUserMessage()
+    {
+        _endpoint.Then(ApiReply.Fixture("tool-use.sse")).Then(ApiReply.Fixture("answer.sse")).Then(ApiReply.Fixture("answer.sse"));
+
+        var first = await Ran(Run() with { Map = "the run's repository map", Codebase = "the pack the conversation began with" });
+        var stored = File.ReadAllText(Path.Combine(_sessions, first.Session!, StoredConversation.ConversationFileName));
+
+        const string Changes = "1 declarations the conversation held: 1 moved or changed, 0 removed; 0 nodes of this step's pack added";
+        var goingOn = await Ran(Run() with
+        {
+            UserPrompt = "go on",
+            Map = "the run's repository map",
+            Codebase = "a whole pack again, never sent",
+            CodebaseChanges = Changes,
+            Conversation = new AgentSessionRef(ClaudeApiClient.ClientName, "anthropic", first.Session!),
+        });
+
+        Assert.Equal(AgentRunStatus.Completed, goingOn.Status);
+        AssertTheConversationHolds(_endpoint.Asked);
+
+        // The conversation's earlier lines are the same, whole: the file grew and nothing in it changed.
+        Assert.StartsWith(stored, File.ReadAllText(Path.Combine(_sessions, first.Session!, StoredConversation.ConversationFileName)), StringComparison.Ordinal);
+
+        // The one new user message: the changes in the place of a map and a pack, then the task.
+        var sent = Messages(_endpoint.Asked[2]);
+        var last = sent[^1];
+        var text = string.Join(string.Empty, JsonNode.Parse(last)!["content"]!.AsArray().Select(block => block!["text"]!.GetValue<string>()));
+        var nl = Environment.NewLine;
+
+        Assert.Equal("user", JsonNode.Parse(last)!["role"]!.GetValue<string>());
+        Assert.Equal($"<codebase-changes>{nl}{Changes}{nl}</codebase-changes>{nl}{nl}<task>{nl}go on{nl}</task>", text);
+        Assert.DoesNotContain(sent, message => message.Contains("a whole pack again", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// An answer outside a bound the copy the API is sent leaves out - two options at least, moved into words - is sent
     /// back by the gate, which holds the answer to the definition's whole schema; the answer that then reads completes the
     /// step. Every request carries the envelope as its format, and the first message says nothing of it.

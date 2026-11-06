@@ -197,6 +197,12 @@ public sealed class CommitStepRunner(
         fileSystem.CreateDirectory(Path.GetDirectoryName(messageFile)!);
         fileSystem.WriteAllTextAtomic(messageFile, message);
 
+        // The tree's lock around the staging and the commit: the index and HEAD are the main tree's git's own, taken
+        // apart from a side-task's writes and commands as every engine write to the tree is, and what the step waited
+        // out for it is what its record says. The step's own stop ends the wait.
+        using var tree = await MainTreeWriteLock.HoldAsync(main, cancellationToken).ConfigureAwait(false)
+            ?? throw new OperationCanceledException(cancellationToken);
+
         var id = ledger.Staging(layout, run.Instance, run.Attempt, head, CommitPathsOf(staging), FoldsOf(staging));
         var paths = staging.Select(path => path.Path.Path).ToList();
         var limit = WorkflowStepTypes.CommandLimitOf(run.Step);
@@ -267,7 +273,7 @@ public sealed class CommitStepRunner(
         }
 
         ledger.Committed(layout, id, sha);
-        return Done(committed: true, sha, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream), hooks);
+        return Done(committed: true, sha, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream), hooks, tree.Waited);
     }
 
     /// <summary>
@@ -279,6 +285,10 @@ public sealed class CommitStepRunner(
     /// </summary>
     private async Task<FlowStepResult?> SettleAsync(FlowStepRun run, OrchestratorLayout layout, string main, IReadOnlyList<string> upstream, CancellationToken cancellationToken)
     {
+        // The tree's lock here too: what a settle unstages is written to the main tree's index, as the staging it settles was.
+        using var settling = await MainTreeWriteLock.HoldAsync(main, cancellationToken).ConfigureAwait(false)
+            ?? throw new OperationCanceledException(cancellationToken);
+
         foreach (var left in store.ReadFolds(layout)?.Commits.Where(commit => commit.State == FlowCommitEntry.Staged && commit.Instance == run.Instance).ToList() ?? [])
         {
             var head = await git.ResolveCommitAsync(main, "HEAD", cancellationToken).ConfigureAwait(false);
@@ -290,7 +300,7 @@ public sealed class CommitStepRunner(
                 && (await FoldLedger.DifferingAsync(git, fileSystem, main, paths, cancellationToken).ConfigureAwait(false)).Count == 0)
             {
                 ledger.Committed(layout, left.Id, head);
-                return Done(committed: true, head, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream));
+                return Done(committed: true, head, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream), waited: settling.Waited);
             }
 
             var status = await git.ReadStatusAsync(main, cancellationToken).ConfigureAwait(false);
@@ -384,10 +394,11 @@ public sealed class CommitStepRunner(
     private static string Quoted(IReadOnlyList<string> paths) => ReportText.Listed([.. paths.Select(path => $"'{path}'")]);
 
     /// <summary>
-    /// The step done: whether it committed, the commit, the paths it took, those its folds changed that git ignores, and,
-    /// where it ran git's commit, the isolation the repository's hooks ran under.
+    /// The step done: whether it committed, the commit, the paths it took, those its folds changed that git ignores,
+    /// where it ran git's commit, the isolation the repository's hooks ran under, and, where it waited for the tree's
+    /// lock, how long and what it waited for.
     /// </summary>
-    private static FlowStepResult Done(bool committed, string? sha, IReadOnlyList<string> paths, IReadOnlyList<string> ignored, ExecutionIsolation? hooks = null)
+    private static FlowStepResult Done(bool committed, string? sha, IReadOnlyList<string> paths, IReadOnlyList<string> ignored, ExecutionIsolation? hooks = null, TimeSpan waited = default)
     {
         var output = new JsonObject
         {
@@ -400,6 +411,15 @@ public sealed class CommitStepRunner(
         if (hooks is not null)
         {
             output["isolation"] = hooks.Record.ToOutput();
+        }
+
+        if (waited > TimeSpan.Zero)
+        {
+            output["waited"] = new JsonObject
+            {
+                ["seconds"] = Math.Round(waited.TotalSeconds, 1),
+                ["for"] = MainTreeWriteLock.WaitedOutOn,
+            };
         }
 
         return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: output);

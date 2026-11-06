@@ -78,6 +78,15 @@ public sealed record ArmListing(IReadOnlyList<ListedLeg> Legs, string Registry, 
 }
 
 /// <summary>
+/// What the one reading of the arms registry read (<see cref="ArmListingReader.ReadListingAsync"/>): the listing, and the
+/// registry it read with the arms selected and each arm's scopes - so a reader that judges by a listing can also find
+/// what an A row holds and where an S row runs.
+/// </summary>
+/// <param name="Listing">The listing, a leg at a time.</param>
+/// <param name="Arms">The registry as it was read and verified, the arms selected and each arm's scopes.</param>
+internal sealed record ArmListingRead(ArmListing Listing, SweepArms Arms);
+
+/// <summary>
 /// What a listing reads of one leg, beside the registry: its arms, whether it can be swept, its record, the tree's one
 /// reading, the host it names, the settings it would be swept with, and what its configure would be given.
 /// </summary>

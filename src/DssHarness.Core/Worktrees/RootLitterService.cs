@@ -1,3 +1,4 @@
+using DssHarness.Core.Application;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Repository;
@@ -15,7 +16,7 @@ namespace DssHarness.Core.Worktrees;
 /// purpose: an allowlist is an escape everyone takes, and the guard this replaces was measured
 /// letting every one of its subjects through that way.
 /// </remarks>
-public interface IRootLitterService
+public interface IRootLitterService : IUseCase
 {
     /// <summary>Finds the litter at the root of the tree containing <paramref name="startDirectory"/>.</summary>
     /// <param name="startDirectory">A directory inside the repository.</param>

@@ -407,6 +407,44 @@ public sealed class ClaudeCodeProtocolTests
     }
 
     /// <summary>
+    /// An <c>Edit</c> after a ranged <c>Read</c> holds, on the stable channel and <c>latest</c> alike (recorded
+    /// 2026-11-04 on 2.1.311 and 2.1.318, slice 27e): Claude Code takes an <c>Edit</c> of a file whose only read was a
+    /// <c>Read</c> with <c>offset</c> and <c>limit</c> - the edited text inside the range that read reached and outside
+    /// it - each asked of the host and neither refused by itself, and both writes ran. The graph tool's <c>edit</c>
+    /// operation is therefore not given on this client; an agent that means to change a body reads its lines and Edits
+    /// them.
+    /// </summary>
+    [Theory]
+    [InlineData("stable", "2.1.311")]
+    [InlineData("latest", "2.1.318")]
+    public void AnEditAfterARangedRead_IsTakenAskedAndRun(string channel, string version)
+    {
+        _ = version;
+
+        var lines = Lines(channel, "ranged-edit.jsonl");
+        var asks = lines.Select(ClaudeCodeProbe.AskOf).OfType<ClaudeCodeProbe.Ask>().ToList();
+
+        Assert.Equal(["Read", "Edit", "Edit"], [.. asks.Select(ask => ask.Tool)]);
+        Assert.True(asks[0].ToolUseId != asks[1].ToolUseId && asks[1].ToolUseId != asks[2].ToolUseId, "each call asked about is its own");
+
+        var findings = ClaudeCodeProbe.FindingsOf(Fixtures(channel, "findings.jsonl"))["ranged-edit"]!;
+
+        Assert.True((bool)findings["rangedReadGiven"]!, "the range was read with offset and limit");
+        Assert.True((bool)findings["editedInside"]!, "the edit inside the range ran");
+        Assert.True((bool)findings["editedOutside"]!, "the edit outside the range ran");
+
+        var edits = findings["edits"]!.AsArray();
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit =>
+        {
+            Assert.True((bool)edit!["asked"]!, "each edit asked of the host");
+            Assert.Null(edit["permissionDenied"]);
+            Assert.Null(edit["isError"]);
+        });
+    }
+
+    /// <summary>
     /// <c>apiKeySource</c> says <c>none</c> under the person's login and says the same with no credential at all, where
     /// the turn ends in the provider's refusal; and no launch, with <c>-p</c> or without, wrote a session file.
     /// </summary>
@@ -423,7 +461,9 @@ public sealed class ClaudeCodeProtocolTests
 
         var findings = ClaudeCodeProbe.FindingsOf(Fixtures(channel, "findings.jsonl"));
 
-        Assert.Equal(23, findings.Count);
+        // The launches of the 2026-10-19 scenario on every channel, and ranged-edit (2026-11-04) on the stable tag and
+        // latest alone, for the oldest version taken changes nothing there.
+        Assert.Equal(channel == "oldest" ? 23 : 24, findings.Count);
         Assert.All(findings.Values, found => Assert.Equal("none", found["sessionFile"]!.GetValue<string>()));
     }
 

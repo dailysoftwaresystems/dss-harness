@@ -1114,6 +1114,10 @@ public static class WorkflowFileParser
                     Ask = BooleanIn(keys, $"{where}.ask", problems),
                     AskRounds = IntIn(keys, $"{where}.askRounds", problems),
                     BackoffSeconds = IntIn(keys, $"{where}.backoffSeconds", problems),
+                    Graph = EnumIn(keys, $"{where}.graph", problems, [.. WorkflowStep.GraphModes]),
+                    GraphFrom = ScalarIn(keys, $"{where}.graphFrom", problems),
+                    GraphPromptTokens = IntIn(keys, $"{where}.graphPromptTokens", problems),
+                    GraphReads = EnumIn(keys, $"{where}.graphReads", problems, [.. WorkflowStep.GraphReadsModes]),
                 };
 
                 RefuseGivenEmpty(keys, $"{where}.search", "name sources or tags", "agentWebSearch.defaults", problems);

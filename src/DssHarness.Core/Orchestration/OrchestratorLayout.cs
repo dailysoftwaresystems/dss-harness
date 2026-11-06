@@ -51,6 +51,7 @@ namespace DssHarness.Core.Orchestration;
 /// web/searches.jsonl          what each source of the web search found once for the run, and each query it answered: the same query again is answered from here; written by every client whose step searches
 /// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
 /// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
+/// graph/map.md, map.json      the run's repository map, made once from the base as it stood when the run's first graphed reason step was given its prompt, and what it was made from; read as it is by every step after
 /// graph/extracts/&lt;ab&gt;/&lt;name&gt;   one file's extract, written once, named by its blob, its path, its implementation and version
 /// graph/sync.jsonl            one line for each sync of the graph
 /// graph/views/&lt;agent&gt;.json    an agent's view of the graph: what its worktree holds that the base does not
@@ -157,6 +158,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file a step's own record is kept in, in its directory.</summary>
     public const string StepRecordFileName = "step.json";
 
+    /// <summary>The step's policy as it started under it: the agents' configuration as resolved - agentPolicy, the web search it asks, what it runs on - read when the step starts, as its prompts are.</summary>
+    public const string PolicyFileName = "policy.json";
+
     /// <summary>The name of the file a step's output is kept in, validated, in its directory.</summary>
     public const string StepOutputFileName = "output.json";
 
@@ -213,6 +217,12 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The name of the file the base's link result is kept in, in the graph's directory.</summary>
     public const string GraphSymbolsFileName = "symbols.jsonl";
+
+    /// <summary>The name of the file the run's repository map is kept in, in the graph's directory, made once and read as it is.</summary>
+    public const string GraphMapFileName = "map.md";
+
+    /// <summary>The name of the file what the run's repository map was made from is kept in, in the graph's directory.</summary>
+    public const string GraphMapMetaFileName = "map.json";
 
     /// <summary>The name of the directory every file's extract is kept in, once, in the graph's directory.</summary>
     public const string GraphExtractsDirectoryName = "extracts";
@@ -463,6 +473,12 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The base's link result: every node and edge, with the digest of the manifest it was made from.</summary>
     public string GraphSymbolsFile => Path.Combine(GraphDirectory, GraphSymbolsFileName);
+
+    /// <summary>The run's repository map, made once and read as it is by every step after (part 08, "The repository map").</summary>
+    public string GraphMapFile => Path.Combine(GraphDirectory, GraphMapFileName);
+
+    /// <summary>What the run's repository map was made from, kept beside it.</summary>
+    public string GraphMapMetaFile => Path.Combine(GraphDirectory, GraphMapMetaFileName);
 
     /// <summary>Where every file's extract is kept, once, each named by <see cref="DssHarness.Core.Codebase.CodeGraphIds.ExtractName"/>.</summary>
     public string GraphExtractsDirectory => Path.Combine(GraphDirectory, GraphExtractsDirectoryName);

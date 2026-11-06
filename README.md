@@ -96,6 +96,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `read-anchor <id>...` | Show anchors in full |
 | `read-anchors` | List anchors, or check the registries with `--lint` |
 | `check-anchor-balance` | Fail a change that creates more anchors than its work closes |
+| `check-anchor-arms` | Hold anchor rows' claims about mutation arms to the mutation record |
 | `check-anchor-citations` | Check every anchor cited in the declared roots resolves to a row |
 | `fix-line-endings [--all \| --changed]` | Apply the line-ending policy `.gitattributes` declares; `--check` refuses instead |
 | `check-ci-legs` | Report each CI leg, separating a real failure from a budget overrun, by the job and step names `ci` declares (`help ci`) |
@@ -237,6 +238,13 @@ otherwise appears as compile errors in files the worktree never touched. It says
 long a name would fit instead. The name limit and both sides of the budget are set
 in `config.json`.
 
+**One seam to the behaviour.** The command line parses arguments, owns the console and
+reports the exit code; everything a command does lives in the Core library behind a use
+case - one interface per operation, its request and its report the contract - so the same
+behaviour is reachable from a terminal today and from a front end later, and the boundary
+is enforced by tests that read the built command line itself. The
+[architecture](docs/architecture.md) says the whole of it.
+
 ## Layout
 
 ```
@@ -256,16 +264,16 @@ in `config.json`.
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
 .orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence
-.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it
+.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it, and for a reason step the policy.json it started under - the agents' configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (its pack's line, each call of the graph tool, each escape of its narrowed reads) and its working-set.json, the seeds of the packs of the steps after it
 .orchestrators/<o>/agents/<agent>/sessions/<id>/ ignored; API clients only: one conversation with the provider, in the provider's own form
-.orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
+.orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included, with a reason step's graph.jsonl and working-set.json where it has a codebase graph
 .orchestrators/<o>/.../<instance>/children/<session>.json ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once its starter has gone
 .orchestrators/<o>/asks/                     ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, the files of its reporter's attempt, the conversations its client stores (sessions/) and ask.json; the engine never reads it
 .orchestrators/<o>/web/searches.jsonl        ignored; a run's web search: what each source found once for the run, and each query it answered, which the same query again is answered from; written by every client whose step searches
 .orchestrators/.web-index/<source>/          ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it could not read, and its fill's record of each address it asked
 .orchestrators/key-spend.jsonl               ignored; what each key spent, by its name and never its value: a line for each key and model of each entry of a step's order or of a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where balanceKeyUsage chooses a key ('dssharness help agent-clients')
 .side-tasks/                                 contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout, and never sent to a host by sync ('dssharness help side-tasks')
-.side-tasks/<task>/                          ignored; one side-task: its task.json, stored stream, transcript, denials and web, and its conversation where its client stores one; <task>.owner.json beside it while a side-task holds it open
+.side-tasks/<task>/                          ignored; one side-task: its task.json, stored stream, transcript, denials and web, its conversation where its client stores one, and its own codebase graph (graph/, its map and each call of the graph tool) where it was given one; <task>.owner.json beside it while a side-task holds it open
 .mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by sync ('dssharness help mutations')
 .mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a host by sync
@@ -489,7 +497,14 @@ that fails again comes back by its own `onFailure`, until it passes or a person 
 failed agent is tried again (`retries`, waiting `backoffSeconds`, twice as long each time) and on
 each model of its fallback, quota or a provider that fails pauses the run where it can resume, and
 what still fails is asked (`onFailure: pause`). The implementation workflow says all of it on its steps, so a run of it
-ends done or asks only what it must.
+ends done or asks only what it must. It builds first: its baseline is split in two - a `build` step, which fails red
+and is taken by the recovery and built again - and the `test` step it was, which waits for the build - and the flow
+makes its codebase graph after that build, beside the baseline's tests and the CI read, passed over where it cannot be
+made. Every reason step after it is served from the graph as its type of work needs: the steps that read code for
+their task say nothing and are given the tool and their task's seeds by default, the reviewers, the self-audit, the
+diagnosis and the steps that verify and fix start their packs from their changes (`graphFrom: changes`), the
+prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the run's records, ask
+none of it (`dssharness help codebase-graph`).
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That
@@ -1575,9 +1590,14 @@ request sends the model, the system prompt as one block, the tools - each stream
 is written - and the messages as the conversation stored them; adaptive thinking, its summary
 shown; the step's effort as `output_config.effort`; old tool uses cleared by the server as the
 context fills (`clear_tool_uses_20250919`, under the `context-management-2025-06-27` beta), each
-clearing said in a notice; and the system prompt and the conversation cached for
-`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the
-model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
+clearing said in a notice; and three cache marks of the client's lifetime for
+`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said) - on the system text,
+covering the tools and it, the same for every step of that agent with the same tools; on the run's
+repository map, the first block of the conversation's first user message, covering the tools, the
+system text and the map, the same for every such step of the run; and the top-level mark, which
+moves with the conversation's last block - so a step's second request on reads the map from the
+cache, and so does the first request of the run's next step of the same agent - and a budget needs
+the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
 step with a fallback that can go on here sends the `fallback-credit-2026-07-01` beta, and a request
 the model declines moves the step to its next model of the same provider and client - the same
 request sent again with the model changed and the credit the API gave sent back as its
@@ -1614,7 +1634,10 @@ message as the conversation stored it - the engine's as a user message of text, 
 each answered by a tool message, in order; the tools as functions, their calls' arguments streamed
 (`tool_stream`); the model's thinking on, the step's effort as `reasoning_effort` (`low`, `medium`,
 `high`, `xhigh`, `max`); and `max_tokens` - no sampling parameter or tool choice of the tool's own,
-which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own. Z.AI caches what a request repeats by itself
+which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own. A first
+message that holds the run's repository map holds it first, ahead of the step's context pack and its
+task - the same bytes for every step of the run, so the longest prefix the steps of an agent share
+begins with it. Z.AI caches what a request repeats by itself
 and bills no write, so a budget needs the model's input, cached-input and output prices. Each
 answer's reasoning is stored with it and sent back; Z.AI leaves it out of what the model reads in
 later turns unless `agentClients.glm.preserveThinking` is true (false where nothing is said), which
@@ -1797,12 +1820,17 @@ on the repository the remote's address names, its body the workflow's file fille
 open one as it is (`created` false) so a step run again opens no second, and never one from a fork's branch of the same
 name; the run never merges it, and its end leaves each pull request, and each folded path git ignores, for a person. A check that finds red
 fails its step under `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it
-starts, and one that reads nothing fails the step (12). Every call of `gh` and every git command is started so it
+starts, and one that reads nothing fails the step (12) - a reason step's prompt alone is filled further: a placeholder in
+it naming a step the run left no output is filled with a sentence saying so and why, so the agent knows what it does not
+have. Every call of `gh` and every git command is started so it
 cannot ask, and each command a step runs on the forge or to publish - a read of CI, a commit's, a push, a pull
 request's - is ended after its step's `timeoutMinutes` where the step says one, else its own (5 minutes for `gh` and
 a push, 15 minutes for a commit's), and is not done (21). A step of any other type fails, saying no runner serves its type;
 the rest are the next thing the tool grows. A step that works in or on an agent
-waits for the create-agent step that makes it, and is not run where that step did not make it. Run
+waits for the create-agent step that makes it, and is not run where that step did not make it. The topic carries its
+worked examples besides - each printed as a whole workflow that holds as it is printed: a repair raised by a failed
+build that goes back to what failed, a check raised whenever a builder ends, issues found and fixed one by one under
+`maxOpenAgents: 1`, and a review loop that reworks what it finds until it finds nothing. Run
 `dssharness help workflows` for the whole of it.
 
 ## Anchors
@@ -1818,13 +1846,19 @@ dssharness set-anchor D-AUTH-TOKEN-REFRESH --status closed   # moves it to the d
 dssharness read-anchor D-AUTH-TOKEN-REFRESH
 dssharness read-anchors --open --band P0 P1
 dssharness check-anchor-balance --base main
+dssharness check-anchor-arms
 ```
 
 The Status cell (`🟠 OPEN`, `⏳ GATED`, `🔵 DISCLOSED`, `✅ CLOSED`) is the only verdict that
 decides whether a row is closed. Closing an anchor moves its row to the done registry, and
 `check-anchor-balance` fails a change that creates more anchors than its work closes. A row is
 one line, so a value's line breaks are stored as spaces: a value that would be stored with an
-id or a path cut in two is refused, and so is one that newly cites an id no row holds. Run
+id or a path cut in two is refused, and so is one that newly cites an id no row holds. A row
+names a mutation arm with a backticked id, and `check-anchor-arms` holds a done row's named
+arms to the mutation record - each must be unmoved with a recorded passed on the legs its S
+row names, a pass cited beside a run id must be spelled as history (`anchors.passWords`,
+`anchors.historyForms`), and a backticked id no A row holds any more is reported where git
+history shows it was declared once. Run
 `dssharness help anchors` for the rules.
 
 ## Building from source

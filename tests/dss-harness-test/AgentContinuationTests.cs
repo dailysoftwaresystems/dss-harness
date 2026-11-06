@@ -219,6 +219,52 @@ public sealed class AgentContinuationTests : IDisposable
     }
 
     /// <summary>
+    /// A step that was given its codebase section holds it at the head of its first user message, before the run
+    /// context and every other part - the sentence for a graph the run never built held the same way - and the task is
+    /// still read out of it alone, whatever the parts before it.
+    /// </summary>
+    [Fact]
+    public void AStepsCodebaseSection_IsTheHeadOfItsFirstMessage_BeforeEveryOtherPart()
+    {
+        var run = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { RunContext = "run facts", Continuation = "the work before", UserPrompt = "do the work" };
+        var withCodebase = run with { Codebase = "the pack of the step's work" };
+
+        var message = AgentPromptParts.FirstMessage(withCodebase, newConversation: true);
+        var nl = Environment.NewLine;
+
+        Assert.StartsWith($"<codebase>{nl}the pack of the step's work{nl}</codebase>{nl}{nl}<{AgentPromptParts.RunContextTag}>", message, StringComparison.Ordinal);
+        Assert.EndsWith($"</{AgentPromptParts.ContinuationTag}>{nl}{nl}<{AgentPromptParts.TaskTag}>{nl}do the work{nl}</{AgentPromptParts.TaskTag}>", message, StringComparison.Ordinal);
+        Assert.Equal("do the work", AgentPromptParts.TaskOf(message));
+
+        // A graph the run never built says so in the place of the pack, held the same way.
+        Assert.StartsWith($"<codebase>{nl}(step 'codebase' left no output: it has not run){nl}</codebase>", AgentPromptParts.FirstMessage(run with { Codebase = "(step 'codebase' left no output: it has not run)" }, newConversation: false), StringComparison.Ordinal);
+
+        // A run given no part is sent its prompt alone, shaped by nothing.
+        Assert.Equal("do the work", AgentPromptParts.FirstMessage(run with { RunContext = null, Continuation = null }, newConversation: true));
+    }
+
+    /// <summary>
+    /// A step that was given the run's repository map holds it first of all, ahead of its codebase section - the same
+    /// bytes for every step of the run - and the task is still read out of the message alone, the map a part before it
+    /// as the pack is.
+    /// </summary>
+    [Fact]
+    public void AStepsRepositoryMap_IsAheadOfItsCodebaseSection_InItsFirstMessage()
+    {
+        var run = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { RunContext = "run facts", UserPrompt = "do the work" };
+        var withMap = run with { Map = "the run's repository map", Codebase = "the pack of the step's work" };
+
+        var message = AgentPromptParts.FirstMessage(withMap, newConversation: true);
+        var nl = Environment.NewLine;
+
+        Assert.StartsWith($"<repository-map>{nl}the run's repository map{nl}</repository-map>{nl}{nl}<codebase>{nl}the pack of the step's work{nl}</codebase>{nl}{nl}<{AgentPromptParts.RunContextTag}>", message, StringComparison.Ordinal);
+        Assert.Equal("do the work", AgentPromptParts.TaskOf(message));
+
+        // A conversation gone on with is sent no map again: what changed is told in its place, never the map whole.
+        Assert.StartsWith($"<codebase>{nl}", AgentPromptParts.FirstMessage(withMap, newConversation: false), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// On a provider told the envelope in words - Z.AI - each launch is sent its first message as the parts and then the
     /// envelope in a message of its own: the later launch's first message is read as its answer alone and the envelope
     /// said again is no new message of the engine's, so the record holds neither the record the launch carried nor the

@@ -205,6 +205,10 @@ public sealed record FlowEvent(
 /// <c>SKILL.md</c>, the SHA-256 of the file and of the folder as handed over, and where the folder was put; null where it
 /// was given none.
 /// </param>
+/// <param name="Graph">
+/// What the step's codebase graph gave and what it saved (part 08): its mode, its view, what the map and the pack cost,
+/// what the tool served, and what the agent still read whole; null where the step was given no graph.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -250,7 +254,8 @@ public sealed record FlowStepRecord(
     string? EndedFor = null,
     string? PieceOf = null,
     string? AgainOf = null,
-    IReadOnlyList<Agents.AgentSkill>? Skills = null)
+    IReadOnlyList<Agents.AgentSkill>? Skills = null,
+    JsonNode? Graph = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -881,6 +886,7 @@ public sealed record FlowSnapshot(
 /// <param name="PieceOf">An instance of the work-item group's: the plan update whose piece it carries or withdrew (<see cref="FlowStepRecord.PieceOf"/>); null otherwise.</param>
 /// <param name="AgainOf">An instance of the work-item group's: the instance it visits again (<see cref="FlowStepRecord.AgainOf"/>); null where it visits none.</param>
 /// <param name="Skills">Every skill the step's agent was given (<see cref="FlowStepRecord.Skills"/>); null where it was given none.</param>
+/// <param name="Graph">What the step's codebase graph gave and what it saved (<see cref="FlowStepRecord.Graph"/>); null where it was given none.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -926,4 +932,5 @@ public sealed record FlowSnapshotStep(
     string? EndedFor = null,
     string? PieceOf = null,
     string? AgainOf = null,
-    IReadOnlyList<Agents.AgentSkill>? Skills = null);
+    IReadOnlyList<Agents.AgentSkill>? Skills = null,
+    JsonNode? Graph = null);

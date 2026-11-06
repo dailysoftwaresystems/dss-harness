@@ -195,6 +195,9 @@ public sealed class FlowService(
     private readonly FlowTimings _timings = timings ?? FlowTimings.Default;
     private readonly FlowRunOwner _owner = new(store, identity, clock);
 
+    /// <summary>How long an answer handed to a running engine waits between looks at what became of it.</summary>
+    private static readonly TimeSpan HandOverSlice = TimeSpan.FromMilliseconds(50);
+
     /// <inheritdoc/>
     public async Task<CommandOutcome> RunAsync(
         string startDirectory,
@@ -511,20 +514,53 @@ public sealed class FlowService(
 
         // Where an engine is running the run, the answer is handed to it and the command returns: it lands in the
         // inbox under an id of its own, the engine takes it at its poll, and no second engine is started. An engine
-        // whose session ends before it took it leaves it there, and the next session of the run takes it.
+        // whose session ends before it took it leaves it there, and the next session of the run takes it - this
+        // command waits out that taking, and where the owner went with its session, so that no session is left to
+        // read the inbox, this command is that next session itself.
         if (_owner.Live(layout) is not null)
         {
             _store.AddToInbox(layout, new FlowInboxAnswer(FlowInboxAnswer.NewId(), asked.Id, answer, _clock.GetUtcNow(), takes));
 
-            var handed = new CommandOutcome(
-                HarnessExit.Success,
-                $"handed '{answer}' for question '{asked.Id}' to the engine running '{run}'",
-                [
-                    $"the engine reads it within {_timings.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s and takes it while the question is open; where its session ends first, the next session of the run takes it",
-                    $"inbox: {layout.InboxFile}",
-                ]);
+            for (var waited = TimeSpan.Zero; waited < _timings.PollEvery + _timings.PollEvery; waited += HandOverSlice)
+            {
+                await Task.Delay(HandOverSlice, cancellationToken).ConfigureAwait(false);
 
-            return Ended(layout, AnswerCommand, handed, ResultOf(layout, handed) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+                if (_store.ReadFlowQuestions(layout)?.Of(asked.Id) is not { State: "open" })
+                {
+                    break;
+                }
+
+                if (_owner.Live(layout) is null)
+                {
+                    break;
+                }
+            }
+
+            if (_store.ReadFlowQuestions(layout)?.Of(asked.Id) is not { State: "open" })
+            {
+                var taken = new CommandOutcome(
+                    HarnessExit.Success,
+                    $"handed '{answer}' for question '{asked.Id}' to the engine running '{run}'",
+                    [
+                        $"the engine took it within {_timings.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, while the question was open",
+                        $"inbox: {layout.InboxFile}",
+                    ]);
+
+                return Ended(layout, AnswerCommand, taken, ResultOf(layout, taken) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+            }
+
+            if (_owner.Live(layout) is not null)
+            {
+                var handed = new CommandOutcome(
+                    HarnessExit.Success,
+                    $"handed '{answer}' for question '{asked.Id}' to the engine running '{run}'",
+                    [
+                        $"the engine reads it within {_timings.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s and takes it while the question is open; where its session ends first, the next session of the run takes it",
+                        $"inbox: {layout.InboxFile}",
+                    ]);
+
+                return Ended(layout, AnswerCommand, handed, ResultOf(layout, handed) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+            }
         }
 
         // The session is held to the definition it began with, as a resume is.
@@ -1119,6 +1155,30 @@ public sealed class FlowService(
     }
 
     /// <summary>
+    /// A run fact a template reads that the run's own state does not hold (part 03): where the step's instance works -
+    /// its agent's worktree, the scratch and plans the run keeps for that agent, the rows it files - and this machine.
+    /// Null for every other name, which reads nothing as it did.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="layout">The run's own places.</param>
+    /// <param name="instance">The instance whose template is filled.</param>
+    /// <param name="fact">The fact's name.</param>
+    private string? RunFactOf(HarnessContext context, OrchestratorLayout layout, FlowInstance instance, string fact)
+    {
+        var agent = instance.WorksIn ?? instance.Made;
+
+        return fact switch
+        {
+            "os" => _platform.PlatformKey,
+            "worktree" when agent is not null => _store.ReadAgent(layout, agent)?.WorktreePath(context.Layout),
+            "work" when agent is not null => layout.WorkDirectory(agent),
+            "plans" when agent is not null => layout.PlansDirectory(agent),
+            "rows" when agent is not null => layout.RowsDirectory(agent),
+            _ => null,
+        };
+    }
+
+    /// <summary>
     /// One session of a run, from its owner claimed to its end: the engine built over the run's records, the answer it
     /// begins with, what was handed to an engine that ended before it took it, then driven - again, where an answer
     /// handed over as it ended settles the question it paused on - and the report written. However it ends - a
@@ -1214,7 +1274,8 @@ public sealed class FlowService(
                 },
                 new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, updates),
                 updates: () => _store.ReadFlowUpdates(layout),
-                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"));
+                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
+                runFacts: (instance, fact) => RunFactOf(context, layout, instance, fact));
             var before = _store.ReadFlowQuestions(layout);
 
             // What a session before this one recorded and left queued - an amendment given while no engine ran - is
@@ -1908,6 +1969,11 @@ public static class QuestionsText
         {
             yield return $"question {question.Id} ({question.Kind}, {question.State}): {question.ProblemShown?.Happened ?? question.Kind}";
 
+            if (question.Recommendation is { } said)
+            {
+                yield return $"  {RecommendationOf(said)}";
+            }
+
             foreach (var option in question.Options)
             {
                 yield return $"  {option.Answer}: {option.Does}";
@@ -1919,6 +1985,17 @@ public static class QuestionsText
             }
         }
     }
+
+    /// <summary>
+    /// A question's recommendation as the listing says it: what is recommended and why, with who gave it - or, where none
+    /// was obtained, why. The report's own saying of it stays the one in <see cref="FlowReports"/>; this is the listing's,
+    /// beside the answers a reader may still give.
+    /// </summary>
+    /// <param name="said">The recommendation, as the question holds it.</param>
+    private static string RecommendationOf(FlowRecommendation said)
+        => said.State == "given"
+            ? $"recommended: '{said.Answer}'{(said.Why is { } why ? $", {why}" : string.Empty)}{(said.By is { } by ? $" (by {by})" : string.Empty)}"
+            : said.Why ?? "no recommendation was sought";
 
     /// <summary>Who gave an answer, in words: a person and how, the configuration and where, the input it came from.</summary>
     /// <param name="by">Who gave it, as the answer records it; null where it records nobody.</param>

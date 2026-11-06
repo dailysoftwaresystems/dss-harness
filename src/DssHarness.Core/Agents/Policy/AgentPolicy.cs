@@ -257,8 +257,20 @@ public sealed partial class AgentPolicy
     [
         "help", "verify-git", Worktrees.WorktreeService.ListCommand, OrchestratorService.ListCommand, SideTasks.SideTaskService.ListCommand,
         WorkflowValidationService.CommandName, WorkflowExportService.CommandName, "write-anchor", "set-anchor",
-        "read-anchor", "read-anchors", "check-anchor-balance", "check-anchor-citations", Worktrees.RootLitterService.CommandName,
+        "read-anchor", "read-anchors", "check-anchor-balance", "check-anchor-arms", "check-anchor-citations", Worktrees.RootLitterService.CommandName,
         "fix-line-endings", "check-ci-legs", Codebase.CodebaseGraphQueryService.CommandName,
+    ];
+
+    /// <summary>
+    /// The git verbs that move HEAD, the index or the stash, refused to a side-task's agent while a run works over the
+    /// tree (<see cref="AgentPolicyGround.LiveRun"/>): the run moves HEAD itself, and an agent's moving it beside it
+    /// would weigh the run's work against a tree the run never saw. Read-only git - <c>status</c>, <c>log</c>,
+    /// <c>diff</c> - stays open, as everything of the person's own session that moves nothing does.
+    /// </summary>
+    public static IReadOnlyList<string> HeadMovingGitVerbs { get; } =
+    [
+        "commit", "stash", "reset", "clean", "checkout", "switch", "restore", "rebase", "merge", "cherry-pick", "revert",
+        "pull", "am", "worktree", "branch", "tag", "update-ref",
     ];
 
     /// <summary>
@@ -2279,8 +2291,7 @@ public sealed partial class AgentPolicy
     /// (<see cref="AgentChildEnvironment.AgentMarker"/>), so a copy of the program under another name starts none either.
     /// Null where the command starts none.
     /// </summary>
-    private static AgentPolicyAnswer.Denied? SideTaskRefusal(string program, AnalyzedCommand analyzed, int start, string whole)
-    {
+    private static AgentPolicyAnswer.Denied? SideTaskRefusal(string program, AnalyzedCommand analyzed, int start, string whole)    {
         var roots = StringComparer.OrdinalIgnoreCase;
         var refused = new AgentPolicyAnswer.Denied(
             SideTasks.SideTaskService.RunCommand,
@@ -2303,6 +2314,39 @@ public sealed partial class AgentPolicy
             _ => null,
         };
     }
+
+    /// <summary>
+    /// The verb of git's the command at <paramref name="start"/> names that moves HEAD, the index or the stash, or null
+    /// where it is no git or names none: git's own options before the verb are skipped, the ones that take a value with
+    /// it, so <c>git -C path commit</c> is read as the <c>commit</c> it is.
+    /// </summary>
+    private static string? MovingHead(string program, AnalyzedCommand analyzed, int start)
+    {
+        if (!program.Equals("git", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var command = analyzed.Words;
+
+        for (var at = start + 1; at < command.Count;)
+        {
+            var word = command[at];
+
+            if (word.Length > 0 && word[0] is '-')
+            {
+                at += GitOptionValues.Contains(word, StringComparer.Ordinal) ? 2 : 1;
+                continue;
+            }
+
+            return HeadMovingGitVerbs.Contains(word, StringComparer.Ordinal) ? word : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>Git's own options that take the word after them as their value, skipped with it on the way to the verb.</summary>
+    private static readonly IReadOnlyList<string> GitOptionValues = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"];
 
     /// <summary>The refusal of a verb that reads a credential slot or writes the tool's own state (<see cref="SlotOrStateVerbs"/>), after <paramref name="opening"/>.</summary>
     /// <param name="opening">What is refused, as the sentence opens.</param>
@@ -2450,6 +2494,19 @@ public sealed partial class AgentPolicy
         if (_ground.SideTask && ToolVerbOf(program, analyzed, start) is var (sideVerb, _) && SlotOrStateVerbs.Contains(sideVerb, roots))
         {
             return SlotOrStateRefusal($"'{ToolPackage.Command} {sideVerb}' is refused");
+        }
+
+        // A run working over the tree is what a side-task reads to hold its agent off HEAD: while the run's owner is
+        // live, the git verbs that move HEAD, the index or the stash are refused with the run's name. It is checked at
+        // each call, so a run that starts while the chat is open is held to from its first step, and one that ends
+        // releases it. The person may do any of it by hand; the agent may not, so that a run nobody watches is never
+        // moved by an agent of a conversation it does not know of.
+        if (_ground is { SideTask: true, LiveRun: { } liveRun } && MovingHead(program, analyzed, start) is { } moving && liveRun() is { } run)
+        {
+            return new AgentPolicyAnswer.Denied(
+                "a run working over the tree",
+                AgentPolicySource.Builtin,
+                $"run '{run}' is working over this tree and moves HEAD itself; ask again when it ends, or pause it yourself");
         }
 
         if (!_ground.SideTask && ToolVerbOf(program, analyzed, start) is var (verb, expansion))

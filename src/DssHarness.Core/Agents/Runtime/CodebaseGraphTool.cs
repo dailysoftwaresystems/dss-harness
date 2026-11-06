@@ -43,6 +43,12 @@ public sealed record GraphToolAnswer(string Text, GraphToolOutcome Outcome, stri
 {
     /// <summary>The nodes the call asked about, served and edited: what the step's working set is made of.</summary>
     public GraphToolFacts Facts { get; init; } = GraphToolFacts.None;
+
+    /// <summary>
+    /// The files the call leaves viewed, relative to the tree - those a <c>body</c> served lines of and the one an edit
+    /// made - which the runtime counts as views of them for its edit check, as a <c>view_file</c> is a view.
+    /// </summary>
+    public IReadOnlyList<string> Viewed { get; init; } = [];
 }
 
 /// <summary>
@@ -53,7 +59,8 @@ public sealed record GraphToolAnswer(string Text, GraphToolOutcome Outcome, stri
 /// <param name="Served">The nodes a line of which a <c>body</c>'s answer gave, in order.</param>
 /// <param name="Edited">The node an <c>edit</c> wrote, by the id it had; none where it wrote none.</param>
 /// <param name="Wrote">The lines an <c>edit</c> wrote, as the file stood once it had; null where it wrote none.</param>
-public sealed record GraphToolFacts(IReadOnlyList<string> Asked, IReadOnlyList<string> Served, IReadOnlyList<string> Edited, GraphWrittenLines? Wrote = null)
+/// <param name="Hits">How many text hits the answer added where the graph was not sure.</param>
+public sealed record GraphToolFacts(IReadOnlyList<string> Asked, IReadOnlyList<string> Served, IReadOnlyList<string> Edited, GraphWrittenLines? Wrote = null, int Hits = 0)
 {
     /// <summary>A call that used no node.</summary>
     public static GraphToolFacts None { get; } = new([], [], []);
@@ -91,6 +98,19 @@ public enum GraphToolOutcome
 
     /// <summary>An <c>edit</c> wrote the file its node is in.</summary>
     Wrote,
+}
+
+/// <summary>
+/// What a whole read of one file is under the narrowing of reads (<c>graphReads: narrow</c>): denied, with the way to
+/// the graph; allowed as an escape <c>lowConfidence</c>, with why the graph is not sure of the file; or allowed plainly.
+/// </summary>
+/// <param name="Narrowed">Whether the read is denied.</param>
+/// <param name="Text">Where it is denied, the sentence the model reads with the way to the graph; where it is an escape, why the graph is not sure of the file.</param>
+/// <param name="Escape">The escape that lets the read - <see cref="GraphEscapeLine.LowConfidence"/> - or null where it is denied or needs none.</param>
+public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape)
+{
+    /// <summary>A read that passes plainly: not denied, no escape to record.</summary>
+    public static GraphWholeRead Passed { get; } = new(Narrowed: false, string.Empty, null);
 }
 
 /// <summary>
@@ -216,6 +236,56 @@ public sealed class CodebaseGraphTool(
 
         return ops;
     }
+
+    /// <summary>
+    /// The most lines a file may hold and a whole read of it still pass the narrowing: a longer one the view holds as
+    /// parsed is denied, with the way to the graph (<c>graphReads: narrow</c>, value 380).
+    /// </summary>
+    public const int NarrowLines = 200;
+
+    /// <summary>The files whose narrowing a <c>wholeFile</c> lifted, each once, for the rest of the step.</summary>
+    private readonly HashSet<string> _lifted = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// What a whole read of the file at <paramref name="path"/> of <paramref name="lines"/> lines is under the narrowing
+    /// (<c>graphReads: narrow</c>): denied, with the way to the graph, where the view holds the file as parsed and it is
+    /// over <see cref="NarrowLines"/> lines - or allowed, an escape <c>lowConfidence</c> with why where the graph is not
+    /// sure of it, plainly where the view does not hold it as parsed, it is short enough, or a <c>wholeFile</c> lifted it.
+    /// </summary>
+    /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
+    /// <param name="lines">How many lines the file holds, as the reader read it.</param>
+    public GraphWholeRead WholeRead(string path, int lines)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        if (!_queries.Parsed(path))
+        {
+            return GraphWholeRead.Passed;
+        }
+
+        var held = _queries.HeldPath(path)!;
+
+        if (_lifted.Contains(held))
+        {
+            return GraphWholeRead.Passed;
+        }
+
+        if (_queries.UnsureOfFile(held) is { } why)
+        {
+            return new GraphWholeRead(Narrowed: false, why, GraphEscapeLine.LowConfidence);
+        }
+
+        return lines > NarrowLines
+            ? new GraphWholeRead(
+                Narrowed: true,
+                $"'{held}' is {lines.ToString(CultureInfo.InvariantCulture)} lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile",
+                null)
+            : GraphWholeRead.Passed;
+    }
+
+    /// <summary>Whether a <c>wholeFile</c> lifted the narrowing of the file at <paramref name="path"/> for the rest of the step.</summary>
+    /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
+    public bool Lifted(string path) => _queries.HeldPath(path) is { } held && _lifted.Contains(held);
 
     /// <summary>The members each operation reads beside <c>op</c>, and of them those it needs.</summary>
     /// <param name="op">An operation.</param>
@@ -352,13 +422,16 @@ public sealed class CodebaseGraphTool(
         var matched = _queries.Find(query, Str(input, "kind"), Str(input, "path") is { } path ? _queries.HeldPath(path) ?? path : null, int.MaxValue, 0, near).Cards;
         var (kept, left) = Readable(matched);
         var text = kept.Count == 0 ? "no node matched" : Paged([.. kept.Select(GraphLines.Of)], offset, limit);
+        var hits = 0;
 
         if (matched.Count == 0)
         {
-            text += await SearchAsync(query, cancellationToken).ConfigureAwait(false);
+            var searched = await SearchAsync(query, cancellationToken).ConfigureAwait(false);
+            text += searched.Text;
+            hits = searched.Hits;
         }
 
-        return Answered(text + LeftOut(left));
+        return Answered(text + LeftOut(left), new GraphToolFacts([], [], [], Hits: hits));
     }
 
     private async Task<GraphToolAnswer> NodeAsync(JsonObject input, CancellationToken cancellationToken)
@@ -367,7 +440,7 @@ public sealed class CodebaseGraphTool(
 
         if (Resolved(symbol) is not { } card)
         {
-            return Answered(await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false));
+            return Answered((await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false)).Text);
         }
 
         var lines = new List<string> { GraphLines.Of(card) };
@@ -395,13 +468,16 @@ public sealed class CodebaseGraphTool(
         }
 
         var text = string.Join('\n', lines);
+        var hits = 0;
 
         if (unsure)
         {
-            text += await SearchAsync(card.Name, cancellationToken).ConfigureAwait(false);
+            var searched = await SearchAsync(card.Name, cancellationToken).ConfigureAwait(false);
+            text += searched.Text;
+            hits = searched.Hits;
         }
 
-        return Answered(text + LeftOut(left), new GraphToolFacts([card.Id], [], []));
+        return Answered(text + LeftOut(left), new GraphToolFacts([card.Id], [], [], Hits: hits));
     }
 
     private async Task<GraphToolAnswer> RelatedAsync(JsonObject input, CancellationToken cancellationToken)
@@ -413,7 +489,7 @@ public sealed class CodebaseGraphTool(
 
         if (Resolved(symbol) is not { } card)
         {
-            return Answered(await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false));
+            return Answered((await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false)).Text);
         }
 
         var reached = _queries.Related(card.Id, relation, depth);
@@ -422,13 +498,16 @@ public sealed class CodebaseGraphTool(
             ? $"{one.Distance}: {GraphLines.Of(one.Card)} | {edges} {relation}, not gone through"
             : $"{one.Distance}: {GraphLines.Of(one.Card)}").ToList();
         var text = lines.Count == 0 ? $"no node is {relation} of '{card.Qualified}'" : Paged(lines, offset, RelatedLines);
+        var hits = 0;
 
         if (_queries.Unsure(card.Id) || kept.Any(one => one.Candidates || _queries.Unsure(one.Card.Id)))
         {
-            text += await SearchAsync(card.Name, cancellationToken).ConfigureAwait(false);
+            var searched = await SearchAsync(card.Name, cancellationToken).ConfigureAwait(false);
+            text += searched.Text;
+            hits = searched.Hits;
         }
 
-        return Answered(text + LeftOut(reached.Count - kept.Count), new GraphToolFacts([card.Id], [], []));
+        return Answered(text + LeftOut(reached.Count - kept.Count), new GraphToolFacts([card.Id], [], [], Hits: hits));
     }
 
     private async Task<GraphToolAnswer> OutlineAsync(JsonObject input, CancellationToken cancellationToken)
@@ -456,7 +535,7 @@ public sealed class CodebaseGraphTool(
         {
             if (Resolved(symbol) is not { } card)
             {
-                return Answered(await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false));
+                return Answered((await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false)).Text);
             }
 
             var members = _queries.OutlineType(card.Id);
@@ -484,16 +563,22 @@ public sealed class CodebaseGraphTool(
         var full = Flag(input, "full");
         var builder = new StringBuilder();
         var given = 0;
+        var hits = 0;
         var asked = new List<string>();
 
         // Each node whose lines began to be given, with where its first line ends in the answer: served only where the cap keeps it.
         var served = new List<(string Id, int End)>();
 
+        // Each file a served node is declared in: what the runtime counts as a view of it, as a view_file is.
+        var viewed = new List<string>();
+
         foreach (var symbol in Strings(input, "symbols"))
         {
             if (Resolved(symbol) is not { } card)
             {
-                builder.Append(await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false)).Append('\n');
+                var unresolved = await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false);
+                builder.Append(unresolved.Text).Append('\n');
+                hits += unresolved.Hits;
                 continue;
             }
 
@@ -550,7 +635,7 @@ public sealed class CodebaseGraphTool(
                 if (given == BodyLines)
                 {
                     builder.Append($"cut: {BodyLines} lines shown; ask for fewer symbols, or one at a time").Append('\n');
-                    return Served(builder, asked, served);
+                    return Served(builder, asked, served, viewed, hits);
                 }
 
                 builder.Append(number is { } line ? $"{line.ToString(CultureInfo.InvariantCulture)}\t{text}" : text);
@@ -565,20 +650,24 @@ public sealed class CodebaseGraphTool(
                 given++;
             }
 
+            viewed.Add(card.Path);
+
             if (_queries.Unsure(card.Id))
             {
-                builder.Append((await SearchAsync(card.Name, cancellationToken).ConfigureAwait(false)).TrimStart('\n')).Append('\n');
+                var searched = await SearchAsync(card.Name, cancellationToken).ConfigureAwait(false);
+                builder.Append(searched.Text.TrimStart('\n')).Append('\n');
+                hits += searched.Hits;
             }
         }
 
-        return Served(builder, asked, served);
+        return Served(builder, asked, served, viewed, hits);
     }
 
     /// <summary>
     /// A body's answer, cut at its cap, and the nodes it used: each asked about, and each one of whose lines the answer
     /// gives - the cap keeps what the answer was before it, up to a whole line.
     /// </summary>
-    private GraphToolAnswer Served(StringBuilder builder, IReadOnlyList<string> asked, IReadOnlyList<(string Id, int End)> served)
+    private GraphToolAnswer Served(StringBuilder builder, IReadOnlyList<string> asked, IReadOnlyList<(string Id, int End)> served, IReadOnlyList<string> viewed, int hits)
     {
         var text = builder.ToString().TrimEnd('\n');
         var answer = Answered(text);
@@ -588,7 +677,9 @@ public sealed class CodebaseGraphTool(
             Facts = new GraphToolFacts(
                 [.. asked.Distinct(StringComparer.Ordinal)],
                 [.. served.Where(one => answer.Text.Length >= one.End && answer.Text.AsSpan(0, one.End).SequenceEqual(text.AsSpan(0, one.End))).Select(one => one.Id).Distinct(StringComparer.Ordinal)],
-                []),
+                [],
+                Hits: hits),
+            Viewed = [.. viewed.Distinct(StringComparer.Ordinal)],
         };
     }
 
@@ -619,7 +710,7 @@ public sealed class CodebaseGraphTool(
 
         if (Resolved(symbol) is not { } card)
         {
-            return Answered(await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false));
+            return Answered((await UnresolvedAsync(symbol, cancellationToken).ConfigureAwait(false)).Text);
         }
 
         if (!string.Equals(card.Hash, hash, StringComparison.OrdinalIgnoreCase)
@@ -704,7 +795,11 @@ public sealed class CodebaseGraphTool(
             : held.Count == 0 ? $"the new lines no longer declare '{card.Qualified}', nor anything else"
             : $"the new lines no longer declare '{card.Qualified}'; they hold:\n" + string.Join('\n', held);
 
-        return new GraphToolAnswer(Capped($"edited '{card.Qualified}' in '{card.Path}'; {shift}\n{said}", Unheld()), GraphToolOutcome.Wrote, card.Path) { Facts = new GraphToolFacts([], [], [card.Id], new GraphWrittenLines(card.Path, card.Start, written, WrittenHash(edited, card.Start, written))) };
+        return new GraphToolAnswer(Capped($"edited '{card.Qualified}' in '{card.Path}'; {shift}\n{said}", Unheld()), GraphToolOutcome.Wrote, card.Path)
+        {
+            Facts = new GraphToolFacts([], [], [card.Id], new GraphWrittenLines(card.Path, card.Start, written, WrittenHash(edited, card.Start, written))),
+            Viewed = [card.Path],
+        };
     }
 
     /// <summary>The hash of the <paramref name="count"/> lines from <paramref name="start"/> of a file as an edit left it, as a node's is; null where there are none.</summary>
@@ -733,7 +828,17 @@ public sealed class CodebaseGraphTool(
     }
 
     private GraphToolAnswer WholeFile(JsonObject input)
-        => Answered($"the narrowing of reads is lifted for '{Str(input, "path")}' for the rest of this step: {Str(input, "reason")}");
+    {
+        var path = Str(input, "path")!;
+        var reason = Str(input, "reason")!;
+
+        if (_queries.HeldPath(path) is { } held)
+        {
+            _lifted.Add(held);
+        }
+
+        return Answered($"the narrowing of reads is lifted for '{path}' for the rest of this step: {reason}");
+    }
 
     /// <summary>
     /// The node <paramref name="symbol"/> names where it names one the step may read; null otherwise. A node whose part that
@@ -741,31 +846,32 @@ public sealed class CodebaseGraphTool(
     /// </summary>
     private GraphCard? Resolved(string symbol) => _queries.Resolve(symbol) is GraphResolve.Found found && Reads(found.Card) ? found.Card : null;
 
-    /// <summary>What a symbol that names no one node the step reads is answered with: its candidates, or a text search for it.</summary>
-    private async Task<string> UnresolvedAsync(string symbol, CancellationToken cancellationToken)
+    /// <summary>What a symbol that names no one node the step reads is answered with: its candidates, or a text search for it - and the hits the search gave.</summary>
+    private async Task<SearchedText> UnresolvedAsync(string symbol, CancellationToken cancellationToken)
     {
         switch (_queries.Resolve(symbol))
         {
             case GraphResolve.Candidates candidates:
                 var (kept, left) = Readable(candidates.Cards);
-                return $"'{symbol}' is not one name: {ReportText.Counted(kept.Count, "node")} carry it - ask again by a handle\n" + string.Join('\n', kept.Select(GraphLines.Of)) + LeftOut(left);
+                return new SearchedText($"'{symbol}' is not one name: {ReportText.Counted(kept.Count, "node")} carry it - ask again by a handle\n" + string.Join('\n', kept.Select(GraphLines.Of)) + LeftOut(left), 0);
 
             case GraphResolve.Found:
-                return $"'{symbol}' is in a file your reads do not reach";
+                return new SearchedText($"'{symbol}' is in a file your reads do not reach", 0);
 
             default:
-                return $"'{symbol}' is not a node the view holds" + (Simple(symbol) is { } name ? await SearchAsync(name, cancellationToken).ConfigureAwait(false) : string.Empty);
+                var simple = Simple(symbol) is { } name ? await SearchAsync(name, cancellationToken).ConfigureAwait(false) : new SearchedText(string.Empty, 0);
+                return new SearchedText($"'{symbol}' is not a node the view holds" + simple.Text, simple.Hits);
         }
     }
 
-    /// <summary>The lines that hold <paramref name="name"/> as a whole word, case-sensitive, as <c>search_files</c> searches - the text a not-sure answer ends with.</summary>
-    private async Task<string> SearchAsync(string name, CancellationToken cancellationToken)
+    /// <summary>The lines that hold <paramref name="name"/> as a whole word, case-sensitive, as <c>search_files</c> searches - the text a not-sure answer ends with, and how many hits it gave.</summary>
+    private async Task<SearchedText> SearchAsync(string name, CancellationToken cancellationToken)
     {
         var word = name.Trim();
 
         if (word.Length == 0)
         {
-            return string.Empty;
+            return new SearchedText(string.Empty, 0);
         }
 
         try
@@ -779,17 +885,24 @@ public sealed class CodebaseGraphTool(
 
             if (search.Hits.Count == 0)
             {
-                return $"\ntext: no line holds '{word}'{notes}";
+                return new SearchedText($"\ntext: no line holds '{word}'{notes}", 0);
             }
 
             var more = search.More > 0 ? $"; {ReportText.Counted(search.More, "more line")} left out" : string.Empty;
-            return $"\ntext: lines that hold '{word}'{more}\n" + string.Join('\n', search.Hits.Select(hit => $"  {hit.Path}:{hit.Line.ToString(CultureInfo.InvariantCulture)} {Hit(hit.Text.Trim())}")) + notes;
+            return new SearchedText(
+                $"\ntext: lines that hold '{word}'{more}\n" + string.Join('\n', search.Hits.Select(hit => $"  {hit.Path}:{hit.Line.ToString(CultureInfo.InvariantCulture)} {Hit(hit.Text.Trim())}")) + notes,
+                search.Hits.Count);
         }
         catch (RegexMatchTimeoutException)
         {
-            return $"\ntext: the search for '{word}' took too long and was left off";
+            return new SearchedText($"\ntext: the search for '{word}' took too long and was left off", 0);
         }
     }
+
+    /// <summary>What a text search added to an answer: its text, and how many hits it gave.</summary>
+    /// <param name="Text">The search's part of the answer, as the model reads it.</param>
+    /// <param name="Hits">How many hits it gave.</param>
+    private sealed record SearchedText(string Text, int Hits);
 
     /// <summary>
     /// The file at <paramref name="path"/> read whole, in its encoding, or why it is not: a place the runtime's own tools

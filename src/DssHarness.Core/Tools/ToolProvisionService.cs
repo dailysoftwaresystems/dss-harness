@@ -20,7 +20,7 @@ namespace DssHarness.Core.Tools;
 /// use it too: a host that has to be provisioned before anything runs is exactly the host a build
 /// would otherwise fail on, with a message about a compiler rather than about a missing SDK.
 /// </remarks>
-public interface IToolProvisionService
+public interface IToolProvisionService : DssHarness.Core.Application.IUseCase
 {
     /// <summary>
     /// Provisions the legs <paramref name="legNames"/> selects, or every declared leg when

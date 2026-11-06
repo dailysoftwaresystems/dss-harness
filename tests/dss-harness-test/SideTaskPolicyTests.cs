@@ -23,7 +23,7 @@ public sealed class SideTaskPolicyTests
     private static readonly string SideTaskReason = $"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}";
 
     /// <summary>The side-task's policy over a tree of its own, with the policy the tool builds for it, and its Claude Code directory.</summary>
-    private static (AgentPolicy Policy, string Main, string Claude) Policy(PlatformId platform = PlatformId.Linux, IReadOnlyList<AgentRestriction>? restrictions = null, IReadOnlyList<string>? webDomains = null)
+    private static (AgentPolicy Policy, string Main, string Claude) Policy(PlatformId platform = PlatformId.Linux, IReadOnlyList<AgentRestriction>? restrictions = null, IReadOnlyList<string>? webDomains = null, Func<string?>? liveRun = null)
     {
         var main = new TempDirectory();
         var claude = new TempDirectory();
@@ -44,7 +44,7 @@ public sealed class SideTaskPolicyTests
             },
         };
         var layout = new HarnessLayout(main.Path, main.Path);
-        var ground = SideTaskPolicy.Ground(layout, config, [claude.Path], []);
+        var ground = SideTaskPolicy.Ground(layout, config, [claude.Path], [], liveRun);
 
         return (new AgentPolicy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), HostDoubles.Platform(platform), ground), main.Path, claude.Path);
     }
@@ -123,6 +123,43 @@ public sealed class SideTaskPolicyTests
         var denied = Assert.IsType<AgentPolicyAnswer.Denied>(step.Run((IReadOnlyList<string>)["dssharness", AgentPolicy.ToolVerbs[0], "x"]));
 
         Assert.Equal("the orchestrator and agent verbs", denied.Rule);
+    }
+
+    /// <summary>
+    /// While a run's owner is live over the tree, the side-task's agent is refused the git verbs that move HEAD, the
+    /// index or the stash, the run's name in the refusal and git's own options before the verb seen through - and the
+    /// git that moves nothing stays open beside them. It is checked at each call: a run that starts while the chat is
+    /// open is held to from its first step, and one that ends releases it.
+    /// </summary>
+    [Fact]
+    public void AGitVerbThatMovesHead_IsRefusedWhileARunsOwnerIsLive_WithTheRunsName_AndOpenWhereNoneIs()
+    {
+        const string run = "impl-2026-10-19";
+        var live = false;
+        var (side, _, _) = Policy(liveRun: () => live ? run : null);
+
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "commit", "-am", "wip"]));
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "status"]));
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "log", "-1"]));
+
+        live = true;
+
+        foreach (var verb in AgentPolicy.HeadMovingGitVerbs)
+        {
+            var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run((IReadOnlyList<string>)["git", verb]));
+
+            Assert.Equal(
+                ("a run working over the tree", $"run '{run}' is working over this tree and moves HEAD itself; ask again when it ends, or pause it yourself"),
+                (refused.Rule, refused.Reason));
+        }
+
+        Assert.Equal("a run working over the tree", Assert.IsType<AgentPolicyAnswer.Denied>(side.Run((IReadOnlyList<string>)["git", "-C", ".", "stash"])).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "-C", ".", "status"]));
+
+        live = false;
+
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "commit", "-am", "wip"]));
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "stash"]));
     }
 
     /// <summary>

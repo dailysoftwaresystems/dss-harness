@@ -1411,17 +1411,31 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "the tools of the agent's capabilities and no other - read: Read, Grep, Glob; write: Write, Edit, NotebookEdit; run: Bash; web: "
-                + "none of Claude Code's, but mcp__dssharness__web_fetch and mcp__dssharness__web_search of the engine's tool server beside them "
+                + "none of Claude Code's, but mcp__dssharness__web_fetch and mcp__dssharness__web_search of the engine's tool server beside them; and "
+                + "a step that has a codebase graph (graph: tools) takes mcp__dssharness__graph of the engine's tool server beside them, only where its "
+                + "step is given one "
                 + "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "A step with the web takes the harness's own web_fetch - and web_search, where it has a source to search - from the engine's tool "
-                + "server: the one MCP server, of type sdk, named dssharness, that the launch's --mcp-config names beside --strict-mcp-config (the "
+                + "server, and a step that has a codebase graph (graph: tools) takes its one tool, mcp__dssharness__graph, from the same: the one MCP server, of type sdk, named dssharness, that the launch's --mcp-config names beside --strict-mcp-config (the "
                 + "step's claude-mcp.json), served in the engine's own process over the launch's control channel - its initialize, its tool list "
                 + "and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask rule, and run by the "
-                + "tool runtime below as on the API clients, each address decided and recorded. A launch whose init does not show that server "
+                + "tool runtime below as on the API clients, each address decided and recorded, the graph's calls answered by the same owner that "
+                + "answers them on the API clients and each recorded as a line of the step's graph - but its edit operation is not given on this "
+                + "client: the probe measured an Edit taken after a ranged Read, inside the range and outside it, on every version taken, so an "
+                + "agent that means to change a body reads its lines with Read and Edits them. A step's first user message holds the run's "
+                + "repository map first, then its context pack, then its task - every launch a conversation of its own, it is given them as every "
+                + "launch is, and the order puts them at the head of the message so every turn after the first reads them from Claude Code's own "
+                + "cache; the engine sets no mark of its own. A launch whose init does not show that server "
                 + "connected with its tools taken, or that connects another, never started;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A step whose reads are narrowed (graphReads: narrow, 'help codebase-graph') is denied a whole Read - one with no offset and no "
+                + "limit - of a file its graph holds parsed over the narrowing bound, by the same owner that narrows view_file on the API clients "
+                + "and with the same words, a range passing and the same two escapes counted and recorded as the graph's lines.",
             prose,
             StringComparison.Ordinal);
 
@@ -1494,6 +1508,8 @@ public sealed partial class HelpTests
         Assert.Contains("written to the step's web.jsonl before anything leaves the machine", prose, StringComparison.Ordinal);
         Assert.Contains("Calls that read run together, at most 4 at once", prose, StringComparison.Ordinal);
         Assert.Contains("an answer past 32,768 characters is given as its first 8,192 and its last 24,576, the whole kept in the step's tool-results/.", prose, StringComparison.Ordinal);
+        Assert.Contains("A step whose graph is tools - a graphify-codebase step upstream of it, 'help workflows' - is offered the graph tool among these, under read, with the operations its agent's capabilities give, edit among them where it may write, and its context pack at the head of its first message", prose, StringComparison.Ordinal);
+        Assert.Contains("its graphReads narrow (the default) denies a whole view_file of a file the graph parsed over 200 lines, saying the way to the graph instead - a range, a search and a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's wholeFile lifts the narrowing for one file for the rest of the step, an escape stated", prose, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1826,7 +1842,7 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains($"old tool uses cleared by the server as the context fills ({Clear}, under the {Context} beta), each clearing said in a notice;", prose, StringComparison.Ordinal);
-        Assert.Contains("the system prompt and the conversation cached for agentClients.claude-api.cacheTtl (5m or 1h, 5m where nothing is said), so a budget needs the model's price of that cache's writes too: priceCacheWrite, or priceCacheWrite1h for an hour.", prose, StringComparison.Ordinal);
+        Assert.Contains("three cache marks of the client's lifetime for agentClients.claude-api.cacheTtl (5m or 1h, 5m where nothing is said) - on the system text, covering the tools and it, the same for every step of that agent with the same tools; on the run's repository map, the first block of the conversation's first user message, covering the tools, the system text and the map, the same for every such step of the run; and the top-level mark, which moves with the conversation's last block - so a step's second request on reads the map from the cache, and so does the first request of the run's next step of the same agent - and a budget needs the model's price of that cache's writes too: priceCacheWrite, or priceCacheWrite1h for an hour.", prose, StringComparison.Ordinal);
         Assert.Contains($"A step with a fallback that can go on here sends the {Credit} beta, and a request the model declines moves the step to its next model of the same provider and client - the same request sent again with the model changed and the credit the API gave sent back as its fallback_credit_token, a failure naming it answered by the same request without it - Refused with its category only where none is left; no request carries fallbacks or a server-side-fallback-* beta,", prose, StringComparison.Ordinal);
         Assert.Contains("Two keys are claude-api's alone: betas, sent beside the tool's own, each one word and never the API's fallback's, and cacheTtl; three are both API clients':", prose, StringComparison.Ordinal);
         Assert.Contains($"refused where it sets what the tool sends itself or, here, fallbacks or a sampling parameter (temperature, top_p, top_k), which anthropic-version {Version} refuses on every model, and free to add a tool choice or thinking.budget_tokens where the step's model takes one; and maxRetries and maxRetryWaitSeconds, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", prose, StringComparison.Ordinal);
@@ -1839,7 +1855,7 @@ public sealed partial class HelpTests
             readme,
             StringComparison.Ordinal);
         Assert.Contains($"old tool uses cleared by the server as the context fills (`{Clear}`, under the `{Context}` beta), each clearing said in a notice;", readme, StringComparison.Ordinal);
-        Assert.Contains("`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour.", readme, StringComparison.Ordinal);
+        Assert.Contains("three cache marks of the client's lifetime for `agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said) - on the system text, covering the tools and it, the same for every step of that agent with the same tools; on the run's repository map, the first block of the conversation's first user message, covering the tools, the system text and the map, the same for every such step of the run; and the top-level mark, which moves with the conversation's last block - so a step's second request on reads the map from the cache, and so does the first request of the run's next step of the same agent - and a budget needs the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour.", readme, StringComparison.Ordinal);
         Assert.Contains($"A step with a fallback that can go on here sends the `{Credit}` beta, and a request the model declines moves the step to its next model of the same provider and client - the same", readme, StringComparison.Ordinal);
         Assert.Contains("Two keys are `claude-api`'s alone: `betas`, sent beside the tool's own, each one word and never the API's fallback's, and `cacheTtl`; three are both API clients':", readme, StringComparison.Ordinal);
         Assert.Contains($"refused where it sets what the tool sends itself or, here, `fallbacks` or a sampling parameter (`temperature`, `top_p`, `top_k`), which `anthropic-version {Version}` refuses on every model, and free to add a tool choice or `thinking.budget_tokens` where the step's model takes one; and `maxRetries` and `maxRetryWaitSeconds`, the loop's tries and longest wait ({tries} and {wait} where nothing is said).", readme, StringComparison.Ordinal);
@@ -5090,8 +5106,65 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepFoldFileName} a fold, delete-agent, refresh or rebase step:", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/ a refresh or a rebase of others:", orchestrators, StringComparison.Ordinal);
-        Assert.Contains($"<step>/{OrchestratorLayout.StepGraphFileName} a reason step that has a codebase graph: one line for each call of the graph tool", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepGraphFileName} a reason step that has a codebase graph: the line of its prompt - what its pack cost, or why none was given", orchestrators, StringComparison.Ordinal);
+        Assert.Contains("one line for each call of the graph tool, and one for each escape of its narrowing of reads and each whole read that narrowing refused", orchestrators, StringComparison.Ordinal);
         Assert.Contains($"<step>/{OrchestratorLayout.StepWorkingSetFileName} a reason step that has a codebase graph: the nodes it edited, served, read and found", orchestrators, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The workflows topic carries its worked examples - the two ways a step is raised by another step's ending, and
+    /// the loops a repository can build its own work around - each printed as a whole workflow and each holding as it
+    /// is printed, read by the same reader that reads a workflow's own file.
+    /// </summary>
+    [Fact]
+    public void TheWorkflowsTopic_CarriesItsWorkedExamples_EachHoldingAsPrinted()
+    {
+        var topic = HelpText.Of("workflows").StandardOutput;
+
+        Assert.Contains(
+            "Worked examples, each a whole workflow as a file holds it: the two ways a step is raised by another step's ending - a repair that goes back to what failed, and a check that runs whenever a builder ends - and two loops a repository can build its own work around. Each holds as it is printed, read by the same reader that reads a workflow's own file.",
+            Prose.Words(topic),
+            StringComparison.Ordinal);
+
+        // Each example is opened by a comment naming it and ends at the first line the file's own text takes; what
+        // the topic prints is what the reader reads.
+        var examples = new Dictionary<string, string>(StringComparer.Ordinal);
+        string? open = null;
+        var held = new List<string>();
+
+        foreach (var line in topic.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            if (line.StartsWith("  # example: ", StringComparison.Ordinal))
+            {
+                if (open is not null)
+                {
+                    examples[open] = string.Join('\n', held);
+                }
+
+                open = line["  # example: ".Length..].Trim();
+                held = [];
+            }
+            else if (open is not null && line.StartsWith("  ", StringComparison.Ordinal))
+            {
+                held.Add(line[2..]);
+            }
+            else if (open is not null && held.Count > 0)
+            {
+                examples[open] = string.Join('\n', held);
+                open = null;
+                held = [];
+            }
+        }
+
+        Assert.Equal(["issues", "repair", "review", "smoke"], [.. examples.Keys.Order(StringComparer.Ordinal)]);
+
+        foreach (var (slug, yaml) in examples)
+        {
+            var definition = WorkflowFileParser.Parse($"workflows/example-{slug}/example-{slug}.yml", yaml + "\n");
+
+            Assert.Equal($"example-{slug}", definition.Name);
+            Assert.NotEmpty(definition.Steps);
+        }
     }
 
     /// <summary>
@@ -5189,10 +5262,18 @@ public sealed partial class HelpTests
             key => Assert.Contains($"{key.Meaning}; required", result.StandardOutput, StringComparison.Ordinal));
 
         // What init writes of the implementation workflow, and where: the one owner of that rule is InitService, held to it by
-        // InitServiceTests, and this sentence says what those hold.
+        // InitServiceTests, and this sentence says what those hold. The flow's own head and graph serving are said with it:
+        // the build first, the graph after it, and each type of reason step's keys.
         Assert.Contains(
             "init writes one - the implementation workflow, from a request to a pull request whose checks are green - and declares it in "
-                + $"the config it creates. Where config.json declares {WorkflowTemplates.ShippedWorkflowName}, init writes each of its "
+                + "the config it creates. It builds first: the baseline is split in two - a build step, which fails red and is taken by the "
+                + "recovery and built again - and the test step it was, which waits for the build - and the flow makes its codebase graph "
+                + "after that build, beside the baseline's tests and the CI read, passed over where it cannot be made; every reason step "
+                + "after it is served from the graph as its type of work needs: the steps that read code for their task say nothing and are "
+                + "given the tool and their task's seeds by default, the reviewers, the self-audit, the diagnosis and the steps that verify "
+                + "and fix say graphFrom: changes, the prioritiser and a review's scope are given the map alone, and the scribe's steps, "
+                + "which write the run's records, ask none of it. Where config.json declares "
+                + $"{WorkflowTemplates.ShippedWorkflowName}, init writes each of its "
                 + "files that is missing - the whole set where the repository has no definition of it yet, and where it has one only "
                 + "the shipped files that definition names, so a file taken out with its step stays out - and keeps each one that is "
                 + "there, whatever it holds, so an init that stopped part way is "
@@ -5214,7 +5295,11 @@ public sealed partial class HelpTests
                 + "a prompt does; one in any other key is refused, and a pull request's base reads nothing but the run's inputs and "
                 + "run.name, the same for every pull request. A brace meant literally is written twice, {{ and }} alike, another "
                 + "expander's ${...} is left as written, and a placeholder that names nothing is refused. Every template key of a step "
-                + $"is filled where the step starts, and one that reads nothing fails it ({HarnessExit.ConfigInvalid}) before its runner is asked.",
+                + $"is filled where the step starts, and one that reads nothing fails it ({HarnessExit.ConfigInvalid}) before its runner is asked. "
+                + "A prompt alone is filled further: a placeholder in it that names a step this run left no output - it was skipped, or "
+                + "failed and was passed over - is filled with a sentence that says so and why, as (step 'ci' left no output: it failed "
+                + "and was passed over: no run of the matrix was found), so the agent is told what it does not have; a member of a step "
+                + "that did leave an output is not that case, and reads nothing as any other name does.",
             prose,
             StringComparison.Ordinal);
 

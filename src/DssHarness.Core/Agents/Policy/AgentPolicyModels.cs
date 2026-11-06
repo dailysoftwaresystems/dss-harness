@@ -190,6 +190,14 @@ public sealed record AgentPolicyGround(
     IReadOnlyList<string> StateDirectories,
     bool SideTask = false)
 {
+    /// <summary>
+    /// The name of the run whose owner is live over the tree a side-task works on, asked where the policy must hold its
+    /// agent off HEAD - or null where none is; null on every step's ground, whose agent does not work beside a run over
+    /// the main tree. Checked at each call, so a run that starts while the chat is open is held to from its first step
+    /// and one that ends releases it.
+    /// </summary>
+    public Func<string?>? LiveRun { get; init; }
+
     /// <inheritdoc cref="AgentPolicyGround" path="/param[@name='WebDomains']"/>
     public IReadOnlyList<string>? WebDomains { get; init => field = Listed(value, nameof(WebDomains)); } = Listed(WebDomains, nameof(WebDomains));
 

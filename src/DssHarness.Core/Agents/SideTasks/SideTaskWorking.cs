@@ -30,6 +30,9 @@ internal sealed class Working
     private readonly SideTaskOwner _owner;
     private readonly Func<SideTaskRunsOn, string, CancellationToken, Task<(SideTaskSetUp? SetUp, CommandOutcome? Refused)>> _setUpAgain;
     private readonly IAgentSpendSink _spend;
+
+    /// <summary>The side-task's own graph, where it was given one: its tool, its map and its pack, its records synced.</summary>
+    private readonly SideTaskGraph? _graph;
     private readonly StreamTail _stream;
     private readonly List<SideTaskTurn> _turns = [];
 
@@ -53,7 +56,7 @@ internal sealed class Working
         IAgentRunner runner,
         IReadOnlyList<IAgentClient> clients,
         IFileSystem fileSystem,
-        IHarnessOutput output,
+        Output.IHarnessOutput output,
         TimeProvider clock,
         SideTaskCall call,
         SideTaskCommon common,
@@ -62,7 +65,8 @@ internal sealed class Working
         SideTaskRecord record,
         SideTaskSetUp setUp,
         Func<SideTaskRunsOn, string, CancellationToken, Task<(SideTaskSetUp? SetUp, CommandOutcome? Refused)>> setUpAgain,
-        IAgentSpendSink spend)
+        IAgentSpendSink spend,
+        SideTaskGraph? graph = null)
     {
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
         _clients = clients ?? throw new ArgumentNullException(nameof(clients));
@@ -77,6 +81,7 @@ internal sealed class Working
         _now = setUp ?? throw new ArgumentNullException(nameof(setUp));
         _setUpAgain = setUpAgain ?? throw new ArgumentNullException(nameof(setUpAgain));
         _spend = spend;
+        _graph = graph;
         _stream = new StreamTail(fileSystem, Path.Combine(layout.Directory, StoredStream.FileName));
 
         _conversation = record.Conversation;
@@ -565,6 +570,13 @@ internal sealed class Working
 
         var (conversation, compacted, continuation) = GoingOn();
 
+        // The graph's front, where the side-task was given one: the repository map with the first message alone, the
+        // context pack made from each.
+        if (_graph is not null)
+        {
+            message = _graph.Front(message, first: _attempts == 1);
+        }
+
         return new AgentStepRequest(
             _layout.Name,
             "side-task",
@@ -614,6 +626,7 @@ internal sealed class Working
             Interrupt = interrupt,
             Chat = messages is not null,
             Moved = _moved,
+            Graph = _graph?.Support,
         };
     }
 

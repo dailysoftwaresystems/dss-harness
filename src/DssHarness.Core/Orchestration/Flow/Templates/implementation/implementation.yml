@@ -97,9 +97,19 @@ steps:
   - name: orient
     type: orient
     onFailure: recover
+  - name: build
+    type: build
+    dependsOn: [orient]
+    when: 'orient.hasLegs'
+    alone: true
+    onFailure: recover
+  - name: codebase
+    type: graphify-codebase
+    dependsOn: [build]
+    onFailure: continue
   - name: baseline
     type: test
-    dependsOn: [orient]
+    dependsOn: [build]
     when: 'orient.hasLegs'
     alone: true
     failOn: never
@@ -114,7 +124,7 @@ steps:
     skippable: true
     onFailure: continue
   - name: intake
-    dependsOn: [baseline, ci]
+    dependsOn: [codebase, baseline, ci]
     gather: [blockers, stops]
     onFailure: recover
     steps:
@@ -128,6 +138,7 @@ steps:
         backoffSeconds: 30
         onFailure: pause
         onPreExisting: triage-pre-existing-issue
+        graph: map
         prompt: prompts/priority.md
         outputs: schemas/priority.schema.json
       - name: triage
@@ -350,6 +361,7 @@ steps:
             backoffSeconds: 30
             onFailure: pause
             onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
             prompt: prompts/mend.md
             outputs: schemas/implement.schema.json
           - name: fold
@@ -392,6 +404,7 @@ steps:
                 backoffSeconds: 30
                 onFailure: pause
                 onPreExisting: triage-pre-existing-issue
+                graphFrom: changes
                 prompt: prompts/reconcile.md
                 outputs: schemas/implement.schema.json
           - name: fold-checks
@@ -420,6 +433,7 @@ steps:
             backoffSeconds: 30
             onFailure: pause
             onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
             prompt: prompts/anchors.md
             outputs: schemas/implement.schema.json
           - name: checkpoint
@@ -468,6 +482,8 @@ steps:
                 backoffSeconds: 30
                 onFailure: pause
                 onPreExisting: triage-pre-existing-issue
+                graph: map
+                graphFrom: changes
                 prompt: prompts/review-scope.md
                 outputs: schemas/review-scope.schema.json
               - name: review
@@ -485,6 +501,7 @@ steps:
                     backoffSeconds: 30
                     onFailure: pause
                     onPreExisting: triage-pre-existing-issue
+                    graphFrom: changes
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: errors
@@ -498,6 +515,7 @@ steps:
                     backoffSeconds: 30
                     onFailure: pause
                     onPreExisting: triage-pre-existing-issue
+                    graphFrom: changes
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: tests
@@ -511,6 +529,7 @@ steps:
                     backoffSeconds: 30
                     onFailure: pause
                     onPreExisting: triage-pre-existing-issue
+                    graphFrom: changes
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: types
@@ -524,6 +543,7 @@ steps:
                     backoffSeconds: 30
                     onFailure: pause
                     onPreExisting: triage-pre-existing-issue
+                    graphFrom: changes
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: comments
@@ -537,6 +557,7 @@ steps:
                     backoffSeconds: 30
                     onFailure: pause
                     onPreExisting: triage-pre-existing-issue
+                    graphFrom: changes
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: simplicity
@@ -550,6 +571,7 @@ steps:
                     backoffSeconds: 30
                     onFailure: pause
                     onPreExisting: triage-pre-existing-issue
+                    graphFrom: changes
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
               - name: revise
@@ -564,6 +586,7 @@ steps:
                     backoffSeconds: 30
                     onFailure: pause
                     onPreExisting: triage-pre-existing-issue
+                    graphFrom: changes
                     prompt: prompts/rework.md
                     outputs: schemas/implement.schema.json
                   - name: reverify
@@ -587,6 +610,7 @@ steps:
                     backoffSeconds: 30
                     onFailure: pause
                     onPreExisting: triage-pre-existing-issue
+                    graphFrom: changes
                     prompt: prompts/mend.md
                     outputs: schemas/implement.schema.json
                   - name: refold
@@ -628,6 +652,7 @@ steps:
                         backoffSeconds: 30
                         onFailure: pause
                         onPreExisting: triage-pre-existing-issue
+                        graphFrom: changes
                         prompt: prompts/reconcile.md
                         outputs: schemas/implement.schema.json
                   - name: recheck
@@ -656,6 +681,7 @@ steps:
                     backoffSeconds: 30
                     onFailure: pause
                     onPreExisting: triage-pre-existing-issue
+                    graphFrom: changes
                     prompt: prompts/anchors.md
                     outputs: schemas/implement.schema.json
                   - name: recheckpoint
@@ -736,6 +762,7 @@ steps:
         backoffSeconds: 30
         onFailure: pause
         onPreExisting: triage-pre-existing-issue
+        graphFrom: changes
         prompt: prompts/self-audit.md
         outputs: schemas/self-audit.schema.json
   - name: notes
@@ -756,6 +783,7 @@ steps:
     backoffSeconds: 30
     onFailure: pause
     onPreExisting: triage-pre-existing-issue
+    graph: off
     prompt: prompts/deferrals.md
     outputs: schemas/summary.schema.json
   - name: handoff
@@ -770,6 +798,7 @@ steps:
     backoffSeconds: 30
     onFailure: pause
     onPreExisting: triage-pre-existing-issue
+    graph: off
     prompt: prompts/handoff.md
     outputs: schemas/summary.schema.json
   - name: notes-fold
@@ -894,6 +923,7 @@ recover:
       backoffSeconds: 30
       onFailure: pause
       onPreExisting: triage-pre-existing-issue
+      graphFrom: changes
       prompt: prompts/diagnose.md
       resumePrompt: prompts/rediagnose.md
       outputs: schemas/diagnosis.schema.json
@@ -918,6 +948,7 @@ recover:
       backoffSeconds: 30
       onFailure: pause
       onPreExisting: triage-pre-existing-issue
+      graphFrom: changes
       prompt: prompts/redirect.md
       outputs: schemas/diagnosis.schema.json
     - name: remedies
@@ -987,6 +1018,7 @@ recover:
           backoffSeconds: 30
           onFailure: pause
           onPreExisting: triage-pre-existing-issue
+          graphFrom: changes
           prompt: prompts/mend.md
           outputs: schemas/implement.schema.json
         - name: fold
@@ -1027,6 +1059,7 @@ recover:
               backoffSeconds: 30
               onFailure: pause
               onPreExisting: triage-pre-existing-issue
+              graphFrom: changes
               prompt: prompts/reconcile.md
               outputs: schemas/implement.schema.json
         - name: fold-checks
@@ -1054,6 +1087,7 @@ recover:
           backoffSeconds: 30
           onFailure: pause
           onPreExisting: triage-pre-existing-issue
+          graphFrom: changes
           prompt: prompts/anchors.md
           outputs: schemas/implement.schema.json
         - name: checkpoint
@@ -1099,6 +1133,8 @@ recover:
               backoffSeconds: 30
               onFailure: pause
               onPreExisting: triage-pre-existing-issue
+              graph: map
+              graphFrom: changes
               prompt: prompts/review-scope.md
               outputs: schemas/review-scope.schema.json
             - name: review
@@ -1115,6 +1151,7 @@ recover:
                   backoffSeconds: 30
                   onFailure: pause
                   onPreExisting: triage-pre-existing-issue
+                  graphFrom: changes
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: errors
@@ -1128,6 +1165,7 @@ recover:
                   backoffSeconds: 30
                   onFailure: pause
                   onPreExisting: triage-pre-existing-issue
+                  graphFrom: changes
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: tests
@@ -1141,6 +1179,7 @@ recover:
                   backoffSeconds: 30
                   onFailure: pause
                   onPreExisting: triage-pre-existing-issue
+                  graphFrom: changes
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: types
@@ -1154,6 +1193,7 @@ recover:
                   backoffSeconds: 30
                   onFailure: pause
                   onPreExisting: triage-pre-existing-issue
+                  graphFrom: changes
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: comments
@@ -1167,6 +1207,7 @@ recover:
                   backoffSeconds: 30
                   onFailure: pause
                   onPreExisting: triage-pre-existing-issue
+                  graphFrom: changes
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: simplicity
@@ -1180,6 +1221,7 @@ recover:
                   backoffSeconds: 30
                   onFailure: pause
                   onPreExisting: triage-pre-existing-issue
+                  graphFrom: changes
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
             - name: revise
@@ -1193,6 +1235,7 @@ recover:
                   backoffSeconds: 30
                   onFailure: pause
                   onPreExisting: triage-pre-existing-issue
+                  graphFrom: changes
                   prompt: prompts/rework.md
                   outputs: schemas/implement.schema.json
                 - name: reverify
@@ -1215,6 +1258,7 @@ recover:
                   backoffSeconds: 30
                   onFailure: pause
                   onPreExisting: triage-pre-existing-issue
+                  graphFrom: changes
                   prompt: prompts/mend.md
                   outputs: schemas/implement.schema.json
                 - name: refold
@@ -1254,6 +1298,7 @@ recover:
                       backoffSeconds: 30
                       onFailure: pause
                       onPreExisting: triage-pre-existing-issue
+                      graphFrom: changes
                       prompt: prompts/reconcile.md
                       outputs: schemas/implement.schema.json
                 - name: recheck
@@ -1281,6 +1326,7 @@ recover:
                   backoffSeconds: 30
                   onFailure: pause
                   onPreExisting: triage-pre-existing-issue
+                  graphFrom: changes
                   prompt: prompts/anchors.md
                   outputs: schemas/implement.schema.json
                 - name: recheckpoint

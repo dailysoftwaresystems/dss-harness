@@ -244,6 +244,31 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
+    /// A side-task's first sync seeds from the newest graph of the repository's runs or side-tasks alike: a side-task's
+    /// graph is held under its records in the one shape every graph's records take, so the same seed answers for it.
+    /// </summary>
+    [Fact]
+    public async Task AFirstSync_OfASideTask_SeedsFromTheNewestGraph_RunsAndSideTasksAlike()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("src/a.toy", "class A\n");
+        await graph.CommitAsync();
+        await graph.ForRun("alpha").SyncAsync();
+        graph.Clock.Advance(TimeSpan.FromMinutes(1));
+
+        var side = new OrchestratorLayout("t1", Path.Combine(graph.Layout.SideTasksDirectory, "t1"));
+        var first = await graph.Service.SyncAsync(new CodebaseGraphSync(graph.Layout, side, CodebaseGraphShape.Default, graph.WorktreesRoot, Rebuild: false, "the side-task 't1' opened"), TestContext.Current.CancellationToken);
+
+        Assert.Equal("alpha", first.SeededFrom);
+
+        // The side-task's own graph seeds the next comer, run or side-task, once it is the newest.
+        graph.Clock.Advance(TimeSpan.FromMinutes(1));
+        var second = await graph.ForRun("bravo").SyncAsync();
+
+        Assert.Equal("t1", second.SeededFrom);
+    }
+
+    /// <summary>
     /// A run's first sync starts from the graph of the earlier run synced last - not the first or the last by name -
     /// copying the extracts it reuses, and reads only what changed since; nothing is counted removed from a graph it never
     /// had.

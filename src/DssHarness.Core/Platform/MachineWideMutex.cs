@@ -178,6 +178,35 @@ public static class MachineWideMutex
         return MachineWideHold.TryTake(() => Open(name, subject));
     }
 
+    /// <summary>
+    /// Takes the mutex <paramref name="name"/> on a thread of its own, waiting as long as <paramref name="timeout"/>
+    /// allows and <paramref name="cancellationToken"/> leaves it, for work that awaits while it holds it.
+    /// </summary>
+    /// <param name="name">The name, from <see cref="NameFor"/>.</param>
+    /// <param name="subject">What is being locked, named in a refusal to open it.</param>
+    /// <param name="timeout">How long the whole wait may last; <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> for as long as the token leaves it.</param>
+    /// <param name="cancellationToken">Ends the wait where it has not taken the mutex.</param>
+    /// <returns>
+    /// The hold, which says how long it waited (<see cref="MachineWideHold.Waited"/>) and lets the mutex go when it is
+    /// disposed, from whichever thread disposes it; or <see langword="null"/> where the wait ended - the token fired, or
+    /// the whole of <paramref name="timeout"/> passed - without taking it.
+    /// </returns>
+    /// <exception cref="HarnessException">The mutex could not be opened, as <see cref="Open(string, string)"/> says.</exception>
+    /// <remarks>
+    /// A mutex is released by the thread that took it, and work that awaits may go on on another, so the hold keeps
+    /// a thread of its own that takes the mutex, waits to be let go, and releases it (<see cref="MachineWideHold"/>).
+    /// That thread blocks for the whole of the wait, a second at a time between slices so the token is seen at once; the
+    /// caller awaits the hold, so nothing of the pool is held while it waits. A mutex whose holder ended holding it is
+    /// taken, as <see cref="Wait(Mutex, TimeSpan)"/> takes one.
+    /// </remarks>
+    public static Task<MachineWideHold?> HoldAsync(string name, string subject, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(subject);
+
+        return MachineWideHold.TakeAsync(() => Open(name, subject), timeout, cancellationToken);
+    }
+
     /// <summary>Waits through <paramref name="waitFor"/>, for as long as <paramref name="timeout"/> allows by <paramref name="elapsed"/>.</summary>
     /// <param name="waitFor">Waits for the mutex for at most the time it is given, and says whether it was taken.</param>
     /// <param name="timeout">How long to wait.</param>
@@ -218,15 +247,31 @@ public static class MachineWideMutex
 /// </remarks>
 public sealed class MachineWideHold : IDisposable
 {
+    /// <summary>How long a slice of a waiting take waits before the take looks again at its token and its bound.</summary>
+    internal static readonly TimeSpan Slice = TimeSpan.FromSeconds(1);
+
     private readonly Thread _holder;
     private readonly ManualResetEventSlim _letGo;
     private int _released;
 
-    private MachineWideHold(Thread holder, ManualResetEventSlim letGo)
+    private MachineWideHold(Thread holder, ManualResetEventSlim letGo, TimeSpan waited)
     {
         _holder = holder;
         _letGo = letGo;
+        RawWaited = waited;
     }
+
+    /// <summary>
+    /// How long it took to take the mutex: zero where it was held by nobody. The clock's own cost of one try is under
+    /// <see cref="LeastWaited"/>, so a take that never met a holder reports zero, and any real wait - the holder let go
+    /// moments into the first slice - reports what it was.
+    /// </summary>
+    public TimeSpan Waited => RawWaited < LeastWaited ? TimeSpan.Zero : RawWaited;
+
+    /// <summary>The least time reported as a wait, so the clock's own cost is never one.</summary>
+    internal static readonly TimeSpan LeastWaited = TimeSpan.FromMilliseconds(10);
+
+    private readonly TimeSpan RawWaited;
 
     /// <summary>Whether the hold has been let go, after which it guards nothing.</summary>
     public bool Released => Volatile.Read(ref _released) != 0;
@@ -254,9 +299,30 @@ public sealed class MachineWideHold : IDisposable
     {
         ArgumentNullException.ThrowIfNull(open);
 
-        var taken = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        return TakeAsync(open, TimeSpan.Zero, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Opens a mutex through <paramref name="open"/> on a thread of its own and takes it, waiting as long as
+    /// <paramref name="timeout"/> allows and <paramref name="cancellationToken"/> leaves it; or <see langword="null"/>
+    /// where the wait ended without taking it.
+    /// </summary>
+    /// <param name="open">Opens the mutex, refusing as <see cref="MachineWideMutex.Open(string, string)"/> does.</param>
+    /// <param name="timeout">The whole of the wait; <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> for as long as the token leaves it.</param>
+    /// <param name="cancellationToken">Ends the wait where it has not taken the mutex.</param>
+    /// <exception cref="HarnessException">The mutex could not be opened.</exception>
+    internal static Task<MachineWideHold?> TakeAsync(Func<Mutex> open, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(open);
+
+        if (timeout == System.Threading.Timeout.InfiniteTimeSpan)
+        {
+            timeout = TimeSpan.MaxValue;
+        }
+
+        var taken = new TaskCompletionSource<MachineWideHold?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var letGo = new ManualResetEventSlim();
-        var holder = new Thread(() => Hold(open, taken, letGo))
+        var holder = new Thread(() => HoldFor(open, taken, letGo, timeout, cancellationToken))
         {
             IsBackground = true,
             Name = "machine-wide hold",
@@ -264,12 +330,17 @@ public sealed class MachineWideHold : IDisposable
 
         holder.Start();
 
+        return WaitedAsync(taken, holder, letGo);
+    }
+
+    /// <summary>The take's own task, closing what a take that never answers leaves behind.</summary>
+    private static async Task<MachineWideHold?> WaitedAsync(TaskCompletionSource<MachineWideHold?> taken, Thread holder, ManualResetEventSlim letGo)
+    {
+        MachineWideHold? hold;
+
         try
         {
-            if (taken.Task.GetAwaiter().GetResult())
-            {
-                return new MachineWideHold(holder, letGo);
-            }
+            hold = await taken.Task.ConfigureAwait(false);
         }
         catch
         {
@@ -278,16 +349,20 @@ public sealed class MachineWideHold : IDisposable
             throw;
         }
 
-        holder.Join();
-        letGo.Dispose();
+        if (hold is null)
+        {
+            holder.Join();
+            letGo.Dispose();
+        }
 
-        return null;
+        return hold;
     }
 
     /// <summary>
-    /// The holding thread: opens the mutex, says whether it took it, and where it did, keeps it until it is let go.
+    /// The holding thread: opens the mutex, takes it where nobody holds it and where the wait still allows it, says how
+    /// long it waited, and where it did, keeps it until it is let go.
     /// </summary>
-    private static void Hold(Func<Mutex> open, TaskCompletionSource<bool> taken, ManualResetEventSlim letGo)
+    private static void HoldFor(Func<Mutex> open, TaskCompletionSource<MachineWideHold?> taken, ManualResetEventSlim letGo, TimeSpan timeout, CancellationToken cancellationToken)
     {
         Mutex mutex;
 
@@ -303,24 +378,38 @@ public sealed class MachineWideHold : IDisposable
 
         using (mutex)
         {
-            bool held;
+            var started = Stopwatch.GetTimestamp();
 
-            try
+            while (true)
             {
-                held = MachineWideMutex.Wait(mutex, TimeSpan.Zero);
-            }
-            catch (Exception ex)
-            {
-                taken.SetException(ex);
-                return;
-            }
+                bool held;
 
-            taken.SetResult(held);
+                try
+                {
+                    var left = timeout - Stopwatch.GetElapsedTime(started);
+                    held = MachineWideMutex.Wait(mutex, left > Slice ? Slice : left > TimeSpan.Zero ? left : TimeSpan.Zero);
+                }
+                catch (Exception ex)
+                {
+                    taken.SetException(ex);
+                    return;
+                }
 
-            if (held)
-            {
-                letGo.Wait();
-                mutex.ReleaseMutex();
+                var waited = Stopwatch.GetElapsedTime(started);
+
+                if (held)
+                {
+                    taken.SetResult(new MachineWideHold(Thread.CurrentThread, letGo, waited));
+                    letGo.Wait();
+                    mutex.ReleaseMutex();
+                    return;
+                }
+
+                if (cancellationToken.IsCancellationRequested || waited >= timeout)
+                {
+                    taken.SetResult(null);
+                    return;
+                }
             }
         }
     }

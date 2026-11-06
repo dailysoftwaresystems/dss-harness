@@ -1,6 +1,7 @@
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
+using DssHarness.Core.Application.Hosting;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
 using DssHarness.Core.Ci;
@@ -151,6 +152,7 @@ public static class ServiceRegistration
             NamedMutexAnchorRegistryLock.DefaultTimeout));
         services.AddSingleton<IAnchorRegistryService, AnchorRegistryService>();
         services.AddSingleton<IAnchorBalanceService, AnchorBalanceService>();
+    services.AddSingleton<IAnchorArmsService, AnchorArmsService>();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<OrchestrationStore>();
         services.AddSingleton<OrchestrationLog>();
@@ -271,6 +273,7 @@ public static class ServiceRegistration
                 provider.GetRequiredService<IHostPlatform>(),
                 provider.GetRequiredService<IFileSystem>()),
             provider.GetRequiredService<Agents.Isolation.IAgentIsolation>(),
+            provider.GetRequiredService<Codebase.ICodebaseGraphService>(),
             provider.GetRequiredService<TimeProvider>()));
 
         // The harness's own tools, built for the API clients to give their agents and served to Claude Code's through the
@@ -377,6 +380,7 @@ public static class ServiceRegistration
         services.AddSingleton<ITestLegs, TestLegs>();
         services.AddSingleton<IRunnerLegs, RunnerLegs>();
         services.AddSingleton<IMutationLegs, MutationLegs>();
+        services.AddSingleton<IShowLegs, ShowLegs>();
 
         // Leg machinery. Shared by build, test, run and check-mutations, so the isolation rules cannot hold for one
         // command and not another.
@@ -432,6 +436,7 @@ public static class ServiceRegistration
             provider.GetRequiredService<IProcessIdentity>()));
         services.AddSingleton<LocalSyncTransport>();
         services.AddSingleton<ISyncTransport>(provider => provider.GetRequiredService<LocalSyncTransport>());
+        services.AddSingleton<SyncServeHandler>();
         services.AddSingleton<ISyncTransportFactory, SyncTransportFactory>();
         services.AddSingleton<ISyncService, SyncService>();
         services.AddSingleton<IHostCopyRemover, HostCopyRemover>();
@@ -452,6 +457,7 @@ public static class ServiceRegistration
         // self-test's fixture is kept among this user's own data, as the slots are, whichever tree the command is typed in.
         services.AddSingleton(provider => new MutationFixtureStore(provider.GetRequiredService<IFileSystem>(), MutationFixtureStore.DefaultDirectory));
         services.AddSingleton<MutationService>();
+        services.AddSingleton<ArmListingReader>();
 
         // Guards that became commands.
         services.AddSingleton<IRootLitterService, RootLitterService>();
