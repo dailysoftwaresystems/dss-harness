@@ -1805,6 +1805,294 @@ public sealed class ImplementationFlowTests
         Assert.Contains("done", string.Join("\n", listed.Details ?? []), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The item an update changes, its implementer at work: that step is ended in order, with a handoff, and the item
+    /// is done again by redo in the same worktree, then tested, folded, committed and reviewed, to the run's end.
+    /// </summary>
+    [Fact]
+    public async Task TheItemAnUpdateChanges_ItsImplementerAtWorkIsEndedInOrderWithAHandoff_AndRedoDoesItAgainInTheSameWorktree()
+    {
+        using var temp = new TempDirectory();
+        Held building = null!;
+        var taken = 0;
+
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue(
+                    "planner",
+                    Completed(Plan(One(), One(name: "two", owned: "src/two/**"))),
+                    Asked("Which totals does the change mean?"),
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Two items ship the report and its totals.",
+                            ["done"] = "the report ships; its totals ship; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**")),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "changed",
+                                    ["item"] = One(name: "two", owned: "src/two/**"),
+                                    ["for"] = "",
+                                    ["changed"] = "the amendment makes the report total each region",
+                                    ["keep"] = "the files the item already wrote",
+                                    ["undo"] = "the view that holds no totals",
+                                    ["instead"] = "the view with its totals of each region",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }));
+
+                building = agents.Hold("implementer", step => Interlocked.Increment(ref taken) <= 2);
+            });
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        // The round builds its two items, both builders held at their work.
+        var drive = AnswerAsync(kit, "approve");
+
+        await WhenAsync(
+            () => kit.Agents.Of("implementer").Count >= 2,
+            () => $"{Shown(kit)} | implementers asked: {kit.Agents.Of("implementer").Count}");
+
+        // The change lands while both builders are at work.
+        var amended = await AmendAsync(kit, "Also make the report total each region.");
+
+        Assert.True(amended.ExitCode == HarnessExit.Success, $"{amended.Message} | {Shown(kit)}");
+
+        var update = await WhenOpenAsync(kit, question => question.Kind == "ask" && question.RaisedBy?.Step?.EndsWith(".plan-update", StringComparison.Ordinal) == true);
+
+        // Nothing new started: the round's two builders are those the run asked, both still at their work.
+        Assert.Equal(2, kit.Agents.Of("implementer").Count);
+
+        _ = await AnswerOneAsync(kit, update.Id, "answer", "The weekly one.");
+
+        var approval = await WhenOpenAsync(
+            kit,
+            question => question.Options.Take(2).Select(option => option.Answer).SequenceEqual(["approve", "revise"]),
+            () => $"drive: {(drive.IsCompleted ? $"{drive.Status}" : "running")} | raw: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "questions.json"))} | {Shown(kit)}");
+
+        // The person approves the updated plan while both builders are still at work - the drive session itself goes
+        // on waiting on them. The change names the item whose builder is at work: that step is ended in order -
+        // stopped, ended for the update, its handoff written - and the item is done again by redo in the same
+        // worktree, the agent its round made taken and not made again.
+        var approving = AnswerOneAsync(kit, approval.Id, "approve");
+
+        FlowStepRecord? ended = null;
+        AgentStepRequest? again = null;
+
+        await WhenAsync(
+            () =>
+            {
+                ended = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Steps.FirstOrDefault(step => step.Step.EndsWith(".implement", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Stopped));
+                again = kit.Agents.Of("implementer").FirstOrDefault(step => step.Prompt.Contains("the view that holds no totals", StringComparison.Ordinal));
+                return ended is not null && again is not null;
+            },
+            () => $"updates: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "updates.json"))} | {Shown(kit)}");
+
+        Assert.Contains("ended for update", ended!.Error, StringComparison.Ordinal);
+        Assert.Contains("done again", ended.Error, StringComparison.Ordinal);
+        Assert.NotNull(ended.Handoff);
+
+        // The visit that does the item again runs in the add step's name, whatever declaration carries it: it is told
+        // the piece - what is taken back, and what is done in its place - and it works the worktree the ended step
+        // worked, for the agent the round made is taken and not made again.
+        var was = kit.Agents.Of("implementer").First(step => step.StepInstance == ended.Instance);
+
+        Assert.Contains("the view with its totals of each region", again!.Prompt, StringComparison.Ordinal);
+        Assert.Equal(was.Workspace.Worktree, again.Workspace.Worktree);
+        Assert.NotNull(again.Workspace.Worktree);
+
+        // The builders answer - the ended one's hold is over, and the other goes on with its item - and the answer,
+        // once given, carries the run to its end: the item done again is tested, folded, committed and reviewed as
+        // any item of the round is.
+        building.Open();
+
+        var approved = await approving;
+
+        _ = await drive;
+
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Done) },
+            () => $"approve said: {approved.ExitCode} {approved.Message} | updates: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "updates.json"))} | {Shown(kit)}");
+
+        var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+        // One implement done, one stopped ended for the update, and the visit that does the item again - in the add
+        // step's name - done; and the item done again went through the same round any item does: its tests, its fold,
+        // its checkpoint and its review.
+        var implements = flow.Steps.Where(step => step.Step.EndsWith(".implement", StringComparison.Ordinal)).ToList();
+
+        Assert.Equal(2, implements.Count);
+        Assert.Equal(1, implements.Count(step => step.State == nameof(FlowInstanceState.Done)));
+
+        // The visit that does the item again is the redo declaration's, run in the add step's name: its record says
+        // what ran, and its instance is the place it holds in the round.
+        var carried = again!.StepInstance.Split('/')[0];
+        var scope = string.Join('.', carried.Split('.')[..^1]);
+        var carrier = Assert.Single(flow.Steps, step => step.Instance == carried);
+
+        Assert.Equal(("rounds.items.redo", nameof(FlowInstanceState.Done)), (carrier.Step, carrier.State));
+
+        // The item done again went through the same round any item does - its tests drawn as the workflow directs
+        // them (skipped where the tree holds no legs, as every item's are), its fold, its checkpoint and its review.
+        Assert.Contains(flow.Steps, step => step.Instance == $"{scope}.verify");
+
+        foreach (var name in new[] { ".fold", ".checkpoint", ".fix" })
+        {
+            Assert.Contains(flow.Steps, step => step.Instance == $"{scope}{name}" && step.State == nameof(FlowInstanceState.Done));
+        }
+
+        // The update's entry: done, its changed piece placed, nobody told.
+        var updates = kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())!;
+        var entry = Assert.Single(updates.Updates);
+
+        Assert.Equal(("amendment", "done"), (entry.Cause, entry.State));
+        Assert.Single(entry.Pieces!, piece => piece.Kind == "changed" && piece.ItemName() == "two");
+        Assert.Empty(entry.Told ?? []);
+    }
+
+    /// <summary>
+    /// The item an update withdraws, its work folded and committed: it is taken back by undo in a new agent, from
+    /// what its fold wrote, and the removal is folded, committed and reviewed, to the run's end.
+    /// </summary>
+    [Fact]
+    public async Task TheItemAnUpdateWithdraws_FoldedAndCommitted_IsTakenBackByUndoInANewAgent_AndTheRemovalFoldedCommittedAndReviewed()
+    {
+        using var temp = new TempDirectory();
+        Held review = null!;
+
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue(
+                    "planner",
+                    Completed(Plan(One(name: "two", owned: "src/two/**"), One())),
+                    Asked("What does taking the item back mean?"),
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "One item ships the report.",
+                            ["done"] = "the report ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One()),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "removed",
+                                    ["item"] = One(name: "two", owned: "src/two/**"),
+                                    ["for"] = "",
+                                    ["changed"] = "the amendment withdraws the second item",
+                                    ["keep"] = "",
+                                    ["undo"] = "the report's second view, folded and committed",
+                                    ["instead"] = "",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }));
+
+                // The round's self-audit is held mid-flight, both items' work - the withdrawn one's among it -
+                // folded, committed and released whole before it: the round works on while the withdrawn item stands
+                // as the update finds it, its work in the main tree and its agent gone.
+                review = agents.Hold("auditor");
+            });
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        var drive = AnswerAsync(kit, "approve");
+
+        // The withdrawn item's work is folded, committed and released, and the round sits in its self-audit.
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Steps is { } steps
+                && steps.Any(step => step.Instance == "rounds#1.items[0].release" && step.State == nameof(FlowInstanceState.Done))
+                && kit.Agents.Of("auditor").Count >= 1,
+            () => $"{Shown(kit)}");
+
+        var amended = await AmendAsync(kit, "In fact, ship the report alone.");
+
+        Assert.True(amended.ExitCode == HarnessExit.Success, $"{amended.Message} | {Shown(kit)}");
+
+        var update = await WhenOpenAsync(kit, question => question.Kind == "ask" && question.RaisedBy?.Step?.EndsWith(".plan-update", StringComparison.Ordinal) == true);
+
+        // Nothing new started: the round's two builders are those the run asked, both their items built.
+        Assert.Equal(2, kit.Agents.Of("implementer").Count);
+
+        _ = await AnswerOneAsync(kit, update.Id, "answer", "The weekly one.");
+
+        var approval = await WhenOpenAsync(
+            kit,
+            question => question.Options.Take(2).Select(option => option.Answer).SequenceEqual(["approve", "revise"]),
+            () => $"drive: {(drive.IsCompleted ? $"{drive.Status}" : "running")} | raw: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "questions.json"))} | {Shown(kit)}");
+
+        // The person approves the updated plan. The withdrawal names the item whose work was folded and committed:
+        // it is taken back by undo, in a new agent, from what its fold wrote - the visit runs in the add step's name,
+        // whatever declaration carries it.
+        // The audit answers - the new agent the taking-back works in is made over the main tree, which no reader may
+        // hold while it is - and the answer, once given, carries the run to its end: the removal is folded, committed
+        // and reviewed as any item's work is.
+        review.Open();
+
+        var approving = AnswerOneAsync(kit, approval.Id, "approve");
+
+        var approved = await approving;
+
+        FlowStepRecord? undone = null;
+        AgentStepRequest? takingBack = null;
+
+        await WhenAsync(
+            () =>
+            {
+                var steps = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Steps;
+                undone = steps?.FirstOrDefault(step => step.Step.EndsWith(".undo", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done));
+                takingBack = kit.Agents.Of("implementer").FirstOrDefault(step => step.Prompt.Contains("the report's second view", StringComparison.Ordinal));
+                return undone is not null && takingBack is not null;
+            },
+            () => $"approve said: {approved.ExitCode} {approved.Message} | updates: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "updates.json"))} | {Shown(kit)}");
+
+        // The new agent: the visit that takes the item back works a worktree of its own, not the one the withdrawn
+        // item's builder worked.
+        var was = kit.Agents.Of("implementer").First(step => step.StepInstance == "rounds#1.items[0].implement");
+
+        Assert.NotEqual(was.Workspace.Worktree, takingBack!.Workspace.Worktree);
+
+        _ = await drive;
+
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Done) },
+            () => $"approve said: {approved.ExitCode} {approved.Message} | updates: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "updates.json"))} | {Shown(kit)}");
+
+        var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+        // The visit that takes the item back is the undo declaration's, run in the add step's name, and the removal
+        // went through the same round any item's work does: its fold, its checkpoint and its review.
+        Assert.Equal(("rounds.items.undo", nameof(FlowInstanceState.Done)), (undone!.Step, undone.State));
+
+        var scope = string.Join('.', undone.Instance.Split('.')[..^1]);
+
+        Assert.Contains(flow.Steps, step => step.Instance == $"{scope}.verify");
+
+        foreach (var name in new[] { ".fold", ".checkpoint", ".fix" })
+        {
+            Assert.Contains(flow.Steps, step => step.Instance == $"{scope}{name}" && step.State == nameof(FlowInstanceState.Done));
+        }
+
+        // The update's entry: done, its removed piece placed, nobody told.
+        var updates = kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())!;
+        var entry = Assert.Single(updates.Updates);
+
+        Assert.Equal(("amendment", "done"), (entry.Cause, entry.State));
+        Assert.Single(entry.Pieces!, piece => piece.Kind == "removed" && piece.ItemName() == "two");
+        Assert.Empty(entry.Told ?? []);
+    }
+
     /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
     private static async Task EditWorkflowAsync(Kit kit, Func<string[], string[]> edit)
     {
