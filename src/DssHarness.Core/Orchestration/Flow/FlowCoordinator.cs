@@ -10610,7 +10610,7 @@ public sealed class FlowCoordinator
 
         foreach (var makers in _created.Where(made => made.Made is not null && made.Step.Type == "reason" && !_deletedAgents.Contains(made.Made)).GroupBy(made => made.Made!, StringComparer.Ordinal))
         {
-            if (makers.Any(made => !PastGoingOn(made)) || ResumersCanStillRun(declarations, makers.First().Path))
+            if (makers.Any(made => !PastGoingOn(made)) || ResumersCanStillRun(declarations, makers.First().Path) || PlannedAgain(declarations, makers.First().Path))
             {
                 continue;
             }
@@ -10620,6 +10620,19 @@ public sealed class FlowCoordinator
 
         return over;
     }
+
+    /// <summary>
+    /// Whether an update waits whose turn raises a step going on with the work made at <paramref name="makerPath"/>:
+    /// the <c>amend</c> block's step resumes a chain that reaches the maker - a plan update's planning is that step -
+    /// and an amendment queued or under way raises it when its turn comes, however ended every drawn visit of it
+    /// stands. The agent such a step works as is kept for that turn.
+    /// </summary>
+    /// <param name="declarations">Every declaration, with its path.</param>
+    /// <param name="makerPath">The making step's declaration path.</param>
+    private bool PlannedAgain(IReadOnlyList<(string Path, WorkflowStep Step)> declarations, string makerPath)
+        => _definition.Amend is { Step: { } planner }
+            && _updates.Updates.Any(update => update.State is FlowUpdateStates.Queued or FlowUpdateStates.UnderWay)
+            && ResumesTransitively(declarations, planner, makerPath);
 
     /// <summary>Whether a step that goes on with the work made at <paramref name="makerPath"/> can still run: one of its instances is unended or not drawn yet, or a group around its declaration is unended, for a repeat may raise one yet.</summary>
     /// <param name="declarations">Every declaration, with its path.</param>

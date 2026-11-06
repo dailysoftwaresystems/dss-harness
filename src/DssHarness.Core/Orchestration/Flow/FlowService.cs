@@ -195,6 +195,9 @@ public sealed class FlowService(
     private readonly FlowTimings _timings = timings ?? FlowTimings.Default;
     private readonly FlowRunOwner _owner = new(store, identity, clock);
 
+    /// <summary>How long an answer handed to a running engine waits between looks at what became of it.</summary>
+    private static readonly TimeSpan HandOverSlice = TimeSpan.FromMilliseconds(50);
+
     /// <inheritdoc/>
     public async Task<CommandOutcome> RunAsync(
         string startDirectory,
@@ -511,20 +514,53 @@ public sealed class FlowService(
 
         // Where an engine is running the run, the answer is handed to it and the command returns: it lands in the
         // inbox under an id of its own, the engine takes it at its poll, and no second engine is started. An engine
-        // whose session ends before it took it leaves it there, and the next session of the run takes it.
+        // whose session ends before it took it leaves it there, and the next session of the run takes it - this
+        // command waits out that taking, and where the owner went with its session, so that no session is left to
+        // read the inbox, this command is that next session itself.
         if (_owner.Live(layout) is not null)
         {
             _store.AddToInbox(layout, new FlowInboxAnswer(FlowInboxAnswer.NewId(), asked.Id, answer, _clock.GetUtcNow(), takes));
 
-            var handed = new CommandOutcome(
-                HarnessExit.Success,
-                $"handed '{answer}' for question '{asked.Id}' to the engine running '{run}'",
-                [
-                    $"the engine reads it within {_timings.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s and takes it while the question is open; where its session ends first, the next session of the run takes it",
-                    $"inbox: {layout.InboxFile}",
-                ]);
+            for (var waited = TimeSpan.Zero; waited < _timings.PollEvery + _timings.PollEvery; waited += HandOverSlice)
+            {
+                await Task.Delay(HandOverSlice, cancellationToken).ConfigureAwait(false);
 
-            return Ended(layout, AnswerCommand, handed, ResultOf(layout, handed) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+                if (_store.ReadFlowQuestions(layout)?.Of(asked.Id) is not { State: "open" })
+                {
+                    break;
+                }
+
+                if (_owner.Live(layout) is null)
+                {
+                    break;
+                }
+            }
+
+            if (_store.ReadFlowQuestions(layout)?.Of(asked.Id) is not { State: "open" })
+            {
+                var taken = new CommandOutcome(
+                    HarnessExit.Success,
+                    $"handed '{answer}' for question '{asked.Id}' to the engine running '{run}'",
+                    [
+                        $"the engine took it within {_timings.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, while the question was open",
+                        $"inbox: {layout.InboxFile}",
+                    ]);
+
+                return Ended(layout, AnswerCommand, taken, ResultOf(layout, taken) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+            }
+
+            if (_owner.Live(layout) is not null)
+            {
+                var handed = new CommandOutcome(
+                    HarnessExit.Success,
+                    $"handed '{answer}' for question '{asked.Id}' to the engine running '{run}'",
+                    [
+                        $"the engine reads it within {_timings.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s and takes it while the question is open; where its session ends first, the next session of the run takes it",
+                        $"inbox: {layout.InboxFile}",
+                    ]);
+
+                return Ended(layout, AnswerCommand, handed, ResultOf(layout, handed) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+            }
         }
 
         // The session is held to the definition it began with, as a resume is.
