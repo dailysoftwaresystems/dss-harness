@@ -38,13 +38,15 @@ jobs:
       # 2026-10-26): Linux about 5 minutes, one shard; Windows 33 (x86_64), two; Windows 50
       # (arm64), three, since that runner's speed wanders threefold between runs; macOS 61
       # (arm64), two, and over 120 (x86_64), three - five macOS jobs, as many as GitHub runs
-      # at once. The Intel macOS leg went to four at 12,950 tests (2026-11-05): the
-      # implementation flow's class held 29 tests that each run minutes there - its tests
-      # weigh what many of the suite's others do together, so counting them as the units the
-      # dealing balances broke down, and the shard dealt the class ran past the step's limit
-      # with every test green. Four shards hold the class's shard under the limit with room
-      # for the class to grow; when its batteries outgrow any one shard, they split into
-      # classes of their own, which the dealing then spreads.
+      # at once. The Intel macOS leg went to four at 12,950 tests (2026-11-05), and to six at
+      # 12,956 (2026-11-06): the implementation flow's class held 29 tests then, each running
+      # minutes there - its tests weigh what many of the suite's others do together, so
+      # counting them as the units the dealing balances broke down. The class is atomic to a
+      # shard (every Nth of the classes), so its growth is thinned by the shards around it:
+      # at 35 tests the class's own minutes plus the companions a fourth shard still dealt
+      # it ran past the step's limit with every test green, and six shards hold it under
+      # with room for the class to grow; when its batteries outgrow any one shard, they
+      # split into classes of their own, which the dealing then spreads.
       matrix:
         include:
           - { os: ubuntu-latest, shard: 1, shards: 1 }           # Linux x86_64
@@ -54,10 +56,12 @@ jobs:
           - { os: windows-11-vs2026-arm, shard: 1, shards: 3 }   # Windows arm64
           - { os: windows-11-vs2026-arm, shard: 2, shards: 3 }
           - { os: windows-11-vs2026-arm, shard: 3, shards: 3 }
-          - { os: macos-26-intel, shard: 1, shards: 4 }          # macOS x86_64
-          - { os: macos-26-intel, shard: 2, shards: 4 }
-          - { os: macos-26-intel, shard: 3, shards: 4 }
-          - { os: macos-26-intel, shard: 4, shards: 4 }
+          - { os: macos-26-intel, shard: 1, shards: 6 }          # macOS x86_64
+          - { os: macos-26-intel, shard: 2, shards: 6 }
+          - { os: macos-26-intel, shard: 3, shards: 6 }
+          - { os: macos-26-intel, shard: 4, shards: 6 }
+          - { os: macos-26-intel, shard: 5, shards: 6 }
+          - { os: macos-26-intel, shard: 6, shards: 6 }
           - { os: macos-latest, shard: 1, shards: 2 }            # macOS arm64
           - { os: macos-latest, shard: 2, shards: 2 }
 
