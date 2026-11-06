@@ -2026,6 +2026,21 @@ public sealed class FlowCoordinator
             Record(FlowChangeKind.Step, group, from: was, to: FlowInstanceState.Running, detail: $"in progress again for update {update.Id}");
         }
 
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            // Every repeat that had ended around the planning step's scope is in progress again with it: once the
+            // raised visit and what the amend block's then set going have ended, the loop reads its until again, over
+            // the plan as the update left it, and where that plan does not pass what the flow has it pass - the check
+            // the block's then names returning its problems - the loop's next iteration is the settling, drawn before
+            // anything of the update is placed or anyone is told. A loop that had not ended is not touched, and a
+            // failed one is left as its failure left it.
+            if (at.LoopOf is { Step.Repeat: not null } loop && loop.State == FlowInstanceState.Done)
+            {
+                loop.State = FlowInstanceState.Running;
+                Record(FlowChangeKind.Step, loop, from: FlowInstanceState.Done, to: FlowInstanceState.Running, detail: $"in progress again for update {update.Id}");
+            }
+        }
+
         PutUpdate(update with { Step = raised.Id });
         _heldPlanner = raised;
 
@@ -2048,9 +2063,32 @@ public sealed class FlowCoordinator
     /// <summary>Whether <paramref name="scope"/> is the scope the update under way is planned in, or one nested under it: the only scopes the hold lets start in.</summary>
     private bool InHeldScope(Scope? scope)
     {
+        var held = _heldPlanner?.DeclaredScope;
+
+        if (held is null)
+        {
+            return false;
+        }
+
         for (var at = scope; at is not null; at = at.Parent)
         {
-            if (ReferenceEquals(at, _heldPlanner?.DeclaredScope))
+            if (ReferenceEquals(at, held))
+            {
+                return true;
+            }
+        }
+
+        if (held.LoopOf is not { } loop)
+        {
+            return false;
+        }
+
+        // The loop the held scope is an iteration of plans the update as a whole: its other iterations are the
+        // planning's own work - the settling of a plan its re-check refused among them - and no step of them waits
+        // on the hold.
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            if (ReferenceEquals(at.LoopOf, loop))
             {
                 return true;
             }
@@ -3483,6 +3521,14 @@ public sealed class FlowCoordinator
             return false;
         }
 
+        if (TheThenRefuses(planner, scope))
+        {
+            // The plan the update brought does not pass the check the amend block's then names: the loop around the
+            // planning settles that - its next iteration, the planner given the check's problems - and the plan does
+            // not stand, nothing of the update is placed and nobody told, until one passes and is approved.
+            return false;
+        }
+
         if (_definition.Amend?.Then is { } target
             && DeclarationsOf(scope).FirstOrDefault(declaration => declaration.Name == target) is { } declaration)
         {
@@ -3527,6 +3573,20 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
+    /// Whether the plan the update under way brought does not pass the check the <c>amend</c> block's <c>then</c> names:
+    /// the newest word of that check over every iteration it ran in ended <c>ok</c> false. It is what keeps the plan
+    /// from standing - the loop around the planning settles it, its next iteration - and what lets that loop go round
+    /// again while the update holds: no other falseness of its until is the hold's to iterate over.
+    /// </summary>
+    /// <param name="planner">The planning step the update raised.</param>
+    /// <param name="scope">The scope it stands in.</param>
+    private bool TheThenRefuses(FlowInstance planner, Scope scope)
+        => _definition.Amend?.Then is { } refused
+            && DeclarationsOf(scope).FirstOrDefault(declaration => declaration.Name == refused) is { Type: "validate-plan" } check
+            && EndedDoneLastWord(check) is { Output: { } outcome }
+            && outcome["ok"]?.GetValue<bool>() == false;
+
+    /// <summary>
     /// Whether every member of <paramref name="iteration"/>, at every depth of a group among them, has ended: the
     /// iteration's work is over, whatever its group instance's own state - a repeat the update's hold keeps from
     /// drawing its next iteration leaves it running over ended members. A visit stopped for a plan update has ended,
@@ -3567,8 +3627,11 @@ public sealed class FlowCoordinator
     /// <param name="problem">What is wrong with the scope, where it holds no pieces the engine takes; null where it does.</param>
     private IReadOnlyList<FlowUpdatePiece>? PiecesOf(FlowInstance planner, out string? problem)
     {
-        // A scope that reads nothing is no update, and is handed on as read.
-        var read = Evaluate(_definition.Amend!.Scope, planner.DeclaredScope!, out var unread, reader: planner, mayReadNothing: true);
+        // A scope that reads nothing is no update, and is handed on as read. It is read in the newest instance of
+        // the scope the planning step is declared in: where a check the update's plan did not pass sent the loop
+        // around it round again, the plan that now stands - the one the pieces are taken from - is the word of its
+        // newest iteration, not the visit the update raised, whose plan was refused.
+        var read = Evaluate(_definition.Amend!.Scope, NewestPlanScope(), out var unread, reader: planner, mayReadNothing: true);
 
         if (unread is not null)
         {
@@ -5013,14 +5076,24 @@ public sealed class FlowCoordinator
             return true;
         }
 
-        if (instance.Children.Count == 0 || !ScopeEnded(instance.Children[^1]))
+        if (instance.Children.Count == 0)
         {
             return false;
         }
 
-        if (instance.Children[^1].GroupInstance is { State: FlowInstanceState.Running } ended)
+        // The iteration the held planning step stands in is read at rest, not ended, where the check the amend
+        // block's then names refuses the plan the update brought: that refusal is settled by this loop's next
+        // iteration - the planner given the check's problems - drawn under the hold. No other falseness of the until
+        // is: the loop stands between its iterations while the update holds, and where the until reads true the loop
+        // ends only as it always did, the scope strictly ended - under a hold, once the update settled and the hold
+        // with it.
+        var settling = _heldPlanner is { } planner
+            && ReferenceEquals(planner.DeclaredScope, instance.Children[^1])
+            && TheThenRefuses(planner, instance.Children[^1]);
+
+        if (!(settling ? IterationAtRest(instance.Children[^1]) : ScopeEnded(instance.Children[^1])))
         {
-            End(ended, FlowInstanceState.Done, null, null);
+            return false;
         }
 
         var until = Holds(instance.Step.Repeat!.Until, instance.Children[^1], out var problem);
@@ -5034,6 +5107,11 @@ public sealed class FlowCoordinator
         // Work a plan update owes this loop's next iteration carries it there whatever the until says: the loop runs
         // again, and where it is at its own bound one iteration is added for the update that owes the work.
         var owed = IterationOwed(instance);
+
+        if (instance.Children[^1].GroupInstance is { State: FlowInstanceState.Running } ended)
+        {
+            End(ended, FlowInstanceState.Done, null, null);
+        }
 
         if (until && !owed)
         {
@@ -5061,12 +5139,14 @@ public sealed class FlowCoordinator
             }
         }
 
-        if (_heldPlanner is not null && !InHeldScope(instance.DeclaredScope))
+        if (_heldPlanner is not null && !InHeldScope(instance.DeclaredScope) && instance != _heldPlanner.DeclaredScope?.LoopOf)
         {
             // No next iteration while a plan update is under way and this loop is outside the scope it is planned
             // in: no item is begun on a plan that is about to change. The repeat stands at its iterate point until
             // the hold ends, and the update's plan stands between the iterations. Nothing changed by standing: the
             // session waits for what is in flight - the planning among it - and comes back here once the plan stands.
+            // The loop the planning step's own scope is an iteration of is not held: its next iteration is the
+            // settling itself, where the check that refused the update's plan is put to the planner again.
             return false;
         }
 
@@ -9485,6 +9565,20 @@ public sealed class FlowCoordinator
                     : newest)
             ?? instance;
     }
+
+    /// <summary>
+    /// The visit of <paramref name="declaration"/> that ended done last, over every iteration it ran in: the word that
+    /// stands newest of a step a loop carries, whatever iteration said it. Null where none of its visits ended done.
+    /// </summary>
+    /// <param name="declaration">The step, every visit of the run's considered.</param>
+    private FlowInstance? EndedDoneLastWord(WorkflowStep declaration)
+        => _created
+            .Where(visit => ReferenceEquals(visit.Step, declaration) && visit.State == FlowInstanceState.Done && visit.FinishedAt is not null)
+            .Aggregate(
+                (FlowInstance?)null,
+                (newest, other) => newest is null || (other.FinishedAt!.Value, _created.IndexOf(other)).CompareTo((newest.FinishedAt!.Value, _created.IndexOf(newest))) > 0
+                    ? other
+                    : newest);
 
     /// <summary>
     /// What <paramref name="instance"/>'s agents assumed, as a step's <c>assumptions</c> fact reads it: the envelope's

@@ -2486,6 +2486,156 @@ public sealed class ImplementationFlowTests
         Assert.Single(updates.Updates[1].Pieces!, piece => piece.Kind == "removed" && piece.ItemName() == "two");
     }
 
+    /// <summary>
+    /// An amendment that adds an item whose paths an item of the running round owns: the check of the updated plan
+    /// returns it as a problem, nobody is asked to approve it, the planner settles it - resumed in its own
+    /// conversation with the problem - and the person is asked only over the settled plan, whose item builds in the
+    /// round under paths of its own, to the run's end.
+    /// </summary>
+    [Fact]
+    public async Task AnAmendmentAddsAnItemWhosePathsARunningItemOwns_TheCheckReturnsTheProblem_ThePlannerSettlesIt_AndOnlyTheSettledPlanIsApproved()
+    {
+        using var temp = new TempDirectory();
+        Held building = null!;
+        var taken = 0;
+
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue(
+                    "planner",
+                    Completed(Plan(One(), One(name: "two", owned: "src/two/**"))),
+                    Asked("Which view does the amendment mean?"),
+                    // What the planner first returns: the invoices view as an item that owns the paths the running
+                    // item 'one' owns - the check of the updated plan returns that as a problem.
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Three items ship the report, the invoices view beside it.",
+                            ["done"] = "the report ships; its view ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**"), One(name: "three", owned: "src/one/**", reuses: "src/tool.cs")),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "added",
+                                    ["item"] = One(name: "three", owned: "src/one/**", reuses: "src/tool.cs"),
+                                    ["for"] = "",
+                                    ["changed"] = "the amendment adds the invoices view, as the item 'three'",
+                                    ["keep"] = "",
+                                    ["undo"] = "",
+                                    ["instead"] = "",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }),
+                    // What it returns once the check's problem is put to it: the same item, under paths of its own.
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Three items ship the report, the invoices view under paths of its own.",
+                            ["done"] = "the report ships; its view ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**"), One(name: "three", owned: "src/three/**", reuses: "src/tool.cs")),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "added",
+                                    ["item"] = One(name: "three", owned: "src/three/**", reuses: "src/tool.cs"),
+                                    ["for"] = "",
+                                    ["changed"] = "the amendment adds the invoices view, as the item 'three', under paths of its own",
+                                    ["keep"] = "",
+                                    ["undo"] = "",
+                                    ["instead"] = "",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }));
+
+                building = agents.Hold("implementer", step => Interlocked.Increment(ref taken) <= 2);
+            });
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        var drive = AnswerAsync(kit, "approve");
+
+        await WhenAsync(
+            () => kit.Agents.Of("implementer").Count >= 2,
+            () => $"{Shown(kit)} | implementers asked: {kit.Agents.Of("implementer").Count}");
+
+        // The amendment lands while both builders are at work: it adds an item whose paths item 'one' owns.
+        var amended = await AmendAsync(kit, "Also ship the invoices view.");
+
+        Assert.True(amended.ExitCode == HarnessExit.Success, $"{amended.Message} | {Shown(kit)}");
+
+        var update = await WhenOpenAsync(kit, question => question.Kind == "ask" && question.RaisedBy?.Step?.Contains(".plan-update", StringComparison.Ordinal) == true);
+
+        // The builders answer and the planner's question is answered: the check of the updated plan returns the
+        // ownership problem, and with it standing nobody is asked to approve - the planner is resumed with the
+        // problem instead, in its own conversation, to settle it.
+        building.Open();
+
+        _ = await AnswerOneAsync(kit, update.Id, "answer", "The monthly one.");
+
+        await WhenAsync(
+            () => kit.Agents.Of("planner").Any(visit => visit.Prompt.Contains("no file is written by two items", StringComparison.Ordinal)),
+            () => $"{Shown(kit)} | planner visits: {kit.Agents.Of("planner").Count}");
+
+        // The planner settles: its resumed conversation was given the problem the check returned and the amendment.
+        var settled = Assert.Single(kit.Agents.Of("planner"), visit => visit.Prompt.Contains("no file is written by two items", StringComparison.Ordinal));
+
+        Assert.Contains("Also ship the invoices view.", settled.Prompt, StringComparison.Ordinal);
+
+        // Only the settled plan is put to the person: the approval is raised in the planning the settling made, and
+        // its question holds the settled plan, not the one the check refused.
+        var approval = await WhenOpenAsync(
+            kit,
+            question => question.Options.Take(2).Select(option => option.Answer).SequenceEqual(["approve", "revise"]),
+            () => $"drive: {(drive.IsCompleted ? $"{drive.Status}" : "running")} | raw: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "questions.json"))} | {Shown(kit)}");
+
+        Assert.EndsWith("#2.approval", approval.RaisedBy?.Step, StringComparison.Ordinal);
+        Assert.Contains("under paths of its own", approval.ProblemShown!.Happened, StringComparison.Ordinal);
+
+        _ = await drive;
+
+        var approved = await AnswerOneAsync(kit, approval.Id, "approve");
+
+        // The answer, once given, carries the run to its end: the settled item is built as one more work item of the
+        // round, and nothing of the offending plan is placed anywhere.
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Done) },
+            () => $"approve said: {approved.ExitCode} {approved.Message} | updates: {File.ReadAllText(Path.Combine(kit.RunOf().Directory, "updates.json"))} | {Shown(kit)}");
+
+        var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+        // The check's problem, as the run's own record holds it: the added item owned the running item's paths.
+        var refused = Assert.Single(
+            flow.Steps,
+            step => step.Step.EndsWith(".check", StringComparison.Ordinal) && step.Output?["ok"]?.GetValue<bool>() == false);
+
+        Assert.Contains("work items 'one' and 'three' both own", string.Join("\n", (refused.Output!["problems"] as JsonArray)!.Select(problem => (string)problem!)), StringComparison.Ordinal);
+
+        // The settled item was built: three builders asked, three implements done.
+        Assert.Equal(3, kit.Agents.Of("implementer").Count);
+
+        Assert.Equal(3, flow.Steps.Count(step => step.Step.EndsWith(".implement", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done)));
+
+        // The update's entry: done, and the piece it placed is the settled item, under paths of its own - never the
+        // one the check refused.
+        var updates = kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())!;
+        var entry = Assert.Single(updates.Updates);
+
+        Assert.Equal(("amendment", "done"), (entry.Cause, entry.State));
+
+        var added = Assert.Single(entry.Pieces!, piece => piece.Kind == "added");
+
+        Assert.Equal("three", added.ItemName());
+        Assert.Equal(["src/three/**"], [.. ((JsonArray)added.Item!["ownedPaths"]!).Select(paths => (string)paths!)]);
+    }
+
     /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
     private static async Task EditWorkflowAsync(Kit kit, Func<string[], string[]> edit)
     {
