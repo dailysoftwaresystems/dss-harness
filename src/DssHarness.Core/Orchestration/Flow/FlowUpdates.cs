@@ -13,8 +13,14 @@ public static class FlowUpdateCauses
     /// <summary>A person changed the last answer they gave the run.</summary>
     public const string ChangedAnswer = "changedAnswer";
 
+    /// <summary>
+    /// The check that opens a round found what does not pass: the round's items, with those updates owe it, go back to
+    /// the planner before any of them begins. No person raises it.
+    /// </summary>
+    public const string PlanCheck = "planCheck";
+
     /// <summary>Every cause a plan update is raised by, in the order the report lists them.</summary>
-    public static readonly IReadOnlyList<string> All = [Amendment, ChangedAnswer];
+    public static readonly IReadOnlyList<string> All = [Amendment, ChangedAnswer, PlanCheck];
 }
 
 /// <summary>How an update's id is spelled: <c>u&lt;n&gt;</c> from 1, in the order taken.</summary>
@@ -199,12 +205,13 @@ public sealed record FlowNotDelivered(string For, string Why);
 /// <summary>
 /// One plan update a run has taken, as <c>updates.json</c> holds it: its id, what raised it, and where it stands. Of
 /// what raised it, an amendment holds its text, when it was made and through what; a changed answer holds the id of
-/// the question whose answer was changed with the answer before and the answer now. Of where it stands, an update
-/// taken where no plan holds it yet is <see cref="FlowUpdateStates.DoneAtOnce"/>; one taken where a plan has is
-/// <see cref="FlowUpdateStates.UnderWay"/> - the run held while the step the <c>amend</c> block names plans it, its
-/// instance named here - until the updated plan stands (<see cref="FlowUpdateStates.Done"/>) or its planning was
-/// given up (<see cref="FlowUpdateStates.Failed"/>, saying why no plan holds the change); one the run cannot take
-/// is <see cref="FlowUpdateStates.Refused"/>.
+/// the question whose answer was changed with the answer before and the answer now; a plan check holds the check that
+/// raised it - the check that opens a round - and the problems it found, and needs neither a person nor a window. Of
+/// where it stands, an update taken where no plan holds it yet is <see cref="FlowUpdateStates.DoneAtOnce"/>; one taken
+/// where a plan has is <see cref="FlowUpdateStates.UnderWay"/> - the run held while the step the <c>amend</c> block
+/// names plans it, its instance named here - until the updated plan stands (<see cref="FlowUpdateStates.Done"/>) or its
+/// planning was given up (<see cref="FlowUpdateStates.Failed"/>, saying why no plan holds the change); one the run
+/// cannot take is <see cref="FlowUpdateStates.Refused"/>.
 /// </summary>
 /// <param name="Id">The update's id: <c>u&lt;n&gt;</c>, in the order taken.</param>
 /// <param name="Cause">What raised it: an <c>amendment</c> or a <c>changedAnswer</c>.</param>
@@ -219,6 +226,11 @@ public sealed record FlowNotDelivered(string For, string Why);
 /// The id of the <c>inbox.json</c> entry the change was handed over under, to an engine running the run; null where
 /// none was, so an entry the run's records hold is never weighed again.
 /// </param>
+/// <param name="Check">
+/// The instance of the check that raised it, where one did - the check that opens a round, paused until the updated
+/// plan stands; null for every other cause.
+/// </param>
+/// <param name="Problems">What the check found, each problem as its output holds it; null for every other cause.</param>
 /// <param name="Why">What the run says of the update where its state alone cannot: why one was refused, or given up.</param>
 /// <param name="Step">
 /// The instance of the step the <c>amend</c> block names that plans this update, where the run has raised one; null
@@ -259,6 +271,8 @@ public sealed record FlowUpdateEntry(
     string? FromAnswer = null,
     string? ToAnswer = null,
     string? Inbox = null,
+    string? Check = null,
+    IReadOnlyList<string>? Problems = null,
     string? Why = null,
     string? Step = null,
     string? Then = null,
@@ -281,6 +295,9 @@ public sealed record FlowUpdateEntry(
             : Cause == FlowUpdateCauses.Amendment && string.IsNullOrWhiteSpace(Amendment) ? "an amendment is recorded with its text, and its text is empty"
             : Cause == FlowUpdateCauses.ChangedAnswer && !FlowQuestionIds.IsWellFormed(Question) ? $"'{Question}' is not a question's id"
             : Cause == FlowUpdateCauses.ChangedAnswer && (string.IsNullOrWhiteSpace(FromAnswer) || string.IsNullOrWhiteSpace(ToAnswer)) ? "a changed answer is recorded with the answer before and the answer now"
+            : Cause == FlowUpdateCauses.PlanCheck && (Check is not { } check || !FlowInstanceId.IsWellFormed(check)) ? $"'{Check}' is not an instance's id"
+            : Cause == FlowUpdateCauses.PlanCheck && (Problems is not { Count: > 0 } || Problems.Any(problem => string.IsNullOrWhiteSpace(problem))) ? "a plan check is recorded with the problems it found, and it holds none"
+            : Cause != FlowUpdateCauses.PlanCheck && Check is not null ? "it names the check that raised it, and it was no plan check that did"
             : State == FlowUpdateStates.Refused && string.IsNullOrWhiteSpace(Why) ? "it says not why it was refused"
             : Inbox is not null && string.IsNullOrWhiteSpace(Inbox) ? "it names no inbox entry"
             : Step is not null && !FlowInstanceId.IsWellFormed(Step) ? $"'{Step}' is not an instance's id"
@@ -446,6 +463,13 @@ public static class FlowUpdateGates
     public static string? Refused(WorkflowDefinition definition, string run, string status, IReadOnlyList<FlowStepAt> steps, IReadOnlyList<FlowUpdateEntry> updates, string cause)
     {
         ArgumentNullException.ThrowIfNull(definition);
+
+        if (cause == FlowUpdateCauses.PlanCheck)
+        {
+            // No person raises it, and it needs neither an input nor a window: the table of what is refused is not
+            // its door, for it is how the work of a round is made to fit together before any of it begins.
+            return null;
+        }
 
         var what = cause == FlowUpdateCauses.ChangedAnswer ? "answer" : "request";
 

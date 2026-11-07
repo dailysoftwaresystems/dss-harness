@@ -6,6 +6,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
+using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
 
@@ -105,7 +106,7 @@ public sealed class ImplementationFlowTests
         }
 
         var agents = new Scripted();
-        var steps = new MachineSteps();
+        var steps = new MachineSteps { Store = harness.OrchestrationStore, Worktrees = harness.WorktreeService };
 
         script?.Invoke(agents);
         machine?.Invoke(steps);
@@ -2636,6 +2637,156 @@ public sealed class ImplementationFlowTests
         Assert.Equal(["src/three/**"], [.. ((JsonArray)added.Item!["ownedPaths"]!).Select(paths => (string)paths!)]);
     }
 
+    [Fact]
+    public async Task AnAmendmentAddsAnItemTheNextRoundsOwnItemSharesAFileWith_TheCheckThatOpensTheRoundRaisesAPlanUpdate_Waits_AndOnlyTheSettledRoundBuilds()
+    {
+        using var temp = new TempDirectory();
+        Held auditing = null!;
+        var audits = 0;
+
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue(
+                    "planner",
+                    Completed(Plan(One(), One(name: "two", owned: "src/two/**"))),
+                    // What it returns for the amendment: the whole plan again, with the invoices view as an item of
+                    // its own - checked with the round's items, approved, and owed to the round that opens next.
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Three items ship the report, the invoices view beside it.",
+                            ["done"] = "the report ships; its view ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**"), One(name: "four", owned: "src/shared/**", reuses: "src/tool.cs")),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "added",
+                                    ["item"] = One(name: "four", owned: "src/shared/**", reuses: "src/tool.cs"),
+                                    ["for"] = "",
+                                    ["changed"] = "the amendment adds the invoices view, as the item 'four'",
+                                    ["keep"] = "",
+                                    ["undo"] = "",
+                                    ["instead"] = "",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }),
+                    // What it returns for the plan check that raised the update: the same item, under paths the
+                    // round's own item does not share.
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Three items ship the report, the invoices view under paths of its own.",
+                            ["done"] = "the report ships; its view ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**"), One(name: "four", owned: "src/four/**", reuses: "src/tool.cs")),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "changed",
+                                    ["item"] = One(name: "four", owned: "src/four/**", reuses: "src/tool.cs"),
+                                    ["for"] = "",
+                                    ["changed"] = "the round's own item 'three' and 'four' shared a file: 'four' moves to paths of its own",
+                                    ["keep"] = "",
+                                    ["undo"] = "",
+                                    ["instead"] = "",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }));
+
+                auditing = agents.Hold("auditor", _ => Interlocked.Increment(ref audits) == 1);
+            });
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        var drive = AnswerAsync(kit, "approve");
+
+        // The amendment lands where the plan's own words put it: while the first round is at its audit, past its
+        // items, so the work it adds is owed to the round that opens next.
+        await WhenAsync(
+            () => kit.Agents.Of("implementer").Count >= 2 && kit.Agents.Of("auditor").Count >= 1,
+            () => $"{Shown(kit)}");
+
+        var amended = await AmendAsync(kit, "Also ship the invoices view.");
+
+        Assert.True(amended.ExitCode == HarnessExit.Success, $"{amended.Message} | {Shown(kit)}");
+
+        // The amendment's plan is approved: its settle's approval, in the planning it made.
+        var first = await WhenOpenAsync(
+            kit,
+            question => question.ProblemShown?.Happened?.Contains("the invoices view beside it", StringComparison.Ordinal) == true,
+            () => $"{Shown(kit)}");
+
+        // The first round's audit concludes: not clean, and the second round is its items - one of them owning the
+        // file the amendment's item owes. With it ended, nothing of the run can go on but the amendment's approval,
+        // and the drive ends paused on it.
+        auditing.Open(with: Completed(SelfAudit(clean: false, items: [One(name: "three", owned: "src/shared/**", reuses: "src/tool.cs")])));
+
+        _ = await drive;
+
+        _ = await AnswerOneAsync(kit, first.Id, "approve");
+
+        // The second round opens at its check: the round's own item and the owed one share a file, and the check
+        // raises a plan update and waits - no work item of the round begins, and nobody is asked to build them as
+        // they are. The planner is given the check's problems, in its own conversation.
+        var settled = await WhenOpenAsync(
+            kit,
+            question => question.ProblemShown?.Happened?.Contains("the invoices view under paths of its own", StringComparison.Ordinal) == true,
+            () => $"{Shown(kit)}");
+
+        var given = Assert.Single(kit.Agents.Of("planner"), visit => visit.Prompt.Contains("found what does not pass as the round opens", StringComparison.Ordinal));
+
+        Assert.Contains("work items 'three' and 'four' both own", given.Prompt, StringComparison.Ordinal);
+
+        // The settled plan is approved; the check runs again on the list as it now is, and passes; the round builds
+        // the settled items - and no fold of them is refused, wherever either came from.
+        _ = await AnswerOneAsync(kit, settled.Id, "approve");
+
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Done) },
+            () => $"{Shown(kit)}");
+
+        var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+        Assert.DoesNotContain(flow.Steps, step => step.Step.EndsWith(".fold", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Failed));
+
+        // The check that opened the round: its first visit waits no more - stopped for the update it raised - and
+        // its second ends on what it found, the settled list.
+        var opening = flow.Steps.Where(step => step.Instance.Equals("rounds#2.item-check", StringComparison.Ordinal) || step.Instance.StartsWith("rounds#2.item-check+", StringComparison.Ordinal)).ToList();
+
+        Assert.Contains(opening, step => step.State == nameof(FlowInstanceState.Stopped) && step.EndedFor == "u2");
+        Assert.Contains(opening, step => step.State == nameof(FlowInstanceState.Done) && step.Output?["ok"]?.GetValue<bool>() == true);
+
+        // The round built the settled items: the audit's own and the amendment's, under paths they do not share - the
+        // settled one done again, in the place it holds in the round.
+        Assert.Equal(4, kit.Agents.Of("implementer").Count);
+
+        Assert.Equal(4, flow.Steps.Count(step => step.Instance.EndsWith(".implement", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done)));
+
+        // The updates the run took: the amendment, owed to the round that opened next, and the plan check's, raised
+        // as the round opened - its cause the check that found what does not pass, with its problems.
+        var updates = kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())!;
+
+        Assert.Equal([("amendment", "done"), ("planCheck", "done")], [.. updates.Updates.Select(update => (update.Cause, update.State))]);
+
+        var raised = updates.Updates[^1];
+
+        Assert.Equal("rounds#2.item-check", raised.Check);
+        Assert.Contains(raised.Problems!, problem => problem.Contains("work items 'three' and 'four' both own", StringComparison.Ordinal));
+
+        var moved = Assert.Single(raised.Pieces!, piece => piece.Kind == "changed");
+
+        Assert.Equal("four", moved.ItemName());
+        Assert.Equal(["src/four/**"], [.. ((JsonArray)moved.Item!["ownedPaths"]!).Select(paths => (string)paths!)]);
+        Assert.NotNull(moved.OwedTo);
+    }
+
     /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
     private static async Task EditWorkflowAsync(Kit kit, Func<string[], string[]> edit)
     {
@@ -3158,6 +3309,16 @@ public sealed class ImplementationFlowTests
         public void Queue(string type, params FlowStepResult[] results)
             => _queued[type] = new Queue<FlowStepResult>(results);
 
+        /// <summary>
+        /// The run's store and worktrees, where the script is given them: a <c>delete-agent</c> step's standing answer
+        /// removes the agent's worktree and marks the agent deleted in the store, as the real one would, so the run's
+        /// open agents are counted as the flow budgets them.
+        /// </summary>
+        internal OrchestrationStore? Store { get; set; }
+
+        /// <summary>The worktrees the script removes an agent's worktree through, where it is given them.</summary>
+        internal IWorktreeService? Worktrees { get; set; }
+
         /// <summary>The runner this script serves a type as.</summary>
         public IFlowStepTypeRunner Serving(string type)
             => new Served(this, type);
@@ -3244,7 +3405,7 @@ public sealed class ImplementationFlowTests
             public string Type => type;
 
             /// <inheritdoc/>
-            public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
+            public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
             {
                 ArgumentNullException.ThrowIfNull(run);
 
@@ -3256,7 +3417,22 @@ public sealed class ImplementationFlowTests
                     script._runs.Add(new MachineRun(run.Instance, run.Step, result));
                 }
 
-                return Task.FromResult(result);
+                if (type == "delete-agent" && script.Store is { } store && run.Place is { } place && (run.Target ?? run.WorksIn) is { } deleted)
+                {
+                    var layout = new OrchestratorLayout(place.Run, Path.Combine(place.Repository, ".orchestrators", place.Run));
+
+                    if (script.Worktrees is { } worktrees)
+                    {
+                        await worktrees.DeleteAsync(place.Repository, WorktreeAddress.Nested(place.Run, deleted).Name, force: true, deleteEvidence: true, discardUncommitted: true, cancellationToken);
+                    }
+
+                    if (store.ReadAgent(layout, deleted) is { } record)
+                    {
+                        store.WriteAgent(layout, record with { State = AgentStates.Deleted, DeletedAt = DateTimeOffset.Now, Abandoned = false });
+                    }
+                }
+
+                return result;
             }
         }
     }

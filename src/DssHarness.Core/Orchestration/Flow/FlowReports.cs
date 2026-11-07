@@ -373,6 +373,8 @@ public static class FlowReports
         ["fromAnswer"] = update.FromAnswer,
         ["toAnswer"] = update.ToAnswer,
         ["text"] = update.Text,
+        ["check"] = update.Check,
+        ["problems"] = update.Problems is { Count: > 0 } found ? new JsonArray([.. found.Select(problem => (JsonNode?)problem)]) : null,
         ["step"] = update.Step,
         ["then"] = update.Then,
         ["why"] = update.Why,
@@ -604,6 +606,8 @@ public static class FlowReports
 
                 text.Add(update.Cause == FlowUpdateCauses.ChangedAnswer
                     ? $"- {update.Id} (changed answer of {update.Question}, '{update.FromAnswer}' to '{update.ToAnswer}'), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{step}{why}"
+                    : update.Cause == FlowUpdateCauses.PlanCheck
+                    ? $"- {update.Id} (plan check of {update.Check}), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{step}{why}{(update.Problems is { Count: > 0 } found ? $"\n  > {string.Join("\n  > ", found)}" : string.Empty)}"
                     : $"- {update.Id} (amendment), taken at {FlowTimeConverter.Written(update.TakenAt)}: {update.State}{step}{why}{(update.Amendment is { } amendment ? $"\n  > {amendment.Replace("\n", "\n  > ")}" : string.Empty)}");
 
                 foreach (var piece in update.ThePieces.Where(piece => piece.Kind != FlowUpdatePieceKinds.Told))
