@@ -2787,6 +2787,166 @@ public sealed class ImplementationFlowTests
         Assert.NotNull(moved.OwedTo);
     }
 
+    /// <summary>
+    /// An amendment made while the second round is at its gate - its audit, past its items, its loop's own bound spent -
+    /// is given a third round, named in the report; one made past the items of that third round, one once the run's
+    /// write-down has begun and one to the run that has ended are each refused with its sentence, and nothing of the
+    /// refused ones is recorded.
+    /// </summary>
+    [Fact]
+    public async Task AnAmendmentAtTheSecondRoundsGate_IsGivenAThirdRoundNamedInTheReport_AndOnesPastItsItems_InTheWriteDownAndToTheEndedRun_AreEachRefused()
+    {
+        using var temp = new TempDirectory();
+        Held auditing = null!;
+        Held writing = null!;
+        var audits = 0;
+        var scribes = 0;
+
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue(
+                    "planner",
+                    Completed(Plan(One())),
+                    // What it returns for the amendment: the whole plan again, with the ledger as an item of its own -
+                    // checked, approved, and owed to the round that runs next.
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Two items ship the report, and the amendment adds the ledger as a third.",
+                            ["done"] = "the report ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**"), One(name: "three", owned: "src/three/**")),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "added",
+                                    ["item"] = One(name: "three", owned: "src/three/**"),
+                                    ["for"] = "",
+                                    ["changed"] = "the amendment adds the ledger, as the item 'three'",
+                                    ["keep"] = "",
+                                    ["undo"] = "",
+                                    ["instead"] = "",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }));
+
+                agents.Queue(
+                    "auditor",
+                    // The first round's audit: not clean, and the second round is its items. The third round's: not
+                    // clean with nothing more to build, so the loop asks at its bound once that round has ended.
+                    Completed(SelfAudit(clean: false, items: [One(name: "two", owned: "src/two/**")])),
+                    Completed(SelfAudit(clean: false, items: [])));
+
+                // The second round's audit is the gate the amendment is made at; the run's write-down is held at its
+                // handoff.
+                auditing = agents.Hold("auditor", _ => Interlocked.Increment(ref audits) == 2);
+                writing = agents.Hold("scribe", _ => Interlocked.Increment(ref scribes) == 1);
+            });
+
+        // The rounds loop asks at its bound where the configuration would answer for it: the window an amendment past
+        // the items of the last round stands in.
+        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        var drive = AnswerAsync(kit, "approve");
+
+        // The amendment lands where the plan's own words put it: while the second round is at its audit, past its
+        // items, its loop's own bound spent - so the work it adds is owed to a third round, added for the update.
+        await WhenAsync(
+            () => kit.Agents.Of("implementer").Count >= 2 && kit.Agents.Of("auditor").Count >= 2,
+            () => $"{Shown(kit)}");
+
+        var amended = await AmendAsync(kit, "Also ship the ledger.");
+
+        Assert.True(amended.ExitCode == HarnessExit.Success, $"{amended.Message} | {Shown(kit)}");
+
+        // The amendment's plan is approved: its settle's approval, in the planning it made.
+        var settle = await WhenOpenAsync(
+            kit,
+            question => question.ProblemShown?.Happened?.Contains("adds the ledger as a third", StringComparison.Ordinal) == true,
+            () => $"{Shown(kit)}");
+
+        _ = await AnswerOneAsync(kit, settle.Id, "approve");
+
+        // The update is done while the second round still stands at its audit, and the run is given its third round.
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())?.Updates.FirstOrDefault(update => update.Id == "u1") is { State: "done", AddedIteration: "rounds#3" },
+            () => $"{Shown(kit)}");
+
+        // The second round's audit concludes clean: the loop would end, and runs its third round instead - the one the
+        // update was given, the owed item alone.
+        auditing.Open(with: Completed(SelfAudit(clean: true)));
+
+        await WhenAsync(() => kit.Agents.Of("implementer").Count >= 3, () => $"{Shown(kit)}");
+
+        // The third round's audit finds what is left and names nothing more to build: the loop asks at its bound, past
+        // every item of every round it may run, and the run pauses on the question.
+        var bound = await WhenOpenAsync(kit, question => question.Kind == "loopBound", () => $"{Shown(kit)}");
+
+        _ = await drive;
+
+        // An amendment past the items of that third round: refused, for no round it may run would carry the work out.
+        var past = await AmendAsync(kit, "And the summary page too.");
+
+        Assert.Equal(HarnessExit.Refused, past.ExitCode);
+        Assert.Equal(
+            "run 'r1' is past the work items of round 3 of 'rounds', the last it can run (2 by its own bound, and the 1 that amend.maxAddedIterations lets updates add): nothing would carry the change out. Start a run for the request once this one has ended",
+            past.Message);
+
+        // The loop's bound is accepted and the run writes down what it built; held there, past the step its amend
+        // block names, a third amendment is refused.
+        var tail = AnswerOneAsync(kit, bound.Id, "accept");
+
+        await WhenAsync(() => kit.Agents.Of("scribe").Count >= 1, () => $"{Shown(kit)}");
+
+        var written = await AmendAsync(kit, "And the handoff rewritten.");
+
+        Assert.Equal(HarnessExit.Refused, written.ExitCode);
+        Assert.Equal(
+            "run 'r1' has started 'notes': what it built is being written down, and its plan is no longer changed. Start a run for the request once this one has ended",
+            written.Message);
+
+        writing.Open();
+        _ = await tail;
+
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Done) },
+            () => $"{Shown(kit)}");
+
+        // To a run that has ended: nothing left to go back to.
+        var ended = await AmendAsync(kit, "One more thing.");
+
+        Assert.Equal(HarnessExit.Refused, ended.ExitCode);
+        Assert.Equal("run 'r1' is done; there is nothing left to go back to", ended.Message);
+
+        // The run took one amendment, and it was given the third round: every round built its items - the third the
+        // owed item alone - and nothing of the refused ones was recorded, and the report names the round the update
+        // was given.
+        var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+        Assert.Equal(3, kit.Agents.Of("implementer").Count);
+        Assert.Equal(3, flow.Steps.Count(step => step.Instance.EndsWith(".implement", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done)));
+        Assert.Contains(flow.Steps, step => step.Instance == "rounds#3" && step.State == nameof(FlowInstanceState.Done));
+        Assert.Contains(flow.Steps, step => step.Instance == "rounds#3.items" && step.State == nameof(FlowInstanceState.Done));
+
+        var updates = kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())!;
+
+        Assert.Equal([("amendment", "done", "rounds#3")], [.. updates.Updates.Select(update => (update.Cause, update.State, update.AddedIteration))]);
+
+        var added = Assert.Single(updates.Updates[0].Pieces!, piece => piece.Kind == "added");
+
+        Assert.Equal("three", added.ItemName());
+        Assert.Equal("the next iteration of 'rounds'", added.OwedTo);
+
+        Assert.Contains("  - round 3 of 'rounds' was added for update u1", File.ReadAllText(kit.RunOf().ReportFile), StringComparison.Ordinal);
+    }
+
     /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
     private static async Task EditWorkflowAsync(Kit kit, Func<string[], string[]> edit)
     {
