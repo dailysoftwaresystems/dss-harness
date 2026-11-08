@@ -3260,6 +3260,298 @@ public sealed class ImplementationFlowTests
         Assert.Equal((HarnessExit.Refused, "no answer of run 'r2' was given by a person, so there is no set to change"), (configured.ExitCode, configured.Message));
     }
 
+    /// <summary>
+    /// The status of a run at each of its moments - waiting on its approval, at work in its first round, done - is the
+    /// engine's facts and the reporter's words, and the call changes no file of the run but its own record under
+    /// <c>asks/</c>, its cost the person's and never the run's; where the slot holds no key for the reporter's model the
+    /// facts are still the answer, with why no model worded them; a person's question is answered from a step's notes
+    /// the run's records hold; and the listing of its questions holds both answers of the changed set and what became
+    /// of each.
+    /// </summary>
+    [Fact]
+    public async Task ARunsStatusAtItsQuestionItsWorkAndItsEnd_IsTheFactsAndTheReportersWords_ChangingNoFileOfTheRun_AndWithNoKeyForTheReportersModelItSaysSo_AnAskIsAnsweredFromAStepsNotes_AndTheQuestionsListingHoldsEveryAnswer()
+    {
+        using var temp = new TempDirectory();
+        Held firstImplement = null!;
+        Held firstAudit = null!;
+        Held secondAudit = null!;
+
+        // The reporter serves the keyed model alone: its tier's first entry - the client that signs in with the
+        // machine's login - is taken out, so a slot that holds no key holds none for it.
+        const string serving = "glm-5.3";
+
+        AgentRunResult Worded(string text) => new(AgentRunStatus.Completed, FinalText: text) { Model = serving };
+
+        var kit = await PrepareAsync(
+            temp,
+            adjust: WithoutTheLoginModelOfTheReportersTier,
+            script: agents =>
+            {
+                agents.Queue(
+                    "planner",
+                    Completed(Plan(One())),
+                    // What it returns for the change: the whole plan again, the ledger one more item - checked and
+                    // approved again, owed to the round that runs next.
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Two items ship the report; the change adds the ledger as a second.",
+                            ["done"] = "the report ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**")),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "added",
+                                    ["item"] = One(name: "two", owned: "src/two/**"),
+                                    ["for"] = "",
+                                    ["changed"] = "the change adds the ledger, as the item 'two'",
+                                    ["keep"] = "",
+                                    ["undo"] = "",
+                                    ["instead"] = "",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }));
+
+                // The first round's implement is held to leave its notes: what the person's question asks is in the
+                // run's records, as every agent's run keeps them.
+                firstImplement = agents.Hold("implementer", step => step.StepInstance.StartsWith("rounds#1", StringComparison.Ordinal));
+
+                firstAudit = agents.Hold("auditor", step => step.StepInstance.StartsWith("rounds#1.self-audit", StringComparison.Ordinal));
+                secondAudit = agents.Hold("auditor", step => step.StepInstance.StartsWith("rounds#2.self-audit", StringComparison.Ordinal));
+
+                // The reporter's own answers: three statuses, a person's question, and - where the slot holds no key
+                // for its model - the answer a run with no credential gives.
+                agents.Queue(
+                    "reporter",
+                    Worded("The run waits on its approval."),
+                    Worded("The second round is at its self-audit."),
+                    Worded("The run is done; both items shipped."),
+                    Worded("In src/one.cs, as the notes of the implement of 'one' say."),
+                    new AgentRunResult(AgentRunStatus.NotStarted, AgentNotStartedBecause.KeyMissing, Error: "the run was given no credential, and every request is signed with a key"));
+            });
+
+        // It waits on a question: the approval open, the run paused on it. The call answers with the facts - the
+        // question among them, and the command that answers it - worded by the reporter, and changes no file of the
+        // run but its own record.
+        var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        var approval = Questions(kit).Questions.Single(question => question.Kind == "pause");
+        var atQuestion = await AskingOnlyAsync(kit, () => kit.Service.AskStatusAsync(kit.Tree.Path, "r1", json: false, Token).WaitAsync(Bound, Token));
+
+        Assert.Equal(HarnessExit.Success, atQuestion.ExitCode);
+        Assert.StartsWith($"run 'r1' (workflow '{WorkflowTemplates.ShippedWorkflowName}'), as of ", atQuestion.Message, StringComparison.Ordinal);
+
+        var atQuestionText = string.Join("\n", atQuestion.Details!);
+
+        Assert.Contains($"question {approval.Id} (pause) since ", atQuestionText, StringComparison.Ordinal);
+        Assert.Contains($"answer-orchestrator r1 <answer> --question {approval.Id}", atQuestionText, StringComparison.Ordinal);
+        Assert.Contains(
+            "estimate  none: every step instance that is left is of a step that has ended no instance Done in this run",
+            atQuestionText,
+            StringComparison.Ordinal);
+        Assert.Equal("The run waits on its approval.", atQuestion.Details!.Single(line => line == "The run waits on its approval."));
+        Assert.Equal(
+            $"This answer cost an unknown amount ({serving}). It is not counted in the run's budget.",
+            atQuestion.Details!.Single(line => line.StartsWith("This answer cost", StringComparison.Ordinal)));
+
+        // The reporter was given the facts and where the records are, its reads narrowed to the run's directory.
+        var statusAsked = kit.Agents.Of("reporter")[0];
+
+        Assert.StartsWith("Say how this run stands, for a person who asked.", statusAsked.Prompt, StringComparison.Ordinal);
+        Assert.Contains("## The facts", statusAsked.Prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("## The question", statusAsked.Prompt, StringComparison.Ordinal);
+        Assert.Contains(kit.RunOf().Directory, statusAsked.Prompt, StringComparison.Ordinal);
+        Assert.Equal(kit.RunOf().Directory, statusAsked.Ground!.ReporterRoot);
+        Assert.Equal(serving, statusAsked.Model);
+        Assert.True(statusAsked.Order![0].Usable, $"{statusAsked.Order[0].Model} is not usable");
+
+        var asks = statusAsked.RecordDirectory!;
+
+        Assert.StartsWith(kit.RunOf().Directory, asks, StringComparison.Ordinal);
+        Assert.Contains($"{Path.DirectorySeparatorChar}asks{Path.DirectorySeparatorChar}", asks, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(asks, "facts.md")), "the facts as given are kept in the call's own record");
+        Assert.Contains($"Record: {asks}", atQuestion.Details!, StringComparer.Ordinal);
+
+        // It works: the first round built its item and, the change approved again, the second round is building the
+        // ledger. The facts say what is running and when the run may finish - a range now, for a step of what is left
+        // has ended Done once in this run - and the call leaves the run's files as it found it, the engine parked at
+        // the implement.
+        var drive = AnswerAsync(kit, "approve");
+
+        await WhenAsync(() => kit.Agents.Of("implementer").Count >= 1, () => $"{Shown(kit)}");
+
+        // The first round's implement leaves its notes, as every agent's run does: the answer to the person's later
+        // question is in the run's records from here on.
+        File.WriteAllText(
+            Path.Combine(kit.Agents.Of("implementer")[0].RecordDirectory!, OrchestratorLayout.StepNotesFileName),
+            "the item 'one' lives in src/one.cs, made as one file");
+
+        firstImplement.Open();
+
+        await WhenAsync(() => kit.Agents.Of("auditor").Count >= 1, () => $"{Shown(kit)}");
+
+        // The approval answered 'approve' and changed to 'revise' within the minute: the plan is approved again and
+        // the ledger is owed to the round that runs next.
+        var changed = await ChangeAsync(kit, "revise", "Also ship the ledger.");
+
+        Assert.True(HarnessExit.Success == changed.ExitCode, $"{changed.ExitCode}: {changed.Message} | {Shown(kit)}");
+
+        await WhenAsync(() => kit.Agents.Of("planner").Count >= 2, () => $"{Shown(kit)}");
+
+        var settle = await WhenOpenAsync(
+            kit,
+            question => question.ProblemShown?.Happened?.Contains("adds the ledger as a second", StringComparison.Ordinal) == true,
+            () => $"{Shown(kit)}");
+
+        await WhenAsync(
+            () => DateTimeOffset.UtcNow - NewestPersonAnswerAt(kit) > TimeSpan.FromSeconds(1),
+            () => "the clock never moved past the change");
+
+        _ = await AnswerOneAsync(kit, settle.Id, "approve");
+
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())?.Updates.FirstOrDefault(update => update.Id == "u1") is { State: "done" },
+            () => $"{Shown(kit)}");
+
+        firstAudit.Open(with: Completed(SelfAudit(clean: false, items: [One(name: "two", owned: "src/two/**")])));
+
+        await WhenAsync(() => kit.Agents.Of("implementer").Count >= 2 && kit.Agents.Of("auditor").Count >= 2, () => $"{Shown(kit)}");
+
+        // It works: the second round built the ledger and its audit is at work. The facts say what is running and
+        // when the run may finish - a range now, for a step of what is left, this run's audits, has ended Done once
+        // in it - and the call leaves the run's files as it found it, the engine parked at the audit.
+        var atWork = await AskingOnlyAsync(kit, () => kit.Service.AskStatusAsync(kit.Tree.Path, "r1", json: false, Token).WaitAsync(Bound, Token));
+
+        Assert.Equal(HarnessExit.Success, atWork.ExitCode);
+
+        var atWorkText = string.Join("\n", atWork.Details!);
+
+        Assert.Contains("rounds#2.self-audit (reason, agent '", atWorkText, StringComparison.Ordinal);
+        Assert.Contains(", attempt 1) for ", atWorkText, StringComparison.Ordinal);
+        Assert.Contains("between ", atWorkText, StringComparison.Ordinal);
+        Assert.Contains(" more, from the ", atWorkText, StringComparison.Ordinal);
+        Assert.Equal("The second round is at its self-audit.", atWork.Details!.Single(line => line == "The second round is at its self-audit."));
+
+        secondAudit.Open();
+
+        var done = await drive;
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.ExitCode}: {done.Message} | {Shown(kit)}");
+
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Done) },
+            () => $"{Shown(kit)}");
+
+        // It has ended: no estimate and nothing more can come, the facts saying both, and the reporter's words beside
+        // them.
+        var atEnd = await AskingOnlyAsync(kit, () => kit.Service.AskStatusAsync(kit.Tree.Path, "r1", json: false, Token).WaitAsync(Bound, Token));
+
+        Assert.Equal(HarnessExit.Success, atEnd.ExitCode);
+        Assert.Contains(": done, ran for ", atEnd.Message, StringComparison.Ordinal);
+
+        var atEndText = string.Join("\n", atEnd.Details!);
+
+        Assert.Contains("none: the run has ended", atEndText, StringComparison.Ordinal);
+        Assert.Contains("nothing more can come", atEndText, StringComparison.Ordinal);
+        Assert.Contains(" tokens spent", atEndText, StringComparison.Ordinal);
+        Assert.Equal("The run is done; both items shipped.", atEnd.Details!.Single(line => line == "The run is done; both items shipped."));
+
+        // A person's question whose answer is in a step's notes: the reporter is given the question and the facts,
+        // and its answer names what the records hold.
+        var asked = await AskingOnlyAsync(kit, () => kit.Service.AskAsync(kit.Tree.Path, "r1", "where does the one item live?", json: false, Token).WaitAsync(Bound, Token));
+
+        Assert.Equal(HarnessExit.Success, asked.ExitCode);
+        Assert.Equal($"run 'r1' answered the question, worded by {serving}", asked.Message);
+        Assert.Equal("In src/one.cs, as the notes of the implement of 'one' say.", asked.Details!.Single(line => line == "In src/one.cs, as the notes of the implement of 'one' say."));
+
+        var askVisit = kit.Agents.Of("reporter").Single(visit => visit.Prompt.Contains("## The question", StringComparison.Ordinal));
+
+        Assert.StartsWith("Answer a person's question about this run, from its records.", askVisit.Prompt, StringComparison.Ordinal);
+        Assert.Contains($"## The question\n\nwhere does the one item live?\n\n## The facts", askVisit.Prompt, StringComparison.Ordinal);
+        Assert.Contains(kit.RunOf().Directory, askVisit.Prompt, StringComparison.Ordinal);
+
+        var implement = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps
+            .Single(step => step.Instance.StartsWith("rounds#1", StringComparison.Ordinal) && step.Instance.EndsWith(".implement", StringComparison.Ordinal));
+
+        Assert.Contains(
+            "the item 'one' lives in src/one.cs",
+            File.ReadAllText(Path.Combine(kit.RunOf().InstanceDirectory(implement.Instance, implement.Agent!), OrchestratorLayout.StepNotesFileName)),
+            StringComparison.Ordinal);
+
+        // The slot holds no key for the reporter's model: the facts are still the answer, said why no model worded
+        // them, and the order the reporter was given holds no usable entry and no credential.
+        OrchestrationKit.Write(kit.Tree.Path, Path.Combine(".harness-config", "workflows", ".env", "a.env"), string.Empty);
+
+        var keyless = await AskingOnlyAsync(kit, () => kit.Service.AskStatusAsync(kit.Tree.Path, "r1", json: false, Token).WaitAsync(Bound, Token));
+
+        Assert.Equal(HarnessExit.Success, keyless.ExitCode);
+        Assert.StartsWith($"run 'r1' (workflow '{WorkflowTemplates.ShippedWorkflowName}'), as of ", keyless.Message, StringComparison.Ordinal);
+        Assert.Contains("no model worded this: the run was given no credential, and every request is signed with a key", string.Join("\n", keyless.Details!), StringComparison.Ordinal);
+        Assert.Equal("This answer cost nothing: no model worded it.", keyless.Details!.Single(line => line.StartsWith("This answer cost", StringComparison.Ordinal)));
+
+        var keylessVisit = kit.Agents.Of("reporter")[^1];
+
+        Assert.All(keylessVisit.Order!, entry => Assert.False(entry.Usable, $"{entry.Model} stayed usable"));
+        Assert.Null(keylessVisit.Credential);
+
+        // The listing holds every question of the run - the approval the change changed and the settle of its plan,
+        // both answers of the one and the person's answer of the other - and what became of each.
+        var listed = await kit.Service.QuestionsAsync(kit.Tree.Path, "r1", json: false, Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, listed.ExitCode);
+        Assert.True(
+            listed.Message == "run 'r1' raised 2 question(s)",
+            $"{listed.Message} | questions: {string.Join(", ", Questions(kit).Questions.Select(question => $"{question.Id}/{question.Kind}/{question.State}/{question.Answers.Count} answer(s)"))}");
+
+        var questions = Questions(kit).Questions;
+        var changedSet = questions.Single(question => question.Kind == "pause" && question.Answers.Count == 2);
+        var settled = questions.Single(question => question.Kind == "pause" && question.Answers.Count == 1);
+        var listedText = string.Join("\n", listed.Details!);
+
+        Assert.Contains($"question {changedSet.Id} (pause, answered): ", listedText, StringComparison.Ordinal);
+        Assert.Contains("  answered 'approve' by a person, through answer-orchestrator", listedText, StringComparison.Ordinal);
+        Assert.Contains("  answered 'revise' by a person, through answer-orchestrator: \"Also ship the ledger.\"", listedText, StringComparison.Ordinal);
+        Assert.Contains($"question {settled.Id} (pause, answered): ", listedText, StringComparison.Ordinal);
+        Assert.Contains($"questions: {kit.RunOf().QuestionsFile}", listedText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every file of the run as it stands, but the calls' own records under its <c>asks/</c> and the lock files the
+    /// engine holds open while it works: what a call that reads only must leave as it found it. The files are read
+    /// sharing them with the engine, which holds its events open while it works.
+    /// </summary>
+    private static Dictionary<string, byte[]> FilesOf(Kit kit)
+        => Directory.EnumerateFiles(kit.RunOf().Directory, "*", SearchOption.AllDirectories)
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}asks{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !file.EndsWith(".lock", StringComparison.Ordinal))
+            .ToDictionary(file => file, SharedRead, StringComparer.Ordinal);
+
+    /// <summary>A file's bytes, read sharing it with whoever holds it open.</summary>
+    private static byte[] SharedRead(string file)
+    {
+        using var held = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var read = new MemoryStream();
+        held.CopyTo(read);
+
+        return read.ToArray();
+    }
+
+    /// <summary>A call of one of the two ask commands, checked to change no file of the run but its own record under <c>asks/</c>.</summary>
+    private static async Task<CommandOutcome> AskingOnlyAsync(Kit kit, Func<Task<CommandOutcome>> call)
+    {
+        var before = FilesOf(kit);
+        var outcome = await call();
+
+        Assert.Equal(before.Keys.Order(StringComparer.Ordinal), FilesOf(kit).Keys.Order(StringComparer.Ordinal));
+        Assert.All(before, file => Assert.True(file.Value.SequenceEqual(SharedRead(file.Key)), $"{file.Key} changed"));
+
+        return outcome;
+    }
+
     /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
     private static async Task EditWorkflowAsync(Kit kit, Func<string[], string[]> edit)
     {
@@ -3289,6 +3581,18 @@ public sealed class ImplementationFlowTests
         }
 
         return [.. kept];
+    }
+
+    /// <summary>
+    /// Takes the model of the reporter's tier that signs in with the machine's login out of it, tier and model both:
+    /// the tier holds the keyed model alone, so a slot that holds no key holds none for the reporter.
+    /// </summary>
+    private static void WithoutTheLoginModelOfTheReportersTier(HarnessConfig config)
+    {
+        config.TierConfig["fast"].Remove("claude-haiku-5-5");
+        config.Providers.Single(entry => entry.Name == "anthropic").Models
+            .Single(model => model.Code == "claude-haiku-5-5")
+            .Tiers.Remove("fast");
     }
 
     /// <summary>Takes the fallback model's prices out of the configuration: a model whose cost cannot be counted.</summary>
