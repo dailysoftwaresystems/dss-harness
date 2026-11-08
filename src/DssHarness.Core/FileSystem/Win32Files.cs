@@ -126,8 +126,10 @@ internal static class Win32Files
             {
                 return TryReplace(source, destination, Rename);
             }
-            catch (Exception refused) when (tries < 25 && refused is UnauthorizedAccessException or IOException { HResult: 32 })
+            catch (Exception refused) when (tries < 25 && File.Exists(destination) && refused is UnauthorizedAccessException or IOException { HResult: 32 })
             {
+                // Only a file held open is waited out: where no file stands at the destination - a directory is in the
+                // way - the refusal is nobody's but the caller's own, at once.
                 Thread.Sleep(20);
             }
         }
