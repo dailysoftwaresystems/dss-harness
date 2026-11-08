@@ -493,6 +493,55 @@ public sealed class PhysicalFileSystemTests
         Assert.Equal(32, Assert.Throws<IOException>(() => Win32Files.TryReplace(source, destination, (_, _) => 32)).HResult);
     }
 
+    /// <summary>
+    /// A rename Windows refuses because the old file is held by a holder that shares no deletion - a scanner's brief look
+    /// at a file nobody here holds - is tried again until the holder is gone, and lands; one that stays past half a second
+    /// is the refusal it always was, raised as the runtime's own file calls raise it.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task TryReplace_WaitsOutAHolderThatSharesNoDeletion_AndRefusesOnlyOneThatStays()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows renames through a handle's information.");
+
+        using var temp = new TempDirectory();
+        var source = temp.Combine("new.json");
+        var destination = temp.Combine("record.json");
+        File.WriteAllText(source, "new");
+        File.WriteAllText(destination, "old");
+
+        // A holder that shares no deletion, gone in a fifth of a second.
+        var held = Task.Run(
+            () =>
+            {
+                using (new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    Thread.Sleep(200);
+                }
+            },
+            TestContext.Current.CancellationToken);
+
+        var replaced = await Task.Run(() => Win32Files.TryReplace(source, destination));
+
+        Assert.True(replaced);
+        Assert.False(File.Exists(source));
+        Assert.Equal("new", File.ReadAllText(destination));
+
+        await held;
+
+        // One that stays past the wait: the refusal raises as the runtime's own file calls raise it, and the same rename
+        // lands once it is gone.
+        File.WriteAllText(source, "newer");
+
+        using (var staying = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            Assert.Equal(32, Assert.Throws<IOException>(() => Win32Files.TryReplace(source, destination)).HResult);
+        }
+
+        Assert.True(Win32Files.TryReplace(source, destination));
+        Assert.Equal("newer", File.ReadAllText(destination));
+    }
+
     /// <summary>On Windows, an interruption stops the looking between one entry and the next, rather than after the walk.</summary>
     [Fact]
     public void FindHeld_StopsForAnInterruption()
