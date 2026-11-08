@@ -185,6 +185,10 @@ public sealed class ImplementationFlowTests
     private static Task<CommandOutcome> AmendAsync(Kit kit, string text)
         => kit.Service.AmendAsync(kit.Tree.Path, "r1", text, textFile: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
+    /// <summary>A changed answer to the last set a person answered, within the bound.</summary>
+    private static Task<CommandOutcome> ChangeAsync(Kit kit, string answer, string? text = null)
+        => kit.Service.AnswerAsync(kit.Tree.Path, "r1", answer, question: null, text: text, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
     /// <summary>
     /// An answer to one question the run holds open, by its id, kept up until the run takes it: an answer handed to
     /// an engine whose session is ending lands in the inbox for that session's next - the design's own rule - and
@@ -215,6 +219,30 @@ public sealed class ImplementationFlowTests
     /// <summary>The run's questions, as the store holds them now.</summary>
     private static FlowQuestionsFile Questions(Kit kit)
         => kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf()) ?? throw new InvalidOperationException("the run holds no questions file");
+
+    /// <summary>The last set a person answered, as the run's questions file reads it - the one a changed answer names.</summary>
+    private static string? NewestPersonAnswer(Kit kit)
+        => Questions(kit).Questions
+            .SelectMany(question => question.Answers.Where(answer => answer.By?.Who == "person").Select(answer => (question.Id, answer.At)))
+            .OrderByDescending(answer => answer.At)
+            .Select(answer => (string?)answer.Id)
+            .FirstOrDefault();
+
+    /// <summary>When the last answer a person gave was recorded, as the run's questions file reads it.</summary>
+    private static DateTimeOffset NewestPersonAnswerAt(Kit kit)
+        => Questions(kit).Questions
+            .SelectMany(question => question.Answers.Where(answer => answer.By?.Who == "person").Select(answer => answer.At))
+            .DefaultIfEmpty()
+            .Max();
+
+    /// <summary>The run's events, whole, read as a diagnostic that shares the file with the engine writing it.</summary>
+    private static string Events(Kit kit)
+    {
+        using var shared = new FileStream(Path.Combine(kit.RunOf().Directory, "events.jsonl"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var read = new StreamReader(shared);
+
+        return read.ReadToEnd() ?? string.Empty;
+    }
 
     /// <summary>Waits within the bound until the run holds an open question the predicate names, and returns it.</summary>
     private static async Task<FlowQuestionEntry> WhenOpenAsync(Kit kit, Func<FlowQuestionEntry, bool> which, Func<string>? said = null)
@@ -2945,6 +2973,291 @@ public sealed class ImplementationFlowTests
         Assert.Equal("the next iteration of 'rounds'", added.OwedTo);
 
         Assert.Contains("  - round 3 of 'rounds' was added for update u1", File.ReadAllText(kit.RunOf().ReportFile), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The approval answered 'approve' and changed to 'revise' within the minute: the planner is given both answers and
+    /// what the first set going, the plan is approved again, and what the change adds is carried out as an amendment's
+    /// is; a changed answer that changes no scope, after which nothing is raised and nobody is told; the same past the
+    /// minute, refused with the time it could be changed until; a second change of a set already changed; and a change
+    /// of an answer the configuration gave, which is no set to change.
+    /// </summary>
+    [Fact]
+    public async Task AnApprovalAnsweredApproveThenChangedToReviseWithinTheMinute_IsGivenToThePlannerWithBothAnswers_ApprovedAgain_AndCarriedOutAsAnAmendmentIs_AnEmptyChangeRaisesNothing_PastItsMinuteAndASecondChangeAreRefused_AndSoIsOneOfAnAnswerTheConfigurationGave()
+    {
+        using var temp = new TempDirectory();
+        Held firstAudit = null!;
+        Held secondAudit = null!;
+
+        var kit = await PrepareAsync(
+            temp,
+            script: agents =>
+            {
+                agents.Queue(
+                    "planner",
+                    Completed(Plan(One())),
+                    // What it returns for the change: the whole plan again, the ledger one more item - checked,
+                    // approved again, and owed to the round that runs next.
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Two items ship the report; the change adds the ledger as a second.",
+                            ["done"] = "the report ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**")),
+                            ["scope"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["kind"] = "added",
+                                    ["item"] = One(name: "two", owned: "src/two/**"),
+                                    ["for"] = "",
+                                    ["changed"] = "the change adds the ledger, as the item 'two'",
+                                    ["keep"] = "",
+                                    ["undo"] = "",
+                                    ["instead"] = "",
+                                }),
+                            ["preExisting"] = new JsonArray(),
+                        }),
+                    // What it returns for the second change: the words change nothing to build - the same items, the
+                    // scope empty, so nothing is raised and nobody is told.
+                    Completed(
+                        new JsonObject
+                        {
+                            ["summary"] = "Two items ship the report; the words change nothing to build.",
+                            ["done"] = "the report ships; its test holds",
+                            ["source"] = "made",
+                            ["departures"] = new JsonArray(),
+                            ["items"] = new JsonArray(One(), One(name: "two", owned: "src/two/**")),
+                            ["scope"] = new JsonArray(),
+                            ["preExisting"] = new JsonArray(),
+                        }));
+
+                // This run's own audits are held, each by the round it audits - a held visit is answered once, by the
+                // answer its hold is opened with, and the second run's audits of the same names stand for work slow
+                // enough to be answered the same way.
+                firstAudit = agents.Hold("auditor", step => step.StepInstance.StartsWith("rounds#1.self-audit", StringComparison.Ordinal));
+                secondAudit = agents.Hold("auditor", step => step.StepInstance.StartsWith("rounds#2.self-audit", StringComparison.Ordinal));
+            });
+
+        // The rounds loop asks at its bound where the configuration would answer for it: the window a change past its
+        // minute stands in.
+        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "implementation.yml");
+        var asShipped = File.ReadAllLines(workflow);
+
+        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+        Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+        var drive = AnswerAsync(kit, "approve");
+
+        await WhenAsync(
+            () => kit.Agents.Of("implementer").Count >= 1 && kit.Agents.Of("auditor").Count >= 1,
+            () => $"{Shown(kit)}");
+
+        // The change, within the minute of the answer it changes: handed to the engine running the run.
+        var changed = await ChangeAsync(kit, "revise", "Also ship the ledger.");
+
+        Assert.True(HarnessExit.Success == changed.ExitCode, $"{changed.ExitCode}: {changed.Message} | {Shown(kit)}");
+
+        // The planner is given both answers and what the first set going: the question with the answer before and the
+        // answer now, and each step of the round the first answer set going, with how it stands.
+        await WhenAsync(() => kit.Agents.Of("planner").Count >= 2, () => $"{Shown(kit)}");
+
+        var planned = kit.Agents.Of("planner")[1].Prompt;
+
+        Assert.Contains("was answered 'approve' and is answered 'revise' now, with: Also ship the ledger.", planned, StringComparison.Ordinal);
+        Assert.Contains("(item-agent)", planned, StringComparison.Ordinal);
+        Assert.Contains("(implement)", planned, StringComparison.Ordinal);
+
+        // The plan is approved again: the change's settle, in the planning it made. The run's records keep times to
+        // the second, and the last set a person answered is the newest by them: the approval waits for a later
+        // second than the change, so what it records is the last beyond any tie.
+        var settle = await WhenOpenAsync(
+            kit,
+            question => question.ProblemShown?.Happened?.Contains("adds the ledger as a second", StringComparison.Ordinal) == true,
+            () => $"{Shown(kit)}");
+
+        await WhenAsync(
+            () => DateTimeOffset.UtcNow - NewestPersonAnswerAt(kit) > TimeSpan.FromSeconds(1),
+            () => "the clock never moved past the change");
+
+        _ = await AnswerOneAsync(kit, settle.Id, "approve");
+
+        // The settle's answer is the last a person gave, as the run's records read, before the next change is given:
+        // what a change names the last set by is the record.
+        await WhenAsync(
+            () => NewestPersonAnswer(kit) == settle.Id,
+            () => $"{Shown(kit)} || answers: {string.Join(" | ", Questions(kit).Questions.SelectMany(question => question.Answers.Select(answer => $"{question.Id}/{answer.Answer}/by {answer.By?.Who}/at {answer.At:O}/update {answer.Update}")))}");
+
+        // The update is done: the ledger is owed to the round that runs next, as an amendment's added item is.
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())?.Updates.FirstOrDefault(update => update.Id == "u1") is { State: "done" },
+            () => $"{Shown(kit)}");
+
+        // The first round's audit concludes not clean, naming the ledger for the round that runs next - which the
+        // update owes it too, so the second round builds it once.
+        firstAudit.Open(with: Completed(SelfAudit(clean: false, items: [One(name: "two", owned: "src/two/**")])));
+
+        await WhenAsync(
+            () => kit.Agents.Of("implementer").Count >= 2 && kit.Agents.Of("auditor").Count >= 2,
+            () => $"{Shown(kit)}");
+
+        // A changed answer that changes no scope: the words of the second answer name nothing to build.
+        var emptied = await ChangeAsync(kit, "revise", "Only the words of the summary change; nothing to build.");
+
+        Assert.True(HarnessExit.Success == emptied.ExitCode, $"{emptied.ExitCode}: {emptied.Message} | {Shown(kit)}");
+
+        await WhenAsync(() => kit.Agents.Of("planner").Count >= 3, () => $"{Shown(kit)}");
+
+        var replanned = kit.Agents.Of("planner")[2].Prompt;
+
+        Assert.Contains("was answered 'approve' and is answered 'revise' now, with: Only the words of the summary change; nothing to build.", replanned, StringComparison.Ordinal);
+
+        var reApproved = await WhenOpenAsync(
+            kit,
+            question => question.ProblemShown?.Happened?.Contains("the words change nothing to build", StringComparison.Ordinal) == true,
+            () => $"{Shown(kit)}");
+
+        // A second change of the set the first change changed: refused, for a set is changed one time.
+        await WhenAsync(() => NewestPersonAnswer(kit) == settle.Id, () => $"{Shown(kit)}");
+
+        var second = await ChangeAsync(kit, "approve");
+
+        Assert.Equal(HarnessExit.Refused, second.ExitCode);
+        Assert.StartsWith($"question '{settle.Id}' of run 'r1' had its answer changed already, at ", second.Message, StringComparison.Ordinal);
+        Assert.EndsWith("; a set is changed one time", second.Message, StringComparison.Ordinal);
+
+        _ = await AnswerOneAsync(kit, reApproved.Id, "approve");
+
+        // The empty change is done, and nothing is raised and nobody is told.
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())?.Updates.FirstOrDefault(update => update.Id == "u2") is { State: "done" },
+            () => $"{Shown(kit)}");
+
+        Assert.Contains(
+            "update u2 is done: its plan stands, and nothing of its scope changes",
+            Events(kit),
+            StringComparison.Ordinal);
+
+        // The second round's audit concludes not clean with nothing more to name: the loop asks at its bound, which
+        // the run parks on - the last set a person answered behind it, its minute spent.
+        secondAudit.Open(with: Completed(SelfAudit(clean: false, items: [])));
+
+        var bound = await WhenOpenAsync(kit, question => question.Kind == "loopBound", () => $"{Shown(kit)}");
+
+        _ = await drive;
+
+        // Every answer a person gave, aged past the minute its set could be changed in - the last of them least, so it
+        // is still the last set a person answered, and its minute is spent.
+        var older = 0;
+        var aged = Questions(kit) with
+        {
+            Questions =
+            [
+                .. Questions(kit).Questions.Select(question => question with
+                {
+                    Answers = [.. question.Answers.Select(answer => answer.By?.Who == "person" ? answer with { At = DateTimeOffset.UtcNow.AddMinutes(-(20 - older++)) } : answer)],
+                }),
+            ],
+        };
+
+        kit.Harness.OrchestrationStore.WriteFlowQuestions(kit.RunOf(), aged);
+
+        // The same change, past the minute: refused, with the time the answer could be changed until - and the answer
+        // stands.
+        var late = await ChangeAsync(kit, "revise", "And the summary page too.");
+
+        Assert.Equal(HarnessExit.Refused, late.ExitCode);
+        Assert.StartsWith($"question {reApproved.Id} of run 'r1' was answered 'approve' at ", late.Message, StringComparison.Ordinal);
+        Assert.Contains("and could be answered again until ", late.Message, StringComparison.Ordinal);
+        Assert.EndsWith(". The answer stands. To change what the run builds, amend its request: amend-orchestrator-request r1 \"<what to change>\"", late.Message, StringComparison.Ordinal);
+
+        Assert.Single(Questions(kit).Questions.Single(question => question.Id == reApproved.Id).Answers);
+
+        // The bound is accepted and the run ends on its leftover.
+        var tail = AnswerOneAsync(kit, bound.Id, "accept");
+
+        await tail;
+
+        await WhenAsync(
+            () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Done) },
+            () => $"{Shown(kit)}");
+
+        // Both changes were carried out as an amendment's is: every round built its items - the second the owed item
+        // alone - both answers kept with their times, the set each changed names its update, and nothing of the
+        // refused ones was recorded.
+        var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+        Assert.Equal(2, kit.Agents.Of("implementer").Count);
+        Assert.Equal(2, flow.Steps.Count(step => step.Instance.EndsWith(".implement", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done)));
+        Assert.Contains(flow.Steps, step => step.Instance == "rounds#2" && step.State == nameof(FlowInstanceState.Done));
+
+        var updates = kit.Harness.OrchestrationStore.ReadFlowUpdates(kit.RunOf())!;
+
+        Assert.Equal(
+            [("changedAnswer", "done", "approve", "revise"), ("changedAnswer", "done", "approve", "revise")],
+            [.. updates.Updates.Select(update => (update.Cause, update.State, update.FromAnswer, update.ToAnswer))]);
+
+        var added = Assert.Single(updates.Updates[0].Pieces!, piece => piece.Kind == "added");
+
+        Assert.Equal("two", added.ItemName());
+        Assert.Equal("the next iteration of 'rounds'", added.OwedTo);
+        Assert.Null(updates.Updates[0].AddedIteration);
+
+        Assert.Empty(updates.Updates[1].Pieces!);
+        Assert.True((updates.Updates[1].Told?.Count ?? 0) == 0, $"{Shown(kit)}");
+        Assert.Null(updates.Updates[1].AddedIteration);
+
+        var questions = Questions(kit).Questions;
+
+        Assert.Equal([questions[0].Id, settle.Id], [.. updates.Updates.Select(update => update.Question)]);
+
+        Assert.Equal(2, questions[0].Answers.Count);
+        Assert.Equal(("approve", false), (questions[0].Answers[0].Answer, questions[0].Answers[0].ReplacedAt is null));
+        Assert.Equal(("revise", "u1", "person"), (questions[0].Answers[1].Answer, questions[0].Answers[1].Update, questions[0].Answers[1].By?.Who));
+
+        Assert.Equal(2, questions[1].Answers.Count);
+        Assert.Equal(("revise", "u2"), (questions[1].Answers[1].Answer, questions[1].Answers[1].Update));
+        Assert.Single(questions[2].Answers);
+
+        // A second run, its plan approved beforehand by its input and its bound answered by its configuration: no
+        // person answered anything, so a change of the answer the configuration gave is refused - it is no set to
+        // change.
+        await EditWorkflowAsync(kit, _ => asShipped);
+
+        var secondRun = await kit.Service.RunAsync(
+            kit.Tree.Path,
+            WorkflowTemplates.ShippedWorkflowName,
+            run: null,
+            ["request=Ship the ledger too.", "preapproved=yes"],
+            json: false,
+            cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.True(HarnessExit.Success == secondRun.ExitCode, $"{secondRun.ExitCode}: {secondRun.Message} | {Shown(kit)}");
+
+        var secondQuestions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf("r2"))!;
+
+        Assert.Equal("input", secondQuestions.Questions.Single(question => question.Kind == "pause").Answers[0].By?.Who);
+        Assert.Equal("configuration", secondQuestions.Questions.Single(question => question.Kind == "loopBound").Answers[0].By?.Who);
+
+        Assert.Equal("input", secondQuestions.Questions.Single(question => question.Kind == "pause").Answers[0].By?.Who);
+        Assert.Equal("configuration", secondQuestions.Questions.Single(question => question.Kind == "loopBound").Answers[0].By?.Who);
+
+        var configured = await kit.Service.AnswerAsync(
+            kit.Tree.Path,
+            "r2",
+            "revise",
+            question: null,
+            text: "make it two ledgers",
+            textFile: null,
+            again: true,
+            json: false,
+            cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal((HarnessExit.Refused, "no answer of run 'r2' was given by a person, so there is no set to change"), (configured.ExitCode, configured.Message));
     }
 
     /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
