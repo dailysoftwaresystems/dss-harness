@@ -173,6 +173,18 @@ public sealed class ImplementationFlowTests
     private static Task<CommandOutcome> StartAsync(Kit kit, params string[] inputs)
         => kit.Service.RunAsync(kit.Tree.Path, WorkflowTemplates.ShippedWorkflowName, run: null, inputs, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
+    /// <summary>A safe pause of the run's engine, within the bound.</summary>
+    private static Task<CommandOutcome> PauseAsync(Kit kit, bool all = false)
+        => kit.Service.PauseAsync(kit.Tree.Path, "r1", all, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+    /// <summary>A stop of the run's engine, within the bound.</summary>
+    private static Task<CommandOutcome> StopAsync(Kit kit)
+        => kit.Service.StopAsync(kit.Tree.Path, "r1", now: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+    /// <summary>A resume of the run, within the bound.</summary>
+    private static Task<CommandOutcome> ResumeAsync(Kit kit)
+        => kit.Service.ResumeAsync(kit.Tree.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
     /// <summary>An answer to the run's open question, within the bound.</summary>
     private static Task<CommandOutcome> AnswerAsync(Kit kit, string answer, string? text = null)
         => kit.Service.AnswerAsync(kit.Tree.Path, "r1", answer, question: null, text: text, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
@@ -3520,6 +3532,336 @@ public sealed class ImplementationFlowTests
     }
 
     /// <summary>
+    /// The safe pause over the shipped flow: one in the middle of an implementation asks its agent for its handoff and
+    /// the step's next attempt is given it, its file spent; one in the middle of a review, whose agent gave no account,
+    /// leaves the handoff the engine writes in the step's own directory and gives it the same way; one in the middle of
+    /// a build pauses the run while the build runs, says the engine stays to record it, refuses a resume while it lives
+    /// and ends once the build is recorded; <c>--all</c> stops the machine steps the pause leaves running, and a second
+    /// interrupt during the handoffs stops the run and keeps no handoff, while one after the pause is what <c>--all</c> is.
+    /// </summary>
+    [Fact]
+    public async Task ASafePauseInTheMiddleOfAnImplementation_GivesTheAgentsHandoffToItsNextAttempt_OneOfAReview_LeavesTheEnginesOwnInTheStepsDirectory_AndOneOfABuild_PausesTheRunWhileItRuns_RefusingAResumeUntilTheEngineHasRecordedIt_WithAllAndASecondInterruptStoppingWhatRuns()
+    {
+        // The implementation and the review: one run, paused at its working step twice - the agent's account asked of
+        // the implementer (the record its runner writes when the client answers the handoff turn), and none of the
+        // reviewer, so the engine writes that one itself - each given to the step's next attempt at the resume.
+        {
+            using var temp = new TempDirectory();
+            Held firstImplement = null!, reviewer = null!;
+
+            var kit = await PrepareAsync(
+                temp,
+                agents =>
+                {
+                    agents.Queue("planner", Completed(Plan(One())));
+                    firstImplement = agents.Hold("implementer", step => step.StepInstance.StartsWith("rounds#1", StringComparison.Ordinal));
+                    reviewer = agents.Hold("reviewer-correctness");
+                });
+
+            var parked = await StartAsync(kit, "request=Ship the orders report.");
+
+            Assert.Equal(FlowExit.Paused, parked.ExitCode);
+
+            var drive = AnswerAsync(kit, "approve");
+
+            await WhenAsync(() => kit.Agents.Of("implementer").Count == 1, () => Shown(kit));
+
+            var implement = kit.Agents.Of("implementer")[0];
+
+            // The agent's own account of where its work stands, as its runner records it when the client answers the
+            // handoff turn: what the pause's turn reads back of the step's record.
+            File.WriteAllText(
+                Path.Combine(implement.RecordDirectory!, AgentRunner.ResultFileName),
+                System.Text.Json.JsonSerializer.Serialize(
+                    new AgentRunResult(AgentRunStatus.HandedOff, Handoff: new AgentHandoff("Done: the report's shape stands; the seeding is half applied.")),
+                    DssHarness.Core.FileSystem.JsonStateFile.Options));
+
+            var pausing = PauseAsync(kit);
+
+            await WhenAsync(
+                () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Pause is { CompletedAt: null },
+                () => $"the pause never began | {Shown(kit)}");
+
+            firstImplement.Open();
+
+            var paused = await pausing;
+
+            Assert.Equal(HarnessExit.Success, paused.ExitCode);
+            Assert.Equal("run 'r1' is paused; 1 handoff(s) written", paused.Message);
+
+            // The pause answers once its last handoff is written; the session then writes its end, so the run's
+            // standing settles to paused as the driving session ends.
+            await WhenAsync(
+                () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Paused) },
+                () => Shown(kit));
+
+            var pausedText = string.Join("\n", paused.Details!);
+
+            Assert.Contains($"handoff of {implement.StepInstance}, written by the agent: ", pausedText, StringComparison.Ordinal);
+            Assert.Contains(OrchestratorLayout.HandoffFileName, pausedText, StringComparison.Ordinal);
+
+            var atTheImplement = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var stoppedImplement = atTheImplement.Steps.Single(step => step.Instance == implement.StepInstance);
+
+            Assert.Equal((nameof(FlowRunStatus.Paused), "command"), (atTheImplement.Status, atTheImplement.Pause?.Cause));
+            Assert.Equal([implement.StepInstance], atTheImplement.Pause?.Handoffs);
+            Assert.Equal((nameof(FlowInstanceState.Stopped), "agent", 1), (stoppedImplement.State, stoppedImplement.Handoff?.By, stoppedImplement.Attempt));
+
+            var implementHandoff = kit.RunOf().InstanceHandoffFile(implement.StepInstance, implement.Agent);
+
+            Assert.Equal("Done: the report's shape stands; the seeding is half applied.\n", File.ReadAllText(implementHandoff));
+
+            // The session that drove the round is over, ended by the pause.
+            var ended = await drive;
+
+            Assert.Equal(HarnessExit.Cancelled, ended.ExitCode);
+
+            // The resume gives the handoff to the step's next attempt, in its continuation record, and the file is
+            // spent: the handoff is always in the file or in the prompt, never neither.
+            var resumed = ResumeAsync(kit);
+
+            await WhenAsync(() => kit.Agents.Of("implementer").Count == 2, () => Shown(kit));
+
+            var again = kit.Agents.Of("implementer")[1];
+
+            Assert.Equal(2, again.Attempt);
+            Assert.StartsWith(
+                "<handoff>\nDone: the report's shape stands; the seeding is half applied.\n</handoff>",
+                again.Prompt,
+                StringComparison.Ordinal);
+
+            await WhenAsync(() => !File.Exists(implementHandoff), () => "the handoff was never spent");
+
+            // The item's reviews: the correctness reviewer is held mid-read, and a pause there - its agent gives no
+            // account - leaves the handoff the engine writes in the step's own directory.
+            await WhenAsync(() => kit.Agents.Of("reviewer-correctness").Count == 1, () => Shown(kit));
+
+            var reading = kit.Agents.Of("reviewer-correctness")[0];
+
+            var pausingAgain = PauseAsync(kit);
+
+            await WhenAsync(
+                () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Pause is { CompletedAt: null, Handoffs: [] },
+                () => $"the second pause never began | {Shown(kit)}");
+
+            reviewer.Open();
+
+            var pausedAgain = await pausingAgain;
+
+            Assert.Equal(HarnessExit.Success, pausedAgain.ExitCode);
+            Assert.Contains(
+                $"handoff of {reading.StepInstance}, written by the engine: ",
+                string.Join("\n", pausedAgain.Details!),
+                StringComparison.Ordinal);
+
+            var reviewHandoff = kit.RunOf().InstanceHandoffFile(reading.StepInstance, reading.Agent);
+
+            Assert.Equal("Written by the engine: the agent's answer to its handoff turn held no account.\n", File.ReadAllText(reviewHandoff));
+            Assert.Equal("engine", kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == reading.StepInstance).Handoff?.By);
+
+            var endedAgain = await resumed;
+
+            Assert.Equal(HarnessExit.Cancelled, endedAgain.ExitCode);
+
+            // The engine's handoff is given the same way, and the run goes on to its end.
+            var finished = await ResumeAsync(kit);
+
+            Assert.True(HarnessExit.Success == finished.ExitCode, $"{finished.ExitCode}: {finished.Message} | {Shown(kit)}");
+
+            await WhenAsync(
+                () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Done) },
+                () => Shown(kit));
+
+            var readAgain = kit.Agents.Of("reviewer-correctness")[1];
+
+            Assert.StartsWith(
+                "<handoff>\nWritten by the engine: the agent's answer to its handoff turn held no account.\n</handoff>",
+                readAgain.Prompt,
+                StringComparison.Ordinal);
+        }
+
+        // The build: the run pauses while it runs, the engine stays to record it, a resume typed before that is
+        // refused, and the engine's process ends once the build is recorded.
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(temp, ground: new Ground(Legs: true));
+            var build = kit.Steps.Hold("build");
+
+            var starting = StartAsync(kit, "request=Ship the orders report.");
+
+            await WhenAsync(() => kit.Steps.Of("build").Count == 1, () => Shown(kit));
+
+            var paused = await PauseAsync(kit);
+
+            Assert.Equal(HarnessExit.Success, paused.ExitCode);
+            Assert.Equal("run 'r1' is paused", paused.Message);
+            Assert.Contains(
+                "1 machine step(s) still in progress: build; the engine's process ends when it has",
+                string.Join("\n", paused.Details!),
+                StringComparison.Ordinal);
+
+            // The run is paused under a completed pause while the build still runs - the engine stays to record it -
+            // and a resume typed before it lives is refused.
+            var whileItBuilds = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+            Assert.False(whileItBuilds.Pause?.All);
+            Assert.Equal(["build"], whileItBuilds.MachineStepsRunning());
+            Assert.False(starting.IsCompleted, "the engine left before the build was recorded");
+
+            var refused = await ResumeAsync(kit);
+
+            Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+            Assert.Contains("is owned by a live engine", refused.Message, StringComparison.Ordinal);
+
+            build.Open();
+
+            var engineLeft = await starting;
+
+            Assert.Equal(HarnessExit.Cancelled, engineLeft.ExitCode);
+
+            await WhenAsync(
+                () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Steps.Single(step => step.Instance == "build") is { State: nameof(FlowInstanceState.Done) },
+                () => Shown(kit));
+
+            await WhenAsync(
+                () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf()) is { Status: nameof(FlowRunStatus.Paused) },
+                () => Shown(kit));
+
+            var on = await ResumeAsync(kit);
+
+            Assert.Equal(FlowExit.Paused, on.ExitCode);
+            await WhenOpenAsync(kit, question => question.Kind == "pause", () => Shown(kit));
+        }
+
+        // The same with --all: the pause itself stops the machine steps, so nothing is left in progress and the legs
+        // end stopped, to run again at the resume.
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(temp, ground: new Ground(Legs: true));
+            var build = kit.Steps.Hold("build");
+
+            var starting = StartAsync(kit, "request=Ship the orders report.");
+
+            await WhenAsync(() => kit.Steps.Of("build").Count == 1, () => Shown(kit));
+
+            var paused = await PauseAsync(kit, all: true);
+
+            Assert.Equal(HarnessExit.Success, paused.ExitCode);
+            Assert.DoesNotContain("still in progress", string.Join("\n", paused.Details!), StringComparison.Ordinal);
+
+            var engineLeft = await starting;
+
+            Assert.Equal(HarnessExit.Cancelled, engineLeft.ExitCode);
+
+            await WhenAsync(
+                () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Steps.Single(step => step.Instance == "build") is { State: nameof(FlowInstanceState.Stopped) },
+                () => Shown(kit));
+
+            Assert.True(kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Pause?.All is true, "the pause's record does not say the machine steps were stopped");
+
+            build.Open();
+
+            var on = await ResumeAsync(kit);
+
+            Assert.Equal(FlowExit.Paused, on.ExitCode);
+
+            await WhenAsync(() => kit.Steps.Of("build").Count == 2, () => Shown(kit));
+        }
+
+        // A second interrupt during the handoffs: the turn is cancelled, no handoff is kept, and the run is stopped.
+        {
+            using var temp = new TempDirectory();
+            Held implement = null!;
+
+            var kit = await PrepareAsync(
+                temp,
+                agents =>
+                {
+                    agents.Queue("planner", Completed(Plan(One())));
+                    implement = agents.Hold("implementer", step => step.StepInstance.StartsWith("rounds#1", StringComparison.Ordinal));
+                });
+
+            var parked = await StartAsync(kit, "request=Ship the orders report.");
+
+            Assert.Equal(FlowExit.Paused, parked.ExitCode);
+
+            var drive = AnswerAsync(kit, "approve");
+
+            await WhenAsync(() => kit.Agents.Of("implementer").Count == 1, () => Shown(kit));
+
+            var working = kit.Agents.Of("implementer")[0];
+            var pausing = PauseAsync(kit);
+
+            await WhenAsync(
+                () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Pause is { CompletedAt: null },
+                () => $"the pause never began | {Shown(kit)}");
+
+            var stopping = StopAsync(kit);
+
+            var stopped = await drive;
+
+            Assert.Equal(HarnessExit.Cancelled, stopped.ExitCode);
+
+            var end = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+            Assert.Equal(nameof(FlowRunStatus.Stopped), end.Status);
+            Assert.Equal(nameof(FlowInstanceState.Stopped), end.Steps.Single(step => step.Instance == working.StepInstance).State);
+            Assert.False(File.Exists(kit.RunOf().InstanceHandoffFile(working.StepInstance, working.Agent)), "a stop kept a handoff");
+
+            var neverPaused = await pausing;
+
+            Assert.Equal(HarnessExit.Refused, neverPaused.ExitCode);
+            Assert.Contains("so nothing was paused", neverPaused.Message, StringComparison.Ordinal);
+
+            var ended = await stopping;
+
+            Assert.Equal(HarnessExit.Success, ended.ExitCode);
+            Assert.Contains("is stopped", ended.Message, StringComparison.Ordinal);
+        }
+
+        // A second interrupt after the handoffs - the pause complete, a build left running: it is what --all is, the
+        // machine steps stopped and the run left paused, to go on with at a resume.
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(temp, ground: new Ground(Legs: true));
+            var build = kit.Steps.Hold("build");
+
+            var starting = StartAsync(kit, "request=Ship the orders report.");
+
+            await WhenAsync(() => kit.Steps.Of("build").Count == 1, () => Shown(kit));
+
+            _ = await PauseAsync(kit);
+
+            var stopping = StopAsync(kit);
+
+            var engineLeft = await starting;
+
+            Assert.Equal(HarnessExit.Cancelled, engineLeft.ExitCode);
+
+            await WhenAsync(
+                () => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Steps.Single(step => step.Instance == "build") is { State: nameof(FlowInstanceState.Stopped) },
+                () => Shown(kit));
+
+            var end = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+            Assert.Equal((nameof(FlowRunStatus.Paused), true), (end.Status, end.Pause?.All));
+
+            var stopped = await stopping;
+
+            Assert.Equal(HarnessExit.Success, stopped.ExitCode);
+            Assert.Contains("is paused", stopped.Message, StringComparison.Ordinal);
+
+            build.Open();
+
+            var on = await ResumeAsync(kit);
+
+            Assert.Equal(FlowExit.Paused, on.ExitCode);
+
+            await WhenAsync(() => kit.Steps.Of("build").Count == 2, () => Shown(kit));
+        }
+    }
+
+    /// <summary>
     /// Every file of the run as it stands, but the calls' own records under its <c>asks/</c> and the lock files the
     /// engine holds open while it works: what a call that reads only must leave as it found it. The files are read
     /// sharing them with the engine, which holds its events open while it works.
@@ -3781,6 +4123,21 @@ public sealed class ImplementationFlowTests
     /// <summary>A completed run whose structured output is <paramref name="output"/>.</summary>
     private static AgentRunResult Completed(JsonObject output)
         => new(AgentRunStatus.Completed, StructuredOutput: output.ToJsonString());
+
+    /// <summary>
+    /// A machine step a test holds mid-run, its answer waiting until the test opens it: work long enough to span a
+    /// pause, ended by what ends the run's asking of it where that comes first.
+    /// </summary>
+    private sealed class MachineHold
+    {
+        private readonly TaskCompletionSource _opened = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Ends the hold, the step answered by its standing answer.</summary>
+        public void Open() => _opened.TrySetResult();
+
+        /// <summary>Completed once the hold is opened.</summary>
+        public Task Opened => _opened.Task;
+    }
 
     /// <summary>
     /// An agent a test holds mid-run, its answer waiting until the test opens it: work slow enough to span a question,
@@ -4066,6 +4423,24 @@ public sealed class ImplementationFlowTests
         /// <summary>The results a test queued for a type, taken before the type's standing answer.</summary>
         private readonly Dictionary<string, Queue<FlowStepResult>> _queued = new(StringComparer.Ordinal);
 
+        /// <summary>The machine steps a test holds mid-run, each standing in for a build long enough to span a pause.</summary>
+        private readonly List<(string Type, MachineHold Hold)> _held = [];
+
+        /// <summary>Holds every step of <paramref name="type"/> until the hold is opened: a machine step whose work a test spans a pause with, ended by what ends the run's asking of it where that comes first.</summary>
+        public MachineHold Hold(string type)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+
+            var held = new MachineHold();
+
+            lock (_kept)
+            {
+                _held.Add((type, held));
+            }
+
+            return held;
+        }
+
         /// <summary>Every run the engine asked, in order.</summary>
         public IReadOnlyList<MachineRun> Runs
         {
@@ -4187,11 +4562,25 @@ public sealed class ImplementationFlowTests
                 ArgumentNullException.ThrowIfNull(run);
 
                 FlowStepResult result;
+                MachineHold? held;
 
                 lock (script._kept)
                 {
                     result = script._queued.TryGetValue(type, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standing(type, run);
                     script._runs.Add(new MachineRun(run.Instance, run.Step, result));
+                    held = script._held.FirstOrDefault(entry => string.Equals(entry.Type, type, StringComparison.Ordinal)).Hold;
+                }
+
+                // The held step's answer waits until the test opens it, and ends where the run's asking of it is
+                // cancelled first - a safe pause that stops the machine steps, a stop - as the agents' holds do.
+                if (held is { } waiting)
+                {
+                    var ended = await Task.WhenAny(waiting.Opened, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
+
+                    if (ended != waiting.Opened)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
                 }
 
                 if (type == "delete-agent" && script.Store is { } store && run.Place is { } place && (run.Target ?? run.WorksIn) is { } deleted)

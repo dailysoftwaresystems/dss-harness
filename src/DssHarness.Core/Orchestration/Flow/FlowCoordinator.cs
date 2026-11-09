@@ -763,12 +763,27 @@ public sealed class FlowCoordinator
                 return ended.Status;
             }
 
+            if (_hardStop)
+            {
+                // A stop is in force whatever still runs under it - its drain is ending the runners - so the run's
+                // standing on disk is the stop's own from the moment it is applied, as the session's end says it.
+                return FlowRunStatus.Stopped;
+            }
+
+            if (_pausing)
+            {
+                // A pause is under way, or complete and not gone on with - one stays taken until the next session -
+                // whatever a group it left standing open over stopped members holds, for a group is only bookkeeping
+                // over its members: the run's standing on disk is the pause's own.
+                return FlowRunStatus.Paused;
+            }
+
             if (_created.Any(instance => instance.State is FlowInstanceState.Running) || _wakes.Count > 0)
             {
                 return FlowRunStatus.Running;
             }
 
-            return _open.Count > 0 ? FlowRunStatus.Paused : _hardStop ? FlowRunStatus.Stopped : _pausing ? FlowRunStatus.Paused : _stopping || Standing(FlowFailure.EndedRun).Count > 0 ? FlowRunStatus.Failed : FlowRunStatus.Done;
+            return _open.Count > 0 ? FlowRunStatus.Paused : _stopping || Standing(FlowFailure.EndedRun).Count > 0 ? FlowRunStatus.Failed : FlowRunStatus.Done;
         }
     }
 
