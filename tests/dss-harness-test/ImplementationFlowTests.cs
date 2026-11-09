@@ -3738,8 +3738,8 @@ public sealed class ImplementationFlowTests
             await WhenOpenAsync(kit, question => question.Kind == "pause", () => Shown(kit));
         }
 
-        // The same with --all: the pause itself stops the machine steps, so nothing is left in progress and the legs
-        // end stopped, to run again at the resume.
+        // The same with --all: the pause itself stops the machine steps - a leg it stops may still be draining as its
+        // runner ends, said so at the pause, and the legs end stopped, to run again at the resume.
         {
             using var temp = new TempDirectory();
             var kit = await PrepareAsync(temp, ground: new Ground(Legs: true));
@@ -3752,7 +3752,6 @@ public sealed class ImplementationFlowTests
             var paused = await PauseAsync(kit, all: true);
 
             Assert.Equal(HarnessExit.Success, paused.ExitCode);
-            Assert.DoesNotContain("still in progress", string.Join("\n", paused.Details!), StringComparison.Ordinal);
 
             var engineLeft = await starting;
 
