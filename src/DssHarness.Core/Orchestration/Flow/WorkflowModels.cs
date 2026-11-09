@@ -190,7 +190,12 @@ public sealed record FlowRecover(int? MaxVisits, IReadOnlyList<WorkflowStep> Ste
 /// <param name="Tokens">What the run's reasoning may spend, in tokens.</param>
 /// <param name="Minutes">How long the run's reasoning may run, in minutes.</param>
 /// <param name="ReservePercent">The share of the budget left when the run pauses instead of spending it.</param>
-public sealed record FlowBudget(double? Usd, long? Tokens, double? Minutes, int? ReservePercent);
+/// <remarks>
+/// Each amount is optional where it is given, so each is one the run's own record of its definition holds as absent
+/// where the workflow named none - a record is never guessed at, and a budget that names one amount round-trips as the
+/// one it is.
+/// </remarks>
+public sealed record FlowBudget(double? Usd = null, long? Tokens = null, double? Minutes = null, int? ReservePercent = null);
 
 /// <summary>The agent that recommends an answer to a question the engine raises itself.</summary>
 /// <param name="Agent">The agent definition, as a file under the workflow's <c>agents</c> directory.</param>

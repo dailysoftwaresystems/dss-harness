@@ -3,6 +3,7 @@ using DssHarness.Core.Agents;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
@@ -54,7 +55,7 @@ public sealed class ImplementationFlowTests
     /// of both providers - over the engine's own step runners with every machine step the flow's mechanics do not
     /// reach answered by <see cref="MachineSteps"/>.
     /// </summary>
-    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null)
+    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null, IFileSystem? files = null, Func<HarnessFactory, IAgentRunner>? walking = null)
     {
         var harness = new HarnessFactory();
         var template = AgentProviderTemplates.Read();
@@ -111,21 +112,23 @@ public sealed class ImplementationFlowTests
         script?.Invoke(agents);
         machine?.Invoke(steps);
 
-        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps));
+        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps, files, walking?.Invoke(harness)));
     }
 
-    /// <summary>The service over the engine's own runners: every type the flow's head works through for real, the rest answered by the machine script.</summary>
-    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine)
+    /// <summary>The service over the engine's own runners: every type the flow's head works through for real, the rest answered by the machine script - over <paramref name="files"/> where one is given, so a test stands between the engine and its records, and reasoning worked by <paramref name="walking"/> where one is given, so the engine's own fallback walk runs over a client a test scripts.</summary>
+    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine, IFileSystem? files = null, IAgentRunner? walking = null)
     {
-        var keys = new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform);
-        var create = new CreateAgentRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.AgentService);
+        var fileSystem = files ?? harness.FileSystem;
+        var store = files is null ? harness.OrchestrationStore : new OrchestrationStore(fileSystem, harness.Output);
+        var keys = new DssHarness.Core.Secrets.AgentKeyStore(fileSystem, harness.FilePermissions, harness.Platform);
+        var create = new CreateAgentRunner(harness.ContextLoader, harness.Platform, store, harness.AgentService);
         var reason = new ReasonStepRunner(
             harness.ContextLoader,
             harness.Platform,
-            harness.OrchestrationStore,
+            store,
             create,
-            agents,
-            harness.FileSystem,
+            walking ?? agents,
+            fileSystem,
             keys,
             new GhProcess(harness.ProcessRunner),
             harness.Output,
@@ -136,9 +139,9 @@ public sealed class ImplementationFlowTests
 
         IFlowStepRunner runner = new FlowStepRunners(
             [
-                new OrientRunner(harness.ContextLoader, harness.Platform, harness.GitClient, harness.FileSystem, harness.OrchestrationStore, harness.WorktreeService, harness.RunLock, new TreeHolders(harness.RunLock, harness.Slots, harness.Identity)),
-                new GraphifyCodebaseRunner(harness.ContextLoader, harness.Platform, harness.CodebaseGraph, harness.PathBudget, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild, harness.OrchestrationStore),
-                new PlanCheckRunner(harness.ContextLoader, harness.Platform, new PlanValidator(harness.FileSystem, harness.PathBudget, harness.Platform)),
+                new OrientRunner(harness.ContextLoader, harness.Platform, harness.GitClient, fileSystem, store, harness.WorktreeService, harness.RunLock, new TreeHolders(harness.RunLock, harness.Slots, harness.Identity)),
+                new GraphifyCodebaseRunner(harness.ContextLoader, harness.Platform, harness.CodebaseGraph, harness.PathBudget, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild, store),
+                new PlanCheckRunner(harness.ContextLoader, harness.Platform, new PlanValidator(fileSystem, harness.PathBudget, harness.Platform)),
                 create,
                 reason,
                 .. "build test run check-mutations anchor-balance anchor-citations ci-read ci-wait fold delete-agent refresh rebase commit push pull-request"
@@ -147,14 +150,16 @@ public sealed class ImplementationFlowTests
             ],
             harness.GraphSyncs);
 
+        machine.Store = store;
+
         return new(
             harness.ContextLoader,
             harness.Platform,
-            harness.FileSystem,
-            harness.OrchestrationStore,
+            fileSystem,
+            store,
             harness.Identity,
-            new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient),
-            new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, keys, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
+            new FlowSessions(store, fileSystem, harness.Identity, harness.GitClient),
+            new WorkflowValidationService(harness.ContextLoader, fileSystem, harness.Platform, keys, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             runner,
             harness.OrchestrationLog,
             harness.ChildSessions,
@@ -3957,6 +3962,550 @@ public sealed class ImplementationFlowTests
             });
     }
 
+    /// <summary>
+    /// A hard stop is gone on from: what it stopped runs again, its next attempt given the handoff the engine wrote of
+    /// the attempt the stop cut off. A budget that reaches its reserve while a build runs - the run's second item
+    /// reviewed as the first's verify builds - spends none of it there and stops nothing: the build runs to its end and
+    /// is recorded, the run pauses and asks, and a grant of more carries it to its end. And a crash - the engine's
+    /// process ended, stood in for by its records stopping at a write - after each kind of write the run makes, a
+    /// raise and a redirect owed among them, is gone on from as the run would have gone on: the questions it answered
+    /// stay answered, what it drew stands, and the mender a red verify owed is raised and its verify green again.
+    /// </summary>
+    [Fact]
+    public async Task AHardStopIsGoneOnFromWithTheHandoffTheEngineWrote_ABudgetReachingItsReserveWhileABuildRuns_SpendsNoneOfIt_StopsNothingAndAsks_AndACrashAfterEachKindOfWrite_IsGoneOnFromAsTheRunWouldHaveGoneOn()
+    {
+        // A hard stop, resumed: the implementer the stop cut off runs again, its attempt told what the engine's account
+        // of the cut-off attempt held.
+        using (var first = new TempDirectory())
+        {
+            var kit = await PrepareAsync(first);
+            var implementer = kit.Agents.Hold("implementer");
+            var started = StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            await WhenAsync(() => kit.Agents.Of("implementer").Count == 1, () => Shown(kit));
+
+            var stopping = StopAsync(kit);
+            var stoppedAt = await stopping;
+
+            Assert.True(HarnessExit.Success == stoppedAt.ExitCode, $"{stoppedAt.Message} | {Shown(kit)}");
+            Assert.Contains("is stopped", stoppedAt.Message, StringComparison.Ordinal);
+            Assert.Equal(HarnessExit.Cancelled, (await started).ExitCode);
+
+            var stopped = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+            Assert.Equal(nameof(FlowRunStatus.Stopped), stopped.Status);
+            Assert.Equal(nameof(FlowInstanceState.Stopped), stopped.Steps.Single(step => step.Instance == "rounds#1.items[0].implement").State);
+
+            implementer.Open();
+
+            var resumed = await ResumeAsync(kit);
+
+            Assert.True(HarnessExit.Success == resumed.ExitCode, $"{resumed.Message} | {string.Join(" | ", resumed.Details ?? [])} | {Shown(kit)}");
+            Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+            var attempts = kit.Agents.Of("implementer");
+
+            Assert.Equal(2, attempts.Count);
+            Assert.StartsWith("<handoff>\n", attempts[1].Prompt, StringComparison.Ordinal);
+        }
+
+        // A budget reaching its reserve while a build runs: the first item's verify is held mid-build as the second
+        // item's review spends the run past its reserve - the pause the spend asks for leaves the build running, it
+        // spends none of the budget and runs to its end and is recorded, and the run waits on its question alone.
+        using (var second = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                second,
+                keys: "ZAI_API_KEY=sk-test-two\n",
+                ground: new Ground(Legs: true),
+                script: agents =>
+                {
+                    agents.Queue("planner", Completed(Plan(One("one", "src/one/**"), One("two", "src/two/**"))));
+                    agents.ServingModel = "glm-5.3";
+                    agents.Usage = request => request.Attempt == 1 && request.AgentDefinition == "review-scope" && request.StepInstance.StartsWith("rounds#1.items[1]")
+                        ? new AgentUsage(11_000_000, 5_500_000, 0, 0, 0, 0)
+                        : new AgentUsage(1_000, 0, 0, 0, 0, 0);
+                },
+                machine: steps => steps.Queue("test", MachineSteps.Green(), MachineSteps.Green()));
+
+            await EditWorkflowAsync(
+                kit,
+                lines =>
+                {
+                    var at = Array.IndexOf(lines, "answers:");
+                    return [.. lines[..at], "budget:", "  usd: 40", .. lines[at..]];
+                });
+
+            var secondItem = kit.Agents.Hold("implementer", request => request.StepInstance.StartsWith("rounds#1.items[1]"));
+            var firstsVerify = kit.Steps.Hold("test", run => run.Instance.StartsWith("rounds#1.items[0]"));
+            var started = StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            await WhenAsync(() => kit.Steps.Of("test").Count == 2, () => Shown(kit));
+
+            secondItem.Open();
+
+            await WhenAsync(() => kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Pause is { CompletedAt: not null }, () => Shown(kit));
+
+            var atPause = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+            Assert.Equal(nameof(FlowRunStatus.Paused), atPause.Status);
+            Assert.Equal("budget", atPause.Pause!.Cause);
+            Assert.False(atPause.Pause.All);
+
+            // The build the pause left running: neither stopped nor spending, and the run not stopped either.
+            var verify = atPause.Steps.Single(step => step.Instance == "rounds#1.items[0].verify");
+
+            Assert.Equal(nameof(FlowInstanceState.Running), verify.State);
+
+            firstsVerify.Open();
+
+            Assert.Equal(FlowExit.Paused, (await started).ExitCode);
+
+            var parked = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+            Assert.Equal(nameof(FlowRunStatus.Paused), parked.Status);
+            Assert.Equal(nameof(FlowInstanceState.Done), parked.Steps.Single(step => step.Instance == "rounds#1.items[0].verify").State);
+            Assert.Equal(atPause.Spent!.Usd, parked.Spent!.Usd);
+
+            var asked = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+            Assert.Equal("runBudget", asked.Kind);
+            Assert.Equal(["more", "abort"], asked.Options.Select(option => option.Answer).ToArray());
+            Assert.Contains("of 40.00 USD", asked.ProblemShown!.Happened, StringComparison.Ordinal);
+            Assert.Contains("its reserve of 10% was reached", asked.ProblemShown!.Happened, StringComparison.Ordinal);
+
+            var granted = await AnswerAsync(kit, "more");
+
+            Assert.True(HarnessExit.Success == granted.ExitCode, $"{granted.Message} | {string.Join(" | ", granted.Details ?? [])} | {Shown(kit)}");
+
+            var gone = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+
+            Assert.Equal(nameof(FlowRunStatus.Done), gone.Status);
+            Assert.Contains(
+                "more",
+                kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Questions
+                    .Single(question => question.Kind == "runBudget").Answers.Select(answer => answer.Answer));
+            Assert.True(gone.Spent!.Usd < 40, $"{gone.Spent.Usd}");
+            Assert.True(File.Exists(kit.RunOf().ReportFile), Shown(kit));
+        }
+
+        // A crash after each kind of write: the engine's process is killed at a write the test names, its session
+        // dying as a process does and its records standing as they were, and the session that answers the run's
+        // question goes on from what stands - the owner the killed process left reclaimed, what it was in flight in
+        // run again - to the very standing the uncut run reached. The arc holds a raise - the plan's approval - and a
+        // redirect owed - the mender a red first verify raises - among the writes it is killed beside.
+        async Task<(string Standing, IReadOnlyList<string> Writes, string Said)> CrashedAsync(int cut)
+        {
+            using var temp = new TempDirectory();
+            var files = new CutFiles(new PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create()), Path.Combine(temp.Path, ".orchestrators", "r1")) { Cut = cut };
+            var kit = await PrepareAsync(
+                temp,
+                ground: new Ground(Legs: true),
+                machine: steps => steps.Answer = run => run.Step.Name == "verify"
+                    ? run.Visit == 1 ? MachineSteps.Red(HarnessExit.CommandFailed, "the report test fails on its frame") : MachineSteps.Green()
+                    : null,
+                files: files);
+
+            string parked;
+
+            try
+            {
+                var whole = await StartAsync(kit, "request=Ship the orders report.");
+
+                Assert.True(FlowExit.Paused == whole.ExitCode, $"cut {cut}: {whole.Message} | {string.Join(" | ", whole.Details ?? [])} | {Shown(kit)}");
+
+                parked = whole.Message;
+            }
+            catch (CutFiles.Killed)
+            {
+                // The process the owner names has gone, as the one that died here has: the resume reclaims it.
+                kit.Harness.OrchestrationStore.WriteOwner(kit.RunOf(), new RunOwner(kit.Harness.Identity.CurrentMachine, int.MaxValue, DateTimeOffset.Now, "gone"));
+
+                parked = "killed";
+            }
+
+            var writes = files.Writes;
+
+            files.Cut = int.MaxValue;
+
+            // A run killed in flight is gone on with by a resume, which reclaims the owner the killed process left and
+            // runs what it was in flight in again, to park on the run's question; one killed beside a question it
+            // already asked is answered, never resumed, for nothing of it can run until the question is. Either way
+            // the answer carries the run to its end.
+            string gone = "none";
+
+            if (parked == "killed")
+            {
+                var again = await ResumeAsync(kit);
+
+                if (FlowExit.Paused != again.ExitCode)
+                {
+                    Assert.True(
+                        HarnessExit.Refused == again.ExitCode && again.Message.Contains("answer-orchestrator answers it", StringComparison.Ordinal),
+                        $"cut {cut}: {again.Message} | {string.Join(" | ", again.Details ?? [])} | {Shown(kit)}");
+                }
+
+                gone = again.Message;
+            }
+
+            var answered = await AnswerAsync(kit, "approve");
+
+            Assert.True(HarnessExit.Success == answered.ExitCode, $"cut {cut} ({gone}): {answered.Message} | {string.Join(" | ", answered.Details ?? [])} | {Shown(kit)}");
+
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
+
+            return ($"{flow.Status} | "
+                + string.Join(", ", flow.Steps.OrderBy(step => step.Instance, StringComparer.Ordinal).Select(step => $"{step.Instance} {step.State} {step.Failure} {step.HandledBy}"))
+                + " | " + string.Join(", ", questions.Questions.Select(question => $"{question.Id} {question.State} {string.Join("/", question.Answers.Select(answer => answer.Answer))}")),
+                writes,
+                $"parked '{parked}'; gone on with '{gone}'; answered '{answered.Message}'");
+        }
+
+        var (expected, writes, uncutSaid) = await CrashedAsync(int.MaxValue);
+
+        // The uncut run raised the mender for the red first verify - the redirect owed among the writes - and asked
+        // the person to approve its plan, the answer every crash stands beside.
+        Assert.Contains(".mend ", expected, StringComparison.Ordinal);
+        Assert.Contains("q1 answered approve", expected, StringComparison.Ordinal);
+
+        // Each kind of write, crashed after its last: the cut leaves the run's state on disk - a crash before the
+        // state first stood holds nothing to go on from, and the run's own session says so - and every kind that
+        // stands after it is cut at its deepest.
+        var firstState = writes.ToList().IndexOf(OrchestratorLayout.FlowFileName);
+
+        var cuts = writes.Select((name, index) => (name, index))
+            .GroupBy(write => write.name)
+            .Select(group => group.Last().index)
+            .Where(index => index > firstState)
+            .Order()
+            .ToList();
+
+        Assert.True(cuts.Count >= 4, $"{cuts.Count} kinds past the state's first write among {writes.Count} writes: {string.Join(", ", writes)}");
+
+        foreach (var cut in cuts)
+        {
+            var (standing, _, said) = await CrashedAsync(cut);
+
+            Assert.True(string.Equals(expected, standing, StringComparison.Ordinal),
+                $"a crash after write {cut + 1} of {writes.Count} ({writes[cut]}, the last of its kind) was gone on from otherwise than the run would have gone on ({said}; uncut {uncutSaid}):\nexpected {expected}\nactual   {standing}");
+        }
+    }
+
+    /// <summary>
+    /// A conversation that fills its context: the step's own question asks what to do, <c>compact</c> among its
+    /// answers, and the run waits on it alone; answered compact, the step's next attempt is given the handoff the
+    /// engine wrote of the attempt that filled it, and its conversation is a new one that goes on from the last
+    /// iterations of the old word for word. Where the workflow's own configuration answers compact, nobody is asked:
+    /// the question is raised and answered by the configuration in the same breath, the run never waiting on a person.
+    /// </summary>
+    [Fact]
+    public async Task AConversationThatFillsItsContext_AsksWithCompactAmongItsAnswers_AndAnsweredCompact_GoesOnFromItsLastIterationsWordForWord_WhileTheConfigurationsOwnAnswerAsksNobody()
+    {
+        Action<Scripted> filled = agents => agents.Queue(
+            "implementer",
+            new AgentRunResult(AgentRunStatus.ContextExhausted, Error: "the context is full") { Turns = 1 },
+            Completed(Implement()));
+
+        // The attempt's stored conversation, as a client keeps it: a session the stream names, and one iteration of
+        // work it did - what a compacted conversation goes on from, word for word.
+        void StoredConversation(Kit kit)
+        {
+            kit.Agents.Events = (step, _) =>
+            {
+                if (step.AgentDefinition != "implementer" || step.Attempt != 1)
+                {
+                    return Task.CompletedTask;
+                }
+
+                kit.Harness.FileSystem.CreateDirectory(step.RecordDirectory!);
+                var stream = StoredStream.Open(kit.Harness.FileSystem, step.RecordDirectory!, new Masking());
+                stream.EmitAsync(new RunStarted(1));
+                stream.EmitAsync(new SessionStarted("scripted", "glm-5.3", "hash", [], [], HandedConversation: false, Provider: "zai", SessionId: "session-one"));
+                stream.EmitAsync(new TurnStarted(1));
+                stream.EmitAsync(new AssistantMessage("Built the report's frame.", []));
+                stream.EmitAsync(new RunFinished(AgentRunStatus.ContextExhausted));
+                stream.Dispose();
+                return Task.CompletedTask;
+            };
+        }
+
+        // The question: the workflow's own answer taken out, the person is asked - compact among the answers - and the
+        // run waits on that alone.
+        using (var asks = new TempDirectory())
+        {
+            var kit = await PrepareAsync(asks, script: filled);
+            StoredConversation(kit);
+
+            await EditWorkflowAsync(
+                kit,
+                lines => [.. lines.Where((line, at) => at < Array.IndexOf(lines, "  contextLimit:") || at > Array.IndexOf(lines, "  contextLimit:") + 2)]);
+
+            var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+            var asked = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+            Assert.Equal("contextLimit", asked.Kind);
+            Assert.Equal(["retry", "compact", "fail", "abort"], asked.Options.Select(option => option.Answer).ToArray());
+            Assert.Equal("rounds#1.items[0].implement", asked.RaisedBy?.Step?.ToString());
+            Assert.Contains("reached its context", asked.ProblemShown!.Happened, StringComparison.Ordinal);
+
+            var done = await AnswerAsync(kit, "compact");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+            var attempts = kit.Agents.Of("implementer");
+
+            Assert.Equal(2, attempts.Count);
+            Assert.StartsWith("<handoff>\n", attempts[1].Prompt, StringComparison.Ordinal);
+            Assert.Contains("reached its context", attempts[1].Prompt, StringComparison.Ordinal);
+        }
+
+        // The configuration's own answer: the same full context, asked of nobody - the question raised and answered by
+        // the workflow's own answers in the same breath, the run reaching its end without waiting on a person.
+        using (var configured = new TempDirectory())
+        {
+            var kit = await PrepareAsync(configured, script: filled);
+            StoredConversation(kit);
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+            var answered = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Questions
+                .Single(question => question.Kind == "contextLimit");
+
+            Assert.Equal("answered", answered.State);
+            Assert.Contains("compact", answered.Answers.Select(answer => answer.Answer));
+
+            var attempts = kit.Agents.Of("implementer");
+
+            Assert.Equal(2, attempts.Count);
+            Assert.Contains("Built the report's frame.", attempts[1].Compaction!.Record, StringComparison.Ordinal);
+            Assert.Contains("iterations are word for word", attempts[1].Compaction!.Record, StringComparison.Ordinal);
+            Assert.Equal("session-one", attempts[1].Compaction!.Left);
+        }
+    }
+
+    /// <summary>
+    /// The engine's own fallback walk over the shipped flow's steps: a request the step's model declines moves the step
+    /// to its fallback, its record naming both models; every model declining fails the step naming each; an account at
+    /// its limit moves past the provider's one key to another company's model, in a new conversation given the record,
+    /// and is remembered, so the next step on that account starts on its fallback and says so; a message written by a
+    /// model nobody asked for fails the step naming both; a step that names a model outright is served by it, its
+    /// provider, key and client found from it; and a first model none of whose keys is in the slot refuses the run
+    /// before it starts, naming the provider and the variable, while validate-workflow reports the same key and passes.
+    /// </summary>
+    [Fact]
+    public async Task ARequestTheStepsModelDeclines_MovesTheStepToItsFallbackItsRecordNamingBothModels_EveryModelDecliningFailsTheStepNamingEach_AnAccountAtItsLimitMovesToAnotherCompanysModelInANewConversationGivenTheRecord_AMessageByAModelNobodyAskedForFailsTheStepNamingBoth_AStepNamingAModelOutrightIsServedByIt_AndAFirstModelWithNoKeyRefusesTheRunWhileValidateWorkflowPasses()
+    {
+        // The engine's own walk over clients a test scripts: every step's agent answered by its standard output, and
+        // the implementer's launches by what the session under test scripts.
+        (Kit Kit, WalkingClient Claude, WalkingClient Glm) WalkingAsync(TempDirectory temp, Func<AgentRun, AgentRunResult> implement, string? keys = null, Func<string[], string[]>? edit = null)
+        {
+            WalkingClient? claude = null;
+            WalkingClient? glm = null;
+
+            var kit = PrepareAsync(
+                temp,
+                keys: keys,
+                walking: harness =>
+                {
+                    AgentRunResult Answer(AgentRun run)
+                        => run.Output?.Name switch
+                        {
+                            "triage" => Completed(Triage()),
+                            "plan" => Completed(Plan(One())),
+                            "plan-audit" => Completed(Audit()),
+                            "implement" => implement(run),
+                            "review-scope" => Completed(Scope()),
+                            "review" => Completed(Review()),
+                            "diagnosis" => Completed(Diagnosis(course: "retry")),
+                            "self-audit" => Completed(SelfAudit(clean: true)),
+                            "summary" => Completed(Scribe()),
+                            _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "done"),
+                        };
+
+                    claude = new WalkingClient("claude-code", Answer);
+                    glm = new WalkingClient("glm", Answer);
+
+                    return new AgentRunner([claude, glm], harness.FileSystem, harness.Platform, TimeProvider.System);
+                }).Result;
+
+            if (edit is not null)
+            {
+                EditWorkflowAsync(kit, edit).Wait(Token);
+            }
+
+            return (kit, claude!, glm!);
+        }
+
+        static bool Serving(AgentRun run, string model)
+            => string.Equals(run.Model, model, StringComparison.Ordinal) && run.Output?.Name == "implement";
+
+        // A request the step's model declines: the step goes on with its fallback, and its record names both models.
+        using (var declined = new TempDirectory())
+        {
+            var (kit, claude, glm) = WalkingAsync(
+                declined,
+                run => run.Model == "claude-sonnet-5-5"
+                    ? AgentEndings.Declined("output tokens", "the request asks for more than the model serves", new Masking())
+                    : Completed(Implement()));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            var plan = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "planning#1.plan");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | plan output: {plan.Output?.ToJsonString() ?? "none"} | launched: {string.Join("; ", claude.Launches.Select(run => $"{run.Model}:{run.Output?.Name}"))} + {string.Join("; ", glm.Launches.Select(run => $"{run.Model}:{run.Output?.Name}"))} | {Shown(kit)}");
+
+            Assert.Contains(claude.Launches, run => Serving(run, "claude-sonnet-5-5"));
+            var moved = Assert.Single(glm.Launches, run => Serving(run, "glm-5.3"));
+
+            var record = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].implement");
+
+            // The step's own record names both models and the turn each took the serving over from: the decline's
+            // model served the first turn, the fallback the rest.
+            var served = DssHarness.Core.FileSystem.JsonStateFile.Read<AgentRunResult>(
+                kit.Harness.FileSystem,
+                Path.Combine(moved.StepDirectory, AgentRunner.ResultFileName))!.Served;
+
+            Assert.Equal([("claude-sonnet-5-5", 1), ("glm-5.3", 2)], [.. served.Select(entry => (entry.Model, entry.FromTurn))]);
+            Assert.Equal("Done", record.State);
+        }
+
+        // Every model declining: the step fails, naming each, and the run asks the person.
+        using (var refusing = new TempDirectory())
+        {
+            var (kit, claude, glm) = WalkingAsync(
+                refusing,
+                run => AgentEndings.Declined("output tokens", "the request asks for more than the model serves", new Masking()),
+                edit: lines => [.. lines.Select(line => line.Trim() == "backoffSeconds: 30" ? line.Replace("backoffSeconds: 30", "backoffSeconds: 1") : line)]);
+
+            var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(FlowExit.Paused == paused.ExitCode, $"{paused.Message} | {string.Join(" | ", paused.Details ?? [])} | {Shown(kit)}");
+
+            var failed = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].implement");
+
+            Assert.True(nameof(FlowInstanceState.Paused) == failed.State, $"the implement record: {failed.State} {failed.Error} | {Shown(kit)}");
+            Assert.Contains("declined", failed.Error, StringComparison.Ordinal);
+
+            // Both models served it, each named with the turn it began at, before the step gave them both up.
+            var implementAsked = claude.Launches.Concat(glm.Launches).Where(run => run.Output?.Name == "implement").ToList();
+            var recordFile = Path.Combine(implementAsked[^1].StepDirectory, AgentRunner.ResultFileName);
+            var ended = DssHarness.Core.FileSystem.JsonStateFile.Read<AgentRunResult>(kit.Harness.FileSystem, recordFile);
+
+            Assert.True(ended is { Served.Count: > 0 },
+                $"{recordFile} exists={File.Exists(recordFile)}; implement launches: {string.Join(", ", implementAsked.Select(run => $"{run.Model}@{run.StepDirectory}"))}; files there: {string.Join(", ", Directory.Exists(implementAsked[^1].StepDirectory) ? Directory.GetFiles(implementAsked[^1].StepDirectory) : [])}");
+
+            var both = ended.Served;
+
+            Assert.Equal([("claude-sonnet-5-5", 1), ("glm-5.3", 2)], [.. both.Select(entry => (entry.Model, entry.FromTurn))]);
+
+            var asked = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+            Assert.Equal("failure", asked.Kind);
+        }
+
+        // An account at its limit: past the provider's one key to another company's model, in a new conversation given
+        // the record - and remembered, so the next step on that account starts on its fallback.
+        using (var limited = new TempDirectory())
+        {
+            var (kit, claude, glm) = WalkingAsync(
+                limited,
+                run => run.Model == "claude-sonnet-5-5"
+                    ? AgentEndings.AtLimit("the provider", new AgentAccountLimit(BalanceSpent: true, Key: "ANTHROPIC_API_KEY"), "the balance is spent", new Masking())
+                    : Completed(Implement()));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+            var carried = Assert.Single(glm.Launches, run => Serving(run, "glm-5.3"));
+
+            // Another company's, in a new conversation: the limited provider's session is never handed across.
+            Assert.Null(carried.Conversation);
+        }
+
+        // A message written by a model nobody asked for: the step fails, naming both.
+        using (var ghost = new TempDirectory())
+        {
+            var (kit, claude, glm) = WalkingAsync(
+                ghost,
+                run => AgentEndings.WrongModel(run.Model!, "claude-fable-5-1", "its turn 1", new Masking()),
+                edit: lines => [.. lines.Select(line => line.Trim() == "backoffSeconds: 30" ? line.Replace("backoffSeconds: 30", "backoffSeconds: 1") : line)]);
+
+            var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+            var failed = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].implement");
+
+            Assert.True(nameof(FlowInstanceState.Paused) == failed.State, $"the implement record: {failed.State} {failed.Error} | {Shown(kit)}");
+            Assert.Contains("glm-5.3", failed.Error, StringComparison.Ordinal);
+            Assert.Contains("claude-fable-5-1", failed.Error, StringComparison.Ordinal);
+        }
+
+        // A step that names a model outright: its provider, key and client are found from it, and it serves the step.
+        using (var named = new TempDirectory())
+        {
+            var (kit, claude, glm) = WalkingAsync(
+                named,
+                run => Completed(Implement()),
+                keys: "ZAI_API_KEY=sk-test-two\n",
+                edit: lines =>
+                {
+                    var at = Array.IndexOf(lines, "            tier: balanced");
+                    return [.. lines[..at], "            model: glm-5.3", .. lines[(at + 1)..]];
+                });
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+            var served = Assert.Single(glm.Launches, run => Serving(run, "glm-5.3"));
+
+            Assert.DoesNotContain(claude.Launches, run => run.Output?.Name == "implement");
+            Assert.DoesNotContain(served.Fallback, entry => entry.Usable && entry.Model != "glm-5.3");
+        }
+
+        // A first model none of whose keys is in the slot: the step's agent run is refused before it starts, naming the
+        // provider and the variable; validate-workflow reports the same key and passes.
+        using (var keyless = new TempDirectory())
+        {
+            var (kit, claude, glm) = WalkingAsync(
+                keyless,
+                run => Completed(Implement()),
+                keys: "ANTHROPIC_API_KEY=sk-test-one\n",
+                edit: lines =>
+                {
+                    var at = Array.IndexOf(lines, "            tier: balanced");
+                    return [.. lines[..at], "            model: glm-5.3", .. lines[(at + 1)..]];
+                });
+
+            var refused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.NotEqual(HarnessExit.Success, refused.ExitCode);
+
+            var failed = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].implement");
+
+            Assert.Contains("ZAI_API_KEY", failed.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(glm.Launches, run => run.Output?.Name == "implement");
+
+            var validation = await new WorkflowValidationService(
+                kit.Harness.ContextLoader,
+                kit.Harness.FileSystem,
+                kit.Harness.Platform,
+                new DssHarness.Core.Secrets.AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform),
+                DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild).CheckAsync(keyless.Path, WorkflowTemplates.ShippedWorkflowName, Token);
+
+            Assert.True(validation.Passed, string.Join("; ", validation.Workflows.Select(workflow => string.Join("; ", workflow.Lines))));
+            Assert.Contains("ZAI_API_KEY", string.Join("; ", validation.Workflows.SelectMany(workflow => workflow.Lines)), StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>Waits, a little at a time, for <paramref name="done"/>, and fails the test when it never comes.</summary>
     private static async Task WhenAsync(Func<bool> done, Func<string>? said = null)
     {
@@ -3997,6 +4546,20 @@ public sealed class ImplementationFlowTests
 
         /// <summary>What every completed agent of the script reports it used, where a test sets it; null where none does.</summary>
         public AgentUsage? DefaultUsage { get; set; }
+
+        /// <summary>
+        /// What one agent of the script reports it used, where a test sets it: asked of each request before
+        /// <see cref="DefaultUsage"/>, and where it answers null that stands instead - so a test spends one turn of a
+        /// run and no other, whatever the run asks in what order.
+        /// </summary>
+        public Func<AgentStepRequest, AgentUsage?>? Usage { get; set; }
+
+        /// <summary>
+        /// What one agent of the script says as it works, where a test sets it: asked of each request with the sink the
+        /// engine records the attempt's conversation through - a test writes the stored stream a compacted or handed
+        /// conversation goes on from, iteration by iteration.
+        /// </summary>
+        public Func<AgentStepRequest, IAgentEventSink?, Task>? Events { get; set; }
 
         /// <summary>
         /// The model the script's agents serve on, where a test names it: the walk the script stands in for moves a step
@@ -4046,7 +4609,14 @@ public sealed class ImplementationFlowTests
                 ? await HeldAnswerAsync(waiting, step, cancellationToken)
                 : _queued.TryGetValue(step.AgentDefinition ?? string.Empty, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standard(step);
 
-            if (DefaultUsage is { } usage && events is not null && result.Status == AgentRunStatus.Completed)
+            if (Events is { } says)
+            {
+                await says(step, events);
+            }
+
+            var spent = Usage?.Invoke(step) ?? DefaultUsage;
+
+            if (spent is { } usage && events is not null && result.Status == AgentRunStatus.Completed)
             {
                 // What the run's budget is charged with, as each turn reports it: the model the step serves on - the one
                 // the test names, the walk's own choice where the script bypasses it - then one turn per answer.
@@ -4152,6 +4722,258 @@ public sealed class ImplementationFlowTests
 
         /// <summary>The held agent's answer, once it is opened; null stands for its standard answer.</summary>
         public Task<AgentRunResult?> Answer => _opened.Task;
+    }
+
+    /// <summary>
+    /// One client of the engine's own fallback walk, answering as a test scripts it per launch: every launch kept, with
+    /// the model it served, the keys it was signed with and what the engine handed it, for a test to read the walk's
+    /// moves. The walk itself is the engine's - a declined request, an account at its limit and a failed run move the
+    /// step from entry to entry by the walk's own rules, over this client, never around it.
+    /// </summary>
+    private sealed class WalkingClient(string name, Func<AgentRun, AgentRunResult> answer) : IAgentClient
+    {
+        private readonly Lock _kept = new();
+
+        /// <summary>Every launch this client was given, in order.</summary>
+        private readonly List<AgentRun> _launches = [];
+
+        /// <inheritdoc/>
+        public string Name => name;
+
+        /// <inheritdoc/>
+        public AgentClientCapabilities Capabilities
+            => name == "glm"
+                ? DssHarness.Core.Agents.ZaiApi.ZaiApiClient.Descriptor
+                : DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient.Descriptor;
+
+        /// <summary>Every launch this client was given, in order.</summary>
+        public IReadOnlyList<AgentRun> Launches
+        {
+            get
+            {
+                lock (_kept)
+                {
+                    return [.. _launches];
+                }
+            }
+        }
+
+        /// <inheritdoc/>
+        public async Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(run);
+
+            AgentRunResult answered;
+
+            lock (_kept)
+            {
+                _launches.Add(run);
+                answered = answer(run);
+            }
+
+            // The launch's conversation, as the client's own events say it: one turn of work, recorded by the runner
+            // into the stored stream a move to another company's model goes on from through the engine's record of it.
+            if (events is not null && run.Output?.Name == "implement")
+            {
+                await events.EmitAsync(new TurnStarted(1));
+                await events.EmitAsync(new AssistantMessage($"Working on {run.Output?.Name} on {run.Model}.", []));
+            }
+
+            // What the client served, as the real ones say it: the model of this launch, from its first turn.
+            if (answered.Served.Count == 0 && run.Model is { } model)
+            {
+                answered = answered with { Served = [new AgentServedModel(model, 1)], Turns = Math.Max(answered.Turns, 1) };
+            }
+
+            return answered;
+        }
+    }
+
+    /// <summary>
+    /// A file system that stands where the engine's own does and kills it at a write a test names: past the cut, the
+    /// first thing the engine writes or removes of the run throws - nothing catches it, for the process is gone - so
+    /// the session dies as a killed process does, its records standing as they were, while every write before it lands
+    /// and is counted and named, for a test to cut at each kind of write the run makes. What no session of the run
+    /// owns - the owner, the questions and their answers, the inbox, the log - passes through untouched, and nothing
+    /// past the cut reaches them either, so the run's next session starts from what stands.
+    /// </summary>
+    private sealed class CutFiles(IFileSystem inner, string runDirectory) : IFileSystem
+    {
+        /// <summary>The engine's process dying: an exception nothing catches, for no process is left to catch it.</summary>
+        public sealed class Killed(string what) : Exception(what);
+
+        private readonly Lock _kept = new();
+
+        /// <summary>Every write the engine made of the run, each by its file's name, in order.</summary>
+        private readonly List<string> _writes = [];
+
+        /// <summary>How many of the run's writes reach the disk; every one, where this is <see cref="int.MaxValue"/>.</summary>
+        public int Cut { get; set; } = int.MaxValue;
+
+        /// <summary>Every write the engine made of the run, each by its file's name, in order.</summary>
+        public IReadOnlyList<string> Writes
+        {
+            get
+            {
+                lock (_kept)
+                {
+                    return [.. _writes];
+                }
+            }
+        }
+
+        /// <summary>Whether <paramref name="path"/> is the run's own, this session's or a later one's: under the run's directory, and no file every session of the run owns in common.</summary>
+        private bool WritesTheRun(string path)
+            => path.StartsWith(
+                runDirectory.EndsWith(Path.DirectorySeparatorChar) ? runDirectory : runDirectory + Path.DirectorySeparatorChar,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+                && Path.GetFileName(path) is not (OrchestratorLayout.OwnerFileName or OrchestratorLayout.QuestionsFileName or OrchestratorLayout.InboxFileName);
+
+        /// <summary>Takes one write of the run: counted and named, and past the cut it kills the process - the write never landing, as one the engine's process ended beside.</summary>
+        private void Take(string path)
+        {
+            lock (_kept)
+            {
+                if (!WritesTheRun(path))
+                {
+                    return;
+                }
+
+                _writes.Add(Path.GetFileName(path));
+
+                if (_writes.Count > Cut)
+                {
+                    throw new Killed($"'{path}', the run's own record, was the write the engine's process was killed beside");
+                }
+            }
+        }
+
+        /// <inheritdoc/>
+        public void WriteAtomic(string path, Action<Stream> write)
+        {
+            Take(path);
+
+            inner.WriteAtomic(path, write);
+        }
+
+        /// <inheritdoc/>
+        public async Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        {
+            Take(path);
+
+            await inner.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+        }
+
+        /// <inheritdoc/>
+        public void ReplaceFile(string source, string destination)
+        {
+            Take(destination);
+
+            inner.ReplaceFile(source, destination);
+        }
+
+        /// <inheritdoc/>
+        public void DeleteFile(string path)
+        {
+            lock (_kept)
+            {
+                if (WritesTheRun(path) && _writes.Count > Cut)
+                {
+                    // A file the run held stands as the cut left it: what the engine removed after the write the cut
+                    // stands at, its process had not lived to remove.
+                    throw new Killed($"'{path}', the run's own record, was the removal the engine's process was killed beside");
+                }
+            }
+
+            inner.DeleteFile(path);
+        }
+
+        /// <inheritdoc/>
+        public bool FileExists(string path) => inner.FileExists(path);
+
+        /// <inheritdoc/>
+        public bool DirectoryExists(string path) => inner.DirectoryExists(path);
+
+        /// <inheritdoc/>
+        public PathKind KindOf(string path) => inner.KindOf(path);
+
+        /// <inheritdoc/>
+        public string ResolveLinks(string path) => inner.ResolveLinks(path);
+
+        /// <inheritdoc/>
+        public void CreateDirectory(string path) => inner.CreateDirectory(path);
+
+        /// <inheritdoc/>
+        public string CopyToTemporaryFile(string path) => inner.CopyToTemporaryFile(path);
+
+        /// <inheritdoc/>
+        public void CopyFile(string source, string destination, bool overwrite = false) => inner.CopyFile(source, destination, overwrite);
+
+        /// <inheritdoc/>
+        public void DeleteDirectory(string path) => inner.DeleteDirectory(path);
+
+        /// <inheritdoc/>
+        public void MoveDirectory(string source, string destination) => inner.MoveDirectory(source, destination);
+
+        /// <inheritdoc/>
+        public bool IsLink(string path) => inner.IsLink(path);
+
+        /// <inheritdoc/>
+        public long DirectorySize(string path) => inner.DirectorySize(path);
+
+        /// <inheritdoc/>
+        public DiskSpace SpaceAt(string path) => inner.SpaceAt(path);
+
+        /// <inheritdoc/>
+        public IEnumerable<string> EnumerateFiles(string path, bool recursive) => inner.EnumerateFiles(path, recursive);
+
+        /// <inheritdoc/>
+        public IEnumerable<string> EnumerateReachableFiles(string path, Action<string, Exception> unread) => inner.EnumerateReachableFiles(path, unread);
+
+        /// <inheritdoc/>
+        public IEnumerable<WrittenFile> EnumerateWrittenFiles(string path) => inner.EnumerateWrittenFiles(path);
+
+        /// <inheritdoc/>
+        public IEnumerable<string> EnumerateDirectoryLinks(string path) => inner.EnumerateDirectoryLinks(path);
+
+        /// <inheritdoc/>
+        public IReadOnlyList<string> RemoveJunctions(string path) => inner.RemoveJunctions(path);
+
+        /// <inheritdoc/>
+        public IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default) => inner.FindHeld(path, cancellationToken);
+
+        /// <inheritdoc/>
+        public IEnumerable<string> EnumerateDirectories(string path) => inner.EnumerateDirectories(path);
+
+        /// <inheritdoc/>
+        public Stream OpenRead(string path) => inner.OpenRead(path);
+
+        /// <inheritdoc/>
+        public string FinalPathOf(Stream opened) => inner.FinalPathOf(opened);
+
+        /// <inheritdoc/>
+        public string FinalPathOfDirectory(string directory) => inner.FinalPathOfDirectory(directory);
+
+        /// <inheritdoc/>
+        public HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null) => inner.Hold(anchor, directory, make, asked);
+
+        /// <inheritdoc/>
+        public IAppendFile OpenForAppend(string path) => inner.OpenForAppend(path);
+
+        /// <inheritdoc/>
+        public DateTime LastWriteTimeUtc(string path) => inner.LastWriteTimeUtc(path);
+
+        /// <inheritdoc/>
+        public FileStanding? StandingOf(string path) => inner.StandingOf(path);
+
+        /// <inheritdoc/>
+        public DateTime CreationTimeUtc(string path) => inner.CreationTimeUtc(path);
+
+        /// <inheritdoc/>
+        public void SetLastWriteTimeUtc(string path, DateTime writtenUtc) => inner.SetLastWriteTimeUtc(path, writtenUtc);
+
+        /// <inheritdoc/>
+        public void ProtectSecretFile(string path) => inner.ProtectSecretFile(path);
     }
 
     
@@ -4424,10 +5246,14 @@ public sealed class ImplementationFlowTests
         private readonly Dictionary<string, Queue<FlowStepResult>> _queued = new(StringComparer.Ordinal);
 
         /// <summary>The machine steps a test holds mid-run, each standing in for a build long enough to span a pause.</summary>
-        private readonly List<(string Type, MachineHold Hold)> _held = [];
+        private readonly List<(string Type, Func<FlowStepRun, bool> When, MachineHold Hold)> _held = [];
 
-        /// <summary>Holds every step of <paramref name="type"/> until the hold is opened: a machine step whose work a test spans a pause with, ended by what ends the run's asking of it where that comes first.</summary>
-        public MachineHold Hold(string type)
+        /// <summary>
+        /// Holds every step of <paramref name="type"/> - or those <paramref name="when"/> names - until the hold is
+        /// opened: a machine step whose work a test spans a pause with, ended by what ends the run's asking of it
+        /// where that comes first.
+        /// </summary>
+        public MachineHold Hold(string type, Func<FlowStepRun, bool>? when = null)
         {
             ArgumentNullException.ThrowIfNull(type);
 
@@ -4435,11 +5261,18 @@ public sealed class ImplementationFlowTests
 
             lock (_kept)
             {
-                _held.Add((type, held));
+                _held.Add((type, when ?? (static _ => true), held));
             }
 
             return held;
         }
+
+        /// <summary>
+        /// What one machine step answers, where a test sets it: asked of each run before the queue and the standing
+        /// answer, its null falling through to them. Asked of the run's visit, so a step a crash or a resume asks
+        /// again is answered as it was the first time.
+        /// </summary>
+        public Func<FlowStepRun, FlowStepResult?>? Answer { get; set; }
 
         /// <summary>Every run the engine asked, in order.</summary>
         public IReadOnlyList<MachineRun> Runs
@@ -4566,9 +5399,9 @@ public sealed class ImplementationFlowTests
 
                 lock (script._kept)
                 {
-                    result = script._queued.TryGetValue(type, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standing(type, run);
+                    result = script.Answer?.Invoke(run) ?? (script._queued.TryGetValue(type, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standing(type, run));
                     script._runs.Add(new MachineRun(run.Instance, run.Step, result));
-                    held = script._held.FirstOrDefault(entry => string.Equals(entry.Type, type, StringComparison.Ordinal)).Hold;
+                    held = script._held.FirstOrDefault(entry => string.Equals(entry.Type, type, StringComparison.Ordinal) && entry.When(run)).Hold;
                 }
 
                 // The held step's answer waits until the test opens it, and ends where the run's asking of it is
