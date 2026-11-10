@@ -1221,7 +1221,7 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// A run fact a template reads that the run's own state does not hold (part 03): where the step's instance works -
+    /// A run fact a template reads that the run's own state does not hold: where the step's instance works -
     /// its agent's worktree, the scratch and plans the run keeps for that agent, the rows it files - and this machine.
     /// Null for every other name, which reads nothing as it did.
     /// </summary>

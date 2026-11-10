@@ -206,7 +206,7 @@ public sealed record FlowEvent(
 /// was given none.
 /// </param>
 /// <param name="Graph">
-/// What the step's codebase graph gave and what it saved (part 08): its mode, its view, what the map and the pack cost,
+/// What the step's codebase graph gave and what it saved: its mode, its view, what the map and the pack cost,
 /// what the tool served, and what the agent still read whole; null where the step was given no graph.
 /// </param>
 public sealed record FlowStepRecord(
