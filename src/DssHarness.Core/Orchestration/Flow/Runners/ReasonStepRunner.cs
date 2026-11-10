@@ -149,12 +149,14 @@ public sealed class ReasonStepRunner(
 
         // Where the order holds the client that starts a program, the program is found ready here - installed and
         // brought up to date where it must be - and the run starts what was found, never a launcher of its own: a
-        // program not ready refuses the step with the finder's own words and code.
+        // program not ready refuses the step where the entry that would serve first needs it, and where only a
+        // fallback does, that fallback is passed over when its turn comes - said so by the walk, never refusing a run.
         var program = await launch.ProgramAsync(context.Layout, providers, order, ClaudeCodeAsker.Run($" (step '{run.Instance}')"), change: true, cancellationToken).ConfigureAwait(false);
 
-        if (program is { Ready: false })
+        if (program is { Ready: false } notReady && order.FirstOrDefault(entry => entry.Usable) is { Client: { } serving }
+            && string.Equals(serving, ClaudeCodeClient.ClientName, StringComparison.Ordinal))
         {
-            return FlowStepResult.Ended(passed: false, program.ExitCode, program.Message);
+            return FlowStepResult.Ended(passed: false, notReady.ExitCode, notReady.Message);
         }
 
         var workspace = launch.Workspace(agentRecord, context.Layout, layout.WorkDirectory(agent), layout.Directory);

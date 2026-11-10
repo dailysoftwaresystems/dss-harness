@@ -55,7 +55,7 @@ public sealed class ImplementationFlowTests
     /// of both providers - over the engine's own step runners with every machine step the flow's mechanics do not
     /// reach answered by <see cref="MachineSteps"/>.
     /// </summary>
-    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null, IFileSystem? files = null, Func<HarnessFactory, IAgentRunner>? walking = null, bool commits = false)
+    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null, IFileSystem? files = null, Func<HarnessFactory, IAgentRunner>? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null)
     {
         var harness = new HarnessFactory();
         var template = AgentProviderTemplates.Read();
@@ -112,11 +112,11 @@ public sealed class ImplementationFlowTests
         script?.Invoke(agents);
         machine?.Invoke(steps);
 
-        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps, files, walking?.Invoke(harness), commits));
+        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps, files, walking?.Invoke(harness), commits, updates));
     }
 
-    /// <summary>The service over the engine's own runners: every type the flow's head works through for real, the rest answered by the machine script - over <paramref name="files"/> where one is given, so a test stands between the engine and its records, and reasoning worked by <paramref name="walking"/> where one is given, so the engine's own fallback walk runs over a client a test scripts, and its commits worked by the engine's own commit runner where <paramref name="commits"/> says so.</summary>
-    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine, IFileSystem? files = null, IAgentRunner? walking = null, bool commits = false)
+    /// <summary>The service over the engine's own runners: every type the flow's head works through for real, the rest answered by the machine script - over <paramref name="files"/> where one is given, so a test stands between the engine and its records, and reasoning worked by <paramref name="walking"/> where one is given, so the engine's own fallback walk runs over a client a test scripts, and its commits worked by the engine's own commit runner where <paramref name="commits"/> says so, and its Claude Code made ready by <paramref name="updates"/> where one is given.</summary>
+    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine, IFileSystem? files = null, IAgentRunner? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null)
     {
         var fileSystem = files ?? harness.FileSystem;
         var store = files is null ? harness.OrchestrationStore : new OrchestrationStore(fileSystem, harness.Output);
@@ -135,7 +135,8 @@ public sealed class ImplementationFlowTests
             TimeProvider.System,
             new TestIsolation(),
             harness.GitClient,
-            harness.ConfigStore);
+            harness.ConfigStore,
+            updates);
 
         var machineTypes = "build test run check-mutations anchor-balance anchor-citations ci-read ci-wait fold delete-agent refresh rebase"
             .Split(' ')
@@ -1226,6 +1227,627 @@ public sealed class ImplementationFlowTests
             Assert.Contains("Checked since the last commit:", messages[0], StringComparison.Ordinal);
             Assert.Contains("rounds#1.self-audit (independent) in the main tree: done", messages[0], StringComparison.Ordinal);
             Assert.DoesNotContain("planning#1.check (", messages[0], StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// A member of a group that fails with nothing in the group to handle it: the group ends failed with that member's
+    /// code, its own failure policy - recover - taking what no handler took, and the recovery's retry runs the work
+    /// again to its end. A pull request step that names a base makes the orientation's base branch it, and the checks
+    /// are read there. And the definition's check refuses a step named with a word a definition reads for its own, and
+    /// a read of <c>carried</c> outside a commit step.
+    /// </summary>
+    [Fact]
+    public async Task AGroupWhoseMemberFailsWithNothingToHandleIt_EndsFailedWithItsMembersCode_AndItsOwnFailurePolicyTakesIt_APullRequestStepNamingABase_IsTheRunsBaseBranch_AndTheDefinitionCheckRefusesAStepNamedForAReadAndCarriedOutsideACommit()
+    {
+        // A fold refused for a path, raising no question: no handler in the item's group takes it - the reconciler
+        // waits on a question it never asked - so the group ends failed with the fold's code and its own onFailure,
+        // and the recovery reads the failure and runs the work again.
+        using (var unhandled = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                unhandled,
+                script: agents =>
+                {
+                    agents.Queue("implementer", Completed(Implement()));
+                    agents.Queue("diagnostician", Completed(Diagnosis(course: "retry", summary: "The fold was refused for a path, and nothing in the item's group took it")));
+                },
+                machine: steps => steps.Queue(
+                    "fold",
+                    FlowStepResult.Standing(new FlowDryRun(
+                        RequestStanding.Refused,
+                        [],
+                        [],
+                        [RefusalKind.Other],
+                        "a path the fold was refused for")
+                    {
+                        Agent = "a1",
+                    })));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps;
+            var folds = flow.Where(step => step.Instance.EndsWith(".fold", StringComparison.Ordinal)).ToList();
+
+            Assert.Equal((nameof(FlowInstanceState.Failed), HarnessExit.Refused, null, null), (folds[0].State, folds[0].Exit, folds[0].EndedByQuestion, folds[0].HandledBy));
+            Assert.Equal((nameof(FlowInstanceState.Done), "rounds#1.items[0].fold+2"), (flow.Single(step => step.Instance == "rounds#1.items[0].fold+2").State, flow.Single(step => step.Instance == "rounds#1.items[0].fold+2").Instance));
+            // Nothing in the item's group handled it - its reconciler waits on a question the fold never asked - so the
+            // item ended failed with the fold's code, and its own onFailure took it: the recovery read the failure and
+            // answered retry, which ran the fold again.
+            Assert.Contains(flow, step => step.Instance == "rounds#1.items[0].recover" && step.State == nameof(FlowInstanceState.Done));
+            Assert.Contains(flow, step => step.Instance == "rounds#1.items[0].reconcile" && step.State == nameof(FlowInstanceState.Skipped));
+            Assert.Contains("fold", kit.Agents.Of("diagnostician")[0].Prompt, StringComparison.Ordinal);
+        }
+
+        // A pull request step that names a base: the orientation's base branch is it, and the checks are read there -
+        // one that names none keeps the remote's default, as the run over the trunk remote already showed.
+        using (var based = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                based,
+                ground: new Ground(Remote: true, Ci: true),
+                script: agents => agents.Queue("implementer", Completed(Implement())));
+
+            await EditWorkflowAsync(kit, lines =>
+            {
+                var at = Array.IndexOf(lines, "    type: pull-request");
+
+                return [.. lines[..at], "    base: release-branch", .. lines[at..]];
+            });
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+
+            var orient = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "orient");
+
+            Assert.Equal("release-branch", orient.Output!["baseBranch"]!.GetValue<string>());
+            Assert.Equal("release-branch", kit.Steps.Of("ci-read").Single().Step.Branch);
+        }
+
+        // The definition's check refuses a step named with a word a definition reads for its own, and a read of
+        // carried outside a commit step.
+        using (var reserved = new TempDirectory())
+        {
+            var kit = await PrepareAsync(reserved);
+            var check = () => new WorkflowValidationService(
+                kit.Harness.ContextLoader,
+                kit.Harness.FileSystem,
+                kit.Harness.Platform,
+                new DssHarness.Core.Secrets.AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform),
+                DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild).CheckAsync(reserved.Path, WorkflowTemplates.ShippedWorkflowName, Token);
+
+            await EditWorkflowAsync(
+                kit,
+                lines =>
+                {
+                    var at = Array.IndexOf(lines, "  - name: pr");
+
+                    return [.. lines[..at], "  - name: outcome", "    type: pause", "    question: x", .. lines[at..]];
+                });
+
+            var named = await check();
+
+            Assert.False(named.Passed);
+            Assert.Contains("a word a definition reads for its own", string.Join("; ", named.Workflows.SelectMany(workflow => workflow.Lines)), StringComparison.Ordinal);
+
+            await EditWorkflowAsync(
+                kit,
+                lines => [.. lines.Select(line => line.Trim() == "title: '{intake.triage.title}'" ? "    title: '{carried.ran}'" : line)]);
+
+            var carried = await check();
+
+            Assert.False(carried.Passed);
+            Assert.Contains("is no commit step", string.Join("; ", carried.Workflows.SelectMany(workflow => workflow.Lines)), StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Two runs typed at once in one repository: one runs and the other is refused 13, nothing made for it. A run that
+    /// waits on a question holds nothing of the tree: another run starts and runs to its end while it waits, and the
+    /// name it took is refused another start. While that other run is unfinished, a resume and an answer of the waiting
+    /// run are each refused 13, the question left as it stood - and once the tree is free again the answer goes on with
+    /// the run. An answer naming a question already answered, and one a later session asked again, are each refused 13
+    /// and change nothing.
+    /// </summary>
+    [Fact]
+    public async Task TwoRunsTypedAtOnceInOneRepository_OneRunsAndTheOtherIsRefused13_ANameTakenIsRefused_AndARunWaitingAtAQuestionHoldsNothingOfTheTree_UntilAnotherRunIsUnfinished_AResumeAndAnAnswerOfItAreRefusedToo_AndAnAnswerNamingAnAnsweredOrAReAskedQuestionIsRefused13()
+    {
+        // Two starts at once: the one that takes the repository's section runs; the other is refused, and nothing is
+        // made for it.
+        using (var together = new TempDirectory())
+        {
+            MachineHold held = null!;
+            var kit = await PrepareAsync(together, machine: steps => held = steps.Hold("fold"));
+
+            var one = StartAsync(kit, "request=Ship it.", "preapproved=yes");
+            var two = StartAsync(kit, "request=Ship it.", "preapproved=yes");
+            var refused = await Task.WhenAny(one, two).WaitAsync(Bound, Token);
+            var running = refused == one ? two : one;
+
+            Assert.Equal(13, (await refused).ExitCode);
+            Assert.Contains("of this repository is unfinished", (await refused).Message, StringComparison.Ordinal);
+            Assert.Equal(["r1"], [.. Directory.GetDirectories(Path.Combine(together.Path, ".orchestrators")).Select(Path.GetFileName)]);
+
+            held.Open();
+
+            var done = await running.WaitAsync(Bound, Token);
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+        }
+
+        // A run that waits on its question holds nothing of the tree: another run starts under it - the name the first
+        // took refused a new start - runs to its end while the first waits, and while it runs, a resume and an answer of
+        // the waiting run are each refused, the question left open as it stood. Once the tree is free, the answer goes
+        // on with the waiting run.
+        using (var temp = new TempDirectory())
+        {
+            MachineHold held = null!;
+            var kit = await PrepareAsync(temp, machine: steps => held = steps.Hold("fold"));
+
+            var waiting = await StartAsync(kit, "request=Ship the orders report.");
+
+            Assert.Equal(FlowExit.Paused, waiting.ExitCode);
+            var approval = Questions(kit).Open.Single();
+
+            var taken = await kit.Service.RunAsync(kit.Tree.Path, WorkflowTemplates.ShippedWorkflowName, run: "r1", ["request=Ship it.", "preapproved=yes"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(13, taken.ExitCode);
+            Assert.Contains("run 'r1' exists", taken.Message, StringComparison.Ordinal);
+            Assert.Contains("Nothing was changed", taken.Message, StringComparison.Ordinal);
+
+            var second = StartAsync(kit, "request=Ship it.", "preapproved=yes");
+            CommandOutcome? secondOutcome = null;
+            await WhenAsync(
+                () => kit.Steps.Of("fold").Count == 1 || (second.IsCompleted && (secondOutcome = second.Result).ExitCode != HarnessExit.Success),
+                () => $"{Shown(kit)} || second: {(second.IsCompleted ? $"{second.Result.ExitCode}: {second.Result.Message}" : "still running")}");
+            Assert.Null(secondOutcome);
+
+            var refusedResume = await ResumeAsync(kit);
+
+            Assert.Equal(13, refusedResume.ExitCode);
+            Assert.Contains("run 'r2' of this repository is unfinished (running; owned by a live engine)", refusedResume.Message, StringComparison.Ordinal);
+
+            var refusedAnswer = await AnswerAsync(kit, "approve");
+
+            Assert.Equal(13, refusedAnswer.ExitCode);
+            Assert.Contains("run 'r2' of this repository is unfinished", refusedAnswer.Message, StringComparison.Ordinal);
+            Assert.Equal("open", Questions(kit).Of(approval.Id)!.State);
+
+            held.Open();
+
+            Assert.True(HarnessExit.Success == (await second).ExitCode, $"{(await second).Message} | {Shown(kit)}");
+
+            // The question the run answered once is answered: an answer naming it is refused, and nothing changes.
+            var answered = await AnswerAsync(kit, "approve");
+
+            Assert.True(HarnessExit.Success == answered.ExitCode, $"{answered.Message} | {Shown(kit)}");
+
+            var namedAgain = await AnswerOneAsync(kit, approval.Id, "approve");
+
+            Assert.Equal(13, namedAgain.ExitCode);
+            Assert.Equal($"question '{approval.Id}' of run 'r1' is answered", namedAgain.Message);
+        }
+    }
+
+    /// <summary>
+    /// A resume after a session that ended on a failure nothing handled runs that very step again, as a new attempt of
+    /// its visit; one a fail answer ended, one a handler took, and one passed over by onFailure: continue, a resume
+    /// runs none of them again - each stands as its settlement left it, and only what a stop stopped runs again.
+    /// </summary>
+    [Fact]
+    public async Task ARunWhoseSessionEndedOnAFailureNothingHandled_RunsThatStepAgainAtTheResume_AndOneAFailAnswerEnded_OneAHandlerTook_AndOnePassedOverByContinue_AResumeRunsNoneOfThemAgain()
+    {
+        // Nothing handled it - its policy says stop - so the session ended on it: the resume runs that very step
+        // again, a new attempt of its visit, and the run goes on to its end.
+        using (var unhandled = new TempDirectory())
+        {
+            var kit = await PrepareAsync(unhandled, machine: steps => steps.Queue("fold", MachineSteps.Red(30, "the fold is refused")));
+
+            await EditWorkflowAsync(
+                kit,
+                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: recover" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "            onFailure: stop" : line)]);
+
+            var failed = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.NotEqual(HarnessExit.Success, failed.ExitCode);
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var fold = flow.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
+
+            Assert.Equal(nameof(FlowInstanceState.Failed), fold.State);
+            Assert.Equal(30, fold.Exit);
+
+            var done = await ResumeAsync(kit);
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+            flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            fold = flow.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
+
+            Assert.Equal(nameof(FlowInstanceState.Done), fold.State);
+            Assert.Equal(2, kit.Steps.Of("fold").Count(run => run.Instance == "rounds#1.items[0].fold"));
+        }
+
+        // A fail answer ended it: the step stands failed as the answer left it, and a resume runs nothing of it again.
+        using (var answered = new TempDirectory())
+        {
+            var kit = await PrepareAsync(answered, machine: steps => steps.Queue("fold", MachineSteps.Red(30, "the fold is refused")));
+
+            await EditWorkflowAsync(
+                kit,
+                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: recover" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "            onFailure: pause" : line)]);
+
+            var asked = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.Equal(FlowExit.Paused, asked.ExitCode);
+            var failure = await WhenOpenAsync(kit, question => question.Kind == "failure");
+
+            var ended = await AnswerOneAsync(kit, failure.Id, "abort");
+
+            Assert.NotEqual(HarnessExit.Success, ended.ExitCode);
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var fold = flow.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
+
+            Assert.Equal((nameof(FlowInstanceState.Paused), nameof(FlowRunStatus.Stopped)), (fold.State, flow.Status));
+
+            var resumed = await ResumeAsync(kit);
+
+            Assert.NotEqual(HarnessExit.Success, resumed.ExitCode);
+            flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            fold = flow.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
+
+            Assert.Equal(nameof(FlowInstanceState.Paused), fold.State);
+            Assert.Single(kit.Steps.Of("fold"), run => run.Instance == "rounds#1.items[0].fold");
+        }
+
+        // A handler took it - the reconcile of a fold conflict - and the fold ran again as its redirect drew it; a
+        // stop later ended the session, and the resume runs what the stop stopped alone: none of the settled failure
+        // runs again.
+        using (var handled = new TempDirectory())
+        {
+            MachineHold held = null!;
+            var kit = await PrepareAsync(
+                handled,
+                ground: new Ground(Remote: true),
+                machine: steps =>
+                {
+                    steps.Queue(
+                        "fold",
+                        FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], "the fold found a conflict") { Agent = "a1" }));
+                    held = steps.Hold("pull-request");
+                });
+
+            var stopping = StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+            CommandOutcome? stoppedOutcome = null;
+            await WhenAsync(
+                () => kit.Steps.Of("pull-request").Count == 1 || (stopping.IsCompleted && (stoppedOutcome = stopping.Result).ExitCode != HarnessExit.Success),
+                () => $"{Shown(kit)} || run: {(stopping.IsCompleted ? $"{stopping.Result.ExitCode}: {stopping.Result.Message}" : "still running")}");
+            Assert.Null(stoppedOutcome);
+
+            var before = kit.Steps.Of("fold").Count;
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var settled = flow.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
+
+            Assert.Equal(nameof(FlowInstanceState.Failed), settled.State);
+            Assert.Equal("reconcile", settled.HandledBy);
+
+            var stopped = await StopAsync(kit);
+            var outcome = await stopping;
+
+            Assert.True(HarnessExit.Cancelled == outcome.ExitCode, $"{outcome.Message} | {Shown(kit)}");
+
+            held.Open();
+
+            var done = await ResumeAsync(kit);
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+            Assert.Equal(before, kit.Steps.Of("fold").Count);
+            flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            Assert.DoesNotContain(flow.Steps, step => step.Instance.StartsWith("rounds#1.items[0].fold+", StringComparison.Ordinal) && step.State != nameof(FlowInstanceState.Done));
+            Assert.Equal(2, kit.Steps.Of("pull-request").Count);
+        }
+
+        // Passed over by onFailure: continue: the catch-up of the same reconcile fails and its failure is passed over
+        // - the reconcile settles, the run goes on, and a stop later ended the session; the resume runs none of it
+        // again.
+        using (var passed = new TempDirectory())
+        {
+            MachineHold held = null!;
+            var kit = await PrepareAsync(
+                passed,
+                ground: new Ground(Remote: true),
+                machine: steps =>
+                {
+                    steps.Queue(
+                        "fold",
+                        FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], "the fold found a conflict") { Agent = "a1" }));
+                    steps.Queue("refresh", MachineSteps.Red(30, "the catch-up is red"));
+                    held = steps.Hold("pull-request");
+                });
+
+            var stopping = StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+            CommandOutcome? stoppedOutcome = null;
+            await WhenAsync(
+                () => kit.Steps.Of("pull-request").Count == 1 || (stopping.IsCompleted && (stoppedOutcome = stopping.Result).ExitCode != HarnessExit.Success),
+                () => $"{Shown(kit)} || run: {(stopping.IsCompleted ? $"{stopping.Result.ExitCode}: {stopping.Result.Message}" : "still running")}");
+            Assert.Null(stoppedOutcome);
+
+            var before = kit.Steps.Of("refresh").Count;
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var catchUp = flow.Steps.Single(step => step.Instance.EndsWith(".reconcile.catch-up", StringComparison.Ordinal));
+
+            Assert.Equal(nameof(FlowInstanceState.Failed), catchUp.State);
+            Assert.Equal(nameof(FlowInstanceState.Done), flow.Steps.Single(step => step.Instance == "rounds#1.items[0].fold+2").State);
+
+            var stopped = await StopAsync(kit);
+            var outcome = await stopping;
+
+            Assert.True(HarnessExit.Cancelled == outcome.ExitCode, $"{outcome.Message} | {Shown(kit)}");
+
+            held.Open();
+
+            var done = await ResumeAsync(kit);
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+            Assert.Equal(before, kit.Steps.Of("refresh").Count);
+            Assert.Equal(2, kit.Steps.Of("pull-request").Count);
+        }
+    }
+
+    /// <summary>
+    /// A run step whose runner says writesTree is refused by the definition check where it stands on the main tree, and
+    /// placed in an agent's worktree it runs as any step does; and a definition whose longest .legs copy path is past
+    /// the machine's budget is refused at the start, nothing made for it.
+    /// </summary>
+    [Fact]
+    public async Task ARunStepWhoseRunnerWritesTheTree_IsRefusedOnTheMainTreeByTheDefinitionCheck_AndRunsInAnAgentsWorktree_AndADefinitionWhoseLongestLegsPathIsPastTheBudget_IsRefusedAtTheStart()
+    {
+        // On the main tree, the definition's check refuses it; in an agent's worktree, the same step runs.
+        using (var tree = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                tree,
+                ground: new Ground(Legs: true),
+                adjust: config => config.PredefinedRunners["corpus"] = new RunnerConfig
+                {
+                    Legs = ["local"],
+                    WritesTree = true,
+                    Phases = [new RunnerPhase { Name = "one", Command = ["dotnet", "--version"] }],
+                });
+
+            await EditWorkflowAsync(
+                kit,
+                lines =>
+                {
+                    var at = Array.IndexOf(lines, "  - name: pr");
+
+                    return [.. lines[..at], "  - name: corpus", "    type: run", "    runner: corpus", .. lines[at..]];
+                });
+
+            var refused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
+            Assert.Contains("runs 'corpus', which writes the tree (writesTree), on the main tree", string.Join("; ", refused.Details ?? []), StringComparison.Ordinal);
+
+            await EditWorkflowAsync(
+                kit,
+                lines =>
+                {
+                    var top = Array.IndexOf(lines, "  - name: corpus");
+                    string[] without = [.. lines[..top], .. lines[(top + 3)..]];
+                    var at = Array.IndexOf(without, "          - name: redo");
+
+                    return [.. without[..at], "          - name: corpus", "            type: run", "            runner: corpus", "            in: item-agent", "            dependsOn: [item-agent]", .. without[at..]];
+                });
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+            var corpus = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].corpus");
+
+            Assert.Equal(nameof(FlowInstanceState.Done), corpus.State);
+        }
+
+        // The longest .legs copy a leg step of the definition may keep is past the machine's budget: the start itself
+        // is refused, and nothing of a run is made.
+        using (var deep = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                deep,
+                ground: new Ground(Legs: true),
+                adjust: config =>
+                {
+                    var local = config.Legs["local"];
+                    var configName = new string('c', 400);
+
+                    config.Legs["deep"] = new LegConfig
+                    {
+                        Os = local.Os,
+                        Processor = local.Processor,
+                        Toolchain = local.Toolchain,
+                        Config = configName,
+                        LocalCopy = true,
+                    };
+                    config.BuildConfigs[configName] = new BuildConfiguration { DotnetConfiguration = "Debug" };
+                });
+
+            var refused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+            Assert.Contains("would work in paths too long for this machine", refused.Message, StringComparison.Ordinal);
+            Assert.EndsWith(" Nothing was made.", refused.Message, StringComparison.Ordinal);
+            Assert.False(Directory.GetDirectories(Path.Combine(deep.Path, ".orchestrators")).Any(directory => Path.GetFileName(directory) == "r1"), "a run was made for a start the budget refuses");
+        }
+    }
+
+    /// <summary>
+    /// Claude Code as npm has it, through a run of the shipped flow: a definition on another company's models looks
+    /// for neither npm nor Claude Code - npm sits ready and nothing asks it; one whose steps reach Claude through the
+    /// client that starts a program, with npm off the PATH, is refused with its sentence naming the step; and one where
+    /// only a fallback needs the client is not refused - the run says so and passes that fallback over.
+    /// </summary>
+    [Fact]
+    public async Task ADefinitionOnAnotherCompanysModels_LooksForNeitherNpmNorClaudeCode_OneWhoseStepsNeedTheClientIsRefusedItsSentenceNamingTheStep_AndOneWhereOnlyAFallbackNeedsIt_IsNotRefusedButPassesItOver()
+    {
+        // Another company's models alone: npm sits ready with the package, and no step of the run looks at it.
+        using (var other = new TempDirectory())
+        using (var ready = new ClaudeCodeUpdateServiceTests.Kit(package: "2.1.296", program: "2.1.296"))
+        {
+            var kit = await PrepareAsync(
+                other,
+                adjust: config =>
+                {
+                    foreach (var model in config.Providers.Single(entry => entry.Name == "anthropic").Models)
+                    {
+                        model.Tiers.Clear();
+                    }
+
+                    foreach (var tier in config.TierConfig.Values)
+                    {
+                        tier.RemoveAll(listed => listed.StartsWith("claude-", StringComparison.Ordinal));
+                    }
+                },
+                updates: ready.Service());
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+            Assert.Empty(ready.Runner.Ran);
+        }
+
+        // The steps reach Claude through the client that starts a program, and no npm is on the PATH: the first reason
+        // step is refused with its own sentence naming the step, and its policy asks a person.
+        using (var refusing = new TempDirectory())
+        using (var none = new ClaudeCodeUpdateServiceTests.Kit(npm: false))
+        {
+            var kit = await PrepareAsync(refusing, updates: none.Service());
+
+            var paused = await StartAsync(kit, "request=Ship the orders report.");
+
+            Assert.Equal(FlowExit.Paused, paused.ExitCode);
+            var failure = Questions(kit).Open.Single(question => question.Kind == "failure");
+
+            Assert.Contains("needs a Claude model through the client 'claude-code' (step 'intake.triage')", failure.ProblemShown!.Happened, StringComparison.Ordinal);
+            Assert.Contains("no npm is on the PATH", failure.ProblemShown.Happened, StringComparison.Ordinal);
+
+            var triage = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "intake.triage");
+
+            Assert.Equal((nameof(FlowInstanceState.Paused), 14), (triage.State, triage.Exit));
+        }
+
+        // Only a fallback needs the client: the run is not refused - it says so and passes that fallback over, and
+        // every step is served by the first model of its tier.
+        using (var fallback = new TempDirectory())
+        using (var none = new ClaudeCodeUpdateServiceTests.Kit(npm: false))
+        {
+            var kit = await PrepareAsync(
+                fallback,
+                adjust: config =>
+                {
+                    config.TierConfig["best"] = ["glm-5.3", "claude-fable-5-1"];
+                    config.TierConfig["balanced"] = ["glm-5.3", "claude-sonnet-5-5"];
+                    config.TierConfig["high"] = ["glm-5.3", "claude-opus-5-5"];
+                    config.TierConfig["fast"] = ["glm-5.3", "claude-haiku-5-5"];
+                },
+                updates: none.Service());
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+        }
+    }
+
+    /// <summary>
+    /// The closing sweep of the class: the flow run once with every step served by the fake claude and once with every
+    /// step served by the fake provider, each run to its end - every launch on the model its tier names by id, the
+    /// fallback never asked where the first serves, each reason step's kept policy naming its whole running order with
+    /// the key's name alone, and each step's stream holding the turns of its own conversation in order.
+    /// </summary>
+    [Fact]
+    public async Task TheFlowRunOnceWithEveryStepOnTheFakeClaude_AndOnceWithEveryStepOnTheFakeProvider_EachRunToItsEnd_ItsLaunchesOnTheModelItsTierNames_ItsPolicyNamingItsOrder_AndEachStepsStreamHoldingItsOwnConversation()
+    {
+        AgentRunner Walking(HarnessFactory harness, WalkingClient claude, WalkingClient glm)
+            => new([claude, glm], harness.FileSystem, harness.Platform, TimeProvider.System);
+
+        AgentRunResult Answer(AgentRun run)
+            => run.Output?.Name switch
+            {
+                "triage" => Completed(Triage()),
+                "plan" => Completed(Plan(One())),
+                "plan-audit" => Completed(Audit()),
+                "implement" => Completed(Implement()),
+                "review-scope" => Completed(Scope()),
+                "review" => Completed(Review()),
+                "self-audit" => Completed(SelfAudit(clean: true)),
+                "summary" => Completed(Scribe()),
+                _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "done"),
+            };
+
+        // Every step on the fake claude: the tiers name Claude first, npm holds the package, and no launch falls back.
+        using (var claude = new TempDirectory())
+        using (var ready = new ClaudeCodeUpdateServiceTests.Kit(package: "2.1.296", program: "2.1.296"))
+        {
+            WalkingClient client = null!;
+            var kit = await PrepareAsync(
+                claude,
+                walking: harness => Walking(harness, client = new WalkingClient("claude-code", Answer), new WalkingClient("glm", Answer)),
+                updates: ready.Service());
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+            var launches = client.Launches;
+
+            Assert.NotEmpty(launches);
+            Assert.All(launches, launch => Assert.StartsWith("claude-", launch.Model, StringComparison.Ordinal));
+            Assert.All(launches, launch => Assert.NotNull(launch.Effort));
+
+            // The step's kept policy names its whole running order - the entry that served and the fallback after it -
+            // each with the key's name alone, never a value.
+            var policyFile = Directory
+                .GetFiles(kit.RunOf().Directory, OrchestratorLayout.PolicyFileName, SearchOption.AllDirectories)
+                .Single(file => file.Replace('\\', '/').EndsWith("implement/policy.json", StringComparison.Ordinal));
+            var runsOn = (JsonArray)JsonNode.Parse(File.ReadAllText(policyFile))!["runsOn"]!;
+
+            Assert.Contains(runsOn, entry => entry!["model"]!.GetValue<string>() == "claude-sonnet-5-5" && entry["client"]!.GetValue<string>() == "claude-code");
+            Assert.Contains(runsOn, entry => entry!["model"]!.GetValue<string>() == "glm-5.3" && entry["client"]!.GetValue<string>() != "claude-code");
+            Assert.All(runsOn, entry => Assert.True(entry!["key"] is null || entry["key"]!.GetValue<string>() is "ANTHROPIC_API_KEY" or "ZAI_API_KEY", "a key was kept by its value"));
+
+            // Each reason step's stream holds its own conversation: the launch's turns, in order.
+            var streamFile = policyFile.Replace(OrchestratorLayout.PolicyFileName, "stream.jsonl");
+            string[] kinds = [.. File.ReadAllLines(streamFile).Select(line => JsonNode.Parse(line)!["kind"]!.GetValue<string>())];
+
+            Assert.NotEmpty(kinds);
+        }
+
+        // Every step on the fake provider: the same flow with the tiers naming glm alone, and no launch on Claude.
+        using (var provider = new TempDirectory())
+        {
+            WalkingClient client = null!;
+            var kit = await PrepareAsync(
+                provider,
+                adjust: config =>
+                {
+                    foreach (var model in config.Providers.Single(entry => entry.Name == "anthropic").Models)
+                    {
+                        model.Tiers.Clear();
+                    }
+
+                    foreach (var tier in config.TierConfig.Values)
+                    {
+                        tier.RemoveAll(listed => listed.StartsWith("claude-", StringComparison.Ordinal));
+                    }
+                },
+                walking: harness => Walking(harness, new WalkingClient("claude-code", Answer), client = new WalkingClient("glm", Answer)));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+            Assert.NotEmpty(client.Launches);
+            Assert.All(client.Launches, launch => Assert.Equal("glm-5.3", launch.Model));
         }
     }
 
