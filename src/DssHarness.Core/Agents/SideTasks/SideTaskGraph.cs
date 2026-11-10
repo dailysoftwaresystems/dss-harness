@@ -13,8 +13,9 @@ namespace DssHarness.Core.Agents.SideTasks;
 /// <summary>
 /// A side-task's own codebase graph, under its records as a run's is under its own (part 03, "The graph"): seeded from
 /// the newest graph of the repository's runs or side-tasks at its opening, then incremental, synced again after each of
-/// the side-task's writes. Its agent is given the <c>graph</c> tool with every operation and no narrowing, the repository
-/// map with its first message, and a context pack made from each message the person types.
+/// its agent's writes and commands on either client (<see cref="AfterWrites"/>). Its agent is given the <c>graph</c> tool
+/// with every operation its client serves and no narrowing, held to the side-task's own policy, the repository map with
+/// its first message, and a context pack made from each message the person types.
 /// </summary>
 public sealed class SideTaskGraph
 {
@@ -85,16 +86,28 @@ public sealed class SideTaskGraph
 
     /// <summary>
     /// What the side-task's agent is given its graph as, where the graph holds a view: the tool offered by the runtime
-    /// among the harness's own, every operation - <c>edit</c> among them - and no narrowing, each of its calls recorded
-    /// in the side-task's graph lines, and the graph synced after each of its writes. Null where the side-task's graph
-    /// holds nothing yet, and nothing is served.
+    /// among the harness's own, every operation its client serves and no narrowing, what it reads and an edit writes
+    /// asked of the side-task's own policy - each refusal recorded as every denial is - each of its calls recorded in the
+    /// side-task's graph lines, and the graph synced after each of the agent's writes and commands, the tool answering
+    /// from the view each sync leaves. Null where the side-task's graph holds nothing yet, and nothing is served.
     /// </summary>
-    public AgentGraphSupport? Support => queries is null
-        ? null
-        : new AgentGraphSupport(
-            Tool(queries),
+    /// <param name="ground">The side-task's ground, as its turn is run under it: its policy is the tool's.</param>
+    public AgentGraphSupport? Support(AgentPolicyGround ground)
+    {
+        ArgumentNullException.ThrowIfNull(ground);
+
+        if (queries is null)
+        {
+            return null;
+        }
+
+        var tool = Tool(queries, new AgentPolicy(files, platform, ground));
+
+        return new AgentGraphSupport(
+            tool,
             line => store.AppendGraphStepLine(layout.Directory, line),
-            (path, cancellationToken) => AfterWriteAsync(path, cancellationToken));
+            (written, cancellationToken) => AfterWriteAsync(tool, written, cancellationToken));
+    }
 
     /// <summary>
     /// The person's message as the side-task's agent is given it: the repository map at its head where it is the first,
@@ -129,27 +142,21 @@ public sealed class SideTaskGraph
     /// <summary>How near each node is to the work of the person's last message, as its pack said it; null before any.</summary>
     private GraphNearness? near;
 
-    /// <summary>Syncs the graph by the path a write of the side-task's changed, its records kept whole.</summary>
-    /// <param name="path">The path written, absolute.</param>
+    /// <summary>
+    /// Syncs the graph by what a write or a command of the side-task's agent wrote (<see cref="AfterWrites.SyncGraphAsync"/>),
+    /// its sync's record naming the write, and makes <paramref name="tool"/> and the context pack of the next message answer
+    /// from the view it leaves.
+    /// </summary>
+    /// <param name="tool">The graph tool the side-task's agent is given.</param>
+    /// <param name="written">What the agent wrote.</param>
     /// <param name="cancellationToken">Stops the sync.</param>
-    public async Task AfterWriteAsync(string path, CancellationToken cancellationToken)
+    public async Task AfterWriteAsync(CodebaseGraphTool tool, AgentGraphWrite written, CancellationToken cancellationToken)
     {
-        if (Path.GetFullPath(path).StartsWith(Path.GetFullPath(request.Repository.MainCheckoutRoot), platform.PathComparison) is false)
-        {
-            return;
-        }
+        ArgumentNullException.ThrowIfNull(written);
 
-        var relative = Path.GetRelativePath(request.Repository.MainCheckoutRoot, path).Replace('\\', '/');
-
-        try
+        if (await AfterWrites.SyncGraphAsync(graph, request with { Why = $"the side-task '{layout.Name}': {written.Tool}" }, written, platform.PathComparison, tool, cancellationToken).ConfigureAwait(false) is { } synced)
         {
-            await graph.SyncPathsAsync(request, [relative], cancellationToken).ConfigureAwait(false);
-            queries = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Results.HarnessException)
-        {
-            // A sync that cannot be made says nothing to the agent: the graph's records stand as they were, and the tool
-            // reads a body fresh against its hash either way.
+            queries = synced;
         }
     }
 
@@ -159,18 +166,23 @@ public sealed class SideTaskGraph
             ? new CodebaseGraphQueries(read)
             : null;
 
-    /// <summary>The tool over <paramref name="view"/>: every operation, no narrowing, a file re-extracted where an edit moved it.</summary>
-    private CodebaseGraphTool Tool(CodebaseGraphQueries view)
+    /// <summary>
+    /// The tool over <paramref name="view"/>: every operation, no narrowing, a file re-extracted where an edit moved it -
+    /// what it reads and what an edit writes asked of <paramref name="policy"/>, the side-task's own, as the run's graph tool
+    /// asks its step's, and never what no graph lists.
+    /// </summary>
+    private CodebaseGraphTool Tool(CodebaseGraphQueries view, AgentPolicy policy)
     {
         var never = CodebaseGraphService.NeverListed(request.WorktreesRoot);
+        string Full(string path) => Path.Combine(view.Tree, path.Replace('/', Path.DirectorySeparatorChar));
 
         return new CodebaseGraphTool(
             view,
             new AgentFiles(git, files, clock),
             files,
             ConfinedPaths.Within(files, platform, view.Tree),
-            path => !PathPatterns.Matches(never, path, platform.PathComparison),
-            _ => AgentPolicyAnswer.Allow,
+            path => policy.Read(Full(path)).Refusal() is null && !PathPatterns.Matches(never, path, platform.PathComparison),
+            path => policy.Write(Full(path)),
             async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read),
             near);
     }

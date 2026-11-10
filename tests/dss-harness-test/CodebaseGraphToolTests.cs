@@ -4,8 +4,11 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Codebase;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Schemas;
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 
 namespace DssHarness.Tests;
 
@@ -1202,6 +1205,129 @@ public sealed partial class CodebaseGraphToolTests
         Assert.False(tool.Lifted("src/Small.cs"));
         Assert.False(tool.WholeRead("src/Big.cs", 224).Narrowed);
     }
+
+    /// <summary>
+    /// <c>wholeFile</c> lifts the narrowing of a file the view holds as parsed, its escape told from the view's own count of
+    /// the file's lines and bytes; a path the view holds no parsed file at - none there, a file it lists but parses not, one
+    /// outside the tree, one written absolute, one that is binary - is a misuse answered to the model, and so is a file the
+    /// step's reads do not reach: nothing lifted, and no escape told.
+    /// </summary>
+    [Fact]
+    public async Task WholeFile_LiftsAFileTheViewParsed_ToldFromTheView_AndAnyOtherPathIsAMisuseAnswered()
+    {
+        using var tree = await TreeAsync(("assets/blob.cs", "\0\u0001\u0002\0binary\0"));
+        var tool = Tool(tree, await QueriesAsync(tree), mayRead: path => path != "tests/GeometryTests.cs");
+
+        var lifted = await AskAsync(tool, """{"op":"wholeFile","path":"src/Geometry.cs","reason":"to follow the whole flow"}""");
+
+        Assert.Equal((GraphToolOutcome.Answered, "the narrowing of reads is lifted for 'src/Geometry.cs' for the rest of this step: to follow the whole flow"), (lifted.Outcome, lifted.Text));
+        Assert.Equal(
+            new GraphEscapeLine("src/Geometry.cs", 20, EstimatedTokens.OfBytes(new FileInfo(Path.Combine(tree.Tree, "src", "Geometry.cs")).Length), GraphEscapeLine.Stated, "to follow the whole flow"),
+            lifted.Escape);
+        Assert.True(tool.Lifted("src/Geometry.cs"));
+
+        foreach (var path in new[] { "src/Missing.cs", "docs/zoo.txt", "../outside.cs", Path.Combine(tree.Tree, "src", "Shapes.cs"), "assets/blob.cs" })
+        {
+            var refused = await AskAsync(tool, new JsonObject { ["op"] = "wholeFile", ["path"] = path, ["reason"] = "why" }.ToJsonString());
+
+            Assert.Equal(
+                (GraphToolOutcome.Usage, $"the view holds no file it parsed at '{path}': wholeFile lifts the narrowing of a file the graph parsed, and no whole read of any other is narrowed"),
+                (refused.Outcome, refused.Text));
+            Assert.Null(refused.Escape);
+        }
+
+        var unreached = await AskAsync(tool, """{"op":"wholeFile","path":"tests/GeometryTests.cs","reason":"why"}""");
+
+        Assert.Equal((GraphToolOutcome.Usage, "'tests/GeometryTests.cs' is a file your reads do not reach"), (unreached.Outcome, unreached.Text));
+        Assert.Null(unreached.Escape);
+        Assert.False(tool.Lifted("tests/GeometryTests.cs"));
+        Assert.False(tool.Lifted("src/Shapes.cs"));
+    }
+
+    /// <summary>
+    /// Where the tree's file system finds a name in any case, a path in another case is the file the view holds: a whole read
+    /// of it is narrowed as the file's own, said by the path the view holds it at, and a <c>wholeFile</c> in yet another case
+    /// lifts it for every spelling.
+    /// </summary>
+    [Fact]
+    public async Task WhereTheTreeFindsANameInAnyCase_ThePathInAnotherCase_IsTheFileTheViewHolds()
+    {
+        using var tree = await TreeAsync(("src/Big.cs", BigFile));
+
+        Assert.SkipUnless(PathCase.In(tree.Harness.FileSystem, tree.Tree).Equals("a", "A"), "Only a file system that finds a name in any case holds one file under two spellings.");
+
+        var tool = Tool(tree, await QueriesAsync(tree));
+        var narrowed = tool.WholeRead("SRC/big.cs", 222);
+
+        Assert.True(narrowed.Narrowed);
+        Assert.Equal("src/Big.cs", narrowed.Path);
+        Assert.StartsWith("'src/Big.cs' is 222 lines and in the codebase graph", narrowed.Text, StringComparison.Ordinal);
+
+        var lifted = await AskAsync(tool, """{"op":"wholeFile","path":"Src/BIG.cs","reason":"the move needs it whole"}""");
+
+        Assert.Equal((GraphToolOutcome.Answered, "the narrowing of reads is lifted for 'src/Big.cs' for the rest of this step: the move needs it whole"), (lifted.Outcome, lifted.Text));
+        Assert.True(tool.Lifted("src/big.CS"));
+        Assert.False(tool.WholeRead("SRC/big.cs", 222).Narrowed);
+        Assert.False(tool.WholeRead("src/Big.cs", 222).Narrowed);
+    }
+
+    /// <summary>
+    /// Where the tree's file system tells names apart by their case, a path in another case names no file the view holds:
+    /// a whole read of it is never narrowed, and a <c>wholeFile</c> of it is a misuse.
+    /// </summary>
+    [Fact]
+    public async Task WhereTheTreeTellsCasesApart_ThePathInAnotherCase_NamesNoFileTheViewHolds()
+    {
+        using var tree = await TreeAsync(("src/Big.cs", BigFile));
+
+        Assert.SkipWhen(PathCase.In(tree.Harness.FileSystem, tree.Tree).Equals("a", "A"), "A file system that finds a name in any case holds one file under two spellings.");
+
+        var tool = Tool(tree, await QueriesAsync(tree));
+
+        Assert.False(tool.WholeRead("SRC/big.cs", 222).Narrowed);
+        Assert.Equal(GraphToolOutcome.Usage, (await AskAsync(tool, """{"op":"wholeFile","path":"SRC/big.cs","reason":"why"}""")).Outcome);
+        Assert.True(tool.WholeRead("src/Big.cs", 222).Narrowed);
+    }
+
+    /// <summary>
+    /// The sync after a write or a command makes the tool answer from the view it left: a file a write made is found by the
+    /// next call, as is one a command made, synced whole - and a write outside the tree syncs nothing, and a sync that cannot
+    /// be made says nothing, the write standing as written.
+    /// </summary>
+    [Fact]
+    public async Task TheSyncAfterAWriteOrACommand_MakesTheToolAnswerFromTheViewItLeft()
+    {
+        using var tree = await TreeAsync();
+        var tool = Tool(tree, await QueriesAsync(tree));
+        var comparison = tree.Harness.Platform.PathComparison;
+        const string Added = "namespace Demo;\n\npublic static class Added\n{\n    public static int One()\n    {\n        return 1;\n    }\n}\n";
+
+        tree.Write("src/Added.cs", Added);
+
+        Assert.StartsWith("no node matched\n", (await AskAsync(tool, """{"op":"find","query":"Added"}""")).Text, StringComparison.Ordinal);
+
+        var written = await AfterWrites.SyncGraphAsync(tree.Service, tree.Request(), AgentGraphWrite.Of("create_file", Path.Combine(tree.Tree, "src", "Added.cs")), comparison, tool, TestContext.Current.CancellationToken);
+
+        Assert.Same(tool.Queries, written);
+        Assert.Contains(" public static class Added | src/Added.cs:3-9 #", (await AskAsync(tool, """{"op":"find","query":"Added"}""")).Text, StringComparison.Ordinal);
+
+        tree.Write("src/Made.cs", Added.Replace("Added", "Made", StringComparison.Ordinal));
+
+        Assert.NotNull(await AfterWrites.SyncGraphAsync(tree.Service, tree.Request(), AgentGraphWrite.Command("run_command"), comparison, tool, TestContext.Current.CancellationToken));
+        Assert.Contains(" public static class Made | src/Made.cs:3-9 #", (await AskAsync(tool, """{"op":"find","query":"Made"}""")).Text, StringComparison.Ordinal);
+
+        Assert.Null(await AfterWrites.SyncGraphAsync(tree.Service, tree.Request(), AgentGraphWrite.Of("create_file", Path.Combine(Path.GetDirectoryName(tree.Tree)!, "elsewhere.cs")), comparison, tool, TestContext.Current.CancellationToken));
+
+        var before = tool.Queries;
+        var failing = Substitute.For<ICodebaseGraphService>();
+        failing.SyncPathsAsync(Arg.Any<CodebaseGraphSync>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).ThrowsAsync(new IOException("the disk is full"));
+
+        Assert.Null(await AfterWrites.SyncGraphAsync(failing, tree.Request(), AgentGraphWrite.Of("create_file", Path.Combine(tree.Tree, "src", "Added.cs")), comparison, tool, TestContext.Current.CancellationToken));
+        Assert.Same(before, tool.Queries);
+    }
+
+    /// <summary>A C# file of 222 lines, past the narrowing's bound.</summary>
+    private static readonly string BigFile = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
 
     private static Task<GraphToolAnswer> AskAsync(CodebaseGraphTool tool, string json, IReadOnlySet<GraphOp>? ops = null)
         => tool.RunAsync(JsonNode.Parse(json)!.AsObject(), ops ?? CodebaseGraphTool.Operations(write: true, narrow: true), TestContext.Current.CancellationToken);

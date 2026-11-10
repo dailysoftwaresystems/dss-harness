@@ -271,7 +271,7 @@ public sealed class FlowStepGraph
             made.support = new AgentGraphSupport(
                 tool,
                 line => store.AppendGraphStepLine(directory, line),
-                (path, token) => AfterWriteAsync(graph, request, path, token),
+                (written, token) => AfterWriteAsync(graph, request, run.Instance, platform.PathComparison, tool, written, token),
                 operations,
                 Narrow: narrowed);
         }
@@ -681,24 +681,10 @@ public sealed class FlowStepGraph
     }
 
     /// <summary>
-    /// Syncs the graph by the path a write of the step's changed, its records kept whole: the tool checks its view again
-    /// before it answers either way, and reads a body fresh against its hash.
+    /// Syncs the step's view by what a write or a command of its agent wrote (<see cref="AfterWrites.SyncGraphAsync"/>) - its
+    /// tree the request's, the agent's worktree where it names one - its sync's record naming the step's instance and the
+    /// tool, and makes the step's graph tool answer from the view it leaves.
     /// </summary>
-    private static async Task AfterWriteAsync(ICodebaseGraphService graph, CodebaseGraphSync request, string path, CancellationToken cancellationToken)
-    {
-        try
-        {
-            if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(request.Repository.MainCheckoutRoot), StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            await graph.SyncPathsAsync(request, [Path.GetRelativePath(request.Repository.MainCheckoutRoot, path).Replace('\\', '/')], cancellationToken).ConfigureAwait(false);
-        }
-        catch (HarnessException)
-        {
-            // A sync that cannot be made says nothing to the agent: the graph's records stand as they were, and the tool
-            // checks its view again before it answers either way.
-        }
-    }
+    private static Task AfterWriteAsync(ICodebaseGraphService graph, CodebaseGraphSync request, string instance, StringComparison comparison, CodebaseGraphTool tool, AgentGraphWrite written, CancellationToken cancellationToken)
+        => AfterWrites.SyncGraphAsync(graph, request with { Why = $"{instance}:{written.Tool}" }, written, comparison, tool, cancellationToken);
 }

@@ -404,6 +404,236 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// The hold a side-task's own write on Claude Code takes of the main tree's lock goes with the call's result while its
+    /// launch runs on: the write ran with the lock held, and the call after it, in the same turn of the same launch, finds
+    /// it free.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksOwnWriteOnClaudeCode_LetsTheTreesLockGoAtItsResult_WhileItsLaunchRunsOn()
+    {
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" }, ["probesLock"] = kit.TreeLockName },
+                    new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["probesLock"] = kit.TreeLockName }),
+            },
+        ]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([(true, "held"), (true, "free")], sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
+    }
+
+    /// <summary>
+    /// A side-task's own command on Claude Code holds the main tree's lock while it runs, as its write does; one asked to
+    /// run in the background is denied - the lock is held for a command's duration, and a command in the background is
+    /// never seen to end - the agent told to run it in the foreground, recorded as every denial is.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksOwnCommandOnClaudeCode_HoldsTheTreesLockWhileItRuns_AndOneInTheBackgroundIsDenied()
+    {
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "echo hi" }, ["probesLock"] = kit.TreeLockName },
+                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "echo later", ["run_in_background"] = true }, ["probesLock"] = kit.TreeLockName }),
+            },
+        ]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([(true, "held"), (false, ClaudeCodeClient.BackgroundRefused)], sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
+        Assert.Equal(1, result.Denials);
+
+        var denied = Assert.Single(sink.Of<PermissionDenied>());
+        Assert.Equal(("Bash", "echo later", ClaudeCodeClient.TreeLockRule, AgentPermissionSource.Builtin, ClaudeCodeClient.BackgroundRefused), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
+
+        var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!;
+        Assert.Equal(("Bash", ClaudeCodeClient.TreeLockRule, ClaudeCodeClient.BackgroundRefused), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A take of the main tree's lock whose ask is withdrawn while it waits - the chat's interrupt cutting the call - is
+    /// cancelled and holds nothing: once the engine lets the lock go it is free while the chat's launch runs on, and the
+    /// withdrawn ask is never answered.
+    /// </summary>
+    [Fact]
+    public async Task ATakeOfTheTreesLockWhoseAskIsWithdrawn_IsCancelled_HoldsNothing_AndItsAskIsNeverAnswered()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" }, ["cutWhileAsked"] = true }) }]);
+        var engine = MachineWideMutex.TryHold(kit.TreeLockName, "a test as the engine");
+
+        Assert.NotNull(engine);
+
+        var taking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.TreeLock = (main, token) =>
+        {
+            token.Register(() => cancelled.TrySetResult());
+            taking.TrySetResult();
+            return MainTreeWriteLock.HoldAsync(main, token);
+        };
+        var cut = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt(), Ground = kit.Ground() with { SideTask = true } };
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnFinished)
+            {
+                cut.TrySetResult();
+            }
+        });
+
+        var running = Task.Run(() => kit.Client().RunAsync(run, sink, Token));
+
+        try
+        {
+            // The take waits on the engine's hold; the interrupt withdraws its ask, and the take is cancelled with it.
+            await taking.Task.WaitAsync(TimeSpan.FromSeconds(60), Token);
+            run.Interrupt!.Interrupt();
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(60), Token);
+            await cut.Task.WaitAsync(TimeSpan.FromSeconds(60), Token);
+        }
+        finally
+        {
+            engine!.Dispose();
+        }
+
+        // The lock is free once the engine let it go, while the chat's launch still runs: nothing of the take holds it.
+        MachineWideHold? taken = null;
+
+        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(30); ; await Task.Delay(50, Token))
+        {
+            Assert.False(running.IsCompleted, "the chat's launch ended before its next message");
+            taken = MachineWideMutex.TryHold(kit.TreeLockName, "a test as the engine");
+
+            if (taken is not null)
+            {
+                break;
+            }
+
+            Assert.True(DateTime.UtcNow < till, "the withdrawn take held the main tree's lock while the chat ran on");
+        }
+
+        taken.Dispose();
+        run.Messages.Complete();
+
+        var result = await running;
+
+        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
+        Assert.Empty(sink.Of<PermissionDenied>());
+        Assert.DoesNotContain(
+            Assert.Single(kit.Launches()).Read,
+            line => line["type"]?.GetValue<string>() == "control_response" && line["response"]?["response"]?["behavior"] is not null);
+    }
+
+    /// <summary>
+    /// A side-task's write whose take of the main tree's lock fails - the lock cannot be opened - is denied with the lock's
+    /// refusal, saying why, and recorded as every denial is: the launch goes on to its end, and nothing of the take escapes.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksWriteWhoseTakeOfTheTreesLockFails_IsDeniedWithTheLocksRefusal_AndRecorded()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" } }) }]);
+        kit.TreeLock = (_, _) => Task.FromException<MachineWideHold?>(new DssHarness.Core.Results.HarnessException(DssHarness.Core.Results.HarnessExit.Refused, "The lock 'x' belongs to another user on this machine."));
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
+
+        const string Said = "the main tree's lock, which a side-task's write or command holds for its duration, could not be taken: The lock 'x' belongs to another user on this machine";
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(1, result.Denials);
+        Assert.Equal((false, Said), (Assert.Single(sink.Of<ToolCallFinished>()).Ok, Assert.Single(sink.Of<ToolCallFinished>()).Result));
+        Assert.False(File.Exists(Path.Combine(kit.Worktree, "w.txt")));
+
+        var denied = Assert.Single(sink.Of<PermissionDenied>());
+        Assert.Equal(("Write", "w.txt", ClaudeCodeClient.TreeLockRule, AgentPermissionSource.Builtin, Said), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
+
+        var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!;
+        Assert.Equal(("Write", ClaudeCodeClient.TreeLockRule, Said), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// What Claude Code's own write tools wrote and its commands ran is followed as the runtime's own writes are: the run's
+    /// graph synced by the file each write did what it was asked to - made absolute against the agent's working directory -
+    /// and after each command, which may have written anything; a read syncs nothing.
+    /// </summary>
+    [Fact]
+    public async Task ClaudeCodesOwnWritesAndCommands_SyncTheRunsGraph_AsTheRuntimesOwnDo()
+    {
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" } },
+                    new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } },
+                    new JsonObject { ["tool"] = "Edit", ["input"] = new JsonObject { ["file_path"] = "a.txt", ["old_string"] = "alpha", ["new_string"] = "beta" } },
+                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "echo hi" } }),
+            },
+        ]);
+        var synced = new List<(string Tool, IReadOnlyList<string>? Paths)>();
+
+        var result = await kit.Client().RunAsync(kit.Run() with
+        {
+            Graph = new AgentGraphSupport(null, AfterWriteAsync: (write, _) =>
+            {
+                synced.Add((write.Tool, write.Paths));
+                return Task.CompletedTask;
+            }),
+        }, new Sink(), Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(["Write", "Edit", "Bash"], synced.Select(write => write.Tool));
+        Assert.Equal([Path.Combine(kit.Worktree, "w.txt")], synced[0].Paths);
+        Assert.Equal([Path.Combine(kit.Worktree, "a.txt")], synced[1].Paths);
+        Assert.Null(synced[2].Paths);
+    }
+
+    /// <summary>
+    /// A side-task's edit of config.json with Claude Code's own Write, where a run is working over the tree, says in the
+    /// chat where the edit reaches, as the runtime's file tools say it; a write of another file says nothing.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksOwnWriteOfTheConfiguration_OnClaudeCode_SaysInTheChatWhereItReaches_WhereARunIsLive()
+    {
+        using var kit = new Kit();
+        var config = new DssHarness.Core.Repository.HarnessLayout(kit.Temp.Path, kit.Temp.Path).ConfigFile;
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = config, ["content"] = "{}" } },
+                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" } }),
+            },
+        ]);
+        var ground = PolicyGrounds.Of(kit.Worktree, [kit.Temp.Path], [kit.Temp.Path], [], [], []) with { SideTask = true, LiveRun = () => "r1", WorktreeRules = false, ProtectedPaths = false };
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = ground }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Empty(sink.Of<PermissionDenied>());
+        Assert.Equal(
+            "run 'r1' is working over this tree: the edit of config.json reaches its steps that start after it, and never one under way",
+            Assert.Single(sink.Of<Notice>()).Text);
+    }
+
+    /// <summary>
     /// The stored stream is written as the launch runs, by the runner from the client's events: the launch's start, the
     /// prompt, the turn, the call and its result, the message, the turn's end, in that order, no delta among them; the
     /// control messages both ways are kept beside it.
@@ -3809,7 +4039,16 @@ public sealed class ClaudeCodeClientTests : IDisposable
         /// none is given - and every result it answers held together as the runner holds it.
         /// </summary>
         public IAgentClient Client(IProcessRunner? processes = null)
-            => new HeldTogether(new ClaudeCodeClient(processes ?? Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own, Tools(), () => Self));
+            => new HeldTogether(new ClaudeCodeClient(processes ?? Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own, Tools(), () => Self)
+            {
+                TreeLock = TreeLock ?? MainTreeWriteLock.HoldAsync,
+            });
+
+        /// <summary>How the client takes the main tree's lock for a side-task's write or command: the lock's own, unless a test gives another.</summary>
+        public Func<string, CancellationToken, Task<MachineWideHold?>>? TreeLock { get; set; }
+
+        /// <summary>The name of the main tree's lock the kit's runs take, its main checkout the kit's own.</summary>
+        public string TreeLockName => MainTreeWriteLock.NameFor(Temp.Path);
 
         /// <summary>This tool's own program as a launch's shell prefix names it: the installed tool's, unless a test gives another.</summary>
         public (string Program, IReadOnlyList<string> Leading) Self { get; set; } = ("/opt/tools/dssharness", []);

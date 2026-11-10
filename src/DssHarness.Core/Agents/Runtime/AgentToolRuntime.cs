@@ -186,14 +186,15 @@ public sealed partial class AgentToolRuntime : IDisposable
         var tools = AgentTools.Offered(ground, run.Commands, run.WebSearch).Where(tool => only?.Contains(tool.Name) != false).ToList();
 
         // The run's graph tool, where it is given one: offered among the harness's own, with the operations the run's
-        // step is given - a side-task's are every one, edit among them, with no narrowing of its reads.
+        // step is given - a side-task's every one its client serves (Claude Code's none but the reads), with no narrowing
+        // of its reads. It is no barrier by its name: of its operations only an edit writes, and stands alone (Alone).
         if (run.Graph is { } graph)
         {
             var operations = graph.Operations ?? CodebaseGraphTool.Operations(write: true, narrow: false);
             tools.Add(new AgentToolDefinition(
                 AgentGraphSupport.ToolName,
                 AgentCapability.Read,
-                Barrier: true,
+                Barrier: false,
                 CodebaseGraphTool.Description(operations),
                 CodebaseGraphTool.Schema(operations)));
         }
@@ -302,7 +303,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         for (var at = 0; at < calls.Count; at++)
         {
-            if (_tools.TryGetValue(calls[at].Name, out var tool) && tool.Barrier)
+            if (Alone(calls[at]))
             {
                 await ReadsAsync().ConfigureAwait(false);
                 results[at] = await OneAsync(calls[at]).ConfigureAwait(false);
@@ -343,10 +344,10 @@ public sealed partial class AgentToolRuntime : IDisposable
         Tally.Called();
         Answer answer;
 
-        // A side-task's write or command holds the main tree's lock for its duration: the engine's folds and commits
-        // wait it out, as it waits out theirs, and its chat says when it waited - the engine's step records say the
-        // same of theirs.
-        using var tree = _run.Ground is { SideTask: true } && _tools.TryGetValue(call.Name, out var tool) && tool.Barrier
+        // A side-task's write or command - a file tool that writes, run_command, the graph's edit - holds the main tree's
+        // lock for its duration: the engine's folds and commits wait it out, as it waits out theirs, and its chat says
+        // when it waited - the engine's step records say the same of theirs. A read, the graph's among them, takes none.
+        using var tree = _run.Ground is { SideTask: true } && Alone(call)
             ? await MainTreeWriteLock.HoldAsync(_run.Workspace.MainCheckout, cancellationToken).ConfigureAwait(false)
                 ?? throw new OperationCanceledException(cancellationToken)
             : null;
@@ -367,6 +368,34 @@ public sealed partial class AgentToolRuntime : IDisposable
         }
 
         return await KeptAsync(call, answer).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="call"/> stands alone in its turn - after every call before it and before every call after - and,
+    /// for a side-task, holds the main tree's lock for its duration: a call of a tool that writes or runs, and of the graph
+    /// tool its <c>edit</c> alone, the one operation of it that writes. A call of a tool not given, or whose input does not
+    /// read, runs nothing, and reads with the rest.
+    /// </summary>
+    /// <param name="call">The call.</param>
+    private bool Alone(AgentToolCallRequest call)
+        => _tools.TryGetValue(call.Name, out var tool)
+            && (tool.Barrier || (tool.Name == AgentGraphSupport.ToolName && EditsTheGraph(call.Input)));
+
+    /// <summary>Whether a <c>graph</c> call's input asks its <c>edit</c>; false for one that does not read, which runs no operation.</summary>
+    /// <param name="input">The call's input, as JSON.</param>
+    private static bool EditsTheGraph(string input)
+    {
+        try
+        {
+            return JsonNode.Parse(input) is JsonObject members
+                && members["op"] is JsonValue op
+                && op.TryGetValue<string>(out var name)
+                && string.Equals(name, CodebaseGraphTool.NameOf(GraphOp.Edit), StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -463,7 +492,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.InsertInFile => await InsertAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.CreateDirectory => CreateDirectory(input),
             AgentTools.DeleteFile => await DeleteFile(input).ConfigureAwait(false),
-            AgentTools.DeleteDirectory => DeleteDirectory(input),
+            AgentTools.DeleteDirectory => await DeleteDirectory(input).ConfigureAwait(false),
             AgentTools.MovePath => await MovePath(input).ConfigureAwait(false),
             AgentTools.RunCommand => await RunCommandAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebFetch => await FetchAsync(input, cancellationToken).ConfigureAwait(false),
@@ -475,10 +504,11 @@ public sealed partial class AgentToolRuntime : IDisposable
 
     /// <summary>
     /// One call of the run's graph tool, answered by the tool it was given and recorded as each of its calls is: a usage
-    /// the agent can correct is answered as a failed call with the tool's own words, a refusal with the policy's. An edit
-    /// the tool made counts among the files written, and a body it served and an edit it made count as views of their
-    /// files for the edit check, as a <c>view_file</c> is a view; a <c>wholeFile</c> that lifted the narrowing of reads
-    /// is an escape <c>stated</c>, recorded with the reason the agent gave.
+    /// the agent can correct is answered as a failed call with the tool's own words, a refusal with the policy's, recorded
+    /// as every denial is. An edit the tool made counts among the files written, and is followed as every write is; a body
+    /// it served and an edit it made count as views of their files for the edit check, as a <c>view_file</c> is a view; a
+    /// <c>wholeFile</c> that lifted the narrowing of reads is an escape <c>stated</c>, recorded as the tool made it - its
+    /// file as the view holds it, with the agent's reason.
     /// </summary>
     /// <param name="input">The call's input, its <c>op</c> among it.</param>
     /// <param name="cancellationToken">The hard stop.</param>
@@ -500,14 +530,8 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         if (answer.Outcome == GraphToolOutcome.Wrote && answer.Path is { } wrote)
         {
-            var written = Path.Combine(tree, wrote.Replace('/', Path.DirectorySeparatorChar));
-            Tally.Wrote(written);
-
             // The graph is synced after each of the run's writes, an edit of its own among them.
-            if (support.AfterWriteAsync is { } sync)
-            {
-                await sync(written, CancellationToken.None).ConfigureAwait(false);
-            }
+            await WroteAsync(AgentGraphSupport.ToolName, Path.Combine(tree, wrote.Replace('/', Path.DirectorySeparatorChar))).ConfigureAwait(false);
         }
 
         foreach (var viewed in answer.Viewed)
@@ -515,16 +539,15 @@ public sealed partial class AgentToolRuntime : IDisposable
             ViewedAgain(Path.Combine(tree, viewed.Replace('/', Path.DirectorySeparatorChar)));
         }
 
-        if (string.Equals(input["op"]?.GetValue<string>(), "wholeFile", StringComparison.Ordinal)
-            && answer.Outcome == GraphToolOutcome.Answered
-            && input["path"]?.GetValue<string>() is { } lifted)
+        if (answer.Escape is { } escape)
         {
-            support.Recorded?.Invoke(EscapeOf(lifted, GraphEscapeLine.Stated, input["reason"]?.GetValue<string>() ?? string.Empty));
+            support.Recorded?.Invoke(escape);
         }
 
         return answer.Outcome switch
         {
             GraphToolOutcome.Usage => Answer.Failed(answer.Text),
+            GraphToolOutcome.Refused when answer.Denied is { } denied => Answer.Refused(answer.Path ?? AgentGraphSupport.ToolName, denied),
             GraphToolOutcome.Refused => Answer.Failed(answer.Text),
             _ => Answer.Done(answer.Text),
         };
@@ -550,31 +573,6 @@ public sealed partial class AgentToolRuntime : IDisposable
         catch (IOException)
         {
             // A file that cannot be read now leaves no view of it: an edit of it asks for one first, as any edit does.
-        }
-    }
-
-    /// <summary>An escape of the narrowing of reads, as a line of the run's graph lines: the file, its lines and tokens, and why the read was let by.</summary>
-    /// <param name="path">The file, relative to the tree.</param>
-    /// <param name="escape">The escape: <see cref="GraphEscapeLine.Stated"/> or <see cref="GraphEscapeLine.LowConfidence"/>.</param>
-    /// <param name="why">Why the read was let by.</param>
-    private GraphEscapeLine EscapeOf(string path, string escape, string why)
-    {
-        var full = Path.Combine(_run.Workspace.Worktree ?? _run.Workspace.MainCheckout, path.Replace('/', Path.DirectorySeparatorChar));
-
-        try
-        {
-            var read = _host.FileSystem.OpenRead(full);
-
-            using (read)
-            {
-                var text = EncodedText.Read(ReadAll(read));
-                var lines = text.IsRead ? CodeFileText.Lines(text.Text!.Text) : null;
-                return new GraphEscapeLine(path, lines?.Count ?? 0, lines is null ? 0 : EstimatedTokens.Of(text.Text!.Text), escape, why);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return new GraphEscapeLine(path, 0, 0, escape, why);
         }
     }
 

@@ -1422,10 +1422,16 @@ tree, through the one loop every hand-over takes - deletions, then files, each a
 deletion's, a refresh's and a rebase's apply, a commit step - takes the main tree's lock (`MainTreeWriteLock`, a
 `MachineWideMutex` named for the tree's path) once, before the measure its write is held to, and keeps that one hold to
 its last write - a commit step from its first read of the main tree's git through its commit's own check - which a
-side-task's writes and commands take for their duration too: each side waits the other out, for a long command holds
-the folds back for as long as it runs, so nothing the engine weighed is changed under it before it writes, and the
-step's output says how long it waited and for what (`MainTreeWriteLock.WaitedFor`). The command's or the step's own
-stop ends the engine's wait, nothing weighed or written. While a run's owner is live
+side-task's writes and commands take for their duration too, the graph tool's edit among them, never its reads: each
+side waits the other out, for a long command holds the folds back for as long as it runs, so nothing the engine weighed
+is changed under it before it writes, and the step's output says how long it waited and for what
+(`MainTreeWriteLock.WaitedFor`). The command's or the step's own stop ends the engine's wait, nothing weighed or
+written. On Claude Code the lock is taken off the launch's loop for the call whose permission waits on it, with a token
+of its own that an ask withdrawn, the call's result or its turn's end cancels, and the permission is answered on the
+loop - a take that ends for a call no longer waiting is let go at once and nothing sent, and a lock that cannot be taken
+denies the call with its refusal, recorded as every denial is; a shell command asked to run in the background is
+refused (`ClaudeCodeClient.BackgroundRefused`), for its result comes back before it ends and its end is never seen.
+While a run's owner is live
 (`.orchestrators/<run>.owner.json`, asked at each call through `AgentPolicyGround.LiveRun`), a side-task's agent is
 refused, with the run's name, every command that writes the git state the run works over (`AgentPolicy.LiveRunHeld`:
 git's state-writing verbs, the verbs that write its index and gh's that write git's state) - met as the worktree rules
@@ -1439,11 +1445,13 @@ change on the new base.
 
 A side-task may use the codebase graph beside all this, unlimited: a graph of its own under its records
 (`SideTaskGraph`), held in the one shape every graph's records take, seeded from the newest the repository holds - a
-run's or another side-task's - at its opening, then incremental and synced after each of its writes; the `graph`
-tool offered among its agent's own with every operation and no narrowing, the repository map
+run's or another side-task's - at its opening, then incremental and synced after each of its agent's writes and
+commands on either client (`AfterWrites`), the tool answering from what each sync leaves; the `graph` tool offered
+among its agent's own with every operation its client serves (no `edit` on Claude Code, which edits with its own
+`Edit`) and no narrowing, what it reads and an edit writes asked of the side-task's own policy, the repository map
 (`CodebaseRepositoryMap`) given with its first message and the context pack made from each, a line posted to a launch
-Claude Code holds open for a chat among them (`SideTaskGraph.Front`, the one front either shape takes); `--no-graph` turns it
-off, and a graph that cannot be made takes nothing from the conversation: the side-task says once that it runs
+Claude Code holds open for a chat among them (`SideTaskGraph.Front`, the one front either shape takes); `--no-graph`
+turns it off, and a graph that cannot be made takes nothing from the conversation: the side-task says once that it runs
 without one and why - the chat's first line, or a line beside a one shot's records - and its `graph.jsonl` holds the
 prompt line naming why no pack is given (`GraphPromptLine.Why`).
 
@@ -3939,8 +3947,18 @@ directory held from the root it was decided in (`AgentFiles.Write`). The schema 
 it needs, is a usage line (`CodebaseGraphTool.Misused`). A reason step whose `graph` is `tools` is given the tool by the
 runtime among the harness's own, under `read`, with the operations its capabilities and its `graphReads` give
 (`FlowStepGraph`), a conversation that goes on keeping the tool and the operations it began with; an `edit` runs alone
-between the reads, held to the write rules as `replace_in_file` is and counted among the files written, and a body served
-and an edit made count as views of their files for the edit check. Where the run's graph was never built the tool stays
+between the reads - the tool's barrier is its edit alone, every read operation running with the turn's other reads
+(`AgentToolRuntime.Alone`), and a side-task's edit alone holding the main tree's lock - held to the write rules as
+`replace_in_file` is and counted among the files written, and a body served and an edit made count as views of their
+files for the edit check. After each write and each command of the agent's, on every client - the runtime's file tools,
+its `run_command`, the graph's edit, and Claude Code's own `Write`, `Edit`, `NotebookEdit` and `Bash` - the one owner
+of what follows a write (`AfterWrites.FollowAsync`) syncs the view: by the paths written, beneath the view's tree alone
+(`AgentPolicy.Beneath`) - a directory moved or deleted naming every file git lists beneath it and every file the graph
+held there (`ICodebaseGraphService.SyncPathsAsync`) - and whole after a command, which may have written anything; the
+sync's record names the step and the tool, a sync that cannot be made says nothing to the agent, whose write stands,
+and the tool then answers from the view the sync left (`CodebaseGraphTool.RefreshAsync`, under the lock its own
+extractions take). A path the tool is given is the file the view holds by the tree's own rule of case
+(`CodebaseGraphQueries.HeldPath`, `ConfinedPaths.ComparisonIn`). Where the run's graph was never built the tool stays
 offered and every call answers the sentence for a step that left no output. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
 
 The context pack (`CodebaseContextPack`) is the part of the graph a step's work touches, made at its start
@@ -4001,8 +4019,12 @@ narrowed (`graphReads: narrow`, the default) deny a whole `view_file` on the two
 Claude Code, of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
 the refusal; a range, a search and a write pass; a file the graph is not sure of
 (`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its references `candidates`
-or unresolved) passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file for the
-rest of the step, an escape `stated` with the agent's reason.
+or unresolved) passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file the view
+holds as parsed for the rest of the step, an escape `stated` with the agent's reason and the lines and tokens the view
+read the file as - a path it holds no parsed file at a usage line, nothing read. A read the narrowing denies is no view
+an edit may follow, nor a read of the run's. Claude Code's whole `Read` is asked of the same owner
+(`AgentToolRuntime.NarrowedReadAsync`), which reads nothing unless the run narrows and the view holds the file as parsed,
+and then within a view's bound (`AgentTools.MostViewedBytes`) through the file as it was opened.
 The working set (`CodebaseWorkingSet`) is what a reason step that has a graph worked with, kept in its
 directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
 (`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end, at most

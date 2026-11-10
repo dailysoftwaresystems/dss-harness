@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -100,6 +99,15 @@ public sealed class ClaudeCodeClient(
     /// <summary>The control request that carries a message of an MCP server the host serves.</summary>
     private const string McpMessage = "mcp_message";
 
+    /// <summary>
+    /// The rule a side-task's write or command is refused by where the main tree's lock cannot hold it for its duration: a
+    /// lock that could not be taken, and a command asked to run in the background, whose end is never seen.
+    /// </summary>
+    public const string TreeLockRule = "the main tree's lock";
+
+    /// <summary>What a side-task's shell command asked to run in the background is refused with.</summary>
+    public const string BackgroundRefused = "a side-task's command holds the main tree's lock for its duration, and a command run in the background is never seen to end: run it in the foreground, without run_in_background";
+
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly IProcessRunner _processes = processes ?? throw new ArgumentNullException(nameof(processes));
@@ -112,6 +120,12 @@ public sealed class ClaudeCodeClient(
 
     /// <summary>The host of the tool runtime the engine's tool server answers from; none for a client whose steps have no web.</summary>
     internal AgentToolHost? Tools => _tools;
+
+    /// <summary>
+    /// Takes the main tree's lock for a side-task's write or command (<see cref="MainTreeWriteLock.HoldAsync"/>): a test's
+    /// seam alone, for a lock that cannot be opened is no fault a test can make of the machine's own.
+    /// </summary>
+    internal Func<string, CancellationToken, Task<MachineWideHold?>> TreeLock { get; init; } = MainTreeWriteLock.HoldAsync;
 
     /// <summary>What this client can do, as the capabilities table states it.</summary>
     public static AgentClientCapabilities Descriptor { get; } = new(
@@ -367,10 +381,11 @@ public sealed class ClaudeCodeClient(
         public sealed record ServeFailed(string RequestId, AgentToolServerMessage.Call Call, Exception Fault) : Arrival;
 
         /// <summary>
-        /// A side-task's own write or command holds the main tree's lock at last, and its permission is answered now:
-        /// the lock was waited for off the loop, so the results that let the holds before it go were read meanwhile.
+        /// The take of the main tree's lock a side-task's own write or command waited on off the loop ended - the results
+        /// that let the holds before it go were read meanwhile: <paramref name="Hold"/> where it was taken, <paramref name="Fault"/>
+        /// where the lock could not be taken, neither where the take was withdrawn first.
         /// </summary>
-        public sealed record TreeHeld(ClaudeLine.ControlRequest Asked, TimeSpan Waited) : Arrival;
+        public sealed record TreeHeld(ClaudeLine.ControlRequest Asked, MachineWideHold? Hold, Exception? Fault) : Arrival;
 
         /// <summary>The stall bound of a message the launch had not taken, counted from when <paramref name="Taken"/> messages were taken.</summary>
         public sealed record Untaken(int Taken) : Arrival;
@@ -392,6 +407,18 @@ public sealed class ClaudeCodeClient(
 
         /// <summary>The time to look again for the receipts a launch at its end awaits came.</summary>
         public sealed record ReceiptsLookedFor : Arrival;
+    }
+
+    /// <summary>
+    /// One take of the main tree's lock a side-task's write or command waits on: the call it is for, its own token - linked to
+    /// the launch's, so the launch's end cancels it too - and whether its call stopped waiting for it.
+    /// </summary>
+    /// <param name="CallId">The call whose permission waits on the take.</param>
+    /// <param name="Token">Cancels the take's wait.</param>
+    private sealed record TreeTake(string CallId, CancellationTokenSource Token)
+    {
+        /// <summary>Whether the call stopped waiting for the take: its ask withdrawn, its result come, its turn ended or cut.</summary>
+        public bool Withdrawn { get; set; }
     }
 
     /// <summary>Where a launch stands with the handoff.</summary>
@@ -442,9 +469,15 @@ public sealed class ClaudeCodeClient(
         // Every call of the engine's tool server run, by its id: each runs once.
         private readonly HashSet<string> _served = new(StringComparer.Ordinal);
 
+        // Each take of the main tree's lock a side-task's own write or command waits on, by the request that asked its
+        // permission: the call it is for, and its own token, cancelled where the ask is withdrawn, the call's result comes,
+        // or its turn ends or is cut. Kept, and answered, on the loop alone: a take that ends for a call no longer waiting
+        // is let go at once, and nothing is sent.
+        private readonly Dictionary<string, TreeTake> _taking = new(StringComparer.Ordinal);
+
         // Each of a side-task's own writes and commands that holds the main tree's lock, by its call id: taken where its
-        // permission was asked, let go where its result comes and at the launch's end.
-        private readonly ConcurrentDictionary<string, MachineWideHold> _treeHeld = new(StringComparer.Ordinal);
+        // permission was asked, let go where its result comes and at the launch's end. Read and written on the loop alone.
+        private readonly Dictionary<string, MachineWideHold> _treeHeld = new(StringComparer.Ordinal);
 
         // Where the launch hands its commands to the isolation: the directory each command's receipt is written in, Claude
         // Code's own temporary directory, each shell call the engine allowed whose result has not come, with the receipt at
@@ -674,11 +707,25 @@ public sealed class ClaudeCodeClient(
                 await Quietly(posting).ConfigureAwait(false);
 
                 // The calls of the engine's tool server still running end with the launch, before its records close: what
-                // they asked of the web and were refused is the run's, as on every client.
-                await Quietly(Task.WhenAll(_calling)).ConfigureAwait(false);
+                // they asked of the web and were refused is the run's, as on every client. The takes of the tree's lock end
+                // with it too, the launch's token theirs: each said how it ended as an arrival, and none is thrown here.
+                await Ended(Task.WhenAll(_calling)).ConfigureAwait(false);
 
-                // The tree's locks the launch still holds - calls whose results never came, and one whose permission was
-                // never answered - go with it, once nothing is left that could still take one.
+                // The tree's locks the launch still holds - calls whose results never came, and a take whose arrival the
+                // loop never read - go with it, once nothing is left that could still take one.
+                while (_arrivals.Reader.TryRead(out var unread))
+                {
+                    if (unread is Arrival.TreeHeld left)
+                    {
+                        Unanswered(left);
+                    }
+                }
+
+                foreach (var take in _taking.Values)
+                {
+                    take.Token.Dispose();
+                }
+
                 foreach (var heldTree in _treeHeld.Values)
                 {
                     heldTree.Dispose();
@@ -808,6 +855,13 @@ public sealed class ClaudeCodeClient(
 
                 case ClaudeLine.ControlCancel cancelled:
                     Record(cancelled.Node);
+
+                    // An ask withdrawn wants no answer: a take of the tree's lock it waits on is withdrawn with it.
+                    if (_taking.TryGetValue(cancelled.RequestId, out var withdrawn))
+                    {
+                        Withdraw(withdrawn);
+                    }
+
                     return null;
 
                 case ClaudeLine.Refusal refusal:
@@ -933,12 +987,16 @@ public sealed class ClaudeCodeClient(
 
             foreach (var result in user.Results)
             {
+                // A call whose result came waits for no take of the tree's lock: one still waiting is withdrawn.
+                WithdrawAll(take => take.CallId == result.CallId);
+
                 if (!_calls.Remove(result.CallId, out var call))
                 {
                     continue;
                 }
 
-                // Its result come, the call is done writing or running: the tree's lock it held goes with it.
+                // Its result come, the call is done writing or running - a side-task's command never runs in the background
+                // (BackgroundRefused) - so the tree's lock it held goes with it.
                 if (_treeHeld.Remove(result.CallId, out var heldTree))
                 {
                     heldTree.Dispose();
@@ -986,10 +1044,35 @@ public sealed class ClaudeCodeClient(
                 {
                     return unreceipted;
                 }
+
+                // A write of Claude Code's own that did what it was asked, and a command that ran however it ended, is
+                // followed as the runtime's own are: the run's graph synced by it, and a side-task's edit of config.json
+                // said where a run is live.
+                if (Written(call.Tool, call.Asked, result.Ok) is { } written)
+                {
+                    await AfterWrites.FollowAsync(run, written, events, client._platform.PathComparison).ConfigureAwait(false);
+                }
             }
 
             return null;
         }
+
+        /// <summary>
+        /// What a call of Claude Code's own wrote, as what follows a write reads it: the file a file tool's input names, made
+        /// absolute against the agent's working directory, where it did what it was asked; a command, which may have written
+        /// anything, however it ended; null for a call that writes nothing.
+        /// </summary>
+        /// <param name="tool">The tool, as Claude Code names it.</param>
+        /// <param name="input">The call's input, as the model wrote it.</param>
+        /// <param name="ok">Whether its result says it did what it was asked.</param>
+        private AgentGraphWrite? Written(string tool, JsonNode? input, bool ok)
+            => ClaudeCodeTools.Find(tool) switch
+            {
+                { Capability: AgentCapability.Run } => AgentGraphWrite.Command(tool),
+                { Capability: AgentCapability.Write } when ok && ClaudeToolDecider.SubjectOf(tool, input, run.Workspace.WorkingDirectory) is { } subject
+                    => AgentGraphWrite.Of(tool, Path.GetFullPath(Path.Combine(run.Workspace.WorkingDirectory, subject))),
+                _ => null,
+            };
 
         private async Task OnPieceAsync(ClaudeLine.Piece piece)
         {
@@ -1106,39 +1189,55 @@ public sealed class ClaudeCodeClient(
             }
 
             var tool = asked.Tool ?? string.Empty;
-            var answer = Decide(tool, asked.Input);
+            var answer = await DecideAsync(tool, asked.Input).ConfigureAwait(false);
 
             Asked(asked.CallId, tool, answer is AgentPolicyAnswer.Allowed);
 
             if (answer.Refusal() is { } denied)
             {
-                totals.Denials++;
-                var subject = ClaudeToolDecider.SubjectOf(tool, asked.Input, run.Workspace.WorkingDirectory) ?? asked.Input?.ToJsonString() ?? string.Empty;
-                Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "deny", ["message"] = Masked(denied.Reason) }));
-                await _records!.DeniedAsync(tool, subject, denied).ConfigureAwait(false);
+                await DenyAsync(asked, denied).ConfigureAwait(false);
                 return null;
             }
 
             // A side-task's own write or command holds the main tree's lock for its duration, as the engine's folds and
-            // commits do: the lock is taken off the loop and the permission answered once it is held, so the launch's
-            // stream goes on reading the results that let the holds before this one go while the lock is waited for. A
-            // tool of the engine's server takes it where the runtime runs it.
+            // commits do: the lock is taken off the loop and the permission answered on the loop once it is held, so the
+            // launch's stream goes on reading the results that let the holds before this one go - and an ask withdrawn
+            // meanwhile - while the lock is waited for. A tool of the engine's server takes it where the runtime runs it.
             if (run.Ground is { SideTask: true }
                 && ClaudeCodeTools.ServedAs(tool) is null
                 && ClaudeCodeTools.Find(tool) is { Capability: AgentCapability.Write or AgentCapability.Run }
                 && asked.CallId is { Length: > 0 } callId)
             {
+                var token = CancellationTokenSource.CreateLinkedTokenSource(_ending);
+
+                if (!_taking.TryAdd(asked.RequestId, new TreeTake(callId, token)))
+                {
+                    token.Dispose();
+                    Control(Error(asked.RequestId, $"this host is answering the request '{asked.RequestId}' already"));
+                    return null;
+                }
+
+                var take = client.TreeLock;
+                var main = run.Workspace.MainCheckout;
+
                 _calling.Add(Task.Run(async () =>
                 {
-                    var hold = await MainTreeWriteLock.HoldAsync(run.Workspace.MainCheckout, _ending).ConfigureAwait(false);
+                    Arrival.TreeHeld ended;
 
-                    if (hold is null)
+                    try
                     {
-                        return;
+                        ended = new(asked, await take(main, token.Token).ConfigureAwait(false), null);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        ended = new(asked, null, null);
+                    }
+                    catch (Exception ex)
+                    {
+                        ended = new(asked, null, ex);
                     }
 
-                    _treeHeld[callId] = hold;
-                    _arrivals.Writer.TryWrite(new Arrival.TreeHeld(asked, hold.Waited));
+                    _arrivals.Writer.TryWrite(ended);
                 }));
 
                 return null;
@@ -1149,15 +1248,65 @@ public sealed class ClaudeCodeClient(
         }
 
         /// <summary>
-        /// A side-task's own write or command holds the tree's lock at last: its permission is answered now, and where it
-        /// waited, the chat says so as the engine's step records say the same of theirs.
+        /// Answers the ask <paramref name="asked"/> with <paramref name="denied"/>, counted and recorded as every denial is - a
+        /// line of the step's denials and its event - so the person sees why.
+        /// </summary>
+        private async Task DenyAsync(ClaudeLine.ControlRequest asked, AgentPolicyAnswer.Denied denied)
+        {
+            var tool = asked.Tool ?? string.Empty;
+            totals.Denials++;
+            var subject = ClaudeToolDecider.SubjectOf(tool, asked.Input, run.Workspace.WorkingDirectory) ?? asked.Input?.ToJsonString() ?? string.Empty;
+            Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "deny", ["message"] = Masked(denied.Reason) }));
+            await _records!.DeniedAsync(tool, subject, denied).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// The take of the tree's lock a side-task's own write or command waited on ended. Held, for a call still waiting: its
+        /// permission is answered now, and where it waited, the chat says so as the engine's step records say the same of
+        /// theirs. Not taken - the lock could not be opened - for a call still waiting: its permission is denied with the
+        /// lock's own refusal, recorded as every denial is. For a call no longer waiting - its ask withdrawn, its result come,
+        /// its turn ended or cut - the hold is let go at once, and nothing is sent.
         /// </summary>
         private async Task<LaunchOutcome?> OnTreeHeldAsync(Arrival.TreeHeld held)
         {
-            if (held.Waited > TimeSpan.Zero)
+            if (!_taking.Remove(held.Asked.RequestId, out var take))
+            {
+                held.Hold?.Dispose();
+                return null;
+            }
+
+            take.Token.Dispose();
+
+            if (take.Withdrawn)
+            {
+                held.Hold?.Dispose();
+                return null;
+            }
+
+            if (held.Fault is { } fault)
+            {
+                Asked(take.CallId, held.Asked.Tool ?? string.Empty, allowed: false);
+                await DenyAsync(held.Asked, new AgentPolicyAnswer.Denied(
+                    TreeLockRule,
+                    AgentPolicySource.Builtin,
+                    $"the main tree's lock, which a side-task's write or command holds for its duration, could not be taken: {fault.Message.TrimEnd('.')}")).ConfigureAwait(false);
+                return null;
+            }
+
+            if (held.Hold is not { } hold)
+            {
+                return null;
+            }
+
+            // A call is held once: a second ask of the same call runs under the hold its first took.
+            if (!_treeHeld.TryAdd(take.CallId, hold))
+            {
+                hold.Dispose();
+            }
+            else if (hold.Waited > TimeSpan.Zero)
             {
                 await Emit(new Notice(
-                    $"waited {Math.Round(held.Waited.TotalSeconds, 1):0.#} s for {MainTreeWriteLock.WaitedOutOnFromSideTask} to end")).ConfigureAwait(false);
+                    $"waited {Math.Round(hold.Waited.TotalSeconds, 1):0.#} s for {MainTreeWriteLock.WaitedOutOnFromSideTask} to end")).ConfigureAwait(false);
             }
 
             Control(Answer(held.Asked.RequestId, new JsonObject
@@ -1167,6 +1316,39 @@ public sealed class ClaudeCodeClient(
             }));
 
             return null;
+        }
+
+        /// <summary>The take <paramref name="take"/> withdrawn: its call waits for it no more, and its wait is cancelled.</summary>
+        private static void Withdraw(TreeTake take)
+        {
+            if (!take.Withdrawn)
+            {
+                take.Withdrawn = true;
+                take.Token.Cancel();
+            }
+        }
+
+        /// <summary>Withdraws every take of the tree's lock still waiting that <paramref name="which"/> names.</summary>
+        private void WithdrawAll(Func<TreeTake, bool> which)
+        {
+            foreach (var take in _taking.Values.Where(which))
+            {
+                Withdraw(take);
+            }
+        }
+
+        /// <summary>
+        /// A take of the tree's lock that ended where no call can be answered any more - the launch ending: what it holds is
+        /// let go at once, and nothing is sent.
+        /// </summary>
+        private void Unanswered(Arrival.TreeHeld held)
+        {
+            held.Hold?.Dispose();
+
+            if (_taking.Remove(held.Asked.RequestId, out var take))
+            {
+                take.Token.Dispose();
+            }
         }
 
         /// <summary>
@@ -1290,6 +1472,11 @@ public sealed class ClaudeCodeClient(
 
                     case Arrival.ReceiptsLookedFor:
                         looking = false;
+                        break;
+
+                    // The launch has its outcome: a take of the tree's lock that ends now answers no call.
+                    case Arrival.TreeHeld held:
+                        Unanswered(held);
                         break;
                 }
             }
@@ -1439,13 +1626,15 @@ public sealed class ClaudeCodeClient(
         /// <summary>
         /// The engine's answer to a call of <paramref name="tool"/>: its policy's, or, in the handoff turn, that turn's
         /// refusal. A fault of the engine's own while deciding is a denial too, by <see cref="AgentPolicy.UndecidedRule"/> - recorded as
-        /// every denial is, and never a failure that escapes - for nothing runs that was not decided. A whole read of a
-        /// file the graph holds parsed is narrowed here too (<c>graphReads: narrow</c>), by the same owner that narrows
-        /// <c>view_file</c> on the APIs, its denial and its two escapes recorded as the graph's own lines.
+        /// every denial is, and never a failure that escapes - for nothing runs that was not decided. A side-task's shell
+        /// command asked to run in the background is refused (<see cref="BackgroundRefused"/>): its command holds the main
+        /// tree's lock for its duration, and a command in the background comes back before it ends, its end never seen. A
+        /// whole read of a file the graph holds parsed is narrowed here too (<c>graphReads: narrow</c>), by the same owner
+        /// that narrows <c>view_file</c> on the APIs, its denial and its two escapes recorded as the graph's own lines.
         /// </summary>
         /// <param name="tool">The tool, as Claude Code names it.</param>
         /// <param name="input">The call's input, as asked.</param>
-        private AgentPolicyAnswer Decide(string tool, JsonNode? input)
+        private async Task<AgentPolicyAnswer> DecideAsync(string tool, JsonNode? input)
         {
             if (_handing != Handing.No)
             {
@@ -1456,10 +1645,23 @@ public sealed class ClaudeCodeClient(
             {
                 var decided = ClaudeToolDecider.Decide(policy, _given, tool, input, run.Workspace.WorkingDirectory);
 
-                return tool == ClaudeCodeTools.Read && input is JsonObject holding && decided is AgentPolicyAnswer.Allowed
+                if (decided is not AgentPolicyAnswer.Allowed || input is not JsonObject holding)
+                {
+                    return decided;
+                }
+
+                if (run.Ground is { SideTask: true }
+                    && ClaudeCodeTools.Find(tool) is { Capability: AgentCapability.Run }
+                    && holding[BackgroundMember] is JsonValue background && background.TryGetValue<bool>(out var behind) && behind)
+                {
+                    return new AgentPolicyAnswer.Denied(TreeLockRule, AgentPolicySource.Builtin, BackgroundRefused);
+                }
+
+                return tool == ClaudeCodeTools.Read
                     && holding["offset"] is null && holding["limit"] is null
                     && holding["file_path"] is JsonValue named && named.TryGetValue<string>(out var path) && path.Length > 0
-                    && _servedBy?.NarrowedRead(path) is { } narrowed
+                    && _servedBy is { } served
+                    && await served.NarrowedReadAsync(path, _ending).ConfigureAwait(false) is { } narrowed
                     ? narrowed
                     : decided;
             }
@@ -1516,7 +1718,7 @@ public sealed class ClaudeCodeClient(
             }
 
             // What the engine cannot decide it would not have allowed: such a call is a denial, as its refusal said.
-            return Decide(made.Tool, made.Asked) is AgentPolicyAnswer.Allowed
+            return await DecideAsync(made.Tool, made.Asked).ConfigureAwait(false) is AgentPolicyAnswer.Allowed
                 ? NotHost($"Claude Code refused '{made.Tool}' without asking the engine, which allows it ({Claude}): {message}; this tool runs Claude Code only as its host")
                 : null;
         }
@@ -1572,6 +1774,9 @@ public sealed class ClaudeCodeClient(
                     return null;
                 }
 
+                // The turn it cut asks nothing more: a take of the tree's lock one of its calls waits on is withdrawn.
+                WithdrawAll(_ => true);
+
                 // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn
                 // takes them, and the person is told, for each was theirs. The turn it cuts ends by itself, and the
                 // launch stays open for the chat's next message.
@@ -1607,6 +1812,7 @@ public sealed class ClaudeCodeClient(
                 if (answered.Succeeded)
                 {
                     _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+                    WithdrawAll(_ => true);
                 }
 
                 return Leaving();
@@ -1623,6 +1829,7 @@ public sealed class ClaudeCodeClient(
             }
 
             _interruptId = null;
+            WithdrawAll(_ => true);
 
             // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn takes
             // them. One Claude Code had taken for its next turn already is not named, and that turn runs - cut - first.
@@ -1646,6 +1853,9 @@ public sealed class ClaudeCodeClient(
         private async Task<LaunchOutcome?> OnTurnEndedAsync(ClaudeLine.Result result)
         {
             _inTurn = false;
+
+            // A turn that ended asks nothing more: a take of the tree's lock one of its calls still waits on is withdrawn.
+            WithdrawAll(_ => true);
             await ActedAsync().ConfigureAwait(false);
             var served = _held ?? model;
 
@@ -2227,6 +2437,22 @@ public sealed class ClaudeCodeClient(
             catch (Exception ex) when (ex is OperationCanceledException or ProgramStartException or IOException)
             {
                 // Its end was seen to where it mattered.
+            }
+        }
+
+        /// <summary>
+        /// Waits for the launch's own tasks - the calls of the engine's tool server and the takes of the tree's lock - to have
+        /// ended: each hands the loop how it ended, its fault among them, so none ends the launch's end in turn.
+        /// </summary>
+        private static async Task Ended(Task tasks)
+        {
+            try
+            {
+                await tasks.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Each fault was handed to the loop as an arrival, and said there: the launch's end goes on whole.
             }
         }
     }

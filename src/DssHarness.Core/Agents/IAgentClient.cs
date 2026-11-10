@@ -919,8 +919,9 @@ public sealed record AgentEntries(Configuration.AgentProviderConfig Provider, Co
 /// <summary>
 /// The codebase graph a run is given with: its <see cref="Runtime.CodebaseGraphTool">graph tool</see>, offered by the
 /// tool runtime among the harness's own tools on every client, each of its calls recorded where the run's graph lines
-/// are kept, and its graph synced after each of the run's writes - a side-task's own under its records, unlimited (every
-/// operation, no narrowing), a reason step's the run's own, scoped to its view, its operations and its narrowing of
+/// are kept, and its graph synced after each of the run's writes and commands, on every client
+/// (<see cref="Runtime.AfterWrites.FollowAsync"/>) - a side-task's own under its records, unlimited (every operation the
+/// client serves, no narrowing), a reason step's the run's own, scoped to its view, its operations and its narrowing of
 /// reads said by its step (<c>graph</c> and <c>graphReads</c>).
 /// </summary>
 /// <param name="Tool">
@@ -928,13 +929,16 @@ public sealed record AgentEntries(Configuration.AgentProviderConfig Provider, Co
 /// answers <see cref="Gone"/>.
 /// </param>
 /// <param name="Recorded">Told of each line the graph leaves - a call, an escape, a denied read - where the run keeps them; null where it keeps none.</param>
-/// <param name="AfterWriteAsync">Syncs the graph by the path a write of the run's changed; null where nothing syncs.</param>
+/// <param name="AfterWriteAsync">
+/// Syncs the graph by what a write or a command of the run's wrote, and makes <paramref name="Tool"/> answer from the view
+/// it leaves (<see cref="Runtime.AfterWrites.SyncGraphAsync"/>); null where nothing syncs.
+/// </param>
 /// <param name="Operations">The operations the run's step is given; null where it is given every one (a side-task's).</param>
 /// <param name="Narrow">Whether the run's whole-file reads are narrowed to the graph (<c>graphReads: narrow</c>).</param>
 public sealed record AgentGraphSupport(
     Runtime.CodebaseGraphTool? Tool,
     Action<Runtime.GraphStepLine>? Recorded = null,
-    Func<string, CancellationToken, Task>? AfterWriteAsync = null,
+    Func<Runtime.AgentGraphWrite, CancellationToken, Task>? AfterWriteAsync = null,
     IReadOnlySet<Runtime.GraphOp>? Operations = null,
     bool Narrow = false)
 {

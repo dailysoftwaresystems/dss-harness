@@ -49,6 +49,13 @@ public sealed record GraphToolAnswer(string Text, GraphToolOutcome Outcome, stri
     /// made - which the runtime counts as views of them for its edit check, as a <c>view_file</c> is a view.
     /// </summary>
     public IReadOnlyList<string> Viewed { get; init; } = [];
+
+    /// <summary>
+    /// The escape a <c>wholeFile</c> that lifted the narrowing of reads made, <see cref="GraphEscapeLine.Stated"/> with the
+    /// agent's reason - its file by the path the view holds it at, with the lines and the tokens the view read it as; null
+    /// for every other call.
+    /// </summary>
+    public GraphEscapeLine? Escape { get; init; }
 }
 
 /// <summary>
@@ -107,7 +114,8 @@ public enum GraphToolOutcome
 /// <param name="Narrowed">Whether the read is denied.</param>
 /// <param name="Text">Where it is denied, the sentence the model reads with the way to the graph; where it is an escape, why the graph is not sure of the file.</param>
 /// <param name="Escape">The escape that lets the read - <see cref="GraphEscapeLine.LowConfidence"/> - or null where it is denied or needs none.</param>
-public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape)
+/// <param name="Path">The file, by the path the view holds it at, where it is denied or let by as an escape - what its line records it as; null where the read passes plainly.</param>
+public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, string? Path = null)
 {
     /// <summary>A read that passes plainly: not denied, no escape to record.</summary>
     public static GraphWholeRead Passed { get; } = new(Narrowed: false, string.Empty, null);
@@ -121,10 +129,12 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape)
 /// runtime's table does not hold it. The <c>query-codebase-graph</c> verb runs its read operations by hand.
 /// </summary>
 /// <remarks>
-/// It answers from the view it was handed - checked fresh by the caller, as the engine checks every answer's files
-/// (<see cref="ICodebaseGraphService.CheckAsync"/>) - and reads a body or an edit's file fresh itself, so a node that moved
-/// since is told by its hash. Where it is handed <c>reExtract</c>, a moved node is extracted again before its body is
-/// served, and an edit's file after it is written, and the tool answers from the view that gives from then on.
+/// It answers from the view it was handed, and reads a body or an edit's file fresh itself, so a node that moved since is
+/// told by its hash. Where it is handed <c>reExtract</c>, a moved node is extracted again before its body is served, and
+/// an edit's file after it is written, and the tool answers from the view that gives from then on; after a write or a
+/// command of another tool's, the sync that follows it hands the tool the view it left (<see cref="RefreshAsync"/>,
+/// <see cref="AfterWrites.SyncGraphAsync"/>). A path it is given is the file the view holds by the tree's own rule of
+/// case: the one file the view holds in another case where the tree's file system finds a name in any case.
 /// </remarks>
 /// <param name="queries">The indexed view it answers from.</param>
 /// <param name="files">The one search a text fallback runs, as <c>search_files</c> runs it, and the one way a body is read fresh and an edit written.</param>
@@ -207,6 +217,9 @@ public sealed class CodebaseGraphTool(
     private readonly SemaphoreSlim _editing = new(1, 1);
     private CodebaseGraphQueries _queries = queries ?? throw new ArgumentNullException(nameof(queries));
 
+    /// <summary>How the tree's file system compares names, as it answers for itself: asked once, the tree being the tool's for its life.</summary>
+    private StringComparison? _case;
+
     /// <summary>The read operations, which a step with the <c>read</c> capability and the verb are given.</summary>
     public static IReadOnlyList<GraphOp> Read { get; } = [GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body];
 
@@ -258,34 +271,46 @@ public sealed class CodebaseGraphTool(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        if (!_queries.Parsed(path))
-        {
-            return GraphWholeRead.Passed;
-        }
-
-        var held = _queries.HeldPath(path)!;
-
-        if (_lifted.Contains(held))
+        if (Narrowable(path) is not { } held)
         {
             return GraphWholeRead.Passed;
         }
 
         if (_queries.UnsureOfFile(held) is { } why)
         {
-            return new GraphWholeRead(Narrowed: false, why, GraphEscapeLine.LowConfidence);
+            return new GraphWholeRead(Narrowed: false, why, GraphEscapeLine.LowConfidence, held);
         }
 
         return lines > NarrowLines
             ? new GraphWholeRead(
                 Narrowed: true,
                 $"'{held}' is {lines.ToString(CultureInfo.InvariantCulture)} lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile",
-                null)
+                null,
+                held)
             : GraphWholeRead.Passed;
     }
 
     /// <summary>Whether a <c>wholeFile</c> lifted the narrowing of the file at <paramref name="path"/> for the rest of the step.</summary>
     /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
-    public bool Lifted(string path) => _queries.HeldPath(path) is { } held && _lifted.Contains(held);
+    public bool Lifted(string path) => Held(path) is { } held && _lifted.Contains(held);
+
+    /// <summary>
+    /// Whether a whole read of the file at <paramref name="path"/> may be narrowed at all - the view holds it as parsed and no
+    /// <c>wholeFile</c> lifted it - asked before the file is read, so a read nothing can narrow reads nothing for it.
+    /// </summary>
+    /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
+    public bool MayNarrow(string path) => Narrowable(path) is not null;
+
+    /// <summary>The path the view holds a parsed file at that <paramref name="path"/> names, where no <c>wholeFile</c> lifted it; null otherwise.</summary>
+    private string? Narrowable(string path)
+        => Held(path) is { } held && _queries.Parsed(held) && !_lifted.Contains(held) ? held : null;
+
+    /// <summary>
+    /// The path the view holds the file <paramref name="path"/> names at, by the tree's own rule of case: as given, or the one
+    /// file the view holds in another case where the tree's file system finds a name in any case; null where it holds none.
+    /// </summary>
+    private string? Held(string path)
+        => _queries.HeldPath(path, _case ??= _paths.ComparisonIn(_queries.Tree));
 
     /// <summary>The members each operation reads beside <c>op</c>, and of them those it needs.</summary>
     /// <param name="op">An operation.</param>
@@ -419,7 +444,7 @@ public sealed class CodebaseGraphTool(
         var query = Str(input, "query")!;
         var limit = Int(input, "limit") ?? FindLines;
         var offset = Int(input, "offset") ?? 0;
-        var matched = _queries.Find(query, Str(input, "kind"), Str(input, "path") is { } path ? _queries.HeldPath(path) ?? path : null, int.MaxValue, 0, near).Cards;
+        var matched = _queries.Find(query, Str(input, "kind"), Str(input, "path") is { } path ? Held(path) ?? path : null, int.MaxValue, 0, near).Cards;
         var (kept, left) = Readable(matched);
         var text = kept.Count == 0 ? "no node matched" : Paged([.. kept.Select(GraphLines.Of)], offset, limit);
         var hits = 0;
@@ -516,7 +541,7 @@ public sealed class CodebaseGraphTool(
 
         if (Str(input, "path") is { } given)
         {
-            var path = _queries.HeldPath(given) ?? given;
+            var path = Held(given) ?? given;
 
             if (!_mayRead(path))
             {
@@ -827,17 +852,61 @@ public sealed class CodebaseGraphTool(
         }
     }
 
+    /// <summary>
+    /// The view the tool answers from from now on: the one <paramref name="read"/> gives - what the sync after a write or a
+    /// command of another tool's left - read under the one lock an edit's and a moved body's extraction take, so a view an
+    /// earlier read gave never replaces one a later read gave. Where nothing may be synced (the verb), nothing changes.
+    /// </summary>
+    /// <param name="read">Reads the view as it now stands.</param>
+    /// <param name="cancellationToken">Stops the wait and the read.</param>
+    public async Task RefreshAsync(Func<CancellationToken, Task<CodebaseGraphQueries>> read, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+
+        if (reExtract is null)
+        {
+            return;
+        }
+
+        await _extracting.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            _queries = await read(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _extracting.Release();
+        }
+    }
+
+    /// <summary>
+    /// <c>wholeFile</c>: the narrowing of reads lifted for one file the view holds as parsed, for the rest of the step - an
+    /// escape stated, with the lines and the tokens the view read the file as and the agent's reason. A path the view does
+    /// not hold as parsed - none there, binary, a file no implementation reads - is a misuse, said, for no read of it is
+    /// narrowed; and so is one the step's reads do not reach.
+    /// </summary>
     private GraphToolAnswer WholeFile(JsonObject input)
     {
         var path = Str(input, "path")!;
         var reason = Str(input, "reason")!;
 
-        if (_queries.HeldPath(path) is { } held)
+        if (Held(path) is not { } held || !_queries.Parsed(held) || _queries.FileAt(held) is not { Lines: > 0 and var lines } file)
         {
-            _lifted.Add(held);
+            return Usage($"the view holds no file it parsed at '{path}': wholeFile lifts the narrowing of a file the graph parsed, and no whole read of any other is narrowed");
         }
 
-        return Answered($"the narrowing of reads is lifted for '{path}' for the rest of this step: {reason}");
+        if (!_mayRead(held))
+        {
+            return Usage($"'{held}' is a file your reads do not reach");
+        }
+
+        _lifted.Add(held);
+
+        return Answered($"the narrowing of reads is lifted for '{held}' for the rest of this step: {reason}") with
+        {
+            Escape = new GraphEscapeLine(held, lines, EstimatedTokens.OfBytes(file.Bytes), GraphEscapeLine.Stated, reason),
+        };
     }
 
     /// <summary>

@@ -639,7 +639,7 @@ internal sealed class Working
             Interrupt = interrupt,
             Chat = messages is not null,
             Moved = _moved,
-            Graph = _graph?.Support,
+            Graph = _graph?.Support(_now.Ground),
         };
     }
 

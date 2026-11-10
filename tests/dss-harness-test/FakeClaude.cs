@@ -50,7 +50,9 @@ namespace DssHarness.Tests;
 /// An allowed call's <c>exitsWhileRunning</c> ends the process once it is handed over, or not, its result never written,
 /// and its <c>hangsWhileRunning</c> writes no result and plays nothing more until the process is ended; its
 /// <c>cutAfterAllowed</c> is cut before it runs, stamped not run, nothing handed over.
-/// An allowed call's <c>pauseAfterMs</c> waits that long after its result before the turn plays on.
+/// An allowed call's <c>pauseAfterMs</c> waits that long after its result before the turn plays on, and its
+/// <c>probesLock</c> names a machine-wide lock it tries as it runs: its result is <c>held</c> where another holds the lock,
+/// and <c>free</c> where it took it - and let it go at once.
 /// </para>
 /// <para>
 /// Where <c>--mcp-config</c> names a server of type <c>sdk</c>, it connects it before its first init as the probe saw
@@ -795,7 +797,7 @@ internal static class FakeClaude
                         continue;
                     }
 
-                    ToolResult(id, ok: true, Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));
+                    ToolResult(id, ok: true, Probed(call) ?? Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));
 
                     if (call["pauseAfterMs"] is JsonValue pause && pause.TryGetValue<int>(out var paused))
                     {
@@ -902,4 +904,20 @@ internal static class FakeClaude
 
     private static string? Text(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    /// <summary>
+    /// What a call that probes a machine-wide lock found as it ran: <c>held</c> where another held it, <c>free</c> where the
+    /// fake took it - let go at once; null for a call that probes none.
+    /// </summary>
+    private static string? Probed(JsonNode call)
+    {
+        if (Text(call["probesLock"]) is not { } name)
+        {
+            return null;
+        }
+
+        using var taken = DssHarness.Core.Platform.MachineWideMutex.TryHold(name, "the fake claude's probe");
+
+        return taken is null ? "held" : "free";
+    }
 }

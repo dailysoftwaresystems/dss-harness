@@ -1068,6 +1068,27 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
+    /// A sync by paths given a directory moved or deleted whole takes every file beneath it: those the graph held there,
+    /// gone, and those git lists there now, read - and never a file whose name only begins as the directory's does.
+    /// </summary>
+    [Fact]
+    public async Task ASyncByPaths_OfADirectoryMovedWhole_TakesEveryFileBeneathItAtBothEnds()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("lib/a.toy", "class A\n");
+        graph.Write("lib/deep/b.toy", "class B\n");
+        graph.Write("libs.toy", "class L\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        Directory.Move(Path.Combine(graph.Tree, "lib"), Path.Combine(graph.Tree, "moved"));
+
+        var synced = (await graph.SyncPathsAsync("lib", "moved"))!;
+
+        Assert.Equal((2, 2), (synced.Extracted, synced.Removed));
+        Assert.Equal(["README.md", "libs.toy", "moved/a.toy", "moved/deep/b.toy"], graph.Manifest().Files.Keys.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// The check of the files an answer names stats each against what the view recorded, hashes only one whose size or time
     /// moved, and reads again one whose blob moved before it answers: a file changed under a view between two answers is
     /// answered the second time with its new span and blob, never the old; one whose time alone moved, to before the view's

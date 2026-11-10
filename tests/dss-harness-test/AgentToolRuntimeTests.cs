@@ -1947,6 +1947,221 @@ public sealed class AgentToolRuntimeTests : IDisposable
         fetch.Dispose();
     }
 
+    /// <summary>
+    /// A side-task's command holds the main tree's lock while it runs, as its write does, and lets it go at its end: the
+    /// command finds the lock held, and the tree's lock is free once the call has answered.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksCommand_HoldsTheMainTreesLockWhileItRuns_AndLetsItGoAtItsEnd()
+    {
+        var name = DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(_worktree);
+        var processes = new ProbingTheLock(name);
+        var runtime = Open(sideTask: true, processes: processes);
+
+        var ran = await Call(runtime, AgentTools.RunCommand, ("program", "tool"), ("args", new[] { "go" }));
+
+        Assert.True(ran.Ok, ran.Text);
+        Assert.Equal(["held"], processes.Found);
+
+        using var free = DssHarness.Core.Platform.MachineWideMutex.TryHold(name, "a test as the engine");
+
+        Assert.NotNull(free);
+    }
+
+    /// <summary>
+    /// The lock a side-task's graph call holds is its operation's: a read of the graph - here a <c>find</c> - holds none of
+    /// the main tree's lock, as a <c>view_file</c> holds none, while an <c>edit</c>, a write, holds it as every write of its
+    /// does.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksGraphRead_HoldsNoneOfTheMainTreesLock_WhileItsGraphEditHoldsIt()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync();
+        var name = DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(_worktree);
+        var found = new List<(string Asked, string Lock)>();
+        string Probe()
+        {
+            using var taken = DssHarness.Core.Platform.MachineWideMutex.TryHold(name, "a test as the engine");
+            return taken is null ? "held" : "free";
+        }
+
+        var tool = CodebaseGraphToolTests.Tool(
+            tree,
+            await CodebaseGraphToolTests.QueriesAsync(tree),
+            mayRead: _ =>
+            {
+                lock (found)
+                {
+                    found.Add(("read", Probe()));
+                }
+
+                return true;
+            },
+            mayWrite: _ =>
+            {
+                lock (found)
+                {
+                    found.Add(("write", Probe()));
+                }
+
+                return AgentPolicyAnswer.Allow;
+            });
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Write], sideTask: true, graph: new AgentGraphSupport(tool));
+
+        var read = await Call(runtime, AgentGraphSupport.ToolName, ("op", "find"), ("query", "Total"));
+
+        Assert.True(read.Ok, read.Text);
+        Assert.NotEmpty(found);
+        Assert.All(found, probe => Assert.Equal("free", probe.Lock));
+
+        found.Clear();
+        var edited = await Call(runtime, AgentGraphSupport.ToolName, ("op", "edit"), ("symbol", "Twice"), ("hash", "#aac0401c"), ("text", "    public static double Twice(IShape shape) => 0;"));
+
+        Assert.True(edited.Ok, edited.Text);
+        Assert.Contains(("write", "held"), found);
+        Assert.All(found, probe => Assert.Equal("held", probe.Lock));
+    }
+
+    /// <summary>
+    /// A graph edit the policy refuses is answered with the policy's refusal and recorded as every denial is - its event,
+    /// the run's count - as a <c>replace_in_file</c> the policy refuses is; the file is as it was.
+    /// </summary>
+    [Fact]
+    public async Task AGraphEditThePolicyRefuses_IsRecordedAsEveryDenialIs()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync();
+        var before = File.ReadAllText(Path.Combine(tree.Tree, "src", "Geometry.cs"));
+        var refusal = new AgentPolicyAnswer.Denied("Write(src/**)", AgentPolicySource.Config, "'src/Geometry.cs' is denied by Write(src/**)");
+        var tool = CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree), mayWrite: _ => refusal);
+        var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Write], graph: new AgentGraphSupport(tool));
+
+        var edited = await Call(runtime, AgentGraphSupport.ToolName, ("op", "edit"), ("symbol", "Twice"), ("hash", "#aac0401c"), ("text", "    public static double Twice(IShape shape) => 0;"));
+
+        Assert.Equal((false, refusal.Reason), (edited.Ok, edited.Text));
+        Assert.Equal(1, runtime.Tally.Denials);
+
+        var denied = Assert.Single(_events.All.OfType<PermissionDenied>());
+        Assert.Equal((AgentGraphSupport.ToolName, "src/Geometry.cs", "Write(src/**)", refusal.Reason), (denied.Tool, denied.Subject, denied.Rule, denied.Reason));
+        Assert.Equal(before, File.ReadAllText(Path.Combine(tree.Tree, "src", "Geometry.cs")));
+    }
+
+    /// <summary>
+    /// Each write and each command of the run's is followed by its graph's sync, by what it wrote: a file created or edited
+    /// by its path, both ends of a move, a directory deleted whole by the directory - which names every file the graph held
+    /// beneath it - and a command, which may have written anything, by no path; a read is followed by nothing.
+    /// </summary>
+    [Fact]
+    public async Task EachWriteAndCommand_IsFollowedByTheGraphsSync_ByWhatItWrote()
+    {
+        var synced = new List<(string Tool, IReadOnlyList<string>? Paths)>();
+        var runtime = Open(processes: new Uncontaining(), graph: new AgentGraphSupport(null, AfterWriteAsync: (write, _) =>
+        {
+            synced.Add((write.Tool, write.Paths));
+            return Task.CompletedTask;
+        }));
+
+        Assert.True((await Call(runtime, AgentTools.CreateFile, ("path", "src/a.txt"), ("content", "alpha\n"))).Ok);
+        Assert.True((await View(runtime, "src/a.txt")).Ok);
+        Assert.True((await Replace(runtime, "src/a.txt", "alpha", "beta")).Ok);
+        Assert.True((await Call(runtime, AgentTools.MovePath, ("from", "src"), ("to", "lib"))).Ok);
+        Assert.True((await Call(runtime, AgentTools.DeleteDirectory, ("path", "lib"), ("recursive", true))).Ok);
+        Assert.True((await Call(runtime, AgentTools.RunCommand, ("program", "tool"), ("args", new[] { "go" }))).Ok);
+
+        Assert.Equal(
+            [
+                (AgentTools.CreateFile, Path.Combine(_worktree, "src", "a.txt")),
+                (AgentTools.ReplaceInFile, Path.Combine(_worktree, "src", "a.txt")),
+                (AgentTools.MovePath, Path.Combine(_worktree, "src") + " | " + Path.Combine(_worktree, "lib")),
+                (AgentTools.DeleteDirectory, Path.Combine(_worktree, "lib")),
+                (AgentTools.RunCommand, (string?)null),
+            ],
+            synced.Select(write => (write.Tool, write.Paths is { } paths ? string.Join(" | ", paths) : null)));
+    }
+
+    /// <summary>
+    /// A whole view the narrowing denies shows the agent nothing: it is no view an edit may follow and no read of the run's,
+    /// while a range of the same file is both.
+    /// </summary>
+    [Fact]
+    public async Task AWholeViewTheNarrowingDenies_IsNoViewAnEditMayFollow_NorARead()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", BigFile));
+        var runtime = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree)), []);
+
+        Assert.False((await View(runtime, "src/Big.cs")).Ok);
+        Assert.Empty(runtime.Tally.Files);
+
+        var unseen = await Replace(runtime, "src/Big.cs", "// line 1 of the big file", "// the first line of the big file");
+
+        Assert.Equal((false, AgentToolRuntime.NeverViewed), (unseen.Ok, unseen.Text));
+
+        Assert.True((await Call(runtime, AgentTools.ViewFile, ("path", "src/Big.cs"), ("start_line", 1), ("end_line", 4))).Ok);
+        Assert.Equal([Path.Combine(tree.Tree, "src", "Big.cs")], runtime.Tally.Files);
+
+        var edited = await Replace(runtime, "src/Big.cs", "// line 1 of the big file", "// the first line of the big file");
+
+        Assert.True(edited.Ok, edited.Text);
+    }
+
+    /// <summary>
+    /// The narrowing a client's own whole read is asked under reads nothing it cannot narrow: a run that narrows nothing
+    /// reads not a byte of the file, and in one that narrows, a file not there, one the view does not parse and one that
+    /// cannot be read pass - null, left to the client's own tool - while a parsed file over its lines is denied as a whole
+    /// view of it is.
+    /// </summary>
+    [Fact]
+    public async Task TheNarrowingOfAClientsOwnWholeRead_ReadsNothingItCannotNarrow()
+    {
+        Write("a.txt", "alpha\n");
+        var plain = Open(fileSystem: new Held(_harness.FileSystem, Path.Combine(_worktree, "a.txt")));
+
+        Assert.Null(await plain.NarrowedReadAsync("a.txt", Token));
+
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", BigFile), ("src/Held.cs", BigFile.Replace("big file", "held file", StringComparison.Ordinal)));
+        var lines = new List<GraphStepLine>();
+        var runtime = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree)), lines, new Held(tree.Harness.FileSystem, Path.Combine(tree.Tree, "src", "Held.cs")));
+
+        Assert.Null(await runtime.NarrowedReadAsync("src/Missing.cs", Token));
+        Assert.Null(await runtime.NarrowedReadAsync("docs/zoo.txt", Token));
+        Assert.Null(await runtime.NarrowedReadAsync("src/Held.cs", Token));
+        Assert.Empty(lines);
+
+        var denied = await runtime.NarrowedReadAsync("src/Big.cs", Token);
+
+        Assert.Equal(
+            ("graphReads: narrow", "'src/Big.cs' is 222 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile"),
+            (denied?.Rule, denied?.Reason));
+        Assert.Equal(("src/Big.cs", 222), (Assert.IsType<GraphDeniedLine>(Assert.Single(lines)).Path, ((GraphDeniedLine)lines[0]).Lines));
+    }
+
+    /// <summary>A C# file of 222 lines, past the narrowing's bound.</summary>
+    private static readonly string BigFile = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
+
+    /// <summary>A step's runtime over <paramref name="tree"/> whose whole reads are narrowed by <paramref name="tool"/>, its graph lines kept in <paramref name="lines"/>.</summary>
+    private AgentToolRuntime Narrowing(CodebaseGraphTree tree, CodebaseGraphTool tool, List<GraphStepLine> lines, IFileSystem? files = null)
+    {
+        var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
+        var host = new AgentToolHost(
+            files ?? tree.Harness.FileSystem,
+            tree.Harness.Platform,
+            tree.Harness.GitClient,
+            new PhaseRunner(tree.Harness.ProcessRunner, files ?? tree.Harness.FileSystem, tree.Harness.Output),
+            tree.Harness.ChildSessions,
+            fetch,
+            new RunningToolDouble("1.2.3"),
+            TimeProvider.System);
+        var ground = PolicyGrounds.Of(tree.Tree, [tree.Tree], [tree.Tree], [], [], [], [AgentCapability.Read, AgentCapability.Write]);
+        var runtime = host.Open(AgentRuns.Of(_step, tree.Tree, ground: ground) with
+        {
+            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Operations: CodebaseGraphTool.Operations(write: true, narrow: true), Narrow: true),
+        }, _events);
+
+        _opened.Add(fetch);
+        _opened.Add(runtime);
+
+        return runtime;
+    }
+
     private static Task<AgentToolCallResult> Call(AgentToolRuntime runtime, string tool, params (string Name, object? Value)[] members)
         => Call(runtime, tool, "call_1", members);
 
@@ -1987,7 +2202,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
         AgentNativeAsk? native = null,
         DssHarness.Core.Agents.Isolation.LaunchIsolation? isolation = null,
         bool sideTask = false,
-        Func<string?>? liveRun = null)
+        Func<string?>? liveRun = null,
+        AgentGraphSupport? graph = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -2010,7 +2226,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var files = fileSystem ?? _harness.FileSystem;
         var search = webSearch is null ? null : Search(fetch, clock ?? TimeProvider.System);
         var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), clock ?? TimeProvider.System, search: search);
-        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire(), Isolation = isolation?.Processes }, _events, native);
+        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire(), Isolation = isolation?.Processes, Graph = graph }, _events, native);
 
         _opened.Add(fetch);
         _opened.Add(runtime);
@@ -2071,6 +2287,24 @@ public sealed class AgentToolRuntimeTests : IDisposable
         public override long TimestampFrequency => 1;
 
         public override long GetTimestamp() => Interlocked.Increment(ref _ticks);
+    }
+
+    /// <summary>A command that finds, as it runs, whether the lock <paramref name="name"/> is held - <c>held</c> or <c>free</c> - and ends at once.</summary>
+    private sealed class ProbingTheLock(string name) : IProcessRunner
+    {
+        public List<string> Found { get; } = [];
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            using (var taken = DssHarness.Core.Platform.MachineWideMutex.TryHold(name, "a test's command"))
+            {
+                Found.Add(taken is null ? "held" : "free");
+            }
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
     }
 
     /// <summary>

@@ -1363,9 +1363,37 @@ public sealed class CodebaseGraphService(
             }
 
             var (listed, _, _) = await ListAsync(asked, withHead: false).ConfigureAwait(false);
+
+            // A path that names a directory - one moved or deleted whole - names every file beneath it: each git lists there
+            // now, and each the tree's graph holds there, gone where git lists none. A file is never taken for one.
+            asked = Beneath(asked, listed, current.Entries);
+
             var changed = asked.Count(path => listed.TryGetValue(path, out var file) ? current.Entries.GetValueOrDefault(path)?.Blob != file.Blob : current.Entries.ContainsKey(path));
 
             return await ApplyAsync(current, asked.ToDictionary(path => path, path => listed.GetValueOrDefault(path), StringComparer.Ordinal), head, changed > 0, asked.Count).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// <paramref name="asked"/>, each path that names neither a file git lists nor one the tree keeps taken as every file
+        /// beneath it - those of <paramref name="listed"/> and those of <paramref name="kept"/> - in its place: a directory
+        /// moved or deleted whole, whose files are what the sync takes. One that names nothing beneath it either stays, as a
+        /// file gone.
+        /// </summary>
+        private static List<string> Beneath(List<string> asked, IReadOnlyDictionary<string, Listed> listed, IReadOnlyDictionary<string, CodeGraphFileEntry> kept)
+        {
+            var taken = new List<string>();
+            var given = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var path in asked)
+            {
+                List<string> under = listed.ContainsKey(path) || kept.ContainsKey(path)
+                    ? []
+                    : [.. listed.Keys.Concat(kept.Keys).Where(file => file.StartsWith(path + "/", StringComparison.Ordinal)).Order(StringComparer.Ordinal)];
+
+                taken.AddRange((under.Count > 0 ? under : [path]).Where(given.Add));
+            }
+
+            return taken;
         }
 
         /// <summary>

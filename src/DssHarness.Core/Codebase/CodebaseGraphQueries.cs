@@ -33,6 +33,9 @@ public sealed class CodebaseGraphQueries
     private readonly IReadOnlySet<string> _testFiles;
     private readonly ConcurrentDictionary<string, GraphCard> _cards = new(StringComparer.Ordinal);
 
+    /// <summary>Every path the view holds, by its spelling in any case: made once, where a file system that finds a name in any case first asks.</summary>
+    private readonly Lazy<ILookup<string, string>> _folded;
+
     /// <summary>Indexes <paramref name="read"/>: every lookup is built once, so the first answer pays for them and the rest read them.</summary>
     /// <param name="read">The view to answer from, as a sync or a check or the read-only open left it.</param>
     public CodebaseGraphQueries(CodebaseGraphRead read)
@@ -40,6 +43,7 @@ public sealed class CodebaseGraphQueries
         ArgumentNullException.ThrowIfNull(read);
 
         _read = read;
+        _folded = new(() => read.Files.Keys.ToLookup(key => key, StringComparer.OrdinalIgnoreCase));
         var symbols = read.Symbols;
 
         var nodes = new Dictionary<string, IReadOnlyList<NodeAt>>(StringComparer.Ordinal);
@@ -220,6 +224,37 @@ public sealed class CodebaseGraphQueries
         return _read.Files.ContainsKey(path) ? path
             : path.Replace('\\', '/') is var slashed && _read.Files.ContainsKey(slashed) ? slashed
             : null;
+    }
+
+    /// <summary>
+    /// The path the view holds <paramref name="path"/> at, as <see cref="HeldPath(string)"/> finds it - and, where the tree's
+    /// file system finds a name in any case (<paramref name="comparison"/> ignores case), the one file the view holds that
+    /// the path names in another case: never one of two the view holds that differ in their case alone.
+    /// </summary>
+    /// <param name="path">A path an agent or a person wrote, relative to the tree.</param>
+    /// <param name="comparison">How the tree's file system compares names, as it answers for itself.</param>
+    public string? HeldPath(string path, StringComparison comparison)
+    {
+        var held = HeldPath(path);
+
+        if (held is not null || comparison != StringComparison.OrdinalIgnoreCase)
+        {
+            return held;
+        }
+
+        return _folded.Value[path.Replace('\\', '/')].ToList() is [var one] ? one : null;
+    }
+
+    /// <summary>
+    /// The view's entry of the file it holds at <paramref name="held"/> - its state, its size and its lines as the graph read
+    /// them - or null where it holds none there.
+    /// </summary>
+    /// <param name="held">The path the view holds the file at (<see cref="HeldPath(string, StringComparison)"/>).</param>
+    public CodeGraphFileEntry? FileAt(string held)
+    {
+        ArgumentNullException.ThrowIfNull(held);
+
+        return _read.Files.GetValueOrDefault(held);
     }
 
     /// <summary>

@@ -454,6 +454,72 @@ public sealed class SideTaskPolicyTests
         Assert.Contains(sources.All, source => source.Name == "feed1");
         Assert.Equal(int.MaxValue, search.MaxPerStep);
     }
+
+    /// <summary>
+    /// The side-task's graph tool is held to the side-task's own policy, as a step's is held to its step's: a node in a file
+    /// its reads do not reach - here under a Claude Code directory - is left out of what the tool finds, and an edit of it
+    /// is refused as one of a file its reads do not reach, the file as it was; a file the policy lets it write is edited.
+    /// </summary>
+    [Fact]
+    public async Task TheSideTasksGraphTool_IsHeldToTheSideTasksOwnPolicy()
+    {
+        const string Secret = "namespace Demo;\n\npublic static class Secret\n{\n    public static int Code()\n    {\n        return 7;\n    }\n}\n";
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/hidden/Secret.cs", Secret));
+        var graph = new SideTaskGraph(tree.Service, tree.Harness.FileSystem, tree.Harness.Platform, tree.Harness.GitClient, tree.Store, TimeProvider.System, tree.Layout, SideTaskLayout.Of(tree.Layout, "one"), tree.WorktreesRoot);
+        await graph.OpenAsync(TestContext.Current.CancellationToken);
+        var hidden = Path.Combine(tree.Tree, "src", "hidden");
+        var ground = SideTaskPolicy.Ground(tree.Layout, new HarnessConfig { Worktrees = new WorktreeSettings() }, [hidden], []);
+        var tool = graph.Support(ground)!.Tool!;
+        var operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: true, narrow: false);
+
+        var found = await tool.RunAsync(System.Text.Json.Nodes.JsonNode.Parse("""{"op":"find","query":"Code"}""")!.AsObject(), operations, TestContext.Current.CancellationToken);
+
+        Assert.Equal("no node matched\n1 node(s) left out: in files your reads do not reach", found.Text);
+
+        var edited = await tool.RunAsync(
+            System.Text.Json.Nodes.JsonNode.Parse("""{"op":"edit","symbol":"Demo.Secret.Code","hash":"#00000000","text":"    public static int Code() => 8;"}""")!.AsObject(),
+            operations,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(DssHarness.Core.Agents.Runtime.GraphToolOutcome.Answered, edited.Outcome);
+        Assert.StartsWith("'Demo.Secret.Code' is in a file your reads do not reach", edited.Text, StringComparison.Ordinal);
+        Assert.Equal(Secret, File.ReadAllText(Path.Combine(hidden, "Secret.cs")));
+
+        // What the tool may write is what the side-task's policy may write: a file it may write is edited.
+        var twice = await tool.RunAsync(
+            System.Text.Json.Nodes.JsonNode.Parse("""{"op":"edit","symbol":"Twice","hash":"#aac0401c","text":"    public static double Twice(IShape shape) => 0;"}""")!.AsObject(),
+            operations,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(DssHarness.Core.Agents.Runtime.GraphToolOutcome.Wrote, twice.Outcome);
+    }
+
+    /// <summary>
+    /// The side-task's graph is synced by each write of its agent - its sync's record naming the side-task and the tool that
+    /// wrote, never its opening - and its tool answers from the view the sync left.
+    /// </summary>
+    [Fact]
+    public async Task TheSideTasksGraph_IsSyncedByEachWriteOfItsAgent_ItsRecordNamingTheWrite()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync();
+        var layout = SideTaskLayout.Of(tree.Layout, "one");
+        var graph = new SideTaskGraph(tree.Service, tree.Harness.FileSystem, tree.Harness.Platform, tree.Harness.GitClient, tree.Store, TimeProvider.System, tree.Layout, layout, tree.WorktreesRoot);
+        await graph.OpenAsync(TestContext.Current.CancellationToken);
+        var support = graph.Support(SideTaskPolicy.Ground(tree.Layout, new HarnessConfig { Worktrees = new WorktreeSettings() }, [], []))!;
+        tree.Write("src/Added.cs", "namespace Demo;\n\npublic static class Added\n{\n    public static int One()\n    {\n        return 1;\n    }\n}\n");
+
+        await support.AfterWriteAsync!(DssHarness.Core.Agents.Runtime.AgentGraphWrite.Of("create_file", Path.Combine(tree.Tree, "src", "Added.cs")), TestContext.Current.CancellationToken);
+
+        var line = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllLines(layout.AsGraph.GraphSyncFile)[^1])!;
+        Assert.Equal("the side-task 'one': create_file", line["why"]!.GetValue<string>());
+
+        var found = await support.Tool!.RunAsync(
+            System.Text.Json.Nodes.JsonNode.Parse("""{"op":"find","query":"Added"}""")!.AsObject(),
+            DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: true, narrow: false),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(" public static class Added | src/Added.cs:3-9 #", found.Text, StringComparison.Ordinal);
+    }
 }
 
 /// <summary>The web-search sources a policy test builds: the configuration's own, as many as a test says.</summary>
