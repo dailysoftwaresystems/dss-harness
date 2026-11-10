@@ -60,7 +60,10 @@ list - the test demands both. None of the platform's seams (`IFileSystem`, `IPro
 never reads a file or runs a program itself: a `--<cell>-file` is read by the anchors' use
 case. The services a command only calls are marked as the use cases
 they are (`: IUseCase`) where they live, from verify-git's to the checks', so their requests
-and their reports are contracts a front end may read. Nothing in Core outside
+and their reports are contracts a front end may read. A service only the engine calls is
+none: `IAgentRunner`, whose request carries what the engine built for a step out of the
+machine's seams - the codebase graph's tool among it - is reached by a front end only through
+the use cases that drive an agent, an orchestrator's run and a side-task. Nothing in Core outside
 `Application\`, `Composition\` and `Help\` reaches into them: the layer below shares the
 layer's contracts but never its machinery - its sessions, its scopes, its document kinds,
 its pipeline. That is read from the core's own metadata, not its source's text: every type a

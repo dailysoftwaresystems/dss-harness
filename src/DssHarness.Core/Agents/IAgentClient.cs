@@ -70,10 +70,15 @@ public interface IAgentEventSink
 }
 
 /// <summary>
-/// What the engine, the command line and a graphical front end call to work an agent's step: one way in, events as
-/// they happen, and a result at the end.
+/// What the engine calls to work an agent's step - a reason step's, an advisor's, a reporter's, each turn of a
+/// side-task's: one way in, events as they happen, and a result at the end.
 /// </summary>
-public interface IAgentRunner : Application.IUseCase
+/// <remarks>
+/// The engine's own service, never a use case: its request carries what the engine built for the step out of the
+/// machine's seams - the codebase graph's tool, the step's ground - so a front end reaches an agent only through the use
+/// cases that drive one (an orchestrator's run, a side-task) and never builds a request itself.
+/// </remarks>
+public interface IAgentRunner
 {
     /// <summary>Works the step, from its request to its result, emitting what happens to <paramref name="events"/>.</summary>
     /// <param name="step">The step, as the engine resolved it.</param>

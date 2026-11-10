@@ -247,8 +247,8 @@ public static class FlowStatus
         // A step none of whose instances has ended Done has no time to go by: its instances are counted and named, and
         // are in neither end.
         var working = left.Where(step => !step.Group).ToList();
-        var named = working.Select(step => FlowInstanceId.PathOf(step.Instance)).Where(path => !times.TryGetValue(path, out var time) || time.Longest <= TimeSpan.Zero).Distinct(StringComparer.Ordinal).ToList();
-        var measured = working.Where(step => times.TryGetValue(FlowInstanceId.PathOf(step.Instance), out var time) && time.Longest > TimeSpan.Zero).ToList();
+        var named = working.Select(step => step.Step).Where(path => !times.TryGetValue(path, out var time) || time.Longest <= TimeSpan.Zero).Distinct(StringComparer.Ordinal).ToList();
+        var measured = working.Where(step => times.TryGetValue(step.Step, out var time) && time.Longest > TimeSpan.Zero).ToList();
 
         if (measured.Count == 0 && named.Count > 0)
         {
@@ -292,7 +292,9 @@ public static class FlowStatus
 
     /// <summary>
     /// The shortest and the longest time instances of each step of the definition that works took to end Done in this
-    /// run, by the step's declaration path - a group's own span left out, for its members' times are its time.
+    /// run, by the step's declaration path as its record holds it - never the path its id spells, for a step of the
+    /// recovery taken inside a group is declared at <c>recover.&lt;step&gt;</c> though its id nests where the failure was
+    /// taken - a group's own span left out, for its members' times are its time.
     /// </summary>
     private static Dictionary<string, (TimeSpan Shortest, TimeSpan Longest)> TimesOf(FlowFile flow)
     {
@@ -307,8 +309,7 @@ public static class FlowStatus
                 took = TimeSpan.Zero;
             }
 
-            var path = FlowInstanceId.PathOf(step.Instance);
-            times[path] = times.TryGetValue(path, out var held)
+            times[step.Step] = times.TryGetValue(step.Step, out var held)
                 ? (TimeSpan.FromTicks(Math.Min(held.Shortest.Ticks, took.Ticks)), TimeSpan.FromTicks(Math.Max(held.Longest.Ticks, took.Ticks)))
                 : (took, took);
         }
@@ -386,7 +387,7 @@ public static class FlowStatus
     /// <summary>What one instance adds to an end of the estimate: its step's shortest or longest time, less what it has already run where it is in progress, and never below naught.</summary>
     private static TimeSpan LeftOf(FlowStepRecord step, IReadOnlyDictionary<string, (TimeSpan Shortest, TimeSpan Longest)> times, bool shortest, DateTimeOffset asOf)
     {
-        var whole = shortest ? times[FlowInstanceId.PathOf(step.Instance)].Shortest : times[FlowInstanceId.PathOf(step.Instance)].Longest;
+        var whole = shortest ? times[step.Step].Shortest : times[step.Step].Longest;
 
         return step.State == nameof(FlowInstanceState.Running) && step.StartedAt is { } began
             ? TimeSpan.FromTicks(Math.Max(0, whole.Ticks - (asOf - began).Ticks))
@@ -406,7 +407,7 @@ public static class FlowStatus
             return ordered;
         }
 
-        var (waiter, target) = (FlowInstanceId.PathOf(step.Instance), FlowInstanceId.PathOf(other.Instance));
+        var (waiter, target) = (step.Step, other.Step);
         var key = $"{waiter}<-{target}";
 
         if (!memo.TryGetValue(key, out var waits))

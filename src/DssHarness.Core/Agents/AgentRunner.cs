@@ -1516,7 +1516,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     private static TimeSpan Bound(AgentStepRequest step)
         => step.Limits.HandoffSeconds is { } seconds and > 0 ? TimeSpan.FromSeconds(seconds) : AgentLimits.DefaultHandoffBound;
 
-    /// <summary>One sink that takes each event into a channel, as the front end reads it; nothing once no one reads.</summary>
+    /// <summary>One sink that takes each event into a channel, as the stream's reader reads it; nothing once no one reads.</summary>
     /// <param name="yielded">The channel the events are yielded through.</param>
     private sealed class ChannelSink(Channel<AgentEvent> yielded) : IAgentEventSink
     {

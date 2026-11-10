@@ -27,7 +27,11 @@ public sealed class FlowStatusTests
     private static DateTimeOffset At(int hour, int minute, int second = 0)
         => new(2026, 10, 30, hour, minute, second, TimeSpan.Zero);
 
-    /// <summary>One step instance's record, in the shape flow.json holds it.</summary>
+    /// <summary>
+    /// One step instance's record, in the shape flow.json holds it: its declaration path the one its id spells, unless
+    /// <paramref name="declared"/> says another - a step of the recovery taken inside a group is declared at
+    /// <c>recover.&lt;step&gt;</c> though its id nests where the failure was taken.
+    /// </summary>
     private static FlowStepRecord Step(
         string instance,
         string state,
@@ -43,10 +47,11 @@ public sealed class FlowStatusTests
         IReadOnlyList<string>? waitsOn = null,
         string? handledBy = null,
         string? failure = null,
-        string? raisedBy = null)
+        string? raisedBy = null,
+        string? declared = null)
         => new(
             instance,
-            instance.Split('.')[^1].Split(['+', '#', '['])[0],
+            declared ?? FlowInstanceId.PathOf(instance),
             group,
             state,
             attempt,
@@ -507,6 +512,104 @@ public sealed class FlowStatusTests
         // verify, not drawn yet: 1; one more visit of the recovery (2 instances) with build and verify again (2): 4.
         Assert.Equal(
             "left      at least 1 step instance, at most 6 step instances (the engine's bounds)",
+            facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A step of the recovery taken inside a group is timed and ordered by its declaration, as its record holds it, never
+    /// by the path its id spells where the failure was taken: the second visit's mend waits for its diagnose, so the
+    /// estimate's lower end lays the two one after the other, each at the time the first visit's took.
+    /// </summary>
+    [Fact]
+    public void AStepOfTheRecoveryTakenInsideAGroup_IsTimedAndOrderedByItsDeclaration()
+    {
+        var definition = Definition("""
+            name: flow
+            recover:
+              maxVisits: 2
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: orient
+                - name: mend
+                  type: orient
+                  dependsOn: [diagnose]
+            steps:
+              - name: stage
+                steps:
+                  - name: build
+                    type: orient
+                    onFailure: recover
+            """);
+        Assert.Empty(WorkflowValidator.Validate(definition, hasCommitTemplate: false));
+        var flow = File(
+            nameof(FlowRunStatus.Running),
+            [
+                Step("stage", nameof(FlowInstanceState.Running), group: true, started: At(10, 0)),
+                Step("stage.build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1)),
+                Step("stage.recover", nameof(FlowInstanceState.Done), group: true, started: At(10, 1), finished: At(10, 5), raisedBy: "stage.build", declared: "recover"),
+                Step("stage.recover.diagnose", nameof(FlowInstanceState.Done), "orient", started: At(10, 1), finished: At(10, 2), declared: "recover.diagnose"),
+                Step("stage.recover.mend", nameof(FlowInstanceState.Done), "orient", started: At(10, 2), finished: At(10, 5), declared: "recover.mend"),
+                Step("stage.build+2", nameof(FlowInstanceState.Failed), "orient", started: At(10, 5), finished: At(10, 6), visit: 2),
+                Step("stage.recover+2", nameof(FlowInstanceState.Running), group: true, started: At(10, 6), visit: 2, raisedBy: "stage.build+2", declared: "recover"),
+                Step("stage.recover+2.diagnose", nameof(FlowInstanceState.NotStarted), "orient", declared: "recover.diagnose"),
+                Step("stage.recover+2.mend", nameof(FlowInstanceState.NotStarted), "orient", declared: "recover.mend"),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf);
+
+        Assert.Equal(
+            "estimate  between 4m00s and 4m00s more, from the 3 step instances that ended Done in this run",
+            facts.First(fact => fact.StartsWith("estimate", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A group of the recovery taken inside another group counts what it may still make by its declaration, as its record
+    /// holds it, never by the path its id spells where the failure was taken: a repeat of the recovery at its first of
+    /// three iterations may still make two, each its record and its step.
+    /// </summary>
+    [Fact]
+    public void AGroupOfTheRecoveryTakenInsideAnother_CountsWhatItMayStillMake()
+    {
+        var definition = Definition("""
+            name: flow
+            recover:
+              maxVisits: 1
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: retry
+                  repeat:
+                    until: 'again.hasLegs'
+                    maxIterations: 3
+                  steps:
+                    - name: again
+                      type: orient
+            steps:
+              - name: stage
+                steps:
+                  - name: build
+                    type: orient
+                    onFailure: recover
+            """);
+        Assert.Empty(WorkflowValidator.Validate(definition, hasCommitTemplate: false));
+        var flow = File(
+            nameof(FlowRunStatus.Running),
+            [
+                Step("stage", nameof(FlowInstanceState.Running), group: true, started: At(10, 0)),
+                Step("stage.build", nameof(FlowInstanceState.Failed), "orient", started: At(10, 0), finished: At(10, 1)),
+                Step("stage.recover", nameof(FlowInstanceState.Running), group: true, started: At(10, 1), raisedBy: "stage.build", declared: "recover"),
+                Step("stage.recover.retry", nameof(FlowInstanceState.Running), group: true, started: At(10, 1), declared: "recover.retry"),
+                Step("stage.recover.retry#1", nameof(FlowInstanceState.Running), group: true, started: At(10, 1), iteration: 1, declared: "recover.retry"),
+                Step("stage.recover.retry#1.again", nameof(FlowInstanceState.Running), "orient", started: At(10, 1), declared: "recover.retry.again"),
+            ]);
+
+        var facts = FlowStatus.Facts(definition, flow, questions: null, updates: null, Engine, AsOf);
+
+        // Two iterations of retry past the one it made, each its record and again: 4.
+        Assert.Equal(
+            "left      at least 5 step instances, at most 9 step instances (the engine's bounds)",
             facts.First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
     }
 
