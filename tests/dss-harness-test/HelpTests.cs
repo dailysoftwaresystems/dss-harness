@@ -4990,7 +4990,17 @@ public sealed partial class HelpTests
                 + "to write anything else - the trees moved between the two - it writes nothing; an apply of any of the four refused "
                 + $"under its hold so is weighed again, {FoldFamilyStepRunner.MostPasses} times at most. A fold, and a deletion that "
                 + $"folds, write each path they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
-                + "before the verb is called, and what they left after",
+                + "before the verb is called, and what they left after, written by the verb under the main tree's lock it wrote "
+                + "under, before it lets that lock go",
+            workflows,
+            StringComparison.Ordinal);
+
+        // What a fold left is recorded through the intent its request carries; the one read of the tree after is marked.
+        Assert.NotNull(typeof(FoldAgentRequest).GetProperty(nameof(FoldAgentRequest.Intent)));
+        Assert.NotNull(typeof(DeleteAgentRequest).GetProperty(nameof(DeleteAgentRequest.Intent)));
+        Assert.Contains(
+            "The one limit is a fold that dies inside its own hold, part way through its write: the next attempt reads what it left "
+                + $"from the tree, under that lock, and marks it {JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowFoldEntry.ReadFromTree))}",
             workflows,
             StringComparison.Ordinal);
         Assert.Null(typeof(RefreshAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));

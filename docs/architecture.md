@@ -1429,10 +1429,15 @@ side-task's writes and commands take for their duration too, the graph tool's ed
 side waits the other out, for a long command holds the folds back for as long as it runs, so nothing the engine weighed
 is changed under it before it writes, and the step's output says how long it waited and for what
 (`MainTreeWriteLock.WaitedFor`). The command's or the step's own stop ends the engine's wait, nothing weighed or
-written. A fold, and a deletion that folds, read what they left at each path they change (`AgentVerbFacts.Left`) under
-that hold, before they let it go - a deletion lets it go before its transcripts, its evidence and its worktree's removal -
-so the run's ledger of its folds settles a fold by it, never by the tree after, where a side-task's write that waited on
-the hold may stand; the one other read of what a fold left, after a crash or a throw out of its verb, takes the lock as well.
+written. A fold, and a deletion that folds, called by a step of a run, record in the run's ledger of its folds, under
+that hold and before they let it go, that their write begins and then what it left at each path - through the
+`FoldIntent` their request carries (`FoldLedger.Writing`, `FoldLedger.WrittenAsync`), also where the write throws part
+way; a deletion lets the hold go before its transcripts, its evidence and its worktree's removal. So whatever comes after
+- the verb's answer, a throw, a crash, a side-task's write let in once the hold is let go - the ledger settles the fold by
+what it recorded, never by the tree after; from the command line there is no ledger and nothing is recorded. The one
+limit is a fold that dies inside its own hold, part way through its write: the next attempt reads what it left from the
+tree, under the lock as well, and marks it so, for a side-task's write made between the death and that read cannot be
+told from the fold's.
 On Claude Code the lock is taken off the launch's loop for the call whose permission waits on it, with a token
 of its own that an ask withdrawn, the call's result or its turn's end cancels, and the permission is answered on the
 loop - a take that ends for a call no longer waiting is let go at once and nothing sent, an ask of a call already held
@@ -3177,15 +3182,18 @@ passed. A fold's apply, and a deletion's, is held to what its dry run named (`Fo
 `DeleteAgentRequest.Expected`, measured again under its hold and compared by `AgentPlanned.DifferenceFrom`) - a
 refresh's and a rebase's request carry none - and which steps fold is one rule, `WorkflowStepTypes.Folds`, the
 definition's check and the runner alike. `FoldLedger` writes a fold's intent to `folds.json` before the verb is called
-and what it left after (`FlowFoldLedgerFile`) - applied, stopped or failed with what the apply read it left under its
-hold of the tree (`AgentVerbFacts.Left`; each path as found where it never reached its write), or refused having read
-nothing; `FoldLedger.Settle` reads nothing of the tree, which a side-task that waited on the apply's hold may have
-written since. An apply stopped - which writes nothing once its measure is done, every write after it uncancelled - is
-settled stopped with each path as found, the tree unread; one that threw otherwise, and an intent a crash cut off, which
-the next attempt settles first, are settled interrupted from the tree read under its lock (`SettleInterruptedAsync`,
-which no caller holding that lock calls); the step's `fold.json` takes what the apply answered before the ledger's
-settle, and an apply that threw goes on with its own exception, its intent left for the next attempt where reading the
-tree fails too or a stop ends the wait for the lock. `CommitStepRunner` commits the folds upstream of it
+and, by the verb under its hold of the tree (`FoldIntent`), `writing` as its write begins and `written` with what it
+left once the write is done or has thrown (`FlowFoldLedgerFile`); then, once the verb answered, applied, stopped or
+failed with what it recorded (each path as found where it never began to write), or refused having read nothing -
+`FoldLedger.Settle` reads nothing of the tree, which a side-task that waited on the apply's hold may have written since.
+An apply stopped - which writes nothing once its measure is done, every write after it uncancelled - is settled stopped
+with each path as found, the tree unread; one that threw otherwise, and whatever a crash left unsettled, which the next
+attempt settles first, are settled interrupted (`SettleInterruptedAsync`): by what the fold recorded, where it was
+written; as found, where it never began to write; and only for a fold that died inside its own hold, part way through
+its write - which recorded that it began and nothing after - from the tree read under its lock, marked `readFromTree`:
+the one stated limit, for a side-task's write made between that death and the read cannot be told from the fold's. No caller holding that lock calls it. The
+step's `fold.json` takes what the apply answered before the ledger's settle, and an apply that threw goes on with its own
+exception, its fold left for the next attempt where reading the tree fails too or a stop ends the wait for the lock. `CommitStepRunner` commits the folds upstream of it
 (`FoldLedger.Owed`, over the instances the coordinator read where it started - `FlowInstanceId.Precedes`, then
 `FlowGraph.Waits`, so another item of a `forEach` is never upstream): its message from `CommitTemplate`, the one owner
 of `commit.template`'s grammar and of its refusals, which `ValidateCommit` and V30 read too; the main checkout on the

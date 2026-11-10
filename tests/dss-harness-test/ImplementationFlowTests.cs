@@ -1178,7 +1178,8 @@ public sealed class ImplementationFlowTests
                 new AgentPlanned([], [], [], [], null) { Written = ["src/one/one.cs"] },
                 Token);
             OrchestrationKit.Write(kit.Tree.Path, Path.Combine("src", "one", "one.cs"), "the item's folded work\n");
-            ledger.Settle(kit.RunOf(), itemEntry, 0, OrchestrationKit.Left(kit.Tree.Path, new AgentPlanned([], [], [], [], null) { Written = ["src/one/one.cs"] }));
+            await OrchestrationKit.WrittenAsync(ledger, kit.RunOf(), kit.Tree.Path, itemEntry);
+            ledger.Settle(kit.RunOf(), itemEntry, 0);
             itemFold.Open();
 
             // The notes' fold is held next, past the checkpoint: what it owes the final commit is folded after the
@@ -1197,7 +1198,8 @@ public sealed class ImplementationFlowTests
                 new AgentPlanned([], [], [], [], null) { Written = ["docs/handoff.md"] },
                 Token);
             OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "handoff.md"), "# Handoff\n");
-            ledger.Settle(kit.RunOf(), notesEntry, 0, OrchestrationKit.Left(kit.Tree.Path, new AgentPlanned([], [], [], [], null) { Written = ["docs/handoff.md"] }));
+            await OrchestrationKit.WrittenAsync(ledger, kit.RunOf(), kit.Tree.Path, notesEntry);
+            ledger.Settle(kit.RunOf(), notesEntry, 0);
             notesFold.Open();
 
             var done = await run;

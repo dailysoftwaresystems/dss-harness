@@ -1802,9 +1802,12 @@ none appeared, some are still running, or one ended neither green nor red; and t
 `refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
 consent, a path outside a fold's `within`, conflicting merges - with what it is about, a fold and a deletion applying
 only what it named, write each path a fold means to write to the run's ledger of its folds (`folds.json`) before the
-verb and what it left after - read under the main tree's lock the fold wrote under, so a side-task's write made once it
-let go is never taken for the fold's - and, of `others`, work on each other open agent of the run in turn; and `commit`, which
-commits the folds upstream of it and no other work - each path they changed that no commit of the run took, held to what
+verb and, before the fold lets go of the main tree's lock it wrote under, what it left - so a side-task's write made once
+it let go is never taken for the fold's, whatever comes after: the verb's answer, a throw, a crash, a stop. The one limit
+is a fold that dies inside its own hold, part way through its write: the next attempt reads what it left from the tree,
+under that lock, and marks it `readFromTree`, for a side-task's write made between the death and that read cannot be
+told from the fold's - and, of `others`, work on each other open agent of the run in turn; and `commit`, which commits
+the folds upstream of it and no other work - each path they changed that no commit of the run took, held to what
 its fold left there (a path edited or restored since, a path the index marks assume-unchanged or skip-worktree, the
 main checkout off the branch the run started on, or a fold upstream whose intent nobody settled, fails it, and nothing
 is staged), on an empty index, by explicit path, with the configuration's `commit.template` filled or the step's own

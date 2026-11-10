@@ -538,7 +538,7 @@ public sealed class FoldStepTests
         var moved = Answer(HarnessExit.Refused, "the trees moved", RequestStanding.Refused, [], [RefusalKind.Other]);
         var held = Answer(HarnessExit.Refused, "held", RequestStanding.Sound, [], [], OutcomeCause.LockHeld);
 
-        var once = Scripted(sound, moved, Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], [], left: OrchestrationKit.Left(kit.Main, named)));
+        var once = Scripted(sound, moved, Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], []));
         var always = Scripted(sound, moved);
         var waiting = Scripted(sound, held);
 
@@ -555,10 +555,10 @@ public sealed class FoldStepTests
     }
 
     /// <summary>
-    /// The ledger settles each fold as it ended: an apply that stopped (21) stopped, with what it reports it left - each
-    /// path as it found it where it reports nothing; one that threw after its intent was written interrupted, from the
-    /// tree read under its lock, before the exception goes on; and an intent a crash left - nothing written after it -
-    /// interrupted where the next attempt starts, before it folds anything.
+    /// The ledger settles each fold as it ended: an apply that stopped (21) stopped, with what it recorded it left - each
+    /// path as it found it where it never began to write; one that threw after its intent was written interrupted, before
+    /// the exception goes on; and an intent a crash left - nothing written after it - interrupted where the next attempt
+    /// starts, before it folds anything; an apply that went through, by what it recorded under its hold.
     /// </summary>
     [Fact]
     public async Task TheLedger_SettlesAStoppedApply_AThrownOne_AndAnIntentACrashLeft()
@@ -579,7 +579,7 @@ public sealed class FoldStepTests
         Assert.Equal(FlowFoldEntry.Interrupted, kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of("f2")!.State);
 
         var crashed = await Ledger(kit).IntendAsync(kit.Layout, kit.Main, "fold", 3, "fold", Agent, named, Token);
-        var after = await Folding(Scripted(sound, Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], [], left: OrchestrationKit.Left(kit.Main, named)))).RunAsync(Run(kit, Fold(), attempt: 4), Token);
+        var after = await Folding(Scripted(sound, Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], []))).RunAsync(Run(kit, Fold(), attempt: 4), Token);
         var folds = kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Folds;
 
         Assert.Equal((HarnessExit.Incomplete, "stopped part way"), (stopped.Exit, stopped.Error));
@@ -626,8 +626,9 @@ public sealed class FoldStepTests
 
     /// <summary>
     /// A deletion of an agent whose deletion began - closed, its fold made - folds nothing: it writes no intent, holds no
-    /// path to within, and takes no allowance, whatever its allow names; an intent a crash left after the closing is
-    /// settled all the same, from what the tree holds, and the run's graph's base is synced by what it changed.
+    /// path to within, and takes no allowance, whatever its allow names; a fold a crash left after the closing - what it
+    /// left recorded under its hold, and nothing after - is settled all the same, by that record, and the run's graph's
+    /// base is synced by what it changed.
     /// </summary>
     [Fact]
     public async Task ADeletionOfAClosedAgent_FoldsNothing_AndTakesNoAllowance()
@@ -650,6 +651,7 @@ public sealed class FoldStepTests
         // The run has a graph, and what the crashed fold wrote reaches its base where the ledger settles it.
         await kit.Harness.CodebaseGraph.SyncAsync(new DssHarness.Core.Codebase.CodebaseGraphSync(new HarnessLayout(kit.Main, kit.Main), kit.Layout, DssHarness.Core.Codebase.CodebaseGraphShape.Default, OrchestrationKit.Settings.Root, Rebuild: false, "test"), Token);
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nwritten by the fold that crashed\n");
+        await OrchestrationKit.WrittenAsync(Ledger(kit), kit.Layout, kit.Main, crashed);
 
         var deleted = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, step, attempt: 2), Token);
 
@@ -690,10 +692,11 @@ public sealed class FoldStepTests
     }
 
     /// <summary>
-    /// A ledger that cannot settle a fold loses nothing the apply said: an apply that threw goes on with its own exception -
-    /// the ledger's read of the tree failing as well, its intent left for the next attempt, which settles it - and one
-    /// that answered is kept in the step's directory, with the ledger's entry it was intended under, before a settle that
-    /// fails: here, of an apply that went through and reports nothing of what it left, which the engine never answers.
+    /// A ledger that cannot settle a fold loses nothing the apply said: an apply that threw part way through its write, and
+    /// could not record what it left, goes on with its own exception - the ledger's read of the tree failing as well, the
+    /// fold left for the next attempt, which settles it - and one that answered is kept in the step's directory, with the
+    /// ledger's entry it was intended under, before a settle that fails: here, of an apply that went through and recorded
+    /// no write, which the engine never answers.
     /// </summary>
     [Fact]
     public async Task ALedgerThatCannotSettle_KeepsTheApplysOwnException_AndWhatItAnswered()
@@ -709,23 +712,33 @@ public sealed class FoldStepTests
         var agents = Substitute.For<IAgentService>();
         var applies = 0;
         agents.FoldAsync(Arg.Any<FoldAgentRequest>(), Arg.Any<CancellationToken>())
-            .Returns(call =>
+            .Returns(async call =>
             {
-                if (!call.Arg<FoldAgentRequest>().Apply)
+                var request = call.Arg<FoldAgentRequest>();
+
+                if (!request.Apply)
                 {
-                    return Task.FromResult(sound);
+                    return sound;
                 }
 
-                // The tree cannot be read from the moment the apply is called: the read after it fails.
+                // The tree cannot be read from the moment the apply is called: the read after it fails. The first apply
+                // begins its write, as the verb records it under its hold, and throws before it can record what it left.
                 tree.Unreadable = true;
-                return ++applies == 1 ? Task.FromException<UseCaseResult<AgentVerbFacts>>(new IOException("the disk went away")) : Task.FromResult(folded);
+
+                if (++applies > 1)
+                {
+                    return folded;
+                }
+
+                await OrchestrationKit.WritingAsync(request.Intent!.Ledger, request.Intent.Layout, request.StartDirectory, request.Intent.Id);
+                throw new IOException("the disk went away");
             });
         FoldStepRunner Folding() => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, ledger, kit.Harness.GraphSyncs);
 
         var thrown = await Assert.ThrowsAsync<IOException>(() => Folding().RunAsync(Run(kit, Fold()), Token));
 
         Assert.Equal("the disk went away", thrown.Message);
-        Assert.Equal(FlowFoldEntry.Intended, kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of("f1")!.State);
+        Assert.Equal(FlowFoldEntry.Writing, kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of("f1")!.State);
 
         tree.Unreadable = false;
         var unsettled = await Assert.ThrowsAsync<HarnessException>(() => Folding().RunAsync(Run(kit, Fold(), attempt: 2), Token));
@@ -1084,6 +1097,103 @@ public sealed class FoldStepTests
         Assert.Empty(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits);
     }
 
+    /// <summary>
+    /// A fold - and a deletion that folds - whose step crashed once the fold let the main tree go, its verb having recorded
+    /// what it left under its hold and nothing recorded after, is settled by the step's next attempt by that record: a
+    /// side-task's write let in the moment the fold let go, made before the next attempt, is never taken for the fold's,
+    /// nor read from the tree, and the commit after it finds the path changed since and stops for a person.
+    /// </summary>
+    [Theory]
+    [InlineData("fold")]
+    [InlineData("delete-agent")]
+    public async Task AFoldWhoseStepCrashedOnceItLetTheTreeGo_IsSettledByWhatItRecorded_NeverByASideTasksWrite(string type)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var ledger = Ledger(kit);
+        var planned = new AgentPlanned([], [], [], [], null) { Written = ["b.txt"] };
+        var (runner, step) = type == "fold" ? ((IFlowStepTypeRunner)Runner(kit), Fold()) : (Deleting(kit), Delete());
+        var id = await ledger.IntendAsync(kit.Layout, kit.Main, step.Name, 1, type, Agent, planned, Token);
+        var intent = new FoldIntent(ledger, kit.Layout, id);
+        var head = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
+
+        // The apply the crashed attempt called, as it called it - what it left recorded under its hold - and nothing
+        // recorded after: the step's process ended there.
+        var applied = type == "fold"
+            ? await kit.Harness.AgentService.FoldAsync(new FoldAgentRequest(kit.Main, OrchestrationKit.Orchestrator, Agent, new FoldAllowances(), Apply: true) { Expected = planned, Intent = intent }, Token)
+            : await kit.Harness.AgentService.DeleteAsync(new DeleteAgentRequest(kit.Main, OrchestrationKit.Orchestrator, Agent, new FoldAllowances(), Apply: true, DiscardUncommitted: false) { Expected = planned, Intent = intent }, Token);
+
+        Assert.True(applied.Outcome.Succeeded, applied.Outcome.Message);
+        Assert.Equal(FlowFoldEntry.Written, kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of(id)!.State);
+
+        // A side-task's write that waited on the fold's hold, in before the step's next attempt.
+        new SideTaskWrite(kit.Main, "b.txt", "two\na side-task's edit\n").Write();
+
+        var next = await runner.RunAsync(Run(kit, step, attempt: 2), Token);
+        var entry = kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Of(id)!;
+
+        Assert.True(next.Passed, next.Error);
+        Assert.Equal(
+            (FlowFoldEntry.Interrupted, DssHarness.Core.FileSystem.FileContentHash.Of("two\nagent edit\n"u8), (bool?)true, (bool?)null),
+            (entry.State, entry.Paths[0].Left, entry.Paths[0].Changed, entry.ReadFromTree));
+
+        var committed = await Committing(kit).RunAsync(Run(kit, Commit(), worksIn: null, read: Names("folds", step.Name)), Token);
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"'b.txt' (folded by '{step.Name}') has changed since; commit or restore it, then resume. Nothing was staged."),
+            (committed.Exit, committed.Error));
+        Assert.Equal(head, await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token));
+    }
+
+    /// <summary>
+    /// A deletion whose removal throws once its fold let the main tree go - a side-task's write that waited on the fold's
+    /// hold in by then - keeps what its fold recorded it left under that hold: the step settles the fold by it as the
+    /// throw goes on, never reading the side-task's bytes from the tree, and the commit after it stops for a person.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionWhoseRemovalThrowsOnceItLetTheTreeGo_KeepsWhatItsFoldRecorded_NeverASideTasksWrite()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var sideTask = new SideTaskWrite(kit.Main, "b.txt", "two\na side-task's edit\n");
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            BeforeRun = arguments =>
+            {
+                if (arguments is ["update-ref", "-d", ..])
+                {
+                    // The removal forgets the commit the worktree stood on, long after the deletion let the tree go: the
+                    // side-task's write that waited on it is in.
+                    sideTask.Write();
+                    throw new InvalidOperationException("the removal could not be asked of git");
+                }
+            },
+        };
+        var agents = kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git);
+        var runner = new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
+        var head = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(Run(kit, Delete()), Token));
+        var entry = Assert.Single(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Folds);
+
+        Assert.Equal("the removal could not be asked of git", thrown.Message);
+        Assert.Equal("two\na side-task's edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.Equal(
+            (FlowFoldEntry.Interrupted, DssHarness.Core.FileSystem.FileContentHash.Of("two\nagent edit\n"u8), (bool?)true, (bool?)null),
+            (entry.State, entry.Paths[0].Left, entry.Paths[0].Changed, entry.ReadFromTree));
+
+        var committed = await Committing(kit).RunAsync(Run(kit, Commit(), worksIn: null, read: Names("folds", "delete")), Token);
+
+        Assert.Equal(
+            (HarnessExit.Refused, "'b.txt' (folded by 'delete') has changed since; commit or restore it, then resume. Nothing was staged."),
+            (committed.Exit, committed.Error));
+        Assert.Equal(head, await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token));
+    }
+
     /// <summary>The <c>waited</c> member of a step's output: what it waited out for the main tree's lock, and how long.</summary>
     private static JsonObject WaitedOf(FlowStepResult ended) => ended.Output![MainTreeWriteLock.WaitedMember]!.AsObject();
 
@@ -1150,7 +1260,7 @@ public sealed class FoldStepTests
     private static Dictionary<string, FlowValue> Names(string key, params string[] names)
         => new() { [key] = FlowValue.Of(new JsonArray([.. names.Select(name => (JsonNode?)name)])) };
 
-    /// <summary>An answer of a verb, its facts carried - what an apply that wrote reports it left among them, where given.</summary>
+    /// <summary>An answer of a verb, its facts carried.</summary>
     private static UseCaseResult<AgentVerbFacts> Answer(
         int code,
         string summary,
@@ -1158,26 +1268,46 @@ public sealed class FoldStepTests
         ConsentKind[] needs,
         RefusalKind[] refusals,
         OutcomeCause cause = OutcomeCause.None,
-        AgentPlanned? planned = null,
-        IReadOnlyDictionary<string, string?>? left = null)
+        AgentPlanned? planned = null)
     {
         var outcome = CommandOutcome.Failed(code, summary);
 
         return UseCaseResult<AgentVerbFacts>.From(outcome with
         {
             Cause = cause,
-            Facts = new AgentVerbFacts(code, summary, false, standing, null, [], needs, refusals, Planned: planned ?? new AgentPlanned([], [], [], [], null), Left: left),
+            Facts = new AgentVerbFacts(code, summary, false, standing, null, [], needs, refusals, Planned: planned ?? new AgentPlanned([], [], [], [], null)),
         });
     }
 
-    /// <summary>An agent service whose fold answers <paramref name="dry"/> to every dry run and each of <paramref name="applies"/> in turn to an apply, the last again once they run out.</summary>
+    /// <summary>
+    /// An agent service whose fold answers <paramref name="dry"/> to every dry run and each of <paramref name="applies"/> in
+    /// turn to an apply, the last again once they run out - an apply that goes through recording its write through the
+    /// run's ledger under the main tree's lock, as the verb does, having written nothing.
+    /// </summary>
     private static IAgentService Scripted(UseCaseResult<AgentVerbFacts> dry, params UseCaseResult<AgentVerbFacts>[] applies)
     {
         var agents = Substitute.For<IAgentService>();
         var at = 0;
 
         agents.FoldAsync(Arg.Any<FoldAgentRequest>(), Arg.Any<CancellationToken>())
-            .Returns(call => Task.FromResult(call.Arg<FoldAgentRequest>().Apply ? applies[Math.Min(at++, applies.Length - 1)] : dry));
+            .Returns(async call =>
+            {
+                var request = call.Arg<FoldAgentRequest>();
+
+                if (!request.Apply)
+                {
+                    return dry;
+                }
+
+                var answer = applies[Math.Min(at++, applies.Length - 1)];
+
+                if (request.Intent is { } intent && answer.Outcome.ExitCode == HarnessExit.Success)
+                {
+                    await OrchestrationKit.WrittenAsync(intent.Ledger, intent.Layout, request.StartDirectory, intent.Id);
+                }
+
+                return answer;
+            });
 
         return agents;
     }
@@ -1207,6 +1337,7 @@ public sealed class FoldStepTests
     {
         private int _written;
 
+        /// <summary>Makes the write, waiting for the tree's lock.</summary>
         public void Write()
         {
             if (Interlocked.Exchange(ref _written, 1) != 0)
@@ -1219,12 +1350,29 @@ public sealed class FoldStepTests
 
             OrchestrationKit.Write(main, path, text);
         }
+
+        /// <summary>Makes the write where nobody holds the tree's lock - a fold holding it lets it in only once it lets go.</summary>
+        public void WriteIfLetIn()
+        {
+            if (Volatile.Read(ref _written) != 0)
+            {
+                return;
+            }
+
+            using var hold = MachineWideMutex.TryHold(MainTreeWriteLock.NameFor(main), "a test as a side-task");
+
+            if (hold is not null && Interlocked.Exchange(ref _written, 1) == 0)
+            {
+                OrchestrationKit.Write(main, path, text);
+            }
+        }
     }
 
     /// <summary>
     /// The real file system, except that looking at <paramref name="path"/> once it holds <paramref name="folded"/> - what
-    /// the fold wrote there - first lets <paramref name="sideTask"/>'s write in, as a side-task's write that waited on the
-    /// fold's hold is let in the moment the fold lets it go: whatever reads the path after the fold reads the side-task's.
+    /// the fold wrote there - first lets <paramref name="sideTask"/>'s write in where the fold has let the tree go, as a
+    /// side-task's write that waited on the fold's hold is let in the moment it does: whatever reads the path after the
+    /// fold let go reads the side-task's.
     /// </summary>
     private sealed class SideTaskFirst(DssHarness.Core.FileSystem.IFileSystem inner, string path, string folded, SideTaskWrite sideTask) : PassThroughFileSystem(inner)
     {
@@ -1232,7 +1380,7 @@ public sealed class FoldStepTests
         {
             if (string.Equals(Path.GetFullPath(asked), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase) && File.Exists(path) && File.ReadAllText(path) == folded)
             {
-                sideTask.Write();
+                sideTask.WriteIfLetIn();
             }
 
             return base.KindOf(asked);

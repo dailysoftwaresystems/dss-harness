@@ -69,6 +69,13 @@ public sealed record FoldAgentRequest(string StartDirectory, string Orchestrator
     /// write anything else, it is refused (13) and writes nothing. Null from the command line, which holds it to nothing.
     /// </summary>
     public AgentPlanned? Expected { get; init; }
+
+    /// <summary>
+    /// The entry of the run's ledger of its folds an <c>--apply</c> of a step of a run was intended under: under the main
+    /// tree's lock its write is made under, before it lets that lock go, the fold records through it that its write begins
+    /// and what it left at each path. Null from the command line, which keeps no ledger.
+    /// </summary>
+    public Flow.FoldIntent? Intent { get; init; }
 }
 
 /// <summary>What deleting an agent was asked, beside the allowances its last fold is let through with.</summary>
@@ -86,4 +93,12 @@ public sealed record DeleteAgentRequest(string StartDirectory, string Orchestrat
     /// hold and found to fold anything else, it is refused (13) and writes nothing. Null from the command line.
     /// </summary>
     public AgentPlanned? Expected { get; init; }
+
+    /// <summary>
+    /// The entry of the run's ledger of its folds the fold it makes was intended under, where a step of a run deletes it:
+    /// under the main tree's lock that fold is written under, before the deletion lets that lock go - ahead of its
+    /// transcripts, its evidence and its worktree's removal - it records through it that its write begins and what it left
+    /// at each path. Null from the command line, which keeps no ledger, and for a deletion that folds nothing.
+    /// </summary>
+    public Flow.FoldIntent? Intent { get; init; }
 }

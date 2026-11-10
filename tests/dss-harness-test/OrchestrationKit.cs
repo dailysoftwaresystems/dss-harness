@@ -155,15 +155,31 @@ internal sealed class OrchestrationKit
     public static string Read(string root, string relative) => File.ReadAllText(Path.Combine(root, relative));
 
     /// <summary>
-    /// What a fold's apply reports it left at each path <paramref name="planned"/> changes in <paramref name="tree"/>, as
-    /// the verb reads it under its hold (<see cref="AgentVerbFacts.Left"/>): what the tree holds there now, none where it
-    /// holds no file.
+    /// What a fold's apply records in the run's ledger of its folds under the main tree's lock as its write begins, and
+    /// nothing after: what a crash part way through the write leaves of the intent <paramref name="id"/>.
     /// </summary>
-    public static IReadOnlyDictionary<string, string?> Left(string tree, AgentPlanned planned)
-        => planned.InMainTree.ToDictionary(
-            change => change.Path,
-            change => File.Exists(Path.Combine(tree, change.Path)) ? DssHarness.Core.FileSystem.FileContentHash.Of(File.ReadAllBytes(Path.Combine(tree, change.Path))) : (string?)null,
-            StringComparer.Ordinal);
+    public static async Task WritingAsync(DssHarness.Core.Orchestration.Flow.FoldLedger ledger, OrchestratorLayout layout, string tree, string id)
+    {
+        using var hold = await MainTreeWriteLock.HoldAsync(tree, TestContext.Current.CancellationToken)
+            ?? throw new OperationCanceledException("the test was stopped while it waited for the main tree");
+
+        ledger.Writing(layout, id, hold);
+    }
+
+    /// <summary>
+    /// What a fold's apply records in the run's ledger of its folds under the main tree's lock, once its write is done: that
+    /// its write began, and what <paramref name="tree"/> holds now at each path its intent <paramref name="id"/> names -
+    /// the test having written them.
+    /// </summary>
+    public static async Task WrittenAsync(DssHarness.Core.Orchestration.Flow.FoldLedger ledger, OrchestratorLayout layout, string tree, string id)
+    {
+        using var hold = await MainTreeWriteLock.HoldAsync(tree, TestContext.Current.CancellationToken)
+            ?? throw new OperationCanceledException("the test was stopped while it waited for the main tree");
+        var intent = new DssHarness.Core.Orchestration.Flow.FoldIntent(ledger, layout, id);
+
+        intent.Writing(hold);
+        await intent.WrittenAsync(tree, hold);
+    }
 
     /// <summary>Files a row for <paramref name="agent"/>, one file for each cell given.</summary>
     public void FileRow(string agent, string id, IReadOnlyDictionary<string, string> cells)

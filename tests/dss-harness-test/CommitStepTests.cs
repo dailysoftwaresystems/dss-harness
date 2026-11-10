@@ -240,7 +240,8 @@ public sealed class CommitStepTests
         var ledger = Ledger(kit);
         var id = await ledger.IntendAsync(kit.Layout, kit.Main, "fold", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }, Token);
         File.Delete(Path.Combine(kit.Main, "b.txt"));
-        ledger.Settle(kit.Layout, id, HarnessExit.Success, OrchestrationKit.Left(kit.Main, new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }));
+        await OrchestrationKit.WrittenAsync(ledger, kit.Layout, kit.Main, id);
+        ledger.Settle(kit.Layout, id, HarnessExit.Success);
 
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
 
@@ -261,7 +262,8 @@ public sealed class CommitStepTests
         var ledger = Ledger(kit);
         var id = await ledger.IntendAsync(kit.Layout, kit.Main, "fold", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }, Token);
         File.Delete(Path.Combine(kit.Main, "b.txt"));
-        ledger.Settle(kit.Layout, id, HarnessExit.Success, OrchestrationKit.Left(kit.Main, new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }));
+        await OrchestrationKit.WrittenAsync(ledger, kit.Layout, kit.Main, id);
+        ledger.Settle(kit.Layout, id, HarnessExit.Success);
         Directory.CreateDirectory(Path.Combine(kit.Main, "b.txt"));
         File.WriteAllText(Path.Combine(kit.Main, "b.txt", "inside.txt"), "made since\n");
 
@@ -1212,7 +1214,8 @@ public sealed class CommitStepTests
             OrchestrationKit.Write(kit.Main, path, text);
         }
 
-        ledger.Settle(kit.Layout, id, HarnessExit.Success, OrchestrationKit.Left(kit.Main, planned));
+        await OrchestrationKit.WrittenAsync(ledger, kit.Layout, kit.Main, id);
+        ledger.Settle(kit.Layout, id, HarnessExit.Success);
         return id;
     }
 

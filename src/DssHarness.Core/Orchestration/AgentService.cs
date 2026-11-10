@@ -1626,15 +1626,19 @@ public sealed class AgentService(
         bool apply,
         CancellationToken cancellationToken = default,
         bool json = false)
-        => FoldHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, apply, json, cancellationToken);
+        => FoldHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, intent: null, apply, json, cancellationToken);
 
-    /// <summary>Folding an agent, its <c>--apply</c> held to what its dry run named where <paramref name="expected"/> is given.</summary>
+    /// <summary>
+    /// Folding an agent, its <c>--apply</c> held to what its dry run named where <paramref name="expected"/> is given, and its
+    /// write recorded under its hold in the run's ledger of its folds where <paramref name="intent"/> is.
+    /// </summary>
     private async Task<CommandOutcome> FoldHeldAsync(
         string startDirectory,
         string orchestrator,
         string agent,
         FoldAllowances allowances,
         AgentPlanned? expected,
+        Flow.FoldIntent? intent,
         bool apply,
         bool json,
         CancellationToken cancellationToken)
@@ -1654,7 +1658,7 @@ public sealed class AgentService(
         }
 
         var met = new HoldersMet();
-        var outcome = await FoldLiveAsync(at, allowances, expected, apply, json, met, cancellationToken).ConfigureAwait(false);
+        var outcome = await FoldLiveAsync(at, allowances, expected, intent, apply, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, FoldCommand, outcome) : outcome;
 
         // Asked for one document, what the live agent answered brings one, and what was returned above brings the same
@@ -1663,7 +1667,7 @@ public sealed class AgentService(
     }
 
     /// <summary>Folding a live agent, once it is found.</summary>
-    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, AgentPlanned? expected, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, AgentPlanned? expected, Flow.FoldIntent? intent, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var policy = TwoChangePolicy.Of(context, []);
@@ -1735,13 +1739,11 @@ public sealed class AgentService(
                 return unexpected;
             }
 
-            var written = await WriteAsync(context, layout, record, path, seed!, measured, tree).ConfigureAwait(false);
+            var written = await WriteRecordedAsync(context, layout, record, path, seed!, measured, tree, intent).ConfigureAwait(false);
 
             // What the fold wrote rides the answer as its facts, whatever form the answer is asked in - as far as it went,
-            // where it stopped part way, since that much is in the main tree now - and what it left at each path, read
-            // while the hold it wrote under is held.
+            // where it stopped part way, since that much is in the main tree now.
             met.Folded = FoldedOf(written, context);
-            met.Left = await FoldLeftAsync(context.Layout.MainCheckoutRoot, met.Planned!, tree).ConfigureAwait(false);
 
             return written.Failure ?? CommandOutcome.Ok(
                 $"folded {Lower(Agent(record))}: wrote {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
@@ -1760,15 +1762,19 @@ public sealed class AgentService(
         bool discardUncommitted,
         CancellationToken cancellationToken = default,
         bool json = false)
-        => DeleteHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, apply, discardUncommitted, json, cancellationToken);
+        => DeleteHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, intent: null, apply, discardUncommitted, json, cancellationToken);
 
-    /// <summary>Deleting an agent, the <c>--apply</c> of its fold held to what its dry run named where <paramref name="expected"/> is given.</summary>
+    /// <summary>
+    /// Deleting an agent, the <c>--apply</c> of its fold held to what its dry run named where <paramref name="expected"/> is
+    /// given, and that fold's write recorded under its hold in the run's ledger of its folds where <paramref name="intent"/> is.
+    /// </summary>
     private async Task<CommandOutcome> DeleteHeldAsync(
         string startDirectory,
         string orchestrator,
         string agent,
         FoldAllowances allowances,
         AgentPlanned? expected,
+        Flow.FoldIntent? intent,
         bool apply,
         bool discardUncommitted,
         bool json,
@@ -1796,7 +1802,7 @@ public sealed class AgentService(
         }
 
         var met = new HoldersMet();
-        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, expected, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
+        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, expected, intent, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(found.Layout!, agent, DeleteCommand, outcome) : outcome;
 
         // Asked for one document, what the agent found answered brings one, and what was returned above brings the same
@@ -1811,6 +1817,7 @@ public sealed class AgentService(
         AgentRecord record,
         FoldAllowances allowances,
         AgentPlanned? expected,
+        Flow.FoldIntent? intent,
         bool apply,
         bool discardUncommitted,
         bool json,
@@ -1850,7 +1857,7 @@ public sealed class AgentService(
 
         return record.State == AgentStates.Closed
             ? await FinishAsync(target, allowances, apply, json, met, cancellationToken).ConfigureAwait(false)
-            : await CloseAsync(target, allowances, expected, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
+            : await CloseAsync(target, allowances, expected, intent, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1915,7 +1922,7 @@ public sealed class AgentService(
     /// Deleting a live agent: its fold and rows - or nothing, abandoning it - then its transcripts and evidence kept, its
     /// closing recorded, and its worktree's removal asked for.
     /// </summary>
-    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, AgentPlanned? expected, bool apply, bool discard, bool json, HoldersMet met, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, AgentPlanned? expected, Flow.FoldIntent? intent, bool apply, bool discard, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (target.Context, target.Layout, target.Record, target.Path);
         var policy = TwoChangePolicy.Of(context, []);
@@ -2063,13 +2070,13 @@ public sealed class AgentService(
             if (!discard)
             {
                 var fold = measured.Fold!;
-                var written = await WriteAsync(context, layout, record, path, seed!, fold, tree!).ConfigureAwait(false);
+                // Recorded in the run's ledger under the hold it is written under, which is let go before the transcripts,
+                // the evidence and the worktree's removal: a throw or a crash in any of them leaves what it left recorded.
+                var written = await WriteRecordedAsync(context, layout, record, path, seed!, fold, tree!, intent).ConfigureAwait(false);
 
                 // The work the delete folded back rides the answer as its facts, whatever form the answer is asked in - as
-                // far as it went, where it stopped part way, since that much is in the main tree now - and what it left at
-                // each path, read while the hold it wrote under is held: the hold is let go before the worktree is removed.
+                // far as it went, where it stopped part way, since that much is in the main tree now.
                 met.Folded = FoldedOf(written, context);
-                met.Left = await FoldLeftAsync(context.Layout.MainCheckoutRoot, met.Planned!, tree!).ConfigureAwait(false);
 
                 if (written.Failure is { } failure)
                 {
@@ -3139,6 +3146,51 @@ public sealed class AgentService(
             + $"{OrchestrationReports.DeleteAgentLine(target.Record.Orchestrator, target.Record.Name)} then finishes this agent.";
 
     /// <summary>
+    /// <see cref="WriteAsync"/>, recorded in the run's ledger of its folds where a step of a run folds through one
+    /// (<paramref name="intent"/>): that the write begins, right before its first write, and what it left at each path once
+    /// it is done - or has thrown part way, before the throw goes on - both under <paramref name="tree"/>, before it is let
+    /// go. Whatever comes after - the verb's answer, a throw, a crash, a side-task's write let in once the hold is let go -
+    /// the fold is settled by what it left; only a crash part way through the write itself leaves the ledger to read the
+    /// tree. From the command line there is no ledger, and nothing more is done than the write.
+    /// </summary>
+    private async Task<Written> WriteRecordedAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string path, SeedRecord seed, Measured measured, MachineWideHold tree, Flow.FoldIntent? intent)
+    {
+        if (intent is null)
+        {
+            return await WriteAsync(context, layout, record, path, seed, measured, tree).ConfigureAwait(false);
+        }
+
+        var main = context.Layout.MainCheckoutRoot;
+        Written written;
+
+        intent.Writing(tree);
+
+        try
+        {
+            written = await WriteAsync(context, layout, record, path, seed, measured, tree).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // What it wrote before the throw is recorded all the same, still under the hold; where even that fails, the
+            // write stays begun and unrecorded, which the step settles from the tree, and what goes on is the write's own
+            // exception.
+            try
+            {
+                await intent.WrittenAsync(main, tree).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Left writing: the step reads what it left from the tree, under the lock.
+            }
+
+            throw;
+        }
+
+        await intent.WrittenAsync(main, tree).ConfigureAwait(false);
+        return written;
+    }
+
+    /// <summary>
     /// Writes a measured fold into the main tree, records what it wrote as shared, then applies the rows the agent declared
     /// anew and records them as applied, never interrupted: the rows as written and the seed as recorded, or - once anything
     /// is written - what stopped it, as a change begun and not finished. All of it under <paramref name="tree"/>, the main
@@ -3701,8 +3753,7 @@ public sealed class AgentService(
             had?.Refusals ?? Reasons(standing, met.Reasons),
             met.Folded ?? had?.Folded,
             had?.Planned ?? met.Planned,
-            met.Waited,
-            met.Left ?? had?.Left);
+            met.Waited);
 
         return json && answered.Data.Count == 0
             ? OrchestrationReports.Document(answered, facts)
@@ -3741,31 +3792,6 @@ public sealed class AgentService(
 
         met.Waited = tree.Waited;
         return tree;
-    }
-
-    /// <summary>
-    /// What the main tree holds at each path <paramref name="planned"/> changes there (<see cref="AgentPlanned.InMainTree"/>),
-    /// once a fold's write was made: read under <paramref name="tree"/>, the hold it was made under, before it is let go -
-    /// a side-task's write that waited on it comes after, and is never read as the fold's. What the fold's facts carry
-    /// (<see cref="AgentVerbFacts.Left"/>), which the run's ledger of its folds settles it by. Never cancelled: the write is
-    /// in.
-    /// </summary>
-    /// <exception cref="InvalidOperationException"><paramref name="tree"/> was let go: what is read outside the lock is not the fold's.</exception>
-    private async Task<IReadOnlyDictionary<string, string?>> FoldLeftAsync(string main, AgentPlanned planned, MachineWideHold tree)
-    {
-        if (tree.Released)
-        {
-            throw new InvalidOperationException("what a fold left is read under the tree's lock its write was made under, and the hold it was given was let go");
-        }
-
-        var left = new Dictionary<string, string?>(StringComparer.Ordinal);
-
-        foreach (var (changed, _) in planned.InMainTree)
-        {
-            left[changed] = await FileContentHash.OfFileAsync(_fileSystem, Path.Combine(main, changed), CancellationToken.None).ConfigureAwait(false);
-        }
-
-        return left;
     }
 
     /// <summary>
@@ -4101,7 +4127,7 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<AgentVerbFacts>.From(
-            await FoldHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Apply, request.Json, cancellationToken).ConfigureAwait(false));
+            await FoldHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Intent, request.Apply, request.Json, cancellationToken).ConfigureAwait(false));
     }
 
     /// <inheritdoc cref="IAgentService.DeleteAsync(DeleteAgentRequest, CancellationToken)"/>
@@ -4110,7 +4136,7 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<AgentVerbFacts>.From(
-            await DeleteHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Apply, request.DiscardUncommitted, request.Json, cancellationToken).ConfigureAwait(false));
+            await DeleteHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Intent, request.Apply, request.DiscardUncommitted, request.Json, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>What deleting a live agent measured before writing anything, and why it cannot go on where it cannot.</summary>
@@ -4136,9 +4162,6 @@ public sealed class AgentService(
 
         /// <summary>How long the apply waited for the main tree's lock, which a side-task held; zero where it did not wait.</summary>
         public TimeSpan Waited { get; set; }
-
-        /// <summary>What a fold left at each path it changes in the main tree, read under its hold; <see langword="null"/> where it wrote nothing.</summary>
-        public IReadOnlyDictionary<string, string?>? Left { get; set; }
 
         /// <summary>The reasons the --apply's own measure was refused for, by kind, where it typed any; empty otherwise.</summary>
         public IReadOnlyList<RefusalKind> Reasons { get; set; } = [];
