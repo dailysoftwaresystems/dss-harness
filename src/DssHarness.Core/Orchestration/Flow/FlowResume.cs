@@ -304,6 +304,14 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     /// <param name="held">The owner recorded.</param>
     public bool Stands(RunOwner held) => _owner.Stands(held);
 
+    /// <summary>Whether this process is the run's recorded owner: a claim of its own, never another session's.</summary>
+    /// <param name="layout">The run's layout.</param>
+    public bool Holds(OrchestratorLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        return _owner.Holds(layout.OwnerFile, OrchestrationStore.OwnerKind);
+    }
+
     /// <summary>Whether the engine <paramref name="held"/> names runs on this machine.</summary>
     /// <param name="held">The owner recorded.</param>
     public bool IsHere(RunOwner held) => _owner.IsHere(held);

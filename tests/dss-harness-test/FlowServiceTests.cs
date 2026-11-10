@@ -2216,7 +2216,6 @@ public sealed class FlowServiceTests
         var files = new Signalling(repository.Harness.FileSystem);
         var service = Service(repository.Harness, runner, clock, HandedOverTimings, fileSystem: files, identity: engines);
         var store = repository.Harness.OrchestrationStore;
-        var identity = repository.Harness.Identity;
 
         store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
 
@@ -2226,9 +2225,9 @@ public sealed class FlowServiceTests
         await clock.WaitingAsync().WaitAsync(Bound, Token);
         var entry = Assert.Single(store.ReadInbox(run)!.Answers);
 
-        // The engine goes having weighed nothing, and another session's owner - live, this very process - is on the run
-        // as the command comes to claim it, the inbox not yet read.
-        engines.LeavesWhenNextAsked(() => files.AfterLookingAt(run.DefinitionFile, () => store.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, clock.GetUtcNow(), identity.Current))));
+        // The engine goes having weighed nothing, and another session's owner - live, another process - is on the run as
+        // the command comes to claim it, the inbox not yet read.
+        engines.LeavesWhenNextAsked(() => files.AfterLookingAt(run.DefinitionFile, () => store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Another, clock.GetUtcNow(), "another session's start"))));
         clock.Advance(TimeSpan.FromSeconds(1));
 
         // The claim refused, the command waits on its entry again.
@@ -2246,6 +2245,121 @@ public sealed class FlowServiceTests
         Assert.Equal([TakenUnderItsEntry, $"questions: {run.QuestionsFile}", $"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"], outcome.Details);
         Assert.Equal(entry.Id, Assert.Single(store.ReadInbox(run)!.Answers).Id);
     }
+
+    /// <summary>
+    /// An answer handed over whose engine went before weighing it, where the command's claim of the run meets a stop file
+    /// the store refuses: the claim this process wrote is let go - no owner is left on the run - and the command answers
+    /// the stop file's problem (13), saying the answer stays in the inbox for the next session; never a wait on itself
+    /// taken for another session's.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedOverWhoseClaimMeetsAStopFileTheStoreRefuses_IsRefusedWithItsProblem_TheAnswerStays_AndNoOwnerIsLeft()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var engines = new Engines(repository.Harness.Identity);
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: HandedOverTimings, fileSystem: files, identity: engines);
+        var store = repository.Harness.OrchestrationStore;
+
+        store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+
+        await files.Written(run.InboxFile).WaitAsync(Bound, Token);
+
+        // The engine goes having weighed nothing, leaving a stop file no one can read.
+        engines.LeavesWhenNextAsked(() => File.WriteAllText(run.StopFile, AsksForNothing));
+
+        var outcome = await answering.WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Equal(UnreadableStopFile(run), outcome.Message);
+        Assert.Equal([StaysHandedOverLine(run), $"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"], outcome.Details);
+        Assert.Null(store.ReadOwner(run));
+        Assert.Equal(("q1", "go"), (Assert.Single(store.ReadInbox(run)!.Answers).Question, Assert.Single(store.ReadInbox(run)!.Answers).Answer));
+    }
+
+    /// <summary>A resume whose claim of the run meets a stop file the store refuses is refused with its problem (13), and leaves no owner on the run.</summary>
+    [Fact]
+    public async Task AResumeWhoseClaimMeetsAStopFileTheStoreRefuses_IsRefusedWithItsProblem_AndLeavesNoOwner()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        var service = Service(repository.Harness, runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        File.WriteAllText(run.StopFile, AsksForNothing);
+
+        var outcome = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Equal(UnreadableStopFile(run), outcome.Message);
+        Assert.Null(repository.Harness.OrchestrationStore.ReadOwner(run));
+    }
+
+    /// <summary>
+    /// An answer handed over whose engine went before weighing it, where the run's owner record names this very process
+    /// as the command comes to claim it - a claim of its own left behind - is refused with the claim's refusal, the
+    /// answer said to stay in the inbox: this process is never taken for another session, and the command never waits
+    /// on itself.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedOverWhoseClaimThisProcesssOwnRecordRefuses_IsRefused_NeverWaitedOnAsAnotherSession()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var clock = new TimerClock();
+        var engines = new Engines(repository.Harness.Identity);
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, clock, HandedOverTimings, fileSystem: files, identity: engines);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+
+        store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+
+        await clock.WaitingAsync().WaitAsync(Bound, Token);
+
+        // The engine goes having weighed nothing, and the run's owner record names this very process as the command
+        // comes to claim it.
+        engines.LeavesWhenNextAsked(() => files.AfterLookingAt(run.DefinitionFile, () => store.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, clock.GetUtcNow(), identity.Current))));
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        var waitingAgain = clock.WaitingAsync();
+        Assert.Same(answering, await Task.WhenAny(waitingAgain, answering).WaitAsync(Bound, Token));
+
+        var outcome = await answering;
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.StartsWith("run 'r1' is owned by a live engine (process ", outcome.Message, StringComparison.Ordinal);
+        Assert.Equal([StaysHandedOverLine(run), $"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"], outcome.Details);
+    }
+
+    /// <summary>The line a command says of the answer 'go' to q1 it handed over that stays in the inbox for the next session.</summary>
+    private static string StaysHandedOverLine(OrchestratorLayout run)
+        => $"the answer 'go' handed over for question 'q1' stays in '{run.InboxFile}', and the next session of the run takes it";
+
+    /// <summary>A stop file that reads as JSON and asks the engine for nothing, which the store refuses.</summary>
+    private const string AsksForNothing = """{ "schema": 1 }""";
+
+    /// <summary>The store's refusal of the stop file <see cref="AsksForNothing"/>.</summary>
+    private static string UnreadableStopFile(OrchestratorLayout run)
+        => $"'{run.StopFile}' is {OrchestrationStore.StopFileKind}, and does not read as one: it asks for nothing. Nothing was changed: a record is never guessed at.";
 
     /// <summary>Two pause steps, one after the other, holding the run open, and a step after them.</summary>
     private const string TwoQuestionsFlow = """
@@ -4508,7 +4622,11 @@ public sealed class FlowServiceTests
         /// <summary>The engine's process id: one no process of this machine carries.</summary>
         public const int Engine = 999_999_001;
 
+        /// <summary>Another engine's process id - a session that claimed the run after the first went - live while <see cref="AnotherAlive"/> says so.</summary>
+        public const int Another = 999_999_002;
+
         private volatile bool _alive = true;
+        private volatile bool _anotherAlive = true;
         private Action? _leaving;
 
         /// <summary>Whether the engine still runs.</summary>
@@ -4516,6 +4634,13 @@ public sealed class FlowServiceTests
         {
             get => _alive;
             set => _alive = value;
+        }
+
+        /// <summary>Whether the other engine still runs.</summary>
+        public bool AnotherAlive
+        {
+            get => _anotherAlive;
+            set => _anotherAlive = value;
         }
 
         /// <summary>Whether the engine ends in the moment a stop comes to end it: as it is told apart, before it is ended.</summary>
@@ -4543,7 +4668,12 @@ public sealed class FlowServiceTests
                 _alive = false;
             }
 
-            return processId == Engine ? _alive : real.IsAlive(processId, stamp);
+            return processId switch
+            {
+                Engine => _alive,
+                Another => _anotherAlive,
+                _ => real.IsAlive(processId, stamp),
+            };
         }
 
         public string? StampOf(int processId) => real.StampOf(processId);
@@ -4555,7 +4685,7 @@ public sealed class FlowServiceTests
                 _alive = false;
             }
 
-            return processId != Engine && real.IsSame(processId, stamp);
+            return processId is not (Engine or Another) && real.IsSame(processId, stamp);
         }
     }
 

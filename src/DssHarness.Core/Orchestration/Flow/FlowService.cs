@@ -579,11 +579,12 @@ public sealed class FlowService(
                 // A claim refused with the answer handed over is not the answer's refusal where a session claimed the
                 // run first: that session takes the inbox as it begins. The owner is looked at before the entry is
                 // weighed, for a session writes what it made of the entry before it lets the run go: weighed, the
-                // command answers what the run made of it; not, with a live owner holding the run, it waits on the
-                // same entry as one handed to that owner.
+                // command answers what the run made of it; not, with another session's live owner holding the run, it
+                // waits on the same entry as one handed to that owner. An owner that is this process is no other
+                // session, and nothing would ever take the entry while the command waited on itself.
                 if (handedUnder is not null)
                 {
-                    var live = _owner.Live(layout) is not null;
+                    var live = _owner.Live(layout) is not null && !_owner.Holds(layout);
 
                     if (AnswerOfWeighed(Weigh(layout, handedUnder), layout, run, answer, asked.Id, [], json) is { } settled)
                     {

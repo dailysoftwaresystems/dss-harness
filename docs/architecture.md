@@ -3335,7 +3335,9 @@ in the main checkout no longer matches - compared by digest of what the definiti
 (`FlowRunContext.DigestOf`), never of where its file was read from, so a checkout that moved or a
 command typed in another tree is no change - and claims the run inside the same section: refused by
 name where the run was deleted since, refused while a live engine owns it, a dead owner reclaimed
-and said, a request no engine took removed. Two starts, or two sessions of one run, can never both
+and said, a request no engine took removed - one that cannot be read refuses the session, and the
+claim just made is let go first, so no owner is left behind by a session that never began. Two starts,
+or two sessions of one run, can never both
 pass; and `delete-orchestrator` decides and removes inside that section too, taken before the
 orchestrator's own, so no claim comes between its look at the owner and its removal of the run.
 
