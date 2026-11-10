@@ -55,7 +55,7 @@ public sealed class ImplementationFlowTests
     /// of both providers - over the engine's own step runners with every machine step the flow's mechanics do not
     /// reach answered by <see cref="MachineSteps"/>.
     /// </summary>
-    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null, IFileSystem? files = null, Func<HarnessFactory, IAgentRunner>? walking = null)
+    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null, IFileSystem? files = null, Func<HarnessFactory, IAgentRunner>? walking = null, bool commits = false)
     {
         var harness = new HarnessFactory();
         var template = AgentProviderTemplates.Read();
@@ -112,11 +112,11 @@ public sealed class ImplementationFlowTests
         script?.Invoke(agents);
         machine?.Invoke(steps);
 
-        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps, files, walking?.Invoke(harness)));
+        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps, files, walking?.Invoke(harness), commits));
     }
 
-    /// <summary>The service over the engine's own runners: every type the flow's head works through for real, the rest answered by the machine script - over <paramref name="files"/> where one is given, so a test stands between the engine and its records, and reasoning worked by <paramref name="walking"/> where one is given, so the engine's own fallback walk runs over a client a test scripts.</summary>
-    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine, IFileSystem? files = null, IAgentRunner? walking = null)
+    /// <summary>The service over the engine's own runners: every type the flow's head works through for real, the rest answered by the machine script - over <paramref name="files"/> where one is given, so a test stands between the engine and its records, and reasoning worked by <paramref name="walking"/> where one is given, so the engine's own fallback walk runs over a client a test scripts, and its commits worked by the engine's own commit runner where <paramref name="commits"/> says so.</summary>
+    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine, IFileSystem? files = null, IAgentRunner? walking = null, bool commits = false)
     {
         var fileSystem = files ?? harness.FileSystem;
         var store = files is null ? harness.OrchestrationStore : new OrchestrationStore(fileSystem, harness.Output);
@@ -137,6 +137,33 @@ public sealed class ImplementationFlowTests
             harness.GitClient,
             harness.ConfigStore);
 
+        var machineTypes = "build test run check-mutations anchor-balance anchor-citations ci-read ci-wait fold delete-agent refresh rebase"
+            .Split(' ')
+            .ToList();
+
+        if (!commits)
+        {
+            machineTypes.Add("commit");
+        }
+
+        machineTypes.Add("push");
+        machineTypes.Add("pull-request");
+
+        var own = new List<IFlowStepTypeRunner>();
+
+        if (commits)
+        {
+            own.Add(new CommitStepRunner(
+                harness.ContextLoader,
+                harness.Platform,
+                store,
+                new FoldLedger(store, fileSystem, TimeProvider.System),
+                harness.GitClient,
+                new DssHarness.Core.Git.GitPublisher(harness.GitClient, new GhProcess(harness.ProcessRunner)),
+                fileSystem,
+                new TestIsolation()));
+        }
+
         IFlowStepRunner runner = new FlowStepRunners(
             [
                 new OrientRunner(harness.ContextLoader, harness.Platform, harness.GitClient, fileSystem, store, harness.WorktreeService, harness.RunLock, new TreeHolders(harness.RunLock, harness.Slots, harness.Identity)),
@@ -144,9 +171,8 @@ public sealed class ImplementationFlowTests
                 new PlanCheckRunner(harness.ContextLoader, harness.Platform, new PlanValidator(fileSystem, harness.PathBudget, harness.Platform)),
                 create,
                 reason,
-                .. "build test run check-mutations anchor-balance anchor-citations ci-read ci-wait fold delete-agent refresh rebase commit push pull-request"
-                    .Split(' ')
-                    .Select(type => machine.Serving(type)),
+                .. own,
+                .. machineTypes.Select(type => machine.Serving(type)),
             ],
             harness.GraphSyncs);
 
@@ -1002,6 +1028,205 @@ public sealed class ImplementationFlowTests
 
         Assert.True(asked.RaisedBy?.Step?.Contains("direction", StringComparison.Ordinal) == true, Shown(kit));
         Assert.Contains("The tree will not settle while the verify runs", asked.ProblemShown!.Happened, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A verify of two legs, one red and one whose inputs moved: the step ends with the red leg's code alone - the
+    /// worst of what its legs said - its red holding the red leg alone, and its mender builds the fix before it runs
+    /// again; and a leg whose witness is missing fails the step as what it is, holding no red at all, taken by no
+    /// mender - its remedy is not a fix - but by the recovery, whose diagnosis runs the step again.
+    /// </summary>
+    [Fact]
+    public async Task AVerifyOfARedLegAndAMovedOne_FailsWithTheRedsCodeItsRedHoldingThatLegAlone_AndItsMenderBuildsTheFix_ALegWhoseWitnessIsMissing_FailsTheStepHoldingNoRed_AndTheRecoveryRunsItAgain()
+    {
+        var redAndMoved = FlowStepResult.Ended(
+            passed: false,
+            HarnessExit.CommandFailed,
+            "one leg is red and another's inputs moved while it ran",
+            new JsonObject
+            {
+                ["passed"] = false,
+                ["exitCode"] = HarnessExit.CommandFailed,
+                ["verdicts"] = new JsonArray(
+                    new JsonObject { ["leg"] = "local", ["verdict"] = "red" },
+                    new JsonObject { ["leg"] = "windows", ["verdict"] = "inputsMoved" }),
+                ["red"] = new JsonArray(new JsonObject { ["leg"] = "local", ["verdict"] = "red", ["phase"] = "test", ["detail"] = "one leg is red", ["tail"] = new JsonArray("1 failed") }),
+                ["runDirectory"] = string.Empty,
+                ["isolation"] = new JsonObject { ["mode"] = "none" },
+            });
+
+        using (var mixed = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                mixed,
+                ground: new Ground(Legs: true),
+                script: agents => agents.Queue("implementer", Completed(Implement()), Completed(Implement())),
+                machine: steps => steps.Queue("test", MachineSteps.Green(), redAndMoved, MachineSteps.Green()));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+
+            var verify = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Where(step => step.Instance.StartsWith("rounds#1.items[0].verify", StringComparison.Ordinal)).ToList();
+
+            // The step ended with the red leg's code, its red holding the red leg alone - the moved leg is no red of
+            // the run's - and its mender built the fix before it ran again, green at last.
+            Assert.Equal((nameof(FlowInstanceState.Failed), HarnessExit.CommandFailed, "mend"), (verify[0].State, verify[0].Exit, verify[0].HandledBy));
+            Assert.Equal("local", verify[0].Output!["red"]!.AsArray().Single()!["leg"]!.GetValue<string>());
+            Assert.StartsWith("The engine built your work and ran its tests, and the result is red.", kit.Agents.Of("implementer")[1].Prompt, StringComparison.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Done), "rounds#1.items[0].verify+2"), (verify[^1].State, verify[^1].Instance));
+        }
+
+        var unwitnessed = FlowStepResult.Ended(
+            passed: false,
+            LegExit.Unwitnessed,
+            "the leg exited zero, but the pattern that proves it ran never matched its output",
+            new JsonObject
+            {
+                ["passed"] = false,
+                ["exitCode"] = LegExit.Unwitnessed,
+                ["verdicts"] = new JsonArray(new JsonObject { ["leg"] = "local", ["verdict"] = "unwitnessed" }),
+                ["red"] = new JsonArray(),
+                ["runDirectory"] = string.Empty,
+                ["isolation"] = new JsonObject { ["mode"] = "none" },
+            });
+
+        using (var noWitness = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                noWitness,
+                ground: new Ground(Legs: true),
+                script: agents => agents.Queue("diagnostician", Completed(Diagnosis(course: "retry", summary: "The verify ran, but nothing witnessed what it ran"))),
+                machine: steps => steps.Queue("test", MachineSteps.Green(), unwitnessed, MachineSteps.Green()));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+
+            var verify = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Where(step => step.Instance.StartsWith("rounds#1.items[0].verify", StringComparison.Ordinal)).ToList();
+
+            // The step failed as what it is, holding no red at all, and no mender was raised - the builder was asked
+            // once, for the item's implement alone - for its remedy is not a fix: the recovery read the failure, and
+            // its diagnosis ran the step again.
+            Assert.Equal((nameof(FlowInstanceState.Failed), LegExit.Unwitnessed, null), (verify[0].State, verify[0].Exit, verify[0].HandledBy));
+            Assert.Empty(verify[0].Output!["red"]!.AsArray());
+            Assert.Single(kit.Agents.Of("implementer"));
+            Assert.Equal((nameof(FlowInstanceState.Done), "rounds#1.items[0].verify+2"), (verify[^1].State, verify[^1].Instance));
+            Assert.Contains("verify", kit.Agents.Of("diagnostician")[0].Prompt, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The flow's commits, worked by the engine's own commit runner: a commit step with no fold upstream of it
+    /// uncommitted ends done, committed false, and runs no git at all; and of two commit steps in one flow the first
+    /// takes the fold before it and the second only what was folded after it, each with its own message of the checks
+    /// its part of the run carried.
+    /// </summary>
+    [Fact]
+    public async Task ACommitStepWithNoFoldUpstreamOfItUncommitted_EndsDoneCommittedFalseRunningNoGit_AndOfTwoCommitSteps_TheSecondStagesOnlyTheFoldsAfterTheFirst()
+    {
+        // Nothing owed, no intent untold: both of the flow's commits are done, committed false, and the tree stands
+        // where the run found it - no git of the run's own ran.
+        using (var nothing = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                nothing,
+                commits: true,
+                script: agents => agents.Queue("implementer", Completed(Implement())));
+
+            var before = await kit.Harness.GitClient.ResolveCommitAsync(kit.Tree.Path, "HEAD", Token);
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+
+            var commits = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Where(step => step.Instance == "final-commit" || step.Instance.EndsWith(".checkpoint", StringComparison.Ordinal)).ToList();
+
+            Assert.All(commits, commit => Assert.Equal(nameof(FlowInstanceState.Done), commit.State));
+            Assert.All(commits, commit => Assert.False(commit.Output!["committed"]!.GetValue<bool>()));
+            Assert.Equal(before, await kit.Harness.GitClient.ResolveCommitAsync(kit.Tree.Path, "HEAD", Token));
+        }
+
+        // The item's fold before the first commit, and the notes' folded after it: the checkpoint takes the one, the
+        // final commit the other, each committed on its own message.
+        using (var folded = new TempDirectory())
+        {
+            MachineHold itemFold = null!;
+            MachineHold notesFold = null!;
+            var kit = await PrepareAsync(
+                folded,
+                commits: true,
+                script: agents => agents.Queue("implementer", Completed(Implement())),
+                machine: steps =>
+                {
+                    itemFold = steps.Hold("fold", run => run.Instance == "rounds#1.items[0].fold");
+                    notesFold = steps.Hold("fold", run => run.Instance == "notes-fold");
+                });
+
+            var ledger = new FoldLedger(kit.Harness.OrchestrationStore, kit.Harness.FileSystem, TimeProvider.System);
+            var runDirectory = Path.Combine(kit.Tree.Path, ".orchestrators", "r1");
+
+            var run = StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            // The run stands held at its item's fold: the ledger's entry for it is written while it stands - the
+            // tree holding what the fold wrote - and the fold is let go, the checkpoint after it owing what it left.
+            await WhenAsync(() => File.Exists(Path.Combine(runDirectory, "flow.json")), () => "the run never wrote its flow");
+
+            var itemEntry = await ledger.IntendAsync(
+                kit.RunOf(),
+                kit.Tree.Path,
+                "rounds#1.items[0].fold",
+                attempt: 1,
+                "fold",
+                "a1",
+                new AgentPlanned([], [], [], [], null) { Written = ["src/one/one.cs"] },
+                Token);
+            OrchestrationKit.Write(kit.Tree.Path, Path.Combine("src", "one", "one.cs"), "the item's folded work\n");
+            await ledger.SettleAsync(kit.RunOf(), kit.Tree.Path, itemEntry, 0);
+            itemFold.Open();
+
+            // The notes' fold is held next, past the checkpoint: what it owes the final commit is folded after the
+            // first commit took the item's work.
+            await WhenAsync(
+                () => (kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Steps ?? []).Any(step => step.Instance == "notes-fold"),
+                () => $"the run never reached its notes' fold | {Shown(kit)}");
+
+            var notesEntry = await ledger.IntendAsync(
+                kit.RunOf(),
+                kit.Tree.Path,
+                "notes-fold",
+                attempt: 1,
+                "fold",
+                "notes",
+                new AgentPlanned([], [], [], [], null) { Written = ["docs/handoff.md"] },
+                Token);
+            OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "handoff.md"), "# Handoff\n");
+            await ledger.SettleAsync(kit.RunOf(), kit.Tree.Path, notesEntry, 0);
+            notesFold.Open();
+
+            var done = await run;
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+
+            var flowed = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf());
+
+            Assert.True(flowed is not null, Shown(kit));
+
+            var checkpoint = flowed!.Steps.Single(step => step.Instance == "rounds#1.items[0].checkpoint");
+            var final = flowed.Steps.Single(step => step.Instance == "final-commit");
+
+            Assert.Equal((nameof(FlowInstanceState.Done), true, "src/one/one.cs"), (checkpoint.State, checkpoint.Output!["committed"]!.GetValue<bool>(), checkpoint.Output!["paths"]!.AsArray().Single()!.GetValue<string>()));
+            Assert.Equal((nameof(FlowInstanceState.Done), true, "docs/handoff.md"), (final.State, final.Output!["committed"]!.GetValue<bool>(), final.Output!["paths"]!.AsArray().Single()!.GetValue<string>()));
+
+            var log = await kit.Harness.RunGitAsync(kit.Tree.Path, ["log", "--format=%B---", "-3"], Token);
+            var messages = string.Join("\n", log.StandardOutput).Split("---", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            Assert.Contains("Committed when the item was folded", messages[1], StringComparison.Ordinal);
+            Assert.Contains("planning#1.check (validate-plan) in the main tree: passed", messages[1], StringComparison.Ordinal);
+            Assert.Contains(": handoff and deferrals", messages[0], StringComparison.Ordinal);
+            Assert.Contains("Checked since the last commit:", messages[0], StringComparison.Ordinal);
+            Assert.Contains("rounds#1.self-audit (independent) in the main tree: done", messages[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("planning#1.check (", messages[0], StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
@@ -4502,6 +4727,286 @@ public sealed class ImplementationFlowTests
 
             Assert.True(validation.Passed, string.Join("; ", validation.Workflows.Select(workflow => string.Join("; ", workflow.Lines))));
             Assert.Contains("ZAI_API_KEY", string.Join("; ", validation.Workflows.SelectMany(workflow => workflow.Lines)), StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// An account at its limit for every model the step could use: the run pauses safely - never a failure, never a
+    /// question, for every model it could move to would meet the same - and the resume runs that very step again, its
+    /// attempt told what the last one met, and it is served this time and the run goes on to its end.
+    /// </summary>
+    [Fact]
+    public async Task AnAccountAtItsLimit_ForEveryModelTheStepCouldUse_PausesTheRunSafely_AndTheResumeRunsThatVeryStepAgain()
+    {
+        using var temp = new TempDirectory();
+
+        // Both models of the step's tier answer at their limit on the first walk; the resume's walk is served.
+        var models = new List<string>();
+        var kit = await PrepareAsync(
+            temp,
+            walking: harness =>
+            {
+                AgentRunResult Walked(AgentRun run)
+                {
+                    models.Add(run.Model!);
+
+                    return models.Count <= 2
+                        ? AgentEndings.AtLimit(
+                            "the provider",
+                            new AgentAccountLimit(BalanceSpent: true, Key: run.Model == "glm-5.3" ? "ZAI_API_KEY" : "ANTHROPIC_API_KEY"),
+                            "the balance is spent",
+                            new Masking())
+                        : Completed(Implement());
+                }
+
+                AgentRunResult Answer(AgentRun run)
+                    => run.Output?.Name switch
+                    {
+                        "triage" => Completed(Triage()),
+                        "plan" => Completed(Plan(One())),
+                        "plan-audit" => Completed(Audit()),
+                        "implement" => Walked(run),
+                        "review-scope" => Completed(Scope()),
+                        "review" => Completed(Review()),
+                        "self-audit" => Completed(SelfAudit(clean: true)),
+                        "summary" => Completed(Scribe()),
+                        _ => new AgentRunResult(AgentRunStatus.Completed, FinalText: "done"),
+                    };
+
+                return new AgentRunner([new WalkingClient("claude-code", Answer), new WalkingClient("glm", Answer)], harness.FileSystem, harness.Platform, TimeProvider.System);
+            });
+
+        var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        // A safe pause: the run ends 130, no question raised, and the step stands stopped with why it ended.
+        Assert.True(HarnessExit.Cancelled == paused.ExitCode, $"{paused.Message} | {string.Join(" | ", paused.Details ?? [])} | {Shown(kit)}");
+
+        var implement = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].implement");
+
+        Assert.True(nameof(FlowInstanceState.Stopped) == implement.State, $"the implement record: {implement.State} {implement.Error} | {Shown(kit)}");
+        Assert.Contains("the balance is spent", implement.Error, StringComparison.Ordinal);
+        Assert.Empty(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+        // Both models were asked before the walk ran out: the tier's first, then its fallback.
+        Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], [.. models]);
+
+        var on = await ResumeAsync(kit);
+
+        Assert.True(HarnessExit.Success == on.ExitCode, $"{on.Message} | {string.Join(" | ", on.Details ?? [])} | {Shown(kit)}");
+
+        // The very step ran again and ended done, and the run with it - the walk served the third asking.
+        var again = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].implement");
+
+        Assert.Equal(nameof(FlowInstanceState.Done), again.State);
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+        Assert.True(models.Count == 3, $"the implementer was asked {models.Count} times: {string.Join(", ", models)}");
+    }
+
+    /// <summary>
+    /// The fold family's questions through the shipped flow: a dry run that needs a consent is answered by the
+    /// configuration's own lines, one at a time, and its apply names the rows it applied; a conflicting merge is the
+    /// question <c>foldConflicts</c>, which the configuration's <c>fail</c> ends for its shipped reconciler - the agent
+    /// caught up with the tree, then settled on its reconcile prompt, before the fold runs again - while with no line
+    /// to answer it a person's <c>retry</c> runs the fold again with no reconciler at all; and a cell both the agent
+    /// and the registries changed is asked of a person whatever the configuration says - asked again where its answer
+    /// finds the tree moved, and no line of a configuration accepts it.
+    /// </summary>
+    [Fact]
+    public async Task AFoldThatNeedsConsent_IsAnsweredByItsConfigurationAndNamesTheRowsItApplied_AFoldThatConflicts_IsFailedByItsConfiguredFailAndReconciledByTheShippedHandler_OrRetriedByAPerson_AndACellBothChangedIsAskedOfAPersonWhateverTheConfigurationSays()
+    {
+        FlowStepResult Consented(params ConsentKind[] consents)
+            => FlowStepResult.Standing(new FlowDryRun(
+                RequestStanding.NeedsConsent,
+                consents,
+                [.. consents.Select(kind => new FlowNamed(kind, kind == ConsentKind.FoldNewRows ? ["DS-2"] : kind == ConsentKind.FoldTwoChanges ? ["src/orders/report.cs"] : ["src/orders/report.csv row 3"]))],
+                [],
+                "the dry run's plan")
+            {
+                Agent = "a1",
+            });
+
+        FlowStepResult Conflicting()
+            => FlowStepResult.Standing(new FlowDryRun(
+                RequestStanding.Refused,
+                [],
+                [],
+                [RefusalKind.Conflict],
+                "paths both trees changed conflict in their three-way merge")
+            {
+                Conflicting = ["src/orders/report.cs"],
+                Agent = "a1",
+            });
+
+        FlowStepResult Folded(params string[] rows)
+            => FlowStepResult.Ended(
+                passed: true,
+                HarnessExit.Success,
+                output: new JsonObject
+                {
+                    ["written"] = new JsonArray("src/orders/report.cs"),
+                    ["rows"] = new JsonArray([.. rows]),
+                });
+
+        JsonObject RowsOf(FlowStepRecord fold)
+            => (fold.Output as JsonObject)!;
+
+        // A dry run that needs two consents: the configuration answers each at once, one at a time, and the fold's
+        // own output names the rows it applied.
+        using (var consented = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                consented,
+                script: agents => agents.Queue("implementer", Completed(Implement())),
+                machine: steps => steps.Queue(
+                    "fold",
+                    Consented(ConsentKind.FoldNewRows, ConsentKind.FoldTwoChanges),
+                    Consented(ConsentKind.FoldTwoChanges),
+                    Folded("DS-2")));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+
+            var asked = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Questions.Where(question => question.Kind.StartsWith("fold", StringComparison.Ordinal)).ToList();
+
+            Assert.Equal(["foldNewRows", "foldTwoChanges"], [.. asked.Select(question => question.Kind)]);
+            Assert.All(asked, question => Assert.Equal("configuration", question.Answers[0].By?.Who));
+            Assert.Equal(["allow", "merge"], [.. asked.Select(question => question.Answers[0].Answer)]);
+
+            var fold = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
+
+            Assert.Equal(nameof(FlowInstanceState.Done), fold.State);
+            Assert.Equal(["DS-2"], [.. RowsOf(fold)["rows"]!.AsArray().Select(row => row!.GetValue<string>())]);
+        }
+
+        // A conflicting merge, failed by the configuration's own fail: the shipped reconciler catches the agent up
+        // with the tree and settles it, and the fold runs again and folds.
+        using (var reconciled = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                reconciled,
+                script: agents => agents.Queue("implementer", Completed(Implement()), Completed(Implement())),
+                machine: steps => steps.Queue("fold", Conflicting(), Folded("DS-2")));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps;
+            var folds = flow.Where(step => step.Step.EndsWith(".fold", StringComparison.Ordinal)).ToList();
+
+            Assert.Equal((nameof(FlowInstanceState.Failed), HarnessExit.Refused, "foldConflicts", "reconcile"), (folds[0].State, folds[0].Exit, folds[0].EndedByQuestion, folds[0].HandledBy));
+            Assert.Equal(nameof(FlowInstanceState.Done), folds[^1].State);
+            Assert.Contains(flow, step => step.Step.EndsWith(".catch-up", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done));
+            Assert.StartsWith("The engine tried to fold your work into the main tree, and the fold was refused.", kit.Agents.Of("implementer")[1].Prompt, StringComparison.Ordinal);
+
+            var failedBy = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Questions.Single(question => question.Kind == "foldConflicts");
+
+            Assert.Equal(("fail", "configuration"), (failedBy.Answers[0].Answer, failedBy.Answers[0].By?.Who));
+        }
+
+        // The same conflict with no line to answer it: the question is put to the person, whose retry runs the fold
+        // again - no reconciler, no catch-up - and the run goes on to its end.
+        using (var retried = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                retried,
+                script: agents => agents.Queue("implementer", Completed(Implement())),
+                machine: steps => steps.Queue("fold", Conflicting(), Folded("DS-2")));
+
+            await EditWorkflowAsync(kit, lines => [.. lines.Where((line, at) => at != Array.IndexOf(lines, "              foldConflicts: fail"))]);
+
+            var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+            var asked = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+            Assert.Equal("foldConflicts", asked.Kind);
+            Assert.Equal(["retry", "fail", "abort"], [.. asked.Options.Select(option => option.Answer)]);
+
+            var on = await AnswerAsync(kit, "retry");
+
+            Assert.True(HarnessExit.Success == on.ExitCode, $"{on.Message} | {Shown(kit)}");
+
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps;
+
+            Assert.DoesNotContain(flow, step => step.Step.EndsWith(".catch-up", StringComparison.Ordinal));
+            Assert.Equal(nameof(FlowInstanceState.Done), flow.Single(step => step.Instance == "rounds#1.items[0].fold").State);
+
+            var answered = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Questions.Single(question => question.Id == asked.Id);
+
+            Assert.Equal(("retry", "person"), (answered.Answers[0].Answer, answered.Answers[0].By?.Who));
+        }
+
+        // A cell both the agent and the registries changed: asked of a person whatever the configuration says, asked
+        // again where the answer finds the tree moved, and no line of a configuration accepts it.
+        using (var cells = new TempDirectory())
+        {
+            var kit = await PrepareAsync(
+                cells,
+                script: agents => agents.Queue("implementer", Completed(Implement())),
+                machine: steps => steps.Queue("fold", Consented(ConsentKind.FoldOverCells), Consented(ConsentKind.FoldOverCells), Folded("DS-9")));
+
+            var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.Equal(FlowExit.Paused, paused.ExitCode);
+
+            var first = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+            Assert.Equal("foldOverCells", first.Kind);
+            Assert.Equal(["allow", "retry", "abort"], [.. first.Options.Select(option => option.Answer)]);
+
+            // The person allows it, and the dry run made again asks again: the answer found the tree moved.
+            var askedAgain = await AnswerAsync(kit, "allow");
+
+            Assert.Equal(FlowExit.Paused, askedAgain.ExitCode);
+
+            var second = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+            Assert.Equal("foldOverCells", second.Kind);
+            Assert.NotEqual(first.Id, second.Id);
+
+            var done = await AnswerAsync(kit, "allow");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {Shown(kit)}");
+
+            var fold = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
+
+            Assert.Equal(nameof(FlowInstanceState.Done), fold.State);
+            Assert.Equal(["DS-9"], [.. RowsOf(fold)["rows"]!.AsArray().Select(row => row!.GetValue<string>())]);
+
+            // However the configuration is written, no line of it accepts a cell for a person: the check refuses it.
+            await EditWorkflowAsync(
+                kit,
+                lines =>
+                {
+                    var edited = new List<string>();
+                    var first = true;
+
+                    foreach (var line in lines)
+                    {
+                        edited.Add(line);
+
+                        if (first && line.Trim() == "foldNewRows: allow")
+                        {
+                            edited.Add("              foldOverCells: allow");
+                            first = false;
+                        }
+                    }
+
+                    return [.. edited];
+                });
+
+            var validation = await new WorkflowValidationService(
+                kit.Harness.ContextLoader,
+                kit.Harness.FileSystem,
+                kit.Harness.Platform,
+                new DssHarness.Core.Secrets.AgentKeyStore(kit.Harness.FileSystem, kit.Harness.FilePermissions, kit.Harness.Platform),
+                DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild).CheckAsync(cells.Path, WorkflowTemplates.ShippedWorkflowName, Token);
+
+            Assert.False(validation.Passed);
+            Assert.Contains("a person's to accept", string.Join("; ", validation.Workflows.SelectMany(workflow => workflow.Lines)), StringComparison.Ordinal);
         }
     }
 
