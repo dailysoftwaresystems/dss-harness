@@ -2580,7 +2580,9 @@ public static class HelpTopics
             + "each of its writes. The graph tool is offered among its agent's own with every operation - edit among them - "
             + "and no narrowing of its reads; the repository map is given with its first message, made once from the base as "
             + "it stands when it opens, and a context pack is made from each message the person types. --no-graph turns all "
-            + "of it off for one side-task; a graph that cannot be made takes nothing away from the conversation.");
+            + "of it off for one side-task; a graph that cannot be made takes nothing away from the conversation, and the "
+            + "side-task says once that it runs without its graph, and why - as the chat's first line, or beside a one "
+            + "shot's records - its graph.jsonl naming why no pack is given.");
         builder.AppendLine();
         AppendWrapped(
             builder,

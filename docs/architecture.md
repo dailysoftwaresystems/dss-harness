@@ -1438,8 +1438,11 @@ A side-task may use the codebase graph beside all this, unlimited: a graph of it
 (`SideTaskGraph`), held in the one shape every graph's records take, seeded from the newest the repository holds - a
 run's or another side-task's - at its opening, then incremental and synced after each of its writes; the `graph`
 tool offered among its agent's own with every operation and no narrowing, the repository map
-(`CodebaseRepositoryMap`) given with its first message and the context pack made from each; `--no-graph` turns it
-off, and a graph that cannot be made takes nothing from the conversation.
+(`CodebaseRepositoryMap`) given with its first message and the context pack made from each, a line posted to a launch
+Claude Code holds open for a chat among them (`SideTaskGraph.Front`, the one front either shape takes); `--no-graph` turns it
+off, and a graph that cannot be made takes nothing from the conversation: the side-task says once that it runs
+without one and why - the chat's first line, or a line beside a one shot's records - and its `graph.jsonl` holds the
+prompt line naming why no pack is given (`GraphPromptLine.Why`).
 
 A path both trees changed - each holds a file there, neither is what the two last agreed on, and they differ - is
 resolved in one place, whichever command meets it (`TwoChanges`, made for each command with that command's

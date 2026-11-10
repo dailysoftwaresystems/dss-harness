@@ -61,13 +61,16 @@ public sealed record SideTaskLayout(string Root, string Name)
     /// writes. Kept in the shape every graph is (<see cref="Orchestration.OrchestratorLayout.GraphDirectory"/>), for the
     /// one graph service reads and writes them all.
     /// </summary>
-    public string GraphDirectory => System.IO.Path.Combine(Directory, "graph");
+    public string GraphDirectory => AsGraph.GraphDirectory;
 
     /// <summary>The side-task's repository map, made once at its opening and read as it is by every message after.</summary>
-    public string MapFile => System.IO.Path.Combine(GraphDirectory, "map.md");
+    public string MapFile => AsGraph.GraphMapFile;
 
-    /// <summary>What the side-task's repository map was made from: the base it was made of, and when.</summary>
-    public string MapMetaFile => System.IO.Path.Combine(GraphDirectory, "map.json");
+    /// <summary>
+    /// What the side-task's repository map was made from: the commit the base stood at, how many files the graph holds,
+    /// how many central declarations the map names, and its estimated tokens.
+    /// </summary>
+    public string MapMetaFile => AsGraph.GraphMapMetaFile;
 
     /// <summary>The side-task's layout as the graph service holds it: the one shape every graph's records take.</summary>
     public Orchestration.OrchestratorLayout AsGraph => new(Name, Directory);

@@ -493,7 +493,9 @@ public sealed class SideTaskService(
 
             // The side-task's own graph, opened unless the person turned it off: synced whole - seeded from the newest
             // graph of the repository - before the first message is sent, its map made once from the base as it stands.
-            // A graph that cannot be made takes nothing away from the conversation: the side-task goes on without one.
+            // A graph that cannot be made takes nothing away from the conversation: the side-task goes on without one,
+            // and says so once, with why - in its chat or its one shot's answer, and in its graph's record.
+            string? withoutGraph = null;
             var own = new SideTaskGraph(
                 graph,
                 _fileSystem,
@@ -511,9 +513,11 @@ public sealed class SideTaskService(
                 {
                     await own.OpenAsync(cancellationToken).ConfigureAwait(false);
                 }
-                catch (Exception ex) when (ex is HarnessException or OperationCanceledException && cancellationToken.IsCancellationRequested is false)
+                catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException
+                    || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
                 {
                     own = null;
+                    withoutGraph = WithoutGraph(layout, ex);
                 }
             }
             else
@@ -535,7 +539,8 @@ public sealed class SideTaskService(
                 setUp,
                 (runsOn, form, token) => SetUpAsync(common, runsOn, layout.Name, form, token),
                 spend.RecordingIn(common.Context.Layout),
-                own);
+                own,
+                withoutGraph);
 
             return prompt is null
                 ? await working.ChatAsync(cancellationToken, command).ConfigureAwait(false)
@@ -662,6 +667,29 @@ public sealed class SideTaskService(
             ?.Name;
 
     /// <summary>Says what a claim said of a dead owner's record reclaimed, where it said anything.</summary>
+    /// <summary>
+    /// What a side-task whose graph could not be opened says of it, once: that it runs without one, and why. Its graph's
+    /// record says the same, as a prompt line that names why no pack is given; where even that cannot be written, the
+    /// sentence it returns still says it.
+    /// </summary>
+    /// <param name="layout">The side-task's layout.</param>
+    /// <param name="failure">What opening the graph met.</param>
+    private string WithoutGraph(SideTaskLayout layout, Exception failure)
+    {
+        var why = failure is OperationCanceledException ? "its opening was stopped" : failure.Message.TrimEnd('.');
+
+        try
+        {
+            _store.AppendGraphStepLine(layout.Directory, new Runtime.GraphPromptLine(0, 0, 0, 0, 0, $"the side-task's graph could not be opened: {why}"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+        {
+            // The sentence returned says it all the same.
+        }
+
+        return $"side-task '{layout.Name}' runs without its codebase graph, which could not be opened: {why}";
+    }
+
     private void Said(string? reclaimed)
     {
         if (reclaimed is { Length: > 0 })

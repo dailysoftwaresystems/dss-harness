@@ -489,6 +489,123 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
+    /// A chat over a client that holds one launch open - Claude Code - gives each later message the pack as the chat over
+    /// a client that stores its conversations does: the map with the first message alone, the pack made from each message
+    /// at its head as it is posted to the launch, never the line bare.
+    /// </summary>
+    [Fact]
+    public async Task AChatOnALaunchHeldOpen_GivesEachLaterMessageItsPack_AndTheMapWithTheFirstAlone()
+    {
+        var (_, temp, service, _, rendered) = await RepoAsync(graphs: RealGraph);
+        using var tree = temp;
+        OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter { }\n");
+        var typed = new Typed(["hello", "and again"]);
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "held", Chat: typed.Chat()), Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.StartsWith("<repository-map>", Assert.Single(rendered.Runs).UserPrompt, StringComparison.Ordinal);
+
+        // What each turn of the launch took, said by its first twenty characters: the first message its prompt, the later
+        // one as it was posted.
+        Assert.Equal(2, typed.Said.Count);
+        Assert.StartsWith("about: <repository-map>\n", typed.Said[0], StringComparison.Ordinal);
+        Assert.StartsWith("about: <codebase>\n", typed.Said[1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A side-task whose graph cannot be opened - its records cannot be written, or the graph service refuses - goes on
+    /// without it, its message sent as typed and no graph tool given, and says so once, with why: in its one shot's
+    /// answer beside its records, and in its graph's record as the prompt line that names why no pack is given.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ASideTaskWhoseGraphCannotBeOpened_GoesOnWithoutIt_SayingSoOnceWithWhy(bool io)
+    {
+        Exception failure = io
+            ? new IOException("There is not enough space on the disk.")
+            : new HarnessException(HarnessExit.CommandFailed, "The graph's records do not read.");
+        var (harness, temp, service, stored, _) = await RepoAsync(graphs: _ => new UnopenableGraph(failure));
+        using var tree = temp;
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "hello there", Model: "glm-5.3", Name: "blind"), Token);
+
+        var directory = LayoutOf(temp, "blind").Directory;
+        var why = failure.Message.TrimEnd('.');
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal([$"side-task 'blind' runs without its codebase graph, which could not be opened: {why}", $"Records: {directory}"], outcome.Details);
+        Assert.Equal("hello there", Assert.Single(stored.Runs).UserPrompt);
+        Assert.Null(stored.Runs[0].Graph);
+        Assert.Equal(
+            new GraphPromptLine(0, 0, 0, 0, 0, $"the side-task's graph could not be opened: {why}"),
+            Assert.Single(harness.OrchestrationStore.ReadGraphStepLines(directory)));
+    }
+
+    /// <summary>A chat whose graph cannot be opened says so once, as the chat's first line, and goes on without it.</summary>
+    [Fact]
+    public async Task AChatWhoseGraphCannotBeOpened_SaysSoAsItsFirstLine()
+    {
+        var failure = new UnauthorizedAccessException("Access to the path 'graph' is denied.");
+        var (_, temp, service, stored, _) = await RepoAsync(graphs: _ => new UnopenableGraph(failure));
+        using var tree = temp;
+        var typed = new Typed(["hello"], until: "the answer");
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "blind", Chat: typed.Chat()), Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            ["side-task 'blind' runs without its codebase graph, which could not be opened: Access to the path 'graph' is denied", "the answer"],
+            typed.Said);
+        Assert.Equal("hello", Assert.Single(stored.Runs).UserPrompt);
+    }
+
+    /// <summary>A graph service that cannot open anything: every call fails with the one failure it is given.</summary>
+    private sealed class UnopenableGraph(Exception failure) : DssHarness.Core.Codebase.ICodebaseGraphService
+    {
+        public Task<DssHarness.Core.Codebase.CodebaseGraphSynced> SyncAsync(DssHarness.Core.Codebase.CodebaseGraphSync request, CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphSynced>(failure);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphSynced?> SyncPathsAsync(DssHarness.Core.Codebase.CodebaseGraphSync request, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphSynced?>(failure);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphChecked> CheckAsync(DssHarness.Core.Codebase.CodebaseGraphSync request, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphChecked>(failure);
+
+        public Task DropViewAsync(DssHarness.Core.Orchestration.OrchestratorLayout run, string agent, CancellationToken cancellationToken = default)
+            => Task.FromException(failure);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphRead?> ReadOnlyAsync(DssHarness.Core.Orchestration.OrchestratorLayout run, string? agent, CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphRead?>(failure);
+
+        public Task<IReadOnlyList<string>> DifferingAsync(DssHarness.Core.Codebase.CodebaseGraphSync request, string baseCommit, CancellationToken cancellationToken = default)
+            => Task.FromException<IReadOnlyList<string>>(failure);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphChanges> ChangesAsync(
+            DssHarness.Core.Codebase.CodebaseGraphSync request,
+            DssHarness.Core.Codebase.CodebaseGraphRead read,
+            string baseCommit,
+            CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphChanges>(failure);
+    }
+
+    /// <summary>
+    /// A side-task's graph's paths are the graph records' own - the directory, the map and what the map was made from -
+    /// named by the one layout every graph's records take, so neither can drift from the other.
+    /// </summary>
+    [Fact]
+    public void ASideTasksGraphPaths_AreTheOneGraphLayoutsOwn()
+    {
+        var layout = new SideTaskLayout(Path.Combine(Path.GetTempPath(), ".side-tasks"), "named");
+
+        Assert.Equal(
+            (layout.AsGraph.GraphDirectory, layout.AsGraph.GraphMapFile, layout.AsGraph.GraphMapMetaFile),
+            (layout.GraphDirectory, layout.MapFile, layout.MapMetaFile));
+        Assert.Equal(Path.Combine(layout.Directory, DssHarness.Core.Orchestration.OrchestratorLayout.GraphDirectoryName), layout.GraphDirectory);
+    }
+
+    /// <summary>
     /// The chat's front end as a person's typed lines: one read per message, the chat's own lines collected, and a
     /// completion heard once the chat has said that line - as a person who waits for the answer before leaving.
     /// </summary>
