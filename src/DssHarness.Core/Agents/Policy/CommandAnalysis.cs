@@ -498,7 +498,7 @@ public static partial class CommandAnalysis
         {
             readings.Add(new RuleReading(
                 ["git", "config", AssignedName(setting), .. words.Skip(environment)],
-                [string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]));
+                [string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]) { Configures = true });
         }
 
         // Setting where gh reads its configuration from is gh config set of the setter's choosing: its editor, pager and
@@ -507,14 +507,14 @@ public static partial class CommandAnalysis
         {
             readings.Add(new RuleReading(
                 ["gh", "config", "set", AssignedName(ghSetting), .. words.Skip(environment)],
-                [string.Empty, string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]));
+                [string.Empty, string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]) { Configures = true });
         }
 
         var (command, commandQuoted, configured) = Plain(words, program, quoted);
 
         if (configured || ClonesConfigured(command))
         {
-            readings.Add(new RuleReading(["git", "config", .. command.Skip(1)], [string.Empty, string.Empty, .. commandQuoted.Skip(1)]));
+            readings.Add(new RuleReading(["git", "config", .. command.Skip(1)], [string.Empty, string.Empty, .. commandQuoted.Skip(1)]) { Configures = true });
         }
 
         readings.Add(new RuleReading(command, commandQuoted));
@@ -1397,32 +1397,11 @@ public static partial class CommandAnalysis
     /// <param name="from">Where the words after <c>config</c> begin.</param>
     private static (string Key, string Value)? ConfigSetting(IReadOnlyList<string> words, int from)
     {
-        var positional = new List<string>();
+        var (options, positional) = ConfigWords(words, from);
 
-        for (var at = from; at < words.Count; at++)
+        if (options.Any(option => GitConfigReads.Contains(option, StringComparer.Ordinal)))
         {
-            var word = words[at];
-
-            if (word == "--")
-            {
-                positional.AddRange(words.Skip(at + 1));
-                break;
-            }
-
-            if (word.Length > 1 && word[0] == '-')
-            {
-                var name = word.Split('=', 2)[0];
-
-                if (GitConfigReads.Contains(name, StringComparer.Ordinal))
-                {
-                    return null;
-                }
-
-                at += GitConfigValued.Contains(name, StringComparer.Ordinal) && !word.Contains('=', StringComparison.Ordinal) ? 1 : 0;
-                continue;
-            }
-
-            positional.Add(word);
+            return null;
         }
 
         // git config's own verbs: only set sets.
@@ -1439,15 +1418,76 @@ public static partial class CommandAnalysis
         return positional.Count >= 2 ? (positional[0], positional[1]) : null;
     }
 
+    /// <summary>
+    /// The words of <c>git config</c> from <paramref name="from"/> on: each option's name - its word to an <c>=</c> - and
+    /// every word that is no option and no option's value, in order; every word after a <c>--</c> one of them.
+    /// </summary>
+    /// <param name="words">A git command's words, its program first.</param>
+    /// <param name="from">Where the words after <c>config</c> begin.</param>
+    private static (List<string> Options, List<string> Positional) ConfigWords(IReadOnlyList<string> words, int from)
+    {
+        var (options, positional) = (new List<string>(), new List<string>());
+
+        for (var at = from; at < words.Count; at++)
+        {
+            var word = words[at];
+
+            if (word == "--")
+            {
+                positional.AddRange(words.Skip(at + 1));
+                break;
+            }
+
+            if (word.Length > 1 && word[0] == '-')
+            {
+                var name = word.Split('=', 2)[0];
+
+                options.Add(name);
+                at += GitConfigValued.Contains(name, StringComparer.Ordinal) && !word.Contains('=', StringComparison.Ordinal) ? 1 : 0;
+                continue;
+            }
+
+            positional.Add(word);
+        }
+
+        return (options, positional);
+    }
+
     /// <summary>git config's options that take their value as the next word.</summary>
-    private static readonly string[] GitConfigValued = ["-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url"];
+    private static readonly string[] GitConfigValued = ["-f", "--file", "--blob", "-t", "--type", "--default", "--comment", "--value", "--url"];
+
+    /// <summary>
+    /// git config's options that only read - a value got, every value listed - each an action git refuses beside any
+    /// other: printed by <c>help side-tasks</c>, open while a run works over the tree (<see cref="GitReadsOnly"/>).
+    /// </summary>
+    public static IReadOnlyList<string> GitConfigGets { get; } = ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "-l", "--list"];
+
+    /// <summary>git config's options that unset, rename, remove or edit.</summary>
+    private static readonly string[] GitConfigUnsets = ["--unset", "--unset-all", "--rename-section", "--remove-section", "-e", "--edit"];
 
     /// <summary>git config's options that read, unset, rename, remove, list or edit rather than setting a value.</summary>
-    private static readonly string[] GitConfigReads =
-        ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "--unset", "--unset-all", "--rename-section", "--remove-section", "-l", "--list", "-e", "--edit"];
+    private static readonly string[] GitConfigReads = [.. GitConfigGets, .. GitConfigUnsets];
+
+    /// <summary>git config's options that add or replace a value beside the ones a key holds.</summary>
+    private static readonly string[] GitConfigAdds = ["--add", "--replace-all"];
+
+    /// <summary>
+    /// git config's options that choose its file, the type of its values and what it prints, none of them an action: with
+    /// <see cref="GitConfigValued"/>, <see cref="GitConfigReads"/> and <see cref="GitConfigAdds"/>, every option of git
+    /// config's this knows, each by its whole name.
+    /// </summary>
+    private static readonly string[] GitConfigShaping =
+    [
+        "--global", "--system", "--local", "--worktree", "--bool", "--int", "--bool-or-int", "--bool-or-str", "--path", "--expiry-date",
+        "--no-type", "-z", "--null", "--name-only", "--includes", "--no-includes", "--show-origin", "--show-scope", "--fixed-value", "--all",
+        "--regexp",
+    ];
 
     /// <summary>git config's verbs, of which <c>set</c> alone sets.</summary>
     private static readonly string[] GitConfigVerbs = ["list", "get", "set", "unset", "rename-section", "remove-section", "edit"];
+
+    /// <summary>git config's verbs that only read: printed by <c>help side-tasks</c>.</summary>
+    public static IReadOnlyList<string> GitConfigReadVerbs { get; } = ["list", "get"];
 
     /// <summary>
     /// The command line <c>gh alias set</c> gives a name, read where it is given, for a later command calls it by a name

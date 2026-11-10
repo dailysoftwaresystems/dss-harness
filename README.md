@@ -863,13 +863,14 @@ file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a
 (`$(printf ...)`), and what a process apart from the agent's tree does. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
 can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
-`help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
+`help agent-clients`) and the forms of git's other commands that write the same - a fetch's `--update-head-ok`,
+wherever it stands among its words (`AgentPolicy.GitStateForms`) - a git configured where it runs, by `-c` or `--config-env` of any key but
 the ones that only shape what git prints, by clone's own `-c` or `--config` and clone's and init's `--template`, or by
 its environment - a home it reads its global
 configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it - the `git config`
 it is and still the command it runs - the `gh` commands that run them or write gh's own configuration
 (`gh pr checkout`, `gh pr close`, `gh issue develop`, `gh repo set-default`, `gh repo fork`, `gh repo create`,
-`gh repo rename`, `gh auth setup-git`, `gh config set`; a command by one of gh's own aliases - `gh pr co` - read as
+`gh repo rename`, `gh auth setup-git`, `gh pr create`, `gh pr merge`, `gh repo sync`, `gh config set`; a command by one of gh's own aliases - `gh pr co` - read as
 the command it names, and `GH_CONFIG_DIR` or another place gh reads its configuration from, set for a command, the
 `gh config set` it is), and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
 `gh workflow run`, `gh run rerun`, `gh pr create`, `gh release create`, `gh release edit`), the `gh api` endpoints and

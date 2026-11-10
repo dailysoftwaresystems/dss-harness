@@ -2434,22 +2434,36 @@ public static class HelpTopics
 
     /// <summary>
     /// What a side-task's agent is held off while a run works over the tree, said from the lists the policy holds it by
-    /// (<see cref="Agents.Policy.AgentPolicy.LiveRunHeld"/>, <see cref="Agents.Policy.AgentPolicy.LiveRunOpen"/>), so the
-    /// help names every command the policy does.
+    /// (<see cref="Agents.Policy.AgentPolicy.LiveRunHeld"/>, <see cref="Agents.Policy.AgentPolicy.GitStateForms"/>,
+    /// <see cref="Agents.Policy.AgentPolicy.LiveRunOpen"/>) and the modes git reads as only reading
+    /// (<see cref="Agents.Policy.CommandAnalysis.GitReadsOnly"/>), so the help names every command the policy does.
     /// </summary>
     internal static string SideTaskLiveRunHold
         => "While a run is working over the tree, the commands that write the git state it works over - its HEAD, index, "
             + "refs, stash, configuration or worktrees - are refused with the run's name: git's state-writing verbs ("
             + string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs) + "), the verbs that write its index ("
             + string.Join(", ", Agents.Policy.AgentPolicy.GitIndexVerbs) + " - apply whole, for its --index and --cached "
-            + "may stand anywhere among its words) and gh's that write git's state ("
-            + string.Join(", ", Agents.Policy.AgentPolicy.GhStateCommands) + "), each met as the worktree rules meet a "
+            + "may stand anywhere among its words), gh's that write git's state ("
+            + string.Join(", ", Agents.Policy.AgentPolicy.GhStateCommands) + ", each whole) and the forms of git's other "
+            + "commands that write the same (" + string.Join(", ", Agents.Policy.AgentPolicy.GitStateForms) + ", the option "
+            + "met wherever it stands among the command's words), each met as the worktree rules meet a "
             + "command - git's options before its verb seen through, git-commit read as git commit, a configuration set "
             + "where it runs (git -c alias.x=commit x) read as the git config it is, and a verb the shell expands held as "
             + "one that may be any - checked at each call, so a run that starts while the chat is open is held to from its "
-            + "first step and one that ends releases it. Their listing forms stay open ("
-            + string.Join(", ", Agents.Policy.AgentPolicy.LiveRunOpen) + ", a trailing * any words after the form), as "
-            + "does the git that writes none of it, and the person may do any of it by hand.";
+            + "first step and one that ends releases it. Their forms that only read stay open: "
+            + string.Join(", ", Agents.Policy.AgentPolicy.LiveRunOpen) + " (a trailing * any words after the form); and, "
+            + "read as git reads their options wherever they stand among the words - an option's value never taken for an "
+            + "option - git branch in a listing mode (" + string.Join(", ", Agents.Policy.CommandAnalysis.GitBranchListing)
+            + ") or naming no branch, with no mode that writes; git tag in a listing mode ("
+            + string.Join(", ", Agents.Policy.CommandAnalysis.GitTagListing) + ") or naming no tag, neither deleting nor "
+            + "verifying; git config getting or listing (" + string.Join(", ", Agents.Policy.CommandAnalysis.GitConfigGets)
+            + ", its verbs " + string.Join(" and ", Agents.Policy.CommandAnalysis.GitConfigReadVerbs) + ") or naming one key "
+            + "alone; git symbolic-ref naming one ref, deleting none; git reflog alone, with an option first or by a verb that "
+            + "reads (" + string.Join(", ", Agents.Policy.CommandAnalysis.GitReflogReads) + "); and git notes, after its "
+            + "--ref, alone or by a verb that reads (" + string.Join(", ", Agents.Policy.CommandAnalysis.GitNotesReads)
+            + "). An option of theirs this does not know holds the command - --no-list undoing a --list before it among "
+            + "them - as does a word the shell expands among their words. The git that writes none of it stays open, and "
+            + "the person may do any of it by hand.";
 
     /// <summary>
     /// The side-tasks topic: what a side-task is - an agent outside every workflow, a conversation between a person and
@@ -3601,7 +3615,10 @@ public static class HelpTopics
             + "command computes ($(printf ...)), a program another runs from words that do not name it, and what a "
             + "process apart from the agent's tree does. The worktree rules "
             + "(agentPolicy.worktreeRules, true where nothing is said) keep an agent's worktree a thing the engine can "
-            + $"measure: git's state-writing verbs ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs)}) are "
+            + $"measure: git's state-writing verbs ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs)}) and the forms "
+            + $"of its other commands that write the same ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateForms)}, the option met "
+            + "wherever it stands among the command's words, by any cluster that holds its letter or any start of its name git "
+            + "takes) are "
             + $"refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", Agents.Policy.AgentPolicy.GhStateCommands)}; "
             + "a command gh names by an alias of its own, pr co for pr checkout among them, read as the command it names, and "
             + "where gh reads its configuration from - GH_CONFIG_DIR, XDG_CONFIG_HOME, AppData, HOME - set for a command the gh config set it is) "

@@ -128,10 +128,12 @@ public sealed class SideTaskPolicyTests
     /// <summary>
     /// While a run's owner is live over the tree, the side-task's agent is refused every command that writes the git
     /// state the run works over - HEAD, the index, a ref, the stash, the configuration, a worktree - the run's name in the
-    /// refusal; each command read as the worktree rules read one, so neither git's own options before the verb, the
-    /// verb's own program, a configuration that makes a name for it nor a verb the shell expands passes it by. It is
-    /// checked at each call: a run that starts while the chat is open is held to from its first step, and one that ends
-    /// releases it.
+    /// refusal: git's and gh's, and git's otherwise open commands in the forms that write it; each command read as the
+    /// worktree rules read one, so neither git's own options before the verb, the verb's own program, a configuration that
+    /// makes a name for it nor a verb the shell expands passes it by. The forms of the held verbs that only read stay
+    /// open, read as git reads their options wherever they stand - a listing mode taken as another option's value, or
+    /// undone after it, is no listing - and an option of theirs this does not know holds the command. It is checked at
+    /// each call: a run that starts while the chat is open is held to from its first step, and one that ends releases it.
     /// </summary>
     [Fact]
     public void ACommandThatWritesTheGitStateARunWorksOver_IsRefusedWhileItsOwnerIsLive_WithTheRunsName_AndOpenWhereNoneIs()
@@ -158,9 +160,32 @@ public sealed class SideTaskPolicyTests
             "git add -A", "git stage a.txt", "git rm a.txt", "git mv a.txt b.txt", "git update-index --assume-unchanged a.txt",
             "git apply --index p.patch", "git apply -p1 --cached p.patch", "gh pr checkout 5",
 
+            // gh's that write the local repository: a pull request opened (its branch pushed, its upstream set), merged (its
+            // base checked out and pulled, its branch deleted) and the local repository synced from its source.
+            "gh pr create --fill", "gh pr merge 12 --squash --delete-branch", "gh pr merge 12 -sd", "gh repo sync", "gh repo sync --force",
+
+            // git's other commands where they write the same: a fetch into the branch a worktree has checked out, the option
+            // anywhere among its words, in a cluster or by a start of its name; and the ref store migrated.
+            "git fetch --update-head-ok origin main:main", "git fetch origin main:main -u", "git fetch -fu origin main:main",
+            "git fetch --update-h origin main:main", "git refs migrate --ref-format=reftable",
+
+            // A listing verb's modes that write, wherever they stand, and a listing mode taken as another option's value or
+            // undone after it.
+            "git branch -u origin/main", "git branch --set-upstream-to=origin/main", "git branch --unset-upstream",
+            "git branch --edit-description", "git branch -m old new", "git branch -c old new", "git branch -a -d other",
+            "git branch --format --list other", "git branch --list --no-list other", "git branch --abbrev 7",
+            "git tag -a v1 -m msg", "git tag -d v1", "git tag -m --contains v1", "git tag -f v1 HEAD~1",
+            "git config --unset user.name", "git config --add x.y z", "git config --replace-all x.y z", "git config --unset-a x.y",
+            "git config set user.name x", "git config unset user.name", "git config --edit", "git config --remove-section x",
+            "git config --rename-section a b", "git config --global user.name x", "git config -t bool core.bare true",
+            "git symbolic-ref --delete HEAD", "git symbolic-ref -d HEAD", "git symbolic-ref -m why HEAD refs/heads/other",
+            "git reflog expire --all", "git reflog delete HEAD@{1}", "git reflog drop main",
+            "git notes --ref review add -m x", "git notes remove HEAD", "git notes prune",
+            "git bisect reset", "git bisect good",
+
             // git's own options before the verb, the verb's own program, and a name a configuration makes for it.
             "git -C . stash", "git --attr-source HEAD commit -am m", "git --shallow-file f commit", "git --no-pager stash",
-            "/usr/lib/git-core/git-commit -am m", "git -c alias.x=commit x -am msg", "git -c core.pager=less log",
+            "/usr/lib/git-core/git-commit -am m", "git -c alias.x=commit x -am msg", "git -c core.pager=less log", "export HOME=/tmp/h",
         })
         {
             var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command));
@@ -176,6 +201,12 @@ public sealed class SideTaskPolicyTests
             ("v=commit; git $v -am msg", "git $v -am msg"),
             ("git co${E}mmit -am m", "git co${E}mmit -am m"),
             ("git branch $X", "git branch $X"),
+            ("git branch --list $X", "git branch --list $X"),
+            ("git tag -l $X", "git tag -l $X"),
+            ("git config $K", "git config $K"),
+            ("git reflog $X", "git reflog $X"),
+            ("git notes --ref $R list", "git notes --ref $R list"),
+            ("git fetch $R", "git fetch $R"),
         })
         {
             var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command));
@@ -185,16 +216,41 @@ public sealed class SideTaskPolicyTests
                 (refused.Rule, refused.Reason));
         }
 
-        // The git that writes none of it, and the listing forms of the verbs that do, stay open.
+        // The git that writes none of it, and the forms of the verbs that do that only read - a listing mode wherever it
+        // stands among the words, an option's value read as one - stay open.
         foreach (var command in new[]
         {
             "git status", "git log -1", "git diff HEAD", "git -C . status", "git rev-parse --abbrev-ref HEAD",
-            "git branch", "git branch -a", "git branch -vv", "git branch --show-current", "git branch --list 'feat*'", "git --no-pager branch",
-            "git tag", "git tag -l 'v*'", "git stash list", "git stash show -p stash@{0}", "git worktree list --porcelain",
-            "git config --get user.name", "git config --list", "git remote -v", "git reflog", "git submodule status",
+            "git fetch", "git fetch origin", "git fetch --all --prune", "git fetch origin main:refs/remotes/origin/main",
+            "git branch", "git branch -a", "git branch -vv", "git branch -av", "git branch --show-current", "git branch --list 'feat*'",
+            "git branch -l", "git branch -l 'feat*'", "git --no-pager branch", "git branch --contains abc", "git branch --merged",
+            "git branch --no-merged main", "git branch -a --contains abc", "git branch -r --merged main", "git branch --points-at HEAD",
+            "git branch --format='%(refname:short)'", "git branch --format '%(refname)'", "git branch --sort=-committerdate",
+            "git branch --abbrev=7 -v", "git branch -v --no-color",
+            "git tag", "git tag -l 'v*'", "git tag --list", "git tag -n", "git tag -n5", "git tag --contains abc", "git tag -l --contains abc 'v*'",
+            "git tag --points-at HEAD", "git tag --merged main", "git tag --sort=-v:refname", "git tag --format='%(refname)'",
+            "git symbolic-ref HEAD", "git symbolic-ref --short HEAD", "git symbolic-ref -q --short HEAD", "git symbolic-ref --no-recurse HEAD",
+            "git config user.name", "git config --get user.name", "git config --list", "git config -l", "git config --global --list",
+            "git config --show-origin --get user.name", "git config --get-regexp ^alias", "git config --get-all remote.origin.fetch",
+            "git config get user.name", "git config get --all remote.origin.fetch", "git config list", "git config --type=bool core.bare",
+            "git config -t bool core.bare", "git config --file .gitmodules --get-regexp path", "git config --name-only --list",
+            "git reflog", "git reflog -5", "git reflog --date=iso", "git reflog show main", "git reflog show -3 main", "git reflog list",
+            "git reflog exists main",
+            "git notes", "git notes list", "git notes list HEAD", "git notes show HEAD", "git notes --ref=review list",
+            "git notes --ref review show HEAD", "git notes --ref review", "git notes get-ref",
+            "git bisect log", "git bisect visualize", "git bisect view --stat",
+            "git refs verify", "git refs list",
+            "git stash list", "git stash show -p stash@{0}", "git worktree list --porcelain", "git remote -v", "git submodule status",
+            "gh pr view 12", "gh pr checks 12", "gh repo view",
         })
         {
             Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+        }
+
+        // An option of a held verb's this does not know holds it, whatever git would make of it.
+        foreach (var command in new[] { "git branch --frobnicate", "git tag --frobnicate", "git config --frobnicate user.name", "git symbolic-ref --frobnicate HEAD", "git notes --frobnicate list" })
+        {
+            Assert.Equal(AgentPolicy.LiveRunRule, Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command)).Rule);
         }
 
         live = false;
@@ -215,8 +271,18 @@ public sealed class SideTaskPolicyTests
         var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("side-tasks"));
 
         Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}), the verbs that write its index ({string.Join(", ", AgentPolicy.GitIndexVerbs)} - apply whole,", help, StringComparison.Ordinal);
-        Assert.Contains($"gh's that write git's state ({string.Join(", ", AgentPolicy.GhStateCommands)}),", help, StringComparison.Ordinal);
-        Assert.Contains($"Their listing forms stay open ({string.Join(", ", AgentPolicy.LiveRunOpen)}, a trailing * any words after the form)", help, StringComparison.Ordinal);
+        Assert.Contains($"gh's that write git's state ({string.Join(", ", AgentPolicy.GhStateCommands)}, each whole)", help, StringComparison.Ordinal);
+        Assert.Contains($"the forms of git's other commands that write the same ({string.Join(", ", AgentPolicy.GitStateForms)}, the option met wherever it stands among the command's words)", help, StringComparison.Ordinal);
+        Assert.Contains($"Their forms that only read stay open: {string.Join(", ", AgentPolicy.LiveRunOpen)} (a trailing * any words after the form)", help, StringComparison.Ordinal);
+        Assert.Contains(
+            $"git branch in a listing mode ({string.Join(", ", CommandAnalysis.GitBranchListing)}) or naming no branch, with no mode that writes; "
+                + $"git tag in a listing mode ({string.Join(", ", CommandAnalysis.GitTagListing)}) or naming no tag, neither deleting nor verifying; "
+                + $"git config getting or listing ({string.Join(", ", CommandAnalysis.GitConfigGets)}, its verbs {string.Join(" and ", CommandAnalysis.GitConfigReadVerbs)}) or naming one key alone; "
+                + "git symbolic-ref naming one ref, deleting none; "
+                + $"git reflog alone, with an option first or by a verb that reads ({string.Join(", ", CommandAnalysis.GitReflogReads)}); "
+                + $"and git notes, after its --ref, alone or by a verb that reads ({string.Join(", ", CommandAnalysis.GitNotesReads)}).",
+            help,
+            StringComparison.Ordinal);
         Assert.Equal(
             [.. AgentPolicy.GitStateVerbs.Select(verb => $"git {verb}"), .. AgentPolicy.GitIndexVerbs.Select(verb => $"git {verb}"), .. AgentPolicy.GhStateCommands],
             AgentPolicy.LiveRunHeld);

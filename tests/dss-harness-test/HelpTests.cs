@@ -833,7 +833,9 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("The worktree rules (agentPolicy.worktreeRules, true where nothing is said)", prose, StringComparison.Ordinal);
         Assert.Contains(
-            $"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) are refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", AgentPolicy.GhStateCommands)}; "
+            $"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) and the forms of its other commands that write the same "
+                + $"({string.Join(", ", AgentPolicy.GitStateForms)}, the option met wherever it stands among the command's words, by any cluster that holds "
+                + $"its letter or any start of its name git takes) are refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", AgentPolicy.GhStateCommands)}; "
                 + "a command gh names by an alias of its own, pr co for pr checkout among them, read as the command it names, and "
                 + "where gh reads its configuration from - GH_CONFIG_DIR, XDG_CONFIG_HOME, AppData, HOME - set for a command the gh config set it is) - reading git",
             prose,

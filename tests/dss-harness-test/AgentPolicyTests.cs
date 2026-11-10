@@ -2283,6 +2283,7 @@ public sealed class AgentPolicyTests
         {
             ("git config alias.cf 'credential fill'", "git credential fill", "git credential fill"),
             ("git config --global alias.cf 'credential fill'", "git credential fill", "git credential fill"),
+            ("git config -t path alias.cf 'credential fill'", "git credential fill", "git credential fill"),
             ("git config set --global alias.cf 'credential fill'", "git credential fill", "git credential fill"),
             ("git config --file ~/.gitconfig --add alias.cf 'credential-store get'", "git credential-store get", "git credential-* get"),
             ("git config alias.cf '!git credential fill'", "git credential fill", "git credential fill"),
@@ -2715,17 +2716,17 @@ public sealed class AgentPolicyTests
 
     /// <summary>
     /// The gh commands that run git's state-writing verbs on the repository they stand in - a pull request's or an issue's
-    /// branch checked out, a branch pushed for a pull request, a default repository or a remote written into git's
-    /// configuration, a fork or a new repository with its remote, push or clone, gh made git's credential helper - and the
-    /// one that writes gh's own configuration are refused by the worktree rules beside those verbs, by gh's own aliases of
-    /// them too, and so is a command that sets where gh reads its configuration from; reading a pull request or a
-    /// repository stays allowed.
+    /// branch checked out, a branch pushed for a pull request, a pull request merged with its branch deleted, the local
+    /// repository synced from its source, a default repository or a remote written into git's configuration, a fork or a
+    /// new repository with its remote, push or clone, gh made git's credential helper - and the one that writes gh's own
+    /// configuration are refused by the worktree rules beside those verbs, by gh's own aliases of them too, and so is a
+    /// command that sets where gh reads its configuration from; reading a pull request or a repository stays allowed.
     /// </summary>
     [Fact]
     public void TheGhCommandsThatRunGitsStateVerbs_AreRefusedBesideThem()
     {
         Assert.Equal(
-            ["gh pr checkout", "gh pr close", "gh issue develop", "gh repo set-default", "gh repo fork", "gh repo create", "gh repo rename", "gh auth setup-git", "gh config set"],
+            ["gh pr checkout", "gh pr close", "gh issue develop", "gh repo set-default", "gh repo fork", "gh repo create", "gh repo rename", "gh auth setup-git", "gh pr create", "gh pr merge", "gh repo sync", "gh config set"],
             AgentPolicy.GhStateCommands);
 
         foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
@@ -2747,6 +2748,8 @@ public sealed class AgentPolicyTests
                 ("gh pr new --title t --body b", "Run(gh pr create *)"),
                 ("gh pr close 5 --delete-branch", "Run(gh pr close *)"),
                 ("gh pr close 5 -dc done", "Run(gh pr close *)"),
+                ("gh pr merge 5 --squash --delete-branch", "Run(gh pr merge *)"),
+                ("gh repo sync", "Run(gh repo sync *)"),
                 ("gh issue develop 7 --checkout", "Run(gh issue develop *)"),
                 ("gh repo create new-repo --private --source . --remote upstream --push", "Run(gh repo create *)"),
                 ("gh repo new new-repo --public --clone", "Run(gh repo create *)"),
@@ -2770,6 +2773,51 @@ public sealed class AgentPolicyTests
 
             Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh pr checkout 12"));
             Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("gh pr co 12"));
+        }
+    }
+
+    /// <summary>
+    /// A fetch that may write the branch a worktree has checked out - its <c>--update-head-ok</c> wherever it stands among
+    /// its words, by any cluster that holds its <c>-u</c> or any start of its name git takes - is refused by the worktree
+    /// rules as git's state-writing verbs are, and so is the verb that migrates the ref store; a fetch without it, which git
+    /// refuses into a branch any worktree has checked out, stays allowed, and a word the shell expands where the option
+    /// may stand is said as one that may be it.
+    /// </summary>
+    [Fact]
+    public void AFetchIntoTheBranchAWorktreeHasCheckedOut_AndTheRefStoresMigration_AreRefusedByTheWorktreeRules()
+    {
+        Assert.Equal(["git fetch --update-head-ok", "git fetch -u"], AgentPolicy.GitStateForms);
+
+        foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
+        {
+            using var ground = Ground(platform);
+            var policy = ground.Policy();
+
+            foreach (var (command, rule) in new[]
+            {
+                ("git fetch --update-head-ok origin main:main", "Run(git fetch --update-head-ok)"),
+                ("git fetch origin main:main --update-head-ok", "Run(git fetch --update-head-ok)"),
+                ("git fetch --update-h origin main:main", "Run(git fetch --update-head-ok)"),
+                ("git -C . fetch -u origin main:main", "Run(git fetch -u)"),
+                ("git fetch -fu origin main:main", "Run(git fetch -u)"),
+                ("git refs migrate --ref-format=reftable", "Run(git refs *)"),
+            })
+            {
+                var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+
+                Assert.Equal((rule, AgentPolicySource.Builtin, $"'{command}' is denied by {rule}, a worktree rule of this tool"), (denied.Rule, denied.Source, denied.Reason));
+            }
+
+            var expanded = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git fetch $REMOTE"));
+
+            Assert.Equal(("Run(git fetch --update-head-ok)", "'git fetch $REMOTE' may be what Run(git fetch --update-head-ok) denies: a word the rule reads is one the shell expands, which this does not read"), (expanded.Rule, expanded.Reason));
+
+            foreach (var command in new[] { "git fetch", "git fetch origin", "git fetch --all --prune --tags", "git fetch origin main:refs/remotes/origin/main", "git fetch --unshallow origin" })
+            {
+                Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+            }
+
+            Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false).Run("git fetch -u origin main:main"));
         }
     }
 

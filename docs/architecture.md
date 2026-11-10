@@ -1444,9 +1444,14 @@ either where it leaves the session.
 While a run's owner is live
 (`.orchestrators/<run>.owner.json`, asked at each call through `AgentPolicyGround.LiveRun`), a side-task's agent is
 refused, with the run's name, every command that writes the git state the run works over (`AgentPolicy.LiveRunHeld`:
-git's state-writing verbs, the verbs that write its index and gh's that write git's state) - met as the worktree rules
-meet a command, by every reading `CommandAnalysis.ForRules` gives it and with a verb the shell expands held as one that
-may be any, their listing forms open (`AgentPolicy.LiveRunOpen`) - a run that starts while the chat is open is held to
+git's state-writing verbs, the verbs that write its index and gh's that write git's state, each whole, and beside them
+`AgentPolicy.GitStateForms`, a fetch's `--update-head-ok` wherever it stands) - met as the worktree rules meet a command,
+by every reading `CommandAnalysis.ForRules` gives it and with a verb the shell expands held as one that may be any, their
+forms that only read open: those a verb decides as patterns (`AgentPolicy.LiveRunOpen`), and git branch, tag, config,
+symbolic-ref, reflog and notes in a mode that only reads, read as git reads their options wherever they stand
+(`CommandAnalysis.GitReadsOnly`, over the getopt reader and each verb's option table; an option it does not know, a
+word the shell expands among their words and the reading made of a configuration set where the command runs
+(`RuleReading.Configures`) held) - a run that starts while the chat is open is held to
 from its first step, and one that ends releases it - and the run's
 own verbs and the agent verbs are refused it always, as every verb that writes the tool's state is. Both trees and the seed then agree, so the agent's next fold starts from
 the reconciliation, and delete-agent's proof that nothing is left to fold holds without being told which paths were
@@ -2091,7 +2096,8 @@ in help and README - the policy reads words and is no sandbox: the inside of a s
 runs, the code an interpreter is given (`python -c`, `perl -e`, `node -e`, awk's `system`), a build
 file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a command computes
 (`$(printf ...)`), and what a process apart from the agent's tree does. The worktree rules
-(`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs, the `gh` commands that run them
+(`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the forms of its other
+commands that write the same (`AgentPolicy.GitStateForms`, each option met wherever it stands), the `gh` commands that run them
 or write gh's own configuration (`AgentPolicy.GhStateCommands`; gh's own aliases read as the commands they name,
 `CommandAnalysis.GhAliases`, and a place gh reads its configuration from set for a command read as `gh config set`),
 and the merges

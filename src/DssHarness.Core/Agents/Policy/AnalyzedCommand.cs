@@ -95,6 +95,14 @@ public static class WordQuoting
 public sealed record RuleReading(IReadOnlyList<string> Words, IReadOnlyList<string> Quoted)
 {
     /// <summary>
+    /// Whether the reading is one the analysis makes of a configuration set where the command runs - the <c>git config</c>
+    /// or <c>gh config set</c> it is - rather than the command's own words: a write of that configuration whatever words
+    /// it carries after its command, so none of them reads as a mode of the command that only reads
+    /// (<see cref="CommandAnalysis.GitReadsOnly"/>).
+    /// </summary>
+    public bool Configures { get; init; }
+
+    /// <summary>
     /// How the word at <paramref name="at"/> stands to the shell, or null where its spelling was not kept - a word a
     /// reading made - which reads as wholly open.
     /// </summary>
