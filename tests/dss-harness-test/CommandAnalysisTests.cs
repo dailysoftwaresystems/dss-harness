@@ -9,6 +9,59 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class CommandAnalysisTests
 {
+    /// <summary>
+    /// The program a runner runs is the word past its own options, each with the value it takes, and past the words it
+    /// reads before the command - a wrapper's among them, through each in turn; a runner that runs none of its words on
+    /// this machine runs none - ssh's is its host's, wsl's without -e and watch's without -x are command lines read on
+    /// their own, flock's -c and runuser's without -u a shell's, and a process's settings by its id run nothing. cmd's
+    /// start may take its first word for a title. Every runner has its reading.
+    /// </summary>
+    [Fact]
+    public void ProgramsAt_IsTheCommandEachRunnerRunsPastItsOwnOptions()
+    {
+        (string Command, int[] Programs)[] rows =
+        [
+            ("make $TARGET", [0]), ("A=1 make", [1]),
+            ("setsid -f ./x", [0, 2]),
+            ("stdbuf -oL ./x", [0, 2]), ("stdbuf -o L ./x", [0, 3]), ("stdbuf --output=L ./x", [0, 2]),
+            ("ionice -c 3 -n7 ./x", [0, 4]), ("ionice -c3 -p 123", [0]),
+            ("chrt -b 0 ./x", [0, 3]), ("chrt -p 123", [0]),
+            ("taskset -c 0 ./x $A", [0, 3]), ("taskset 0x1 ./x", [0, 2]), ("taskset -p 0x1 123", [0]),
+            ("unshare -r -S 0 ./x", [0, 4]),
+            ("nsenter -t 1 -m ./x", [0, 4]),
+            ("prlimit --nofile=1024 ./x", [0, 2]), ("prlimit -p 123 --nofile=1024", [0]),
+            ("numactl --membind 0 ./x", [0, 3]), ("numactl -H", [0]),
+            ("cpulimit -l 50 -- ./x", [0, 4]), ("cpulimit -p 123 -l 50", [0]),
+            ("firejail --net=none ./x", [0, 2]),
+            ("flock -w 5 /tmp/l ./x", [0, 4]), ("flock /tmp/l -c make", [0]),
+            ("torsocks -P 9050 ./x", [0, 3]),
+            ("proxychains -f p.conf ./x", [0, 3]), ("proxychains4 -q ./x", [0, 2]),
+            ("faketime 2020-01-01 ./x", [0, 2]),
+            ("strace -f -o t.txt ./x $A", [0, 4]),
+            ("ltrace -o t.txt ./x", [0, 3]),
+            ("valgrind --tool=memcheck ./x", [0, 2]),
+            ("caffeinate -t 60 ./x", [0, 3]),
+            ("chroot /srv/root ./x", [0, 2]),
+            ("runuser -u bob -- ./x", [0, 4]), ("runuser bob -c make", [0]),
+            ("call x.bat 1", [0, 1]),
+            ("start /b /d c:/x prog.exe", [0, 4]), ("start title prog.exe", [0, 1, 2]),
+            ("dtach -c /tmp/s -z ./x", [0, 4]),
+            ("abduco -c name ./x", [0, 3]),
+            ("daemonize -p /tmp/p ./x", [0, 3]),
+            ("watch -n 1 -x ./x", [0, 4]), ("watch -n 1 ./x", [0]),
+            ("wsl -d u -e ./x", [0, 4]), ("wsl ./x", [0]),
+            ("ssh -p 22 host ./x", [0]),
+            ("stdbuf -oL nohup timeout 5 nice -n 3 ./x", [0, 2, 3, 5, 8]),
+        ];
+
+        foreach (var (command, programs) in rows)
+        {
+            Assert.True(programs.SequenceEqual(CommandAnalysis.ProgramsAt(command.Split(' ')).Order()), $"'{command}' runs {string.Join(", ", CommandAnalysis.ProgramsAt(command.Split(' ')).Order())}");
+        }
+
+        Assert.Empty(CommandAnalysis.CommandRunners.Except(rows.Select(row => row.Command.Split(' ')[0])));
+    }
+
     [Fact]
     public void ASeparatorSplitsAStringIntoCommands()
     {

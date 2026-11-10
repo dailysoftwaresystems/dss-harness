@@ -136,13 +136,16 @@ public sealed class AgentPolicyTests
     }
 
     /// <summary>
-    /// A device is no file the string writes - the null device on every system, a device's bare name on Windows - so a
-    /// script file named by a tilde whose HOME the string computes is no file of the string's after a write there alone;
-    /// elsewhere NUL is a file like any other.
+    /// A device is no file the string writes - the null device on every system and to every shell, and a device's bare name
+    /// where cmd or PowerShell writes it on Windows - so a script file named by a tilde whose HOME the string computes is no
+    /// file of the string's after a write there alone. A POSIX shell, Git Bash's on Windows among them, writes a file of a
+    /// device's name, and so does every shell elsewhere.
     /// </summary>
     [Fact]
     public void AWriteToADevice_IsNoFileTheStringRunsAfter()
     {
+        const string Unread = "this tool could not decide 'bash ~/scripts/report.sh' ('~/scripts/report.sh' is a script file this command wrote before it runs it, whose text this does not read): it denies what it cannot decide";
+
         foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
         {
             using var ground = Ground(platform);
@@ -155,17 +158,25 @@ public sealed class AgentPolicyTests
 
             foreach (var target in new[] { "NUL", "nul", "NUL:", "out/CON" })
             {
-                var command = $"HOME=$(pwd); make > '{target}'; bash ~/scripts/report.sh";
-
                 Assert.Equal(
-                    platform == PlatformId.Windows
-                        ? AgentPolicyAnswer.Allow
-                        : new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, "this tool could not decide 'bash ~/scripts/report.sh' ('~/scripts/report.sh' is a script file this command wrote before it runs it, whose text this does not read): it denies what it cannot decide"),
-                    policy.Run(command));
+                    platform == PlatformId.Windows ? AgentPolicyAnswer.Allow : new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, Unread),
+                    policy.Run($"HOME=$(pwd); cmd /c \"make > {target}\"; bash ~/scripts/report.sh"));
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, Unread),
+                    policy.Run($"HOME=$(pwd); make > '{target}'; bash ~/scripts/report.sh"));
             }
 
+            Assert.Equal(
+                platform == PlatformId.Windows ? AgentPolicyAnswer.Allow : new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, Unread),
+                policy.Run("HOME=$(pwd); pwsh -Command \"make > NUL\"; bash ~/scripts/report.sh"));
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, "this tool could not decide 'bash nul' ('nul' is a script file this command wrote before it runs it, whose text this does not read): it denies what it cannot decide"),
+                policy.Run("echo 'gh auth token' > nul; bash nul"));
+
             // A device's name with an extension is a file to a Windows that reads it so.
-            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("HOME=$(pwd); make > NUL.txt; bash ~/scripts/report.sh"));
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, Unread),
+                policy.Run("HOME=$(pwd); cmd /c \"make > NUL.txt\"; bash ~/scripts/report.sh"));
         }
     }
 

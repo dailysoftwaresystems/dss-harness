@@ -766,8 +766,10 @@ public sealed class CommandWordsPolicyTests
     /// end the run word's - so a log written to a variable's path, or a script of the same name in another directory,
     /// runs on both grounds, and the file it wrote does not. A tilde whose variable this does not read - <c>~+</c> where
     /// the string set PWD to a value it computes, <c>~</c> where it so set HOME - is such an expansion, as a target and as
-    /// a run word; a program or a script file the shell expands may be any file the string wrote, a word a runner such as
-    /// wsl or ssh is given none, and the null device is none. A script a shell reads from its input is the file it names.
+    /// a run word; a program the command runs - a runner's past its own options among them - or a script file the shell
+    /// expands may be any file the string wrote, another word a runner such as wsl or ssh is given none, though an end of
+    /// a file named by an expansion it may be, and the null device is none. A script a shell reads from its input is the
+    /// file it names.
     /// </summary>
     [Fact]
     public void AFileTheStringWrote_IsTheScriptItRunsOnlyWhereTheRunWordMayReachIt()
@@ -784,6 +786,8 @@ public sealed class CommandWordsPolicyTests
                 "PWD=$(pwd); echo x > ~+/out/test.sh; bash scripts/test.sh",
                 "make 2>/dev/null; wsl -e bash -lc \"cd /mnt/c/src && make $TARGET\"", "scp f h:/tmp > /dev/null && ssh h \"cd /tmp && ./run $ARGS\"",
                 "make > build.log; wsl -e bash -lc \"cd /mnt/c/src && make $TARGET\"", "bash < scripts/test.sh", "echo x > out/test.sh; sh -s < scripts/test.sh",
+                "LOG=$(mktemp); make > \"$LOG\" 2>&1 || tail -50 \"$LOG\"; ssh build \"cd /srv && make $TARGET\"",
+                "make > \"$LOG\"; strace -f -o trace.txt ./build/bin/app \"$INPUT\"", "make > \"$LOG\"; taskset -c 0 ./build/bin/app $ARGS",
             })
             {
                 Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
@@ -800,6 +804,9 @@ public sealed class CommandWordsPolicyTests
                 ("echo 'gh auth token' > x.sh; bash < x.sh", "bash <x.sh", "x.sh"),
                 ("echo 'gh auth token' > x.sh; sh -s < x.sh", "sh -s <x.sh", "x.sh"),
                 ("echo 'gh auth token' > x.sh; source /dev/stdin < x.sh", "source /dev/stdin <x.sh", "x.sh"),
+                ("echo 'gh auth token' > x.sh; S=$(ls *.sh); taskset -c 0 ./$S", "taskset -c 0 ./$S", "./$S"),
+                ("echo 'gh auth token' > x.sh; stdbuf -oL ./*.sh", "stdbuf -oL ./*.sh", "./*.sh"),
+                ("echo 'gh auth token' > x.sh; ionice -c 3 stdbuf -o L nohup ./*.sh", "ionice -c 3 stdbuf -o L nohup ./*.sh", "./*.sh"),
             })
             {
                 Assert.Equal(
@@ -839,6 +846,7 @@ public sealed class CommandWordsPolicyTests
             ("HOME=$(pwd); echo 'gh auth token' > x.sh; bash ~/x.sh", "bash ~/x.sh", "~/x.sh"),
             ("HOME=$(pwd); echo 'gh auth token' > x.sh; ~/x.sh", "~/x.sh", "~/x.sh"),
             ("HOME=$(pwd); echo 'gh auth token' > x.sh; valgrind bash ~/x.sh", "valgrind bash ~/x.sh", "~/x.sh"),
+            ("HOME=$(pwd); echo 'gh auth token' > x.sh; chmod +x x.sh; stdbuf -oL ~/x.sh", "stdbuf -oL ~/x.sh", "~/x.sh"),
         })
         {
             Assert.Equal(

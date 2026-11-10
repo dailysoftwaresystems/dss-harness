@@ -2746,22 +2746,10 @@ public static partial class CommandAnalysis
             return null;
         }
 
+        // -x runs the words as they are, each met by the rules on its own program.
         if (Is(name, "watch"))
         {
-            var at = 1;
-
-            while (at < words.Count && words[at].StartsWith('-'))
-            {
-                // -x runs the words as they are, each met by the rules on its own program; a help or a version, nothing.
-                if (words[at] is "-x" or "--exec" or "-h" or "--help" or "-v" or "--version")
-                {
-                    return null;
-                }
-
-                at += words[at] is "-n" or "--interval" or "-q" or "--equexit" && at + 1 < words.Count ? 2 : 1;
-            }
-
-            return at < words.Count ? [string.Join(' ', words.Skip(at))] : null;
+            return WatchCommandAt(words) is { Exec: false, At: var at } && at < words.Count ? [string.Join(' ', words.Skip(at))] : null;
         }
 
         return null;
@@ -2905,7 +2893,8 @@ public static partial class CommandAnalysis
     /// The programs that run the words after their own options as a command, which this does not strip - their options
     /// are theirs to read - each tried by the rules on its own program as every word is: a check that holds only where a
     /// program runs (a gh named by none of gh's own) holds past these too, and among any other program's words reads its
-    /// word as that program's data.
+    /// word as that program's data. The program each runs past its own options is read where a script the string wrote
+    /// may be it (<see cref="CommandAt"/>, <see cref="ProgramsAt"/>).
     /// </summary>
     public static IReadOnlyList<string> CommandRunners { get; } =
         ["setsid", "stdbuf", "ionice", "chrt", "taskset", "unshare", "nsenter", "prlimit", "numactl", "cpulimit", "firejail", "flock",
@@ -3120,8 +3109,6 @@ public static partial class CommandAnalysis
             return null;
         }
 
-        var at = 1;
-
         // The wrapper's own spelling from here on: its options are read in the one case each of its
         // kinds writes them.
         name = name.ToLowerInvariant();
@@ -3138,77 +3125,12 @@ public static partial class CommandAnalysis
             return ([.. read.Pairs, .. words.Skip(read.At)], [.. envMade, .. quoted.Skip(read.At)]);
         }
 
-        if (name == "timeout")
+        if (name == "xargs")
         {
-            // Its options, each with its value where it takes one, then the duration the command waits.
-            while (at < words.Count && words[at].StartsWith('-'))
-            {
-                at += words[at] is "--foreground" or "-f" or "-p" || words[at].Contains('=', StringComparison.Ordinal) ? 1
-                    : words[at] is "-k" or "-s" or "--kill-after" or "--signal" && at + 1 < words.Count ? 2
-                    : 1;
-            }
-
-            if (at + 1 < words.Count && Duration().IsMatch(words[at]))
-            {
-                at++;
-            }
-        }
-        else if (name == "nice")
-        {
-            if (at < words.Count && (words[at] == "-n" || words[at] == "--adjustment") && at + 1 < words.Count)
-            {
-                at += 2;
-            }
-            else if (at < words.Count && Niceness().IsMatch(words[at]))
-            {
-                at++;
-            }
-        }
-        else if (name == "time")
-        {
-            if (at < words.Count && words[at] == "-p")
-            {
-                at++;
-            }
-        }
-        else if (name == "xargs")
-        {
-            // Its options, each a word of its own and each that takes a value with it; the command
-            // is the first word that is none. A replace string - -I's, -i's or --replace's - is where
-            // the input goes; without one the input follows the command's words.
-            string? replace = null;
-
-            while (at < words.Count && words[at].StartsWith('-'))
-            {
-                var option = words[at];
-
-                if (option == "-I" && at + 1 < words.Count)
-                {
-                    replace = words[at + 1];
-                    at += 2;
-                    continue;
-                }
-
-                if (option.StartsWith("-I", StringComparison.Ordinal) || option.StartsWith("-i", StringComparison.Ordinal))
-                {
-                    replace = option.Length > 2 ? option[2..] : "{}";
-                    at++;
-                    continue;
-                }
-
-                if (option.StartsWith("--replace", StringComparison.Ordinal))
-                {
-                    replace = option.StartsWith("--replace=", StringComparison.Ordinal) ? option["--replace=".Length..] : "{}";
-                    at++;
-                    continue;
-                }
-
-                at += option is "-d" or "-P" or "-n" or "-s" or "-E" or "-L" or "-a" or "--arg-file" or "--delimiter"
-                    or "--max-args" or "--max-procs" or "--max-chars" or "--process-slot-var" && at + 1 < words.Count ? 2 : 1;
-            }
-
-            // With no command of its own it echoes what it is handed.
-            IReadOnlyList<string> command = at < words.Count ? [.. words.Skip(at)] : ["echo"];
+            // A replace string - -I's, -i's or --replace's - is where the input goes; without one the input follows the
+            // command's words. With no command of its own it echoes what it is handed.
+            var (start, replace) = XargsOptions(words);
+            IReadOnlyList<string> command = start < words.Count ? [.. words.Skip(start)] : ["echo"];
 
             // What xargs fills from its input is an expansion, wherever it stands among these words: they are made
             // here, not read from the command line, so their spelling is not kept.
@@ -3218,23 +3140,224 @@ public static partial class CommandAnalysis
 
             return (filled, [.. filled.Select(_ => string.Empty)]);
         }
-        else if (name is "command" or "builtin")
+
+        // A word xargs fills from its input is an expansion wherever the shell would leave it alone, so the words a
+        // wrapper leaves keep the spelling it read them with. command -v and -V say what a name is and run nothing: no
+        // wrapper, its words each tried as a program still.
+        return CommandAt(name, words) is { } at ? ([.. words.Skip(at)], [.. quoted.Skip(at)]) : null;
+    }
+
+    /// <summary>
+    /// xargs' own options, each a word of its own and each that takes a value with it: where its command begins - the first
+    /// word that is none - and the replace string its <c>-I</c>, <c>-i</c> or <c>--replace</c> gives, where one does.
+    /// </summary>
+    private static (int At, string? Replace) XargsOptions(IReadOnlyList<string> words)
+    {
+        var at = 1;
+        string? replace = null;
+
+        while (at < words.Count && words[at].StartsWith('-'))
         {
-            while (at < words.Count && words[at] is "-v" or "-V" or "-p")
+            var option = words[at];
+
+            if (option == "-I" && at + 1 < words.Count)
             {
-                // -v and -V say what a name is and run nothing: no wrapper, its words each tried as a program still.
+                replace = words[at + 1];
+                at += 2;
+                continue;
+            }
+
+            if (option.StartsWith("-I", StringComparison.Ordinal) || option.StartsWith("-i", StringComparison.Ordinal))
+            {
+                replace = option.Length > 2 ? option[2..] : "{}";
+                at++;
+                continue;
+            }
+
+            if (option.StartsWith("--replace", StringComparison.Ordinal))
+            {
+                replace = option.StartsWith("--replace=", StringComparison.Ordinal) ? option["--replace=".Length..] : "{}";
+                at++;
+                continue;
+            }
+
+            at += option is "-d" or "-P" or "-n" or "-s" or "-E" or "-L" or "-a" or "--arg-file" or "--delimiter"
+                or "--max-args" or "--max-procs" or "--max-chars" or "--process-slot-var" && at + 1 < words.Count ? 2 : 1;
+        }
+
+        return (at, replace);
+    }
+
+    /// <summary>
+    /// Where the command a wrapper (<see cref="Stripped"/>) or a runner (<see cref="CommandRunners"/>) runs begins among
+    /// <paramref name="words"/>, its own name first: past its own options, each with the value it takes, and the words it
+    /// reads before the command - timeout's duration, nice's niceness, taskset's mask, chrt's priority, chroot's root,
+    /// flock's lock, faketime's time, abduco's session (<see cref="RunnerReadings"/>). Null where it runs no command of those
+    /// words on this machine - ssh's runs on its host; wsl's without <c>-e</c> and watch's without <c>-x</c> are command
+    /// lines read as scripts of their own (<see cref="ScriptsItRuns"/>, <see cref="Into"/>), and flock's <c>-c</c> and
+    /// runuser's without <c>-u</c> run a shell's - where it runs none (<c>command -v</c>, a process's settings by its id),
+    /// and where the program is neither. The one reading of a wrapper's and a runner's own options: the wrapper stripped,
+    /// and the program a runner runs (<see cref="ProgramsAt"/>), alike.
+    /// </summary>
+    /// <param name="name">The program's name, as <see cref="Name"/> reads it.</param>
+    /// <param name="words">The program and its words.</param>
+    /// <exception cref="NotSupportedException">env is given an option it does not name alone (<see cref="EnvWords"/>).</exception>
+    private static int? CommandAt(string name, IReadOnlyList<string> words)
+    {
+        var at = 1;
+
+        if (Is(name, "nohup", "exec", "busybox"))
+        {
+            return at;
+        }
+
+        if (Is(name, "timeout"))
+        {
+            // Its options, each with its value where it takes one, then the duration the command waits.
+            while (at < words.Count && words[at].StartsWith('-'))
+            {
+                at += words[at] is "--foreground" or "-f" or "-p" || words[at].Contains('=', StringComparison.Ordinal) ? 1
+                    : words[at] is "-k" or "-s" or "--kill-after" or "--signal" && at + 1 < words.Count ? 2
+                    : 1;
+            }
+
+            return at + 1 < words.Count && Duration().IsMatch(words[at]) ? at + 1 : at;
+        }
+
+        if (Is(name, "nice"))
+        {
+            return at < words.Count && (words[at] == "-n" || words[at] == "--adjustment") && at + 1 < words.Count ? at + 2
+                : at < words.Count && Niceness().IsMatch(words[at]) ? at + 1
+                : at;
+        }
+
+        if (Is(name, "time"))
+        {
+            return at < words.Count && words[at] == "-p" ? at + 1 : at;
+        }
+
+        if (Is(name, "command", "builtin"))
+        {
+            for (; at < words.Count && words[at] is "-v" or "-V" or "-p"; at++)
+            {
                 if (words[at] is "-v" or "-V")
                 {
                     return null;
                 }
-
-                at++;
             }
+
+            return at;
         }
 
-        // A word xargs fills from its input is an expansion wherever the shell would leave it alone, so the words a
-        // wrapper leaves keep the spelling it read them with.
-        return ([.. words.Skip(at)], [.. quoted.Skip(at)]);
+        if (Is(name, "env"))
+        {
+            return EnvWords(words) is { Split: null } read ? read.At : null;
+        }
+
+        if (Is(name, "xargs"))
+        {
+            return XargsOptions(words).At;
+        }
+
+        if (Is(name, "watch"))
+        {
+            return WatchCommandAt(words) is { Exec: true, At: var watched } ? watched : null;
+        }
+
+        if (Is(name, "wsl"))
+        {
+            return WslCommandAt(words) is { Exec: true, At: var run } ? run : null;
+        }
+
+        if (Is(name, "start"))
+        {
+            return StartOptionsEnd(words, at);
+        }
+
+        return RunnerReadings.TryGetValue(Name(name), out var reading) ? reading.CommandAt(words) : null;
+    }
+
+    /// <summary>
+    /// The words of <paramref name="command"/> that may be a program it runs on this machine: its own, past its environment,
+    /// and the one each wrapper or runner among them runs, past that one's own options (<see cref="CommandAt"/>) - for cmd's
+    /// start, the first word that is no option of its own and the next, for the first is its window's title where it was
+    /// quoted, which the words no longer say. Any other word a runner is given - an option's value, a remote command, a
+    /// command line of its own, an argument of the program it runs - is none.
+    /// </summary>
+    /// <param name="command">A command's words, its environment before them.</param>
+    internal static IReadOnlySet<int> ProgramsAt(IReadOnlyList<string> command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var programs = new HashSet<int>();
+
+        for (var at = EnvironmentOf(command); at < command.Count && programs.Add(at);)
+        {
+            var name = Name(command[at]);
+            int? next;
+
+            try
+            {
+                next = CommandAt(name, [.. command.Skip(at)]);
+            }
+            catch (NotSupportedException)
+            {
+                // An env this cannot read is refused where the command is flattened, before a program of its is asked.
+                next = null;
+            }
+
+            if (next is not { } run)
+            {
+                break;
+            }
+
+            if (Is(name, "start") && at + StartOptionsEnd([.. command.Skip(at)], run + 1) is var titled && titled < command.Count)
+            {
+                programs.Add(titled);
+            }
+
+            at += run;
+        }
+
+        return programs;
+    }
+
+    /// <summary>
+    /// Where cmd's start's own options end, from <paramref name="at"/> on: each a word that begins with <c>/</c>,
+    /// <c>/d</c>'s, <c>/node</c>'s and <c>/affinity</c>'s with the value each takes.
+    /// </summary>
+    private static int StartOptionsEnd(IReadOnlyList<string> words, int at)
+    {
+        while (at < words.Count && words[at].StartsWith('/'))
+        {
+            at += words[at].ToLowerInvariant() is "/d" or "/node" or "/affinity" && at + 1 < words.Count ? 2 : 1;
+        }
+
+        return at;
+    }
+
+    /// <summary>
+    /// Where the command watch runs begins among its words - past its own options, each with the value it takes - and
+    /// whether its <c>-x</c> runs those words as they are rather than as a shell's command line; null where it runs none,
+    /// its help or its version asked. The one reading of watch's own options.
+    /// </summary>
+    private static (int At, bool Exec)? WatchCommandAt(IReadOnlyList<string> words)
+    {
+        var at = 1;
+        var exec = false;
+
+        while (at < words.Count && words[at].StartsWith('-'))
+        {
+            if (words[at] is "-h" or "--help" or "-v" or "--version")
+            {
+                return null;
+            }
+
+            exec |= words[at] is "-x" or "--exec";
+            at += words[at] is "-n" or "--interval" or "-q" or "--equexit" && at + 1 < words.Count ? 2 : 1;
+        }
+
+        return (at, exec);
     }
 
     /// <summary>A duration as timeout takes it: digits, with a unit and a fraction.</summary>
