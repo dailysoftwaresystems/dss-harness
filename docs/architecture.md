@@ -105,7 +105,9 @@ size again, in buffers the runtime's shared pool keeps. A file is renamed into p
 while the new one takes its name, where Windows' own rename is refused while the old file is open at all, so a writer
 could not replace a record another sync was streaming. A holder that shares nothing - a virus scanner reading a file
 just written, on a machine busy enough to outlast a short wait - is waited out instead: the rename is retried for
-about five and a half seconds (`PhysicalFileSystem.ReplaceAttempts`) before its refusal is reported. A volume that
+about five and a half seconds (`PhysicalFileSystem.ReplaceAttempts`, the one wait of every replace - the rename itself
+tries once) before its refusal is reported, and a directory standing at the destination, which no wait moves, is
+refused at once. A volume that
 cannot rename so - FAT, some shares - is renamed Windows' own way. Off Windows, a read refuses a pipe, a socket or a
 device before it opens one (`UnixFiles`, the runtime's own stat, where .NET's attributes call each a plain file): a
 pipe's open waits for a writer, past any stop.

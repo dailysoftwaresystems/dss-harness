@@ -106,9 +106,9 @@ internal static class Win32Files
     /// old one. Windows' own replace is refused while the old file is open at all, however it is shared, so a record
     /// streamed by one reader could not be written by another while it was read.
     ///
-    /// A refusal Windows answers with access denied is tried again, a little apart, for as long as half a second: a holder
-    /// that shares no deletion - a scanner's or an indexer's brief look at a file nobody here holds - is gone in moments,
-    /// and only one that stays is the refusal it reads as.
+    /// One try: a refusal is raised as Windows gave it. Waiting out a holder that shares no deletion - a scanner's or an
+    /// indexer's brief look at a file nobody here holds - is the write's own, the one bounded wait every replace takes
+    /// (<c>PhysicalFileSystem.ReplaceWith</c>).
     /// </summary>
     /// <param name="source">The file to put in place, fully qualified.</param>
     /// <param name="destination">Where to put it, fully qualified.</param>
@@ -118,22 +118,7 @@ internal static class Win32Files
     /// </returns>
     /// <exception cref="UnauthorizedAccessException">Windows refused the rename, as a file held without its deletion shared is.</exception>
     /// <exception cref="IOException">It failed for any other reason.</exception>
-    internal static bool TryReplace(string source, string destination)
-    {
-        for (var tries = 0; ; tries++)
-        {
-            try
-            {
-                return TryReplace(source, destination, Rename);
-            }
-            catch (Exception refused) when (tries < 25 && File.Exists(destination) && refused is UnauthorizedAccessException or IOException { HResult: 32 })
-            {
-                // Only a file held open is waited out: where no file stands at the destination - a directory is in the
-                // way - the refusal is nobody's but the caller's own, at once.
-                Thread.Sleep(20);
-            }
-        }
-    }
+    internal static bool TryReplace(string source, string destination) => TryReplace(source, destination, Rename);
 
     /// <summary>
     /// <see cref="TryReplace(string, string)"/>, renaming through <paramref name="rename"/> - which sets the rename's
