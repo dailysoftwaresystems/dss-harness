@@ -481,6 +481,14 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(["codebase", "ci", "rounds.items.reconcile.catch-up", "rounds.items.fix.revise.rereconcile.recatch-up", "recover.remedies.reconcile.catch-up", "recover.remedies.fix.revise.rereconcile.recatch-up"], passedOver);
         Assert.Empty(otherwise);
 
+        // The file's own header, which init writes into a repository, says the same of its steps.
+        var header = Prose.Words(string.Join(' ', Read("implementation.yml").Split('\n').TakeWhile(line => line.StartsWith('#')).Select(line => line.TrimStart('#'))));
+        Assert.Contains(
+            "A reasoning step asks ('onFailure: pause'); the graph of the codebase, the CI read and the catch-ups pass a failure over ('onFailure: continue'); "
+                + "every other step says 'onFailure: recover', which gives a failure no handler takes to 'recover'",
+            header,
+            StringComparison.Ordinal);
+
         // A limit of a reasoning step is answered a counted number of times and then asked, never failed into a recovery.
         foreach (var limit in new[] { "turnLimit", "truncated", "contextLimit" })
         {

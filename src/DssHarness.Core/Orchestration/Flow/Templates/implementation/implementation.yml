@@ -5,11 +5,13 @@
 # to this workflow's own directory.
 #
 # A run of it ends done, or asks a person only what a person must settle. Every step of
-# the flow says what its failure does, itself or through its group: 'onFailure: recover'
-# on every step but a reasoning one, the CI read and the catch-ups gives a failure no handler takes to
-# 'recover', at the end of this file, where an agent finds what went wrong and, where the
-# run can put it right, builds, reviews and folds the fix as a work item is; then the
-# step that failed runs again ('onSuccess: failed-step'). A person is asked where the
+# the flow says what its failure does, itself or through its group. A reasoning step
+# asks ('onFailure: pause'); the graph of the codebase, the CI read and the catch-ups
+# pass a failure over ('onFailure: continue'); every other step says 'onFailure: recover',
+# which gives a failure no handler takes to 'recover', at the end of this file, where an
+# agent finds what went wrong and, where the run can put it right, builds, reviews and
+# folds the fix as a work item is; then the step that failed runs again
+# ('onSuccess: failed-step'). A person is asked where the
 # diagnosis says only a person can lift what stands in the way, with the advisor's
 # recommendation and the choices; where a step still fails after five recoveries; and
 # at the end, for what the run left. An issue a step meets that was there before the run is

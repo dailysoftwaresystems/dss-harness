@@ -7,13 +7,15 @@ using DssHarness.Core.Results;
 namespace DssHarness.Cli.Commands;
 
 /// <summary>
-/// Wires the run verbs that drive a run's session: <c>run-orchestrator</c> and <c>resume-orchestrator</c>. The
-/// sessions count two interrupts through their terminal (<see cref="FlowTerminal"/>): the first asks the engine
-/// for a safe pause, the second stops it where it stands.
+/// What the verbs that work a run share. The three that drive a session of it - <c>run-orchestrator</c>,
+/// <c>resume-orchestrator</c> and <c>answer-orchestrator</c> - run it through <see cref="SessionAsync"/>, which counts
+/// two interrupts through their terminal (<see cref="FlowTerminal"/>): the first asks the engine for a safe pause, the
+/// second stops it where it stands. Those three, <c>amend-orchestrator-request</c>, <c>pause-orchestrator</c> and
+/// <c>stop-orchestrator</c> answer with <see cref="Answer"/> where they stop before their work.
 /// </summary>
 internal static class FlowCommands
 {
-    /// <summary>The flow document each of the five verbs answers with where it stops before its session: the session it would have run, empty.</summary>
+    /// <summary>The flow document each of the six verbs that work a run answers with where it stops before its work: the session it would have run, empty.</summary>
     internal static readonly JsonAnswer Answer = new(OrchestrationArguments.Json, (_, exitCode, summary, _, _) => OrchestrationReports.FlowStopped(exitCode, summary));
 
     /// <summary>

@@ -5115,7 +5115,7 @@ public sealed partial class HelpTests
     /// <summary>
     /// The workflows topic carries its worked examples - the two ways a step is raised by another step's ending, and
     /// the loops a repository can build its own work around - each printed as a whole workflow and each holding as it
-    /// is printed, read by the same reader that reads a workflow's own file.
+    /// is printed, read by the same reader that reads a workflow's own file and checked by the same check.
     /// </summary>
     [Fact]
     public void TheWorkflowsTopic_CarriesItsWorkedExamples_EachHoldingAsPrinted()
@@ -5159,12 +5159,16 @@ public sealed partial class HelpTests
 
         Assert.Equal(["issues", "repair", "review", "smoke"], [.. examples.Keys.Order(StringComparer.Ordinal)]);
 
+        // Each is read and then checked as validate-workflow checks a definition - every rule the yml alone can break; the
+        // files it names are not printed, so none is read - and holds: an example that says a key the check refuses is
+        // no example to copy.
         foreach (var (slug, yaml) in examples)
         {
             var definition = WorkflowFileParser.Parse($"workflows/example-{slug}/example-{slug}.yml", yaml + "\n");
 
             Assert.Equal($"example-{slug}", definition.Name);
             Assert.NotEmpty(definition.Steps);
+            Assert.Equal(string.Empty, string.Join('\n', WorkflowValidator.Validate(definition, hasCommitTemplate: false)));
         }
     }
 

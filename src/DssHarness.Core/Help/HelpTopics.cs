@@ -5620,7 +5620,7 @@ public static class HelpTopics
                 type: build
                 in: builder
                 dependsOn: [implement]
-                onFailure: recover
+                onFailure: stop
               - name: fix
                 type: reason
                 resume: implement
@@ -5637,7 +5637,7 @@ public static class HelpTopics
             """,
             "When the build fails because a leg is red (20), fix goes on with the implementer's work and the run goes",
             "back to build. After three such visits the configuration answers for the run: the build's failure stands,",
-            "and its onFailure decides. Without the answers line the run asks a person there.");
+            "and its onFailure decides - stop ends the run. Without the answers line the run asks a person there.");
 
         AppendExample(
             builder,
@@ -5782,7 +5782,7 @@ public static class HelpTopics
                     type: commit
                     dependsOn: [refold]
                     when: '!empty(review.findings)'
-                    message: '{item.title}: review fixes'
+                    message: 'review fixes'
             """,
             "Each iteration reviews what is in the tree; where the review found something, the author's agent",
             "reworks it, it is tested, folded and committed, and the next iteration reviews it again. The loop ends",
