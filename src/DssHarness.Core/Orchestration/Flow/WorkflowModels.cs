@@ -101,7 +101,8 @@ public sealed record WorkflowDefinition(
 
 /// <summary>
 /// The workflow's <c>codebaseGraph</c>: what the run's one graph is made of, as the file says it - each key left out
-/// <see langword="null"/>, a list given empty kept empty for the check to refuse.
+/// <see langword="null"/>, a list given empty kept empty for the check to refuse. Each key is optional where the run's
+/// frozen definition is read back, for one left out is left out of the record too.
 /// </summary>
 /// <param name="Include">Patterns only the paths one of which matches are graphed.</param>
 /// <param name="Exclude">Patterns the paths one of which matches are not graphed.</param>
@@ -110,12 +111,12 @@ public sealed record WorkflowDefinition(
 /// <param name="Generated">What becomes of generated code: <c>low</c> or <c>exclude</c>.</param>
 /// <param name="MapTokens">The cap, in tokens, of the run's repository map, made once and read as it is by every step after; 0 asks for none.</param>
 public sealed record FlowCodebaseGraph(
-    IReadOnlyList<string>? Include,
-    IReadOnlyList<string>? Exclude,
-    IReadOnlyList<string>? Languages,
-    int? MaxFileBytes,
-    string? Generated,
-    int? MapTokens)
+    IReadOnlyList<string>? Include = null,
+    IReadOnlyList<string>? Exclude = null,
+    IReadOnlyList<string>? Languages = null,
+    int? MaxFileBytes = null,
+    string? Generated = null,
+    int? MapTokens = null)
 {
     /// <summary>
     /// The shape the block gives the run's graph, every key it leaves out at its default: read from the block, never
@@ -145,7 +146,11 @@ public sealed record FlowCodebaseGraph(
 /// <see cref="PauseOnFailure"/> or <see cref="StopOnFailure"/> - never the recovery again, which would be the recovery
 /// calling itself.
 /// </param>
-public sealed record FlowRecover(int? MaxVisits, IReadOnlyList<WorkflowStep> Steps, string OnSuccess, string OnFailure)
+public sealed record FlowRecover(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxVisits,
+    IReadOnlyList<WorkflowStep> Steps,
+    string OnSuccess,
+    string OnFailure)
 {
     /// <summary>The most a recovery may be given: the engine's bound on the visits of one step in one scope.</summary>
     public const int MostVisits = 99;

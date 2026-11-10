@@ -1495,6 +1495,51 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
+    /// A run whose workflow leaves out every key it may - a recovery that names no maxVisits, a codebase graph that names
+    /// only what it excludes - is answered and goes on: the definition it froze as it began is read back by the answer's
+    /// session as it was written, never refused as a record that cannot be read.
+    /// </summary>
+    [Fact]
+    public async Task ARunWhoseWorkflowLeavesOutWhatItMay_IsAnsweredAndGoesOn()
+    {
+        var (repository, service, runner) = await ServiceAsync("""
+            name: flow
+            codebaseGraph:
+              exclude: ['vendor/**']
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: codebase
+                type: graphify-codebase
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+                dependsOn: [codebase]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+                onFailure: recover
+            """);
+        using var disposed = repository;
+
+        Script(runner);
+        var paused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.True(paused.ExitCode == FlowExit.Paused, $"{paused.Message} | {string.Join(" | ", paused.Details ?? [])}");
+
+        var outcome = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.True(outcome.ExitCode == HarnessExit.Success, $"{outcome.Message} | {string.Join(" | ", outcome.Details ?? [])}");
+        Assert.Equal("done", outcome.Message);
+        Assert.Equal(["codebase", "after"], runner.Started);
+    }
+
+    /// <summary>
     /// An answer given where no engine runs the run is applied though the inbox beside it cannot be read: the answer,
     /// once recorded, stands - the run is driven on, and what could not be read is said and left for the next session -
     /// never a refusal over an answer already on disk.
