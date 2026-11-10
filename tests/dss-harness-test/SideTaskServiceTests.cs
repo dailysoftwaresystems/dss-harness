@@ -472,7 +472,7 @@ public sealed class SideTaskServiceTests
         // The message names the namespace of the one the ids put last: its pack holds that one, and not the other.
         var named = widgets[^1].Path;
         _ = graph.Front($"look under {widgets[^1].Qualified.Split('.')[0]}", first: true);
-        var support = graph.Support!;
+        var support = graph.Support(SideTaskPolicy.Ground(repository, new HarnessConfig { Worktrees = new WorktreeSettings() }, [], []))!;
         var found = await support.Tool!.RunAsync(new JsonObject { ["op"] = "find", ["query"] = "Widget", ["kind"] = "type" }, CodebaseGraphTool.Operations(write: true, narrow: false), Token);
         var near = found.Text.IndexOf($"| {named}:", StringComparison.Ordinal);
         var far = found.Text.IndexOf($"| {widgets[0].Path}:", StringComparison.Ordinal);
