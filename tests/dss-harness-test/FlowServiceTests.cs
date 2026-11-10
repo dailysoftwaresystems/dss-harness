@@ -2145,6 +2145,108 @@ public sealed class FlowServiceTests
         Assert.Equal("q1", Assert.Single(repository.Harness.OrchestrationStore.ReadInbox(run)!.Answers).Question);
     }
 
+    /// <summary>
+    /// An answer handed over whose engine went before weighing it, where a resume claimed the run and stays live - having
+    /// taken the inbox as it began - between the command's last weighing and its own claim: the claim refused, the entry
+    /// is weighed, and the command answers what that session made of it - taken - never that nothing was changed and the
+    /// answer stays, nor that the session carrying it out is to be stopped.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedOverThatALiveSessionTookBeforeTheCommandsClaim_IsSaidTaken_NeverRefusedForThatSession()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var engines = new Engines(repository.Harness.Identity);
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: HandedOverTimings, fileSystem: files, identity: engines);
+        var store = repository.Harness.OrchestrationStore;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        runner.Holds("after", release.Task);
+        store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+
+        await files.Written(run.InboxFile).WaitAsync(Bound, Token);
+        var entry = Assert.Single(store.ReadInbox(run)!.Answers);
+        Task<CommandOutcome>? resuming = null;
+
+        // The engine goes having weighed nothing, and a resume begun then claims the run, takes the inbox and runs on -
+        // live, its next step held - all as the command checks the definition it is to go on under, before its claim.
+        engines.LeavesWhenNextAsked(() => files.AfterLookingAt(run.DefinitionFile, () =>
+        {
+            resuming = Task.Run(() => Service(repository.Harness, runner).ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token));
+            Task.Run(() => runner.WaitStartedAsync("after")).GetAwaiter().GetResult();
+        }));
+
+        var outcome = await answering.WaitAsync(Bound, Token);
+        release.SetResult();
+        var resumed = await resuming!.WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("handed 'go' for question 'q1' to the engine running 'r1'", outcome.Message);
+        Assert.Equal([TakenUnderItsEntry, $"questions: {run.QuestionsFile}", $"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"], outcome.Details);
+        Assert.Equal((HarnessExit.Success, "done"), (resumed.ExitCode, resumed.Message));
+        Assert.Equal(["after"], runner.Started);
+        Assert.Equal(entry.Id, Assert.Single(Assert.Single(store.ReadFlowQuestions(run)!.Questions).Answers).By!.Inbox);
+    }
+
+    /// <summary>
+    /// An answer handed over whose engine went before weighing it, where another session claimed the run and stays live
+    /// without having weighed it yet, as the command came to claim it: the claim refused, the command waits on the same
+    /// entry - never handed over a second time - as one handed to that session, and answers what that session made of it.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedOverWhoseClaimALiveSessionRefused_IsWaitedOnAgain_AsHandedToThatSession()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var clock = new TimerClock();
+        var engines = new Engines(repository.Harness.Identity);
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, clock, HandedOverTimings, fileSystem: files, identity: engines);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+
+        store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+
+        // The command waits on the engine it handed the answer to.
+        await clock.WaitingAsync().WaitAsync(Bound, Token);
+        var entry = Assert.Single(store.ReadInbox(run)!.Answers);
+
+        // The engine goes having weighed nothing, and another session's owner - live, this very process - is on the run
+        // as the command comes to claim it, the inbox not yet read.
+        engines.LeavesWhenNextAsked(() => files.AfterLookingAt(run.DefinitionFile, () => store.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, clock.GetUtcNow(), identity.Current))));
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        // The claim refused, the command waits on its entry again.
+        var waitingAgain = clock.WaitingAsync();
+        Assert.Same(waitingAgain, await Task.WhenAny(waitingAgain, answering).WaitAsync(Bound, Token));
+
+        // That session takes it.
+        Engine(store, run, answered: new FlowAnswerRecord("go", DateTimeOffset.UtcNow, By: new FlowAnswerBy("person", FlowService.AnswerCommand, Inbox: entry.Id)));
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        var outcome = await answering.WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("handed 'go' for question 'q1' to the engine running 'r1'", outcome.Message);
+        Assert.Equal([TakenUnderItsEntry, $"questions: {run.QuestionsFile}", $"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"], outcome.Details);
+        Assert.Equal(entry.Id, Assert.Single(store.ReadInbox(run)!.Answers).Id);
+    }
+
     /// <summary>Two pause steps, one after the other, holding the run open, and a step after them.</summary>
     private const string TwoQuestionsFlow = """
         name: flow

@@ -3434,7 +3434,10 @@ that very entry under its id - so the run records one outcome of the person's an
 weighed between the engine's going and the command's claim of the run is read once the command holds
 the run, before any session, and answered as the wait answers one - taken, or refused (13) with the
 run's why, the questions and the inbox named either way, one owner of both - then emptied from the inbox
-as settled, and no session is driven over it. The inbox is named on every exit after the write, a cancelled
+as settled, and no session is driven over it. Where a session that claimed the run first still holds it,
+the command's claim is refused, and not its answer: the entry weighed, it is answered as above; not yet,
+the command waits on that same entry as one handed to the live session, never handing it over twice.
+The inbox is named on every exit after the write, a cancelled
 wait and a session refused before it weighed the entry among them. Where the engine leaves before it takes a request, the command answers from the
 run's state and takes the request back. `stop-orchestrator --now` ends the engine's process tree -
 only on this machine, and only the process whose start matches the one its owner recorded - and

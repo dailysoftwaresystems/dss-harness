@@ -521,18 +521,13 @@ public sealed class FlowService(
 
         if (_owner.Live(layout) is not null)
         {
-            var (ended, entry) = await HandOverAsync(layout, run, asked, answer, takes, json, cancellationToken).ConfigureAwait(false);
-
-            if (ended is not null)
-            {
-                return ended;
-            }
-
-            handedUnder = entry;
+            handedUnder = FlowInboxAnswer.NewId();
+            _store.AddToInbox(layout, new FlowInboxAnswer(handedUnder, asked.Id, answer, _clock.GetUtcNow(), takes));
         }
 
-        // A refusal before the session begins leaves an answer handed over where it is: in the inbox, for the next
-        // session of the run to take - said, and the inbox named.
+        // A refusal before the session begins that no session of the run can take up - the definition changed, another
+        // run unfinished, a state no session can take up - leaves an answer handed over where it is: in the inbox, for
+        // the next session of the run to take - said, and the inbox named.
         CommandOutcome NotBegun(CommandOutcome outcome)
         {
             if (handedUnder is null)
@@ -557,27 +552,59 @@ public sealed class FlowService(
         string? digest;
         string? reclaimed;
 
-        try
+        while (true)
         {
-            (digest, var changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
-
-            if (changed is not null)
+            // An answer handed over is waited on while a live engine holds the run - the one it was handed to, or a
+            // session that claimed the run since - and the command goes on to its own session only where the owner
+            // went with the entry unweighed.
+            if (handedUnder is not null && await WaitOnHandedAsync(layout, run, asked, answer, handedUnder, json, cancellationToken).ConfigureAwait(false) is { } ended)
             {
-                return NotBegun(changed);
+                return ended;
             }
 
-            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
-        }
-        catch (HarnessException ex)
-        {
-            return NotBegun(new CommandOutcome(ex.ExitCode, ex.Message));
+            try
+            {
+                (digest, var changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
+
+                if (changed is not null)
+                {
+                    return NotBegun(changed);
+                }
+
+                reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
+                break;
+            }
+            catch (HarnessException ex)
+            {
+                // A claim refused with the answer handed over is not the answer's refusal where a session claimed the
+                // run first: that session takes the inbox as it begins. The owner is looked at before the entry is
+                // weighed, for a session writes what it made of the entry before it lets the run go: weighed, the
+                // command answers what the run made of it; not, with a live owner holding the run, it waits on the
+                // same entry as one handed to that owner.
+                if (handedUnder is not null)
+                {
+                    var live = _owner.Live(layout) is not null;
+
+                    if (AnswerOfWeighed(Weigh(layout, handedUnder), layout, run, answer, asked.Id, [], json) is { } settled)
+                    {
+                        return settled;
+                    }
+
+                    if (live)
+                    {
+                        continue;
+                    }
+                }
+
+                return NotBegun(new CommandOutcome(ex.ExitCode, ex.Message));
+            }
         }
 
         // The command holds the run now, and no session but its own weighs its entry from here on. One a session weighed
         // between the engine's going and this claim - taking the inbox as it began - is settled by what the records hold
         // under its id, answered as the hand-over answers it, and emptied from the inbox as settled: no session is driven
         // over an answer the run has already taken, or refused.
-        if (handedUnder is not null && (SafeRead(() => _store.ReadFlowQuestions(layout))?.Weighed(handedUnder) ?? (null, null)) is { } weighed && weighed is not (null, null))
+        if (handedUnder is not null && Weigh(layout, handedUnder) is { } weighed && weighed is not (null, null))
         {
             try
             {
@@ -600,22 +627,21 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// Hands an answer to the engine running the run: written to the inbox under an id of its own, then waited for - on
-    /// the service's clock, at most two of the engine's polls - until the run's questions say what became of that entry,
-    /// or the engine's owner is gone. An engine writes what it made of an entry before it lets its owner go, so where the
-    /// owner is seen gone the entry is weighed once more, and that weighing answers: a read made before the look at the
-    /// owner may have missed what the engine wrote as it left. Weighed, the command answers what the run made of it
-    /// (<see cref="AnswerOfWeighed"/>); not, with the engine still running, it answers that the engine takes it at its
-    /// poll. Every answer names the inbox, a cancelled wait's among them, for the entry stands.
+    /// Waits on an answer handed to the engine running the run, under the inbox entry it was written under - on the
+    /// service's clock, at most two of the engine's polls - until the run's questions say what became of that entry, or
+    /// the engine's owner is gone: the engine it was handed to, or a session that claimed the run since, which takes the
+    /// inbox as it begins - the entry is never handed over twice. An engine writes what it made of an entry before it
+    /// lets its owner go, so where the owner is seen gone the entry is weighed once more, and that weighing answers: a
+    /// read made before the look at the owner may have missed what the engine wrote as it left. Weighed, the command
+    /// answers what the run made of it (<see cref="AnswerOfWeighed"/>); not, with the engine still running, it answers
+    /// that the engine takes it at its poll. Every answer names the inbox, a cancelled wait's among them, for the entry
+    /// stands.
     /// </summary>
-    /// <returns>The command's answer where it ends here; else, the owner gone and the entry not weighed, the entry's id, which the command's own session takes.</returns>
-    private async Task<(CommandOutcome? Ended, string Entry)> HandOverAsync(OrchestratorLayout layout, string run, FlowQuestionEntry asked, string answer, string? text, bool json, CancellationToken cancellationToken)
+    /// <returns>The command's answer where it ends here; null where the owner is gone and the entry not weighed, which the command's own session takes.</returns>
+    private async Task<CommandOutcome?> WaitOnHandedAsync(OrchestratorLayout layout, string run, FlowQuestionEntry asked, string answer, string entry, bool json, CancellationToken cancellationToken)
     {
-        var entry = FlowInboxAnswer.NewId();
-        _store.AddToInbox(layout, new FlowInboxAnswer(entry, asked.Id, answer, _clock.GetUtcNow(), text));
-
         var records = new[] { new FlowRecordPath("inbox", layout.InboxFile) };
-        (FlowQuestionEntry? Took, FlowRefusedAnswer? Refused) Weighed() => SafeRead(() => _store.ReadFlowQuestions(layout))?.Weighed(entry) ?? (null, null);
+        (FlowQuestionEntry? Took, FlowRefusedAnswer? Refused) Weighed() => Weigh(layout, entry);
 
         var weighed = Weighed();
 
@@ -634,7 +660,7 @@ public sealed class FlowService(
                 $"waiting for the engine running '{run}' to take '{answer}' for question '{asked.Id}' was cancelled; the answer stays handed over, and the engine takes it at its poll",
                 [$"inbox: {layout.InboxFile}"]);
 
-            return (Ended(layout, AnswerCommand, cancelled, ResultOf(layout, cancelled) with { Records = records }, json), entry);
+            return Ended(layout, AnswerCommand, cancelled, ResultOf(layout, cancelled) with { Records = records }, json);
         }
 
         // The owner seen gone, what became of the entry is read after it: the last poll of the engine's session may have
@@ -648,7 +674,7 @@ public sealed class FlowService(
 
         if (AnswerOfWeighed(weighed, layout, run, answer, asked.Id, [], json) is { } settled)
         {
-            return (settled, entry);
+            return settled;
         }
 
         if (!gone)
@@ -661,11 +687,17 @@ public sealed class FlowService(
                     $"inbox: {layout.InboxFile}",
                 ]);
 
-            return (Ended(layout, AnswerCommand, reads, ResultOf(layout, reads) with { Records = records }, json), entry);
+            return Ended(layout, AnswerCommand, reads, ResultOf(layout, reads) with { Records = records }, json);
         }
 
-        return (null, entry);
+        return null;
     }
+
+    /// <summary>What the run's questions hold under the inbox entry <paramref name="entry"/>: taken, refused, or neither - and neither where they cannot be read.</summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="entry">The inbox entry's id.</param>
+    private (FlowQuestionEntry? Took, FlowRefusedAnswer? Refused) Weigh(OrchestratorLayout layout, string entry)
+        => SafeRead(() => _store.ReadFlowQuestions(layout))?.Weighed(entry) ?? (null, null);
 
     /// <summary>Holds a changed answer to the engine running the run, under an id of its own, and returns: the engine takes it at its poll, within the set's window as from the moment stamped here.</summary>
     /// <param name="layout">The run's layout.</param>
@@ -1667,8 +1699,8 @@ public sealed class FlowService(
 
     /// <summary>
     /// The one owner of what the command answers for an answer it handed over under its own inbox entry that a session
-    /// of the run weighed - the engine it was handed to, or a session between that engine's going and the command's claim
-    /// of the run: taken, said taken; refused, the run's refusal (13) with the run's why; the questions and the inbox
+    /// of the run weighed - the engine it was handed to, a session that claimed the run before the command's claim, live
+    /// or gone since: taken, said taken; refused, the run's refusal (13) with the run's why; the questions and the inbox
     /// named either way, after what the command said before. Null where no session weighed it.
     /// </summary>
     /// <param name="weighed">What the run's questions hold under the entry's id (<see cref="FlowQuestionsFile.Weighed"/>).</param>
