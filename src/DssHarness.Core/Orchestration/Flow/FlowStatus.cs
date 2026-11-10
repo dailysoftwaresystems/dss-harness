@@ -247,8 +247,10 @@ public static class FlowStatus
         // A step none of whose instances has ended Done has no time to go by: its instances are counted and named, and
         // are in neither end.
         var working = left.Where(step => !step.Group).ToList();
-        var named = working.Select(step => step.Step).Where(path => !times.TryGetValue(path, out var time) || time.Longest <= TimeSpan.Zero).Distinct(StringComparer.Ordinal).ToList();
-        var measured = working.Where(step => times.TryGetValue(step.Step, out var time) && time.Longest > TimeSpan.Zero).ToList();
+        // A step that ended an instance Done is measured whatever its time: the records keep times to the second, so one
+        // that ended within the second it began took no time they can tell, and still ended Done.
+        var named = working.Select(step => step.Step).Where(path => !times.ContainsKey(path)).Distinct(StringComparer.Ordinal).ToList();
+        var measured = working.Where(step => times.ContainsKey(step.Step)).ToList();
 
         if (measured.Count == 0 && named.Count > 0)
         {

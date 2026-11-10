@@ -715,6 +715,40 @@ public sealed class FlowStatusTests
     }
 
     /// <summary>
+    /// A step that ended an instance Done within the second it began - the records keep times to the second - is a step
+    /// that ended Done all the same: its next instance is measured, at no time, and never said to be of a step that has
+    /// ended nothing.
+    /// </summary>
+    [Fact]
+    public void AStepThatEndedDoneWithinASecond_IsMeasured_NeverSaidToHaveEndedNothing()
+    {
+        var definition = Definition("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+                maxVisits: 2
+            """);
+        var facts = FlowStatus.Facts(
+            definition,
+            File(
+                nameof(FlowRunStatus.Running),
+                [
+                    Step("build", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 0)),
+                    Step("build+2", nameof(FlowInstanceState.NotStarted), "orient", visit: 2),
+                ]),
+            questions: null,
+            updates: null,
+            Engine,
+            AsOf);
+        var estimate = facts.First(fact => fact.StartsWith("estimate", StringComparison.Ordinal));
+
+        Assert.StartsWith("estimate  between 0s and 0s more, from the 1 step instance that ended Done in this run", estimate, StringComparison.Ordinal);
+        Assert.DoesNotContain("ended no instance Done", estimate, StringComparison.Ordinal);
+        Assert.DoesNotContain("has not run to an end", estimate, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A piece of a plan update not carried out to an end and an iteration an update added and the run has not made yet
     /// - of a loop, or a round of a work-item group with no loop around it - are named among what is left, and a failure
     /// a handler took is counted among what is done.

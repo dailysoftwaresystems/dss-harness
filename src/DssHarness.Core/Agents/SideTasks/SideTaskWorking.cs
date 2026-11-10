@@ -389,6 +389,16 @@ internal sealed class Working
         var launch = new Launch { Entry = Serving };
 
         front.Seen.LaunchBegins(alreadyWritten);
+
+        // Every press reaches the launch, whose client cuts the turn under way and leaves it be between turns; what is
+        // said of it is whether a turn was under way. Wired before the launch is begun: its first turn may begin, and a
+        // press come, before the call that begins it has returned here.
+        Interrupts.WhileTurning(_ =>
+        {
+            launch.Interrupt.Interrupt();
+            return front.Seen.TurnUnderWay;
+        });
+
         launch.Run = _runner.RunAsync(Request(lines[0], launch.Messages, launch.Interrupt), front, _launching);
         launch.Given.Add(lines[0]);
 
@@ -396,14 +406,6 @@ internal sealed class Working
         {
             launch.Post(line, Later(line));
         }
-
-        // Every press reaches the launch, whose client cuts the turn under way and leaves it be between turns; what is
-        // said of it is whether a turn was under way.
-        Interrupts.WhileTurning(_ =>
-        {
-            launch.Interrupt.Interrupt();
-            return front.Seen.TurnUnderWay;
-        });
 
         return launch;
     }
