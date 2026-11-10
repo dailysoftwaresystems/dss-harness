@@ -1450,14 +1450,13 @@ after it ends (`MainTreeWriteLock.LeftBehind`), asked of each command where its 
 a script a shell runs and one the string wrote and then runs meet it as the string's own commands do: one the command
 reader reads as run in the background (`AnalyzedCommand.Background`) - a lone `&` ends its list, never `&&`, a
 redirect's `&` or a quoted one, nor cmd's, which runs the next command in turn and is read as `;`; a `coproc`'s
-command; a `>(...)`'s body, which the shell does not wait for, never a `<(...)`'s, whose output its command reads to the
-end; PowerShell's job `&` - unless a bare `wait` the same shell surely runs follows it, a plain element of its list or
-of a `{ }` group no `&&` or `||` joins, never one in a conditional's, a loop's or a case's body, the reader keeping whose
-job each is (a subshell, a substitution, a pipeline's command and a list run in the background are each a shell of their
-own); or one run by a program that keeps what it starts apart (`CommandAnalysis.Detaching`) wherever a program of the
-command runs (`CommandAnalysis.RunsAt`) - a program by the last segment of any path to it, the shells' own `start`,
-`Start-Process`, `saps` and `disown` by the bare word alone, so `./bin/start` is the repository's script - which a
-contained `run_command`'s end would not reach either where it leaves the session. A terminal session's program given what to run, `systemd-run`, and a `start` or `Start-Process`
+command; a process substitution's body, `<(...)` or `>(...)`, which the shell does not wait for whatever its command
+reads; PowerShell's job `&`; or one run by a program that keeps what it starts apart
+(`CommandAnalysis.Detaching`) wherever a program of the command runs (`CommandAnalysis.RunsAt`) - a program by the
+last segment of any path to it, the shells' and PowerShell's own commands - `start`, `Start-Process`, `Start-Job`,
+`disown` and their kin - by the bare word alone or a module-qualified name PowerShell resolves
+(`Microsoft.PowerShell.Management\Start-Process`), so `./bin/start` is the repository's script - or one PowerShell gives
+`-AsJob`, which a contained `run_command`'s end would not reach either where it leaves the session. A terminal session's program given what to run, `systemd-run`, and a `start` or `Start-Process`
 told to wait, which hands its program a command line of its own, are refused to every agent before the lock weighs
 them. The refusal is of what the command names: what a program detaches by itself - a dev server's own daemon mode, an
 interpreter's code - is not read, the OS layer standing behind the words. Holding the lock until the command's process

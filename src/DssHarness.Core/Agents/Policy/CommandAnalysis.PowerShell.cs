@@ -563,9 +563,17 @@ public static partial class CommandAnalysis
         /// </summary>
         private static bool NamesInvokeExpression(string word)
             => LiteralText(word) is { } text
-                && text.Replace('\\', '/').Split('/')[^1] is var name
-                && string.Concat(name.Select(character => IsDash(character) ? '-' : character)) is var dashed
+                && CommandName(text) is var dashed
                 && (dashed.Equals("iex", StringComparison.OrdinalIgnoreCase) || dashed.Equals("Invoke-Expression", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// The command a name gives as PowerShell resolves it: its last segment, as a module-qualified name ends
+        /// (<c>Microsoft.PowerShell.Management\Start-Process</c>), each of PowerShell's dashes a plain one.
+        /// </summary>
+        internal static string CommandName(string text) => Dashed(text.Replace('\\', '/').Split('/')[^1]);
+
+        /// <summary>A word with each of PowerShell's dashes a plain one, as PowerShell reads a parameter's.</summary>
+        internal static string Dashed(string word) => string.Concat(word.Select(character => IsDash(character) ? '-' : character));
 
         /// <summary>
         /// The text a word is, where it is literal text alone - one or more of <see cref="Literal"/>'s quoted runs,

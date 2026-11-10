@@ -504,10 +504,10 @@ public sealed class SideTaskPolicyTests
     /// <summary>
     /// A side-task's command that leaves a process running after it ends is refused by the main tree's lock, named as it was
     /// written: one the shell runs in the background - a lone <c>&amp;</c> takes its whole list, a pipe's, an and-or's, a
-    /// group's, a loop's and a subshell's with it, a <c>coproc</c> its command, a <c>&gt;(...)</c> its body, PowerShell's job
-    /// <c>&amp;</c> its pipelines - and one a program keeps apart, wherever a program of the command runs; a script a shell
-    /// runs, and one the command wrote and then runs, read the same. A step's agent, which holds no such lock, is refused
-    /// none of it.
+    /// group's, a loop's and a subshell's with it, a <c>coproc</c> its command, a process substitution its body, PowerShell's
+    /// job <c>&amp;</c> its pipelines - whatever waits after it, and one a program keeps apart, wherever a program of the
+    /// command runs, a PowerShell job and <c>-AsJob</c> among them; a script a shell runs, and one the command wrote and
+    /// then runs, read the same. A step's agent, which holds no such lock, is refused none of it.
     /// </summary>
     [Theory]
     [InlineData("make &", "make")]
@@ -528,7 +528,7 @@ public sealed class SideTaskPolicyTests
     [InlineData(": > >(npm run codegen > gen.log 2>&1)", "npm run codegen >gen.log")]
     [InlineData("tee build.log > >(gzip > build.log.gz)", "gzip >build.log.gz")]
     [InlineData("pwsh -c 'npm run codegen &'", "pwsh -c npm run codegen &")]
-    [InlineData("make & wait; make test &", "make test")]
+    [InlineData("make & wait; make test &", "make")]
     [InlineData("make & wait -n", "make")]
     [InlineData("make & wait %1", "make")]
     [InlineData("(make &); wait", "make")]
@@ -566,6 +566,30 @@ public sealed class SideTaskPolicyTests
     [InlineData("cmd /c @start notepad", "cmd /c @start notepad")]
     [InlineData("pwsh -c 'Start-Process notepad'", "pwsh -c Start-Process notepad")]
     [InlineData("pwsh -c 'start notepad'", "pwsh -c start notepad")]
+    [InlineData("make a & make b & wait", "make a")]
+    [InlineData("for f in a.log b.log; do gzip \"$f\" & done; wait", "gzip $f")]
+    [InlineData("make & { wait; }", "make")]
+    [InlineData("if true; then make & fi; wait", "make")]
+    [InlineData("make &\nwait", "make")]
+    [InlineData("coproc make; wait", "make")]
+    [InlineData("(make & wait)", "make")]
+    [InlineData("bash -c 'make & wait'", "bash -c make & wait")]
+    [InlineData("wait() { :; }; npm run codegen > gen.log 2>&1 & wait", "npm run codegen >gen.log")]
+    [InlineData("f() { npm run codegen > gen.log 2>&1 & }; wait; f", "npm run codegen >gen.log")]
+    [InlineData("set -euo pipefail\nnpm run codegen > gen.log 2>&1 &\nnpm run lint\nwait", "npm run codegen >gen.log")]
+    [InlineData("npm run codegen > gen.log 2>&1 & false &&\nwait", "npm run codegen >gen.log")]
+    [InlineData("npm run codegen > gen.log 2>&1 & cat gen.log |\nwait", "npm run codegen >gen.log")]
+    [InlineData("pwsh -c 'npm run codegen &; wait'", "pwsh -c npm run codegen &; wait")]
+    [InlineData("diff <(sort a.txt) <(sort b.txt)", "sort a.txt")]
+    [InlineData("true <(npm run codegen > gen.log 2>&1)", "npm run codegen >gen.log")]
+    [InlineData(": < <(npm run codegen > gen.log 2>&1)", "npm run codegen >gen.log")]
+    [InlineData("pwsh -c 'Microsoft.PowerShell.Management\\Start-Process notepad'", "pwsh -c Microsoft.PowerShell.Management\\Start-Process notepad")]
+    [InlineData("pwsh -c 'Start–Process notepad'", "pwsh -c Start–Process notepad")]
+    [InlineData("pwsh -c 'Start-Job { npm run codegen }'", "pwsh -c Start-Job { npm run codegen }")]
+    [InlineData("pwsh -c 'sajb { npm run codegen }'", "pwsh -c sajb { npm run codegen }")]
+    [InlineData("pwsh -c 'ThreadJob\\Start-ThreadJob { npm run codegen }'", "pwsh -c ThreadJob\\Start-ThreadJob { npm run codegen }")]
+    [InlineData("pwsh -c 'Invoke-Command -ScriptBlock { npm run codegen } -AsJob'", "pwsh -c Invoke-Command -ScriptBlock { npm run codegen } -AsJob")]
+    [InlineData("pwsh -c 'Invoke-Command { npm run codegen } -asj'", "pwsh -c Invoke-Command { npm run codegen } -asj")]
     public void ASideTasksCommandThatLeavesAProcessBehind_IsRefusedByTheMainTreesLock(string command, string named)
     {
         var (side, _, _) = Policy();
@@ -601,24 +625,11 @@ public sealed class SideTaskPolicyTests
     }
 
     /// <summary>
-    /// What leaves nothing running after the command ends refuses a side-task's command nothing: jobs a bare <c>wait</c> the
-    /// same shell surely runs waits for after them - in a loop, a group or a conditional of that shell, a coprocess among
-    /// them; the wait a plain element of the list or of a <c>{ }</c> group of it - a <c>&lt;(...)</c>'s body, whose output
-    /// its command reads to the end, at given no job, and a repository's own script named as one of the shells' own
-    /// detaching commands is, by a path or a script's end.
+    /// What leaves nothing running after the command ends refuses a side-task's command nothing: at given no job, a
+    /// repository's own script named as one of the shells' own detaching commands is, by a path or a script's end, a
+    /// module's command that keeps nothing apart, and a parameter of PowerShell's that only begins as <c>-AsJob</c> does.
     /// </summary>
     [Theory]
-    [InlineData("make a & make b & wait")]
-    [InlineData("for f in a.log b.log; do gzip \"$f\" & done; wait")]
-    [InlineData("make & { wait; }")]
-    [InlineData("make & { echo waiting; { wait; }; }")]
-    [InlineData("if true; then make & fi; wait")]
-    [InlineData("make &\nwait")]
-    [InlineData("make & wait && make test")]
-    [InlineData("coproc make; wait")]
-    [InlineData("(make & wait)")]
-    [InlineData("bash -c 'make & wait'")]
-    [InlineData("diff <(sort a.txt) <(sort b.txt)")]
     [InlineData("at -l")]
     [InlineData("at -r 3")]
     [InlineData("./bin/start")]
@@ -627,6 +638,10 @@ public sealed class SideTaskPolicyTests
     [InlineData("scripts/start.ps1")]
     [InlineData("cmd /c \".\\start.cmd\"")]
     [InlineData("cmd /c start.cmd")]
+    [InlineData("pwsh -c 'Microsoft.PowerShell.Management\\Get-ChildItem'")]
+    [InlineData("pwsh -c '.\\scripts\\start'")]
+    [InlineData("pwsh -c 'Get-Content a.json | ConvertFrom-Json -AsHashtable'")]
+    [InlineData("pwsh -c 'Invoke-Command { npm run codegen } -AsJob:$false'")]
     public void ACommandThatLeavesNothingRunning_IsRefusedASideTaskNothing(string command)
     {
         var (side, _, _) = Policy();
@@ -652,6 +667,28 @@ public sealed class SideTaskPolicyTests
 
         Assert.Equal(rule, Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command)).Rule);
         Assert.Equal(rule, Assert.IsType<AgentPolicyAnswer.Denied>(StepPolicy().Run(command)).Rule);
+    }
+
+    /// <summary>
+    /// A pipe, <c>&amp;&amp;</c> or <c>||</c> at a line's end joins the command on the next line - past blank lines, comments
+    /// and a here-document the line named - as the shell reads on: a shell the next line runs reads its script from the pipe,
+    /// which no agent is let run, a credential's print and a push among what it would read.
+    /// </summary>
+    [Theory]
+    [InlineData("printf 'gh auth token\\n' |\nsh", "sh")]
+    [InlineData("printf 'gh auth token\\n' | # feed it\n\nsh", "sh")]
+    [InlineData("echo 'git push --force origin HEAD:main' |&\nbash", "bash")]
+    [InlineData("cat <<'EOF' |\ngh auth token\nEOF\nsh", "sh")]
+    public void AShellOnTheLineAfterAPipe_ReadsThePipe_ForEveryAgent(string command, string shell)
+    {
+        var (side, _, _) = Policy();
+        var refused = new AgentPolicyAnswer.Denied(
+            AgentPolicy.UndecidedRule,
+            AgentPolicySource.Builtin,
+            $"this tool could not decide '{command}' ('{shell}' reads the script it runs from its input, which this does not read): it denies what it cannot decide");
+
+        Assert.Equal(refused, side.Run(command));
+        Assert.Equal(refused, StepPolicy().Run(command));
     }
 
     /// <summary>The root actions stay refused to the side-task's agent as to every agent's, wherever they stand.</summary>

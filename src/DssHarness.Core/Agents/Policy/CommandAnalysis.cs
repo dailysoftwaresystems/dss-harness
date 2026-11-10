@@ -114,9 +114,10 @@ public static partial class CommandAnalysis
     /// <summary>
     /// The shell's and PowerShell's own commands that keep what they start apart, which no path reaches: <c>disown</c>,
     /// Windows' <c>start</c> - cmd's own, and PowerShell's name for <c>Start-Process</c> - <c>Start-Process</c> and
-    /// <c>saps</c>.
+    /// <c>saps</c>, and PowerShell's jobs, <c>Start-Job</c>, <c>sajb</c> and <c>Start-ThreadJob</c>, whose block runs on as
+    /// the job <c>&amp;</c>'s does.
     /// </summary>
-    private static readonly string[] DetachingCommands = ["disown", "start", "Start-Process", "saps"];
+    private static readonly string[] DetachingCommands = ["disown", "start", "Start-Process", "saps", "Start-Job", "sajb", "Start-ThreadJob"];
 
     /// <summary>
     /// The programs and the shells' own commands whose work is to keep what they start running apart from the command
@@ -124,14 +125,19 @@ public static partial class CommandAnalysis
     /// </summary>
     public static IReadOnlyList<string> Detaching { get; } = [.. DetachingPrograms, .. DetachingCommands];
 
+    /// <summary>A name PowerShell reads as a module's command (<c>Microsoft.PowerShell.Management\Start-Process</c>): a module's name, a backslash, the command.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_.\-]*\\[^\\/]+$")]
+    private static partial System.Text.RegularExpressions.Regex ModuleQualified();
+
     /// <summary>
     /// Whether <paramref name="command"/> leaves a process running after the command it stands in ends: it runs in the
-    /// background (<see cref="AnalyzedCommand.Background"/>), or one of <see cref="Detaching"/> runs at a place a program of
-    /// it runs (<see cref="RunsAt"/>) - among its words, or among a wrapper's stripped before them, as <c>nohup</c> is - at
-    /// and batch where they schedule a job (<see cref="AtJob"/>), not where they list, remove or print one. A program is
-    /// matched by the last segment of any path to it, a Windows program's <c>.exe</c> folded (<c>/usr/bin/setsid</c>); a
-    /// shell's own command by its bare word alone, for a word with a directory part or a script's end
-    /// (<c>./bin/start</c>, <c>start.cmd</c>) names the repository's own script, never cmd's <c>start</c>.
+    /// background (<see cref="AnalyzedCommand.Background"/>), it is given PowerShell's <c>-AsJob</c>, or one of
+    /// <see cref="Detaching"/> runs at a place a program of it runs (<see cref="RunsAt"/>) - among its words, or among a
+    /// wrapper's stripped before them, as <c>nohup</c> is - at and batch where they schedule a job (<see cref="AtJob"/>), not
+    /// where they list, remove or print one. A program is matched by the last segment of any path to it, a Windows
+    /// program's <c>.exe</c> folded (<c>/usr/bin/setsid</c>); a shell's own command by its bare word or by a module-qualified
+    /// name PowerShell resolves to it, each with any of PowerShell's dashes, for a word with a directory part or a script's
+    /// end (<c>./bin/start</c>, <c>start.cmd</c>) names the repository's own script, never cmd's <c>start</c>.
     /// </summary>
     /// <param name="command">The command, as this read it.</param>
     public static bool LeavesAProcessBehind(AnalyzedCommand command)
@@ -145,8 +151,9 @@ public static partial class CommandAnalysis
                 var word = words[at].TrimStart('@');
                 var segment = word.TrimEnd('/', '\\').Replace('\\', '/').Split('/')[^1];
                 var program = segment.Length > 4 && segment.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? segment[..^4] : segment;
+                var own = word.IndexOfAny(['/', '\\']) < 0 || ModuleQualified().IsMatch(word);
 
-                if (Is(word, DetachingCommands)
+                if ((own && Is(PowerShellReader.CommandName(word), DetachingCommands))
                     || (Is(program, DetachingPrograms) && (!Is(program, "at", "batch") || AtJob([.. words.Skip(at)], redirects, program: false).Count > 0)))
                 {
                     return true;
@@ -156,7 +163,17 @@ public static partial class CommandAnalysis
             return false;
         }
 
-        return command.Background || Detaches(command.Words, command.Redirects) || command.Wrappers.Any(words => Detaches(words, []));
+        // PowerShell's -AsJob - by any start of its name from -as, never set :$false - runs the command as a job.
+        static bool AsJob(string word)
+            => PowerShellReader.Dashed(word) is ['-', not '-', ..] dashed
+                && dashed[1..].Split(':', 2) is var spelled
+                && spelled[0].Length >= 2 && "asjob".StartsWith(spelled[0].ToLowerInvariant(), StringComparison.Ordinal)
+                && (spelled.Length == 1 || !spelled[1].TrimStart('$', '{').StartsWith("false", StringComparison.OrdinalIgnoreCase));
+
+        return command.Background
+            || command.Words.Skip(EnvironmentOf(command.Words) + 1).Any(AsJob)
+            || Detaches(command.Words, command.Redirects)
+            || command.Wrappers.Any(words => Detaches(words, []));
     }
 
     /// <summary>

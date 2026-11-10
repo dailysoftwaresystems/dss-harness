@@ -59,15 +59,8 @@ public static partial class CommandAnalysis
         /// <summary>How it is joined to the command before it (<see cref="AnalyzedCommand.Joined"/>).</summary>
         public string? Joined { get; set; }
 
-        /// <summary>
-        /// The shells that run it in the background, one entry for each <c>&amp;</c> or <c>coproc</c> that does - the shell
-        /// whose job it is, which a bare <c>wait</c> of that shell's waits for and takes away - or one no <c>wait</c> here
-        /// waits for: a process substitution's, a job of a shell another reader read.
-        /// </summary>
-        public List<object> BackgroundIn { get; } = [];
-
-        /// <summary>Whether the shell runs it in the background (<see cref="AnalyzedCommand.Background"/>): some shell does, and no wait of that shell's waits for it.</summary>
-        public bool Background => BackgroundIn.Count > 0;
+        /// <summary>Whether the shell runs it in the background (<see cref="AnalyzedCommand.Background"/>).</summary>
+        public bool Background { get; set; }
 
         /// <summary>Where it begins a <c>coproc</c>, how many groups, loops, conditionals and cases stood open at the word: the coprocess ends where they close again.</summary>
         public int? Coproc { get; set; }
@@ -108,12 +101,6 @@ public static partial class CommandAnalysis
         private int _depth = nesting;
 
         /// <summary>
-        /// The shell the reader stands in - the script's own, a subshell's, a substitution's - whose jobs are its own: a
-        /// <c>wait</c> waits for none of another shell's.
-        /// </summary>
-        private object _shell = new();
-
-        /// <summary>
         /// Whether the reader stands where a double quote's rules hold - in one, in arithmetic, in an expanding here-document
         /// - where a single quote is a character like any, and what substitutes inside it runs.
         /// </summary>
@@ -127,16 +114,6 @@ public static partial class CommandAnalysis
 
         /// <summary>Where among the commands read each group, loop, conditional and case the reader stands in began.</summary>
         private readonly Stack<int> _opened = new();
-
-        /// <summary>
-        /// Whether each group, loop, conditional and case the reader stands in runs its commands whenever it runs - a
-        /// <c>{ }</c> group no <c>&amp;&amp;</c> or <c>||</c> joins - where a conditional's, a loop's and a case's body may run
-        /// none of them; in step with <see cref="_opened"/>.
-        /// </summary>
-        private readonly Stack<bool> _surely = new();
-
-        /// <summary>Whether a function's definition was read, whose body - the next group or command - runs only where the function is called.</summary>
-        private bool _defining;
 
         /// <summary>
         /// The level a pipe was read at (<see cref="Level"/>), whose next command - and every command a group, loop or
@@ -177,78 +154,19 @@ public static partial class CommandAnalysis
             // background - every command of it, its pipes and its '&&' and '||' with it - and ';' and a line's end begin
             // the next.
             var list = _read.Count;
-            var first = list;
-
-            // How many groups, loops, conditionals and cases stand open where the list's own commands stand.
-            var bottom = _open;
 
             // A coprocess begun, where among the commands read and inside how many groups: the shell runs it in the
             // background, as a lone '&' would, whole - its group, loop or subshell with it - once those it stands in close.
             (int Start, int Open)? coproc = null;
 
-            // The levels whose pipeline read so far holds a pipe, and where each level's pipeline began among the commands
-            // read: every command of a pipeline runs in a shell of its own, whose jobs no wait of this shell's waits for.
-            var piped = new HashSet<int>();
-            var pipelines = new Dictionary<int, int>();
-
-            // Each bare wait read - no job named, no option - with where it stands among the commands read, and the deepest
-            // level whose pipeline holding it may still be a pipe's or a lone '&''s, each run in a shell of its own: once the
-            // list's own pipeline holding it ends otherwise, it waited in this shell for every job of this shell's before it.
-            var waits = new List<(int At, int Through)>();
-
-            // A separator read where the reader stands - or the list's end, read as ';' - settles what the coprocess, the
-            // pipeline and the waits read before it started and waited for.
-            void Separated(string separator)
+            // A separator read where the reader stands, or the list's end: a coprocess begun before it ends there, once the
+            // groups it began in have closed.
+            void Separated()
             {
-                var level = _open;
-
-                if (coproc is { } begun && level <= begun.Open)
+                if (coproc is { } begun && _open <= begun.Open)
                 {
-                    InBackground(begun.Start, _shell);
+                    InBackground(begun.Start);
                     coproc = null;
-                }
-
-                // A wait the pipe finds still unsettled runs in the pipeline's shell, and is dropped whole: a job of that shell
-                // it did wait for - '{ make & wait; } | cat' - stays in the background, the reader's limit, a refusal too many.
-                if (separator == "|")
-                {
-                    piped.Add(level);
-                    waits.RemoveAll(wait => wait.Through >= level);
-                    return;
-                }
-
-                if (piped.Remove(level))
-                {
-                    Subshelled(Math.Max(pipelines.GetValueOrDefault(level, first), level > bottom && _opened.Count > 0 ? _opened.Peek() : first), _shell);
-                }
-
-                pipelines[level] = _read.Count;
-
-                if (separator == "&")
-                {
-                    waits.RemoveAll(wait => wait.Through >= level);
-                    return;
-                }
-
-                for (var wait = waits.Count - 1; wait >= 0; wait--)
-                {
-                    if (waits[wait].Through < level)
-                    {
-                        continue;
-                    }
-
-                    if (level > bottom)
-                    {
-                        waits[wait] = (waits[wait].At, level - 1);
-                        continue;
-                    }
-
-                    for (var at = 0; at < waits[wait].At; at++)
-                    {
-                        _read[at].BackgroundIn.RemoveAll(shell => shell == _shell);
-                    }
-
-                    waits.RemoveAt(wait);
                 }
             }
 
@@ -263,7 +181,7 @@ public static partial class CommandAnalysis
                         throw new NotSupportedException("a parenthesis in it does not close, which this does not read");
                     }
 
-                    Separated(";");
+                    Separated();
                     return;
                 }
 
@@ -271,7 +189,7 @@ public static partial class CommandAnalysis
 
                 if (character is '\n' or '\r')
                 {
-                    Separated(";");
+                    Separated();
                     EndPipe(joined: null);
                     NewLine();
                     list = _read.Count;
@@ -287,7 +205,7 @@ public static partial class CommandAnalysis
                 if (character == ';')
                 {
                     // ';;', ';&' and ';;&' end a case clause; outside one, they separate as ';' does.
-                    Separated(";");
+                    Separated();
                     var terminator = At(";;&") ? 3 : At(";;") || At(";&") ? 2 : 1;
                     _at += terminator;
                     EndPipe(joined: null);
@@ -301,16 +219,24 @@ public static partial class CommandAnalysis
                     continue;
                 }
 
+                // After '&&', '||', '|' and '|&' the shell reads on past line ends and comments to the command they join: no
+                // line's end there ends the list or the pipeline.
                 if (character == '&' && !At("&>"))
                 {
                     var and = At("&&");
-                    Separated(and ? "&&" : "&");
+                    Separated();
                     _at += and ? 2 : 1;
                     EndPipe(and ? "&&" : null);
 
-                    if (!and)
+                    if (and)
                     {
-                        InBackground(list, _shell);
+                        SkipBlanksAndLines();
+                    }
+                    else
+                    {
+                        // Whatever waits after it: a wait may never run, or never be the shell's own (a function or
+                        // 'enable -n' takes its name, 'exit', 'exec' or errexit ends the shell first).
+                        InBackground(list);
                         list = _read.Count;
                     }
 
@@ -320,24 +246,26 @@ public static partial class CommandAnalysis
                 if (character == '|')
                 {
                     // '||' separates; '|' and '|&' hand what the command before printed to the one after as its input.
+                    Separated();
+
                     if (At("||"))
                     {
-                        Separated("||");
                         _at += 2;
                         EndPipe("||");
+                        SkipBlanksAndLines();
                         continue;
                     }
 
-                    Separated("|");
                     _at += At("|&") ? 2 : 1;
                     _piped = Level;
                     _joined = null;
+                    SkipBlanksAndLines();
                     continue;
                 }
 
                 if (character == ')')
                 {
-                    Separated(";");
+                    Separated();
                     _at++;
 
                     // The parenthesis that closes the list; one nothing opened separates, as a case pattern's would.
@@ -351,7 +279,7 @@ public static partial class CommandAnalysis
 
                 if (end is ListEnd.CaseClause && (_caseClosed || AtWord("esac")))
                 {
-                    Separated(";");
+                    Separated();
                     return;
                 }
 
@@ -363,20 +291,10 @@ public static partial class CommandAnalysis
 
                 var before = _read.Count;
                 ReadCommand(end);
-                var read = _read[^1];
 
-                if (read.Coproc is { } open)
+                if (_read[^1].Coproc is { } open)
                 {
                     coproc = (before, open);
-                }
-
-                // A wait that may not run waits for nothing here: one joined by '&&' or '||', one in a conditional's, a loop's or
-                // a case's body or in a group one of those joins - only a plain element of the list or of a '{ }' group of it
-                // surely runs. One after a pipe at its level or one around it runs in a pipeline's shell of its own.
-                if (read.Words is ["wait"] && read.Joined is null && end is not ListEnd.CaseClause
-                    && _surely.Take(_open - bottom).All(surely => surely) && !piped.Any(level => level <= _open))
-                {
-                    waits.Add((_read.Count - 1, _open));
                 }
             }
         }
@@ -391,13 +309,12 @@ public static partial class CommandAnalysis
             var start = _at;
             var first = _read.Count;
             _at += 2;
-            _defining = false;
             var arithmetic = At(start, "((") && ReadArithmetic(bracket: false);
 
             if (!arithmetic)
             {
                 _at = start + 1;
-                Subshell(() => ReadList(ListEnd.Parenthesis));
+                Deeper(() => ReadList(ListEnd.Parenthesis));
             }
 
             var after = new Simple { Closes = first, Level = _depth };
@@ -473,11 +390,10 @@ public static partial class CommandAnalysis
         }
 
         /// <summary>
-        /// The list that began at <paramref name="list"/> among the commands read runs in the background, a job of
-        /// <paramref name="shell"/>'s: each command of it, and each of a group, loop or conditional it closes, which began
-        /// before it - in a shell of its own, whose jobs are none of <paramref name="shell"/>'s.
+        /// The list that began at <paramref name="list"/> among the commands read runs in the background: each command of it,
+        /// and each of a group, loop or conditional it closes, which began before it.
         /// </summary>
-        private void InBackground(int list, object shell)
+        private void InBackground(int list)
         {
             for (var at = _read.Count - 1; at >= list; at--)
             {
@@ -487,47 +403,17 @@ public static partial class CommandAnalysis
                 }
             }
 
-            Subshelled(list, shell);
-
             for (var at = list; at < _read.Count; at++)
             {
-                _read[at].BackgroundIn.Add(shell);
+                _read[at].Background = true;
             }
         }
 
-        /// <summary>
-        /// The commands read from <paramref name="from"/> run in a shell of their own, which <paramref name="shell"/> starts:
-        /// a job they started is that shell's, which no wait of <paramref name="shell"/>'s waits for.
-        /// </summary>
-        private void Subshelled(int from, object shell)
-        {
-            var own = new object();
-
-            for (var at = from; at < _read.Count; at++)
-            {
-                var marks = _read[at].BackgroundIn;
-
-                for (var mark = 0; mark < marks.Count; mark++)
-                {
-                    if (marks[mark] == shell)
-                    {
-                        marks[mark] = own;
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// A group, loop, conditional or case begins: the commands read from here stand in it - each of them run whenever the
-        /// command it begins at is where <paramref name="surely"/>: a <c>{ }</c> group no <c>&amp;&amp;</c> or <c>||</c> joins and no
-        /// function's definition begins.
-        /// </summary>
-        private void Open(bool surely = false)
+        /// <summary>A group, loop, conditional or case begins: the commands read from here stand in it.</summary>
+        private void Open()
         {
             _open++;
             _opened.Push(_read.Count);
-            _surely.Push(surely && !_defining);
-            _defining = false;
         }
 
         /// <summary>The innermost group, loop, conditional or case ends at <paramref name="command"/>, which a redirect after it is made for.</summary>
@@ -540,7 +426,6 @@ public static partial class CommandAnalysis
 
             _open--;
             LeavePipe();
-            _surely.Pop();
             var first = _opened.Pop();
             command.Closes = Math.Min(command.Closes ?? first, first);
         }
@@ -581,7 +466,6 @@ public static partial class CommandAnalysis
                     if (command.Words.Count == 1 && command.Redirects.Count == 0 && !IsAssignment(command.Words[0]) && EmptyParentheses())
                     {
                         command.Words.Clear();
-                        _defining = true;
                         continue;
                     }
 
@@ -633,7 +517,6 @@ public static partial class CommandAnalysis
                         SkipBlanks();
                         _ = ReadWord(false);
                         _ = EmptyParentheses();
-                        _defining = true;
                         continue;
                     }
 
@@ -646,13 +529,7 @@ public static partial class CommandAnalysis
 
                     if (Reserved.Contains(word))
                     {
-                        // A group runs its commands whenever the command it begins runs: never one a function's definition
-                        // begins, which runs where the function is called, or one '&&' or '||' joins.
-                        if (word == "{")
-                        {
-                            Open(surely: command.Joined is null);
-                        }
-                        else if (word is "if" or "while" or "until")
+                        if (word is "{" or "if" or "while" or "until")
                         {
                             Open();
                         }
@@ -852,17 +729,13 @@ public static partial class CommandAnalysis
                     if (_at + 1 < text.Length && text[_at + 1] == '(')
                     {
                         // A process substitution: its body runs, and the word is a file it names, whatever that is. The shell
-                        // waits for neither kind; what a '<(...)' prints its command reads to the end, by which the body has
-                        // ended, but a '>(...)' reads what its command writes and runs on after it, in the background.
+                        // waits for neither kind: its body runs in the background, as long as it runs, whatever its command
+                        // reads of it.
                         var open = _at + 1;
                         var body = _read.Count;
                         _at = open + 1;
-                        Subshell(() => ReadList(ListEnd.Parenthesis));
-
-                        if (character == '>')
-                        {
-                            InBackground(body, new object());
-                        }
+                        Deeper(() => ReadList(ListEnd.Parenthesis));
+                        InBackground(body);
 
                         word.Append(character).Append(text, open, _at - open);
                         howRead.Append(WordQuoting.Open, 1 + _at - open);
@@ -1060,7 +933,7 @@ public static partial class CommandAnalysis
                 var quoted = _quoted;
                 _at = open + 1;
                 _quoted = false;
-                Subshell(() => ReadList(ListEnd.Parenthesis));
+                Deeper(() => ReadList(ListEnd.Parenthesis));
                 _quoted = quoted;
                 AppendExpansion(word, howRead, "$" + text.Substring(open, _at - open));
                 return;
@@ -1612,19 +1485,6 @@ public static partial class CommandAnalysis
             LeavePipe();
         }
 
-        /// <summary>
-        /// Reads what <paramref name="read"/> reads as a shell of its own - a subshell, a substitution - one level deeper
-        /// (<see cref="Deeper"/>): a job its <c>&amp;</c> starts is that shell's, and its <c>wait</c> waits for none of the
-        /// shell's around it.
-        /// </summary>
-        private void Subshell(Action read)
-        {
-            var shell = _shell;
-            _shell = new object();
-            Deeper(read);
-            _shell = shell;
-        }
-
         /// <summary>A level ends: a pipe read deeper than the reader now stands reaches no further.</summary>
         private void LeavePipe()
         {
@@ -1639,14 +1499,7 @@ public static partial class CommandAnalysis
         /// <summary>A command another reader read whole, as this reader keeps one: given the input a pipe gives where it stands.</summary>
         private Simple Built(AnalyzedCommand read)
         {
-            var command = new Simple { InputGiven = read.InputGiven || _piped >= 0, Level = read.Level, Joined = read.Joined };
-
-            // A job of the shell the other reader read, which no wait here waits for.
-            if (read.Background)
-            {
-                command.BackgroundIn.Add(new object());
-            }
-
+            var command = new Simple { InputGiven = read.InputGiven || _piped >= 0, Level = read.Level, Joined = read.Joined, Background = read.Background };
             command.Words.AddRange(read.Words);
             command.Quoted.AddRange(read.Quoted ?? []);
             command.Redirects.AddRange(read.Redirects);
