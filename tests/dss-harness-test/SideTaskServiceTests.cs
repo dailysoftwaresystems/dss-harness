@@ -542,8 +542,8 @@ public sealed class SideTaskServiceTests
         // What each turn of the launch took, said by its first twenty characters: the first message its prompt, the later
         // one as it was posted.
         Assert.Equal(2, typed.Said.Count);
-        Assert.StartsWith("about: <repository-map>\n", typed.Said[0], StringComparison.Ordinal);
-        Assert.StartsWith("about: <codebase>\n", typed.Said[1], StringComparison.Ordinal);
+        Assert.StartsWith($"about: <repository-map>{Environment.NewLine}", typed.Said[0], StringComparison.Ordinal);
+        Assert.StartsWith($"about: <codebase>{Environment.NewLine}", typed.Said[1], StringComparison.Ordinal);
     }
 
     /// <summary>
