@@ -3370,7 +3370,13 @@ the inbox an answer the run's records do not hold. Once settled it is counted, a
 once the file lets it go: a removal that fails is tried again at the next poll or drive's end, and one
 the inbox still holds as the session ends - the removal failed to the last, or a crash came between the
 take and the removal - is settled by the run's records, so a later session that meets the entry only
-empties it from the inbox: no answer is weighed, offered or taken twice. Where the engine leaves before it takes a request, the command answers from the
+empties it from the inbox: no answer is weighed, offered or taken twice. `answer-orchestrator`, having
+handed an answer to a running engine, waits on the service's clock at most two of the engine's polls for
+what `questions.json` records under its entry's id: taken, it says so; refused, it answers the run's
+refusal (13) with the engine's why. Where the engine's session ends without weighing it, the command's
+own session is the next, and weighs that very entry under its id - so the run records one outcome of the
+person's answer. The inbox is named on every exit after the write, a cancelled wait and a session refused
+before it weighed the entry among them. Where the engine leaves before it takes a request, the command answers from the
 run's state and takes the request back. `stop-orchestrator --now` ends the engine's process tree -
 only on this machine, and only the process whose start matches the one its owner recorded - and
 removes the owner once it is gone. Whether a run's engine is live is asked of one owner

@@ -206,6 +206,17 @@ public sealed record FlowQuestionsFile(
     /// <summary>The questions the run leaves open, in the order raised.</summary>
     public IReadOnlyList<FlowQuestionEntry> Open => [.. Questions.Where(question => question.State == "open")];
 
+    /// <summary>
+    /// What the run did with the answer handed over under the inbox entry <paramref name="inbox"/>, as this file records it
+    /// under the entry's id: the question it took it as an answer of, or the refusal it wrote for it - both null where the
+    /// run has not weighed it yet.
+    /// </summary>
+    /// <param name="inbox">The inbox entry's id.</param>
+    public (FlowQuestionEntry? Took, FlowRefusedAnswer? Refused) Weighed(string inbox)
+        => (
+            Questions.FirstOrDefault(question => question.Answers.Any(answer => string.Equals(answer.By?.Inbox, inbox, StringComparison.Ordinal))),
+            (Refused ?? []).FirstOrDefault(refused => string.Equals(refused.Inbox, inbox, StringComparison.Ordinal)));
+
     /// <summary>The entry named, or null where the file holds none.</summary>
     public FlowQuestionEntry? Of(string id) => Questions.FirstOrDefault(question => string.Equals(question.Id, id, StringComparison.Ordinal));
 }

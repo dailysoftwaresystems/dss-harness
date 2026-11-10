@@ -1639,6 +1639,242 @@ public sealed class FlowServiceTests
         Assert.Equal("open", repository.Harness.OrchestrationStore.ReadFlowQuestions(run)!.Questions[0].State);
     }
 
+    /// <summary>The timings of a command that hands an answer over and waits on what became of it: an engine's poll long enough that the wait ends by what the test does, never by its own bound.</summary>
+    private static readonly FlowTimings HandedOverTimings = new(TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30));
+
+    /// <summary>
+    /// An answer handed to an engine that the engine took under its inbox entry is said taken, from what the run's
+    /// questions record under that entry's id - never from the question's state alone - and names the inbox.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedOverThatTheEngineTook_IsSaidTaken_FromWhatTheRunRecordsUnderItsEntry()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: HandedOverTimings, fileSystem: files);
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+
+        store.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, DateTimeOffset.UtcNow, identity.Current));
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+
+        await files.Written(run.InboxFile).WaitAsync(Bound, Token);
+        var entry = Assert.Single(store.ReadInbox(run)!.Answers);
+
+        // The engine's take, as it records one: the answer written under the entry's id.
+        Engine(store, run, answered: new FlowAnswerRecord("go", DateTimeOffset.UtcNow, By: new FlowAnswerBy("person", FlowService.AnswerCommand, Inbox: entry.Id)));
+
+        var outcome = await answering.WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("handed 'go' for question 'q1' to the engine running 'r1'", outcome.Message);
+        Assert.Equal(["the engine took it within 30 s, while the question was open", $"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"], outcome.Details);
+    }
+
+    /// <summary>
+    /// An answer handed to an engine that refused it - another answer took the question first - is the run's refusal
+    /// (13) with the engine's own why, read from what the run's questions record under its entry's id; never "taken"
+    /// because the question is no longer open. The questions and the inbox are named.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedOverThatTheEngineRefused_IsRefused_WithTheEnginesWhy()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: HandedOverTimings, fileSystem: files);
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+
+        store.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, DateTimeOffset.UtcNow, identity.Current));
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: true, cancellationToken: Token);
+
+        await files.Written(run.InboxFile).WaitAsync(Bound, Token);
+        var entry = Assert.Single(store.ReadInbox(run)!.Answers);
+
+        // Another answer, handed over beside this one, took the question first, and the engine refused this one under its id.
+        Engine(
+            store,
+            run,
+            answered: new FlowAnswerRecord("stay", DateTimeOffset.UtcNow, By: new FlowAnswerBy("person", "front-end")),
+            refused: new FlowRefusedAnswer(entry.Id, "q1", "go", DateTimeOffset.UtcNow, "'q1' is not a question this run leaves open"));
+
+        var outcome = await answering.WaitAsync(Bound, Token);
+        var records = JsonNode.Parse(Assert.Single(outcome.Data))!["records"]!;
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Equal("the engine running 'r1' did not take 'go' for question 'q1': 'q1' is not a question this run leaves open", outcome.Message);
+        Assert.Equal([$"questions: {run.QuestionsFile}", $"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"], outcome.Details);
+        Assert.Equal(run.QuestionsFile, records["questions"]!.GetValue<string>());
+        Assert.Equal(run.InboxFile, records["inbox"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// An answer handed to an engine whose session then ends without taking it is the command's own session's answer -
+    /// the entry it handed over, weighed once under its id: taken, never also refused by the inbox's pass that follows,
+    /// and emptied from the inbox as settled.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedOverWhoseEngineGoes_IsTakenOnceUnderItsEntry_ByTheCommandsOwnSession()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var engines = new Engines(repository.Harness.Identity);
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: HandedOverTimings, fileSystem: files, identity: engines);
+        var store = repository.Harness.OrchestrationStore;
+
+        store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+
+        await files.Written(run.InboxFile).WaitAsync(Bound, Token);
+        var entry = Assert.Single(store.ReadInbox(run)!.Answers);
+
+        // The engine's session ends without having read the inbox: nothing is left to take the answer but the command.
+        engines.Alive = false;
+
+        var outcome = await answering.WaitAsync(Bound, Token);
+        var questions = store.ReadFlowQuestions(run)!;
+        var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("done", outcome.Message);
+        Assert.Equal(["after"], runner.Started);
+        Assert.Equal(entry.Id, Assert.Single(Assert.Single(questions.Questions).Answers).By!.Inbox);
+
+        // Weighed once: nothing refused, no line saying the person's answer was not taken, no answer event of a refusal.
+        Assert.Null(questions.Refused);
+        Assert.DoesNotContain(outcome.Details ?? [], line => line.Contains("was not taken", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, read => read.Kind == "answer");
+        Assert.Contains($"inbox: {run.InboxFile}", outcome.Details ?? []);
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
+    /// <summary>
+    /// An answer handed to an engine whose session then ends, where the command's own session is refused before it
+    /// weighs it - the definition no longer one that holds - stays in the inbox for the next session, and the refusal
+    /// says so and names the inbox.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedOverWhoseOwnSessionIsRefused_StaysInTheInbox_AndTheRefusalNamesIt()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var engines = new Engines(repository.Harness.Identity);
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: HandedOverTimings, fileSystem: files, identity: engines);
+        var store = repository.Harness.OrchestrationStore;
+
+        store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+        File.WriteAllText(Path.Combine(repository.Path, ".harness-config", "workflows", Workflow, $"{Workflow}.yml"), "name: flow\nsteps:\n  - name: one\n    type: nonsense\n");
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: true, cancellationToken: Token);
+
+        await files.Written(run.InboxFile).WaitAsync(Bound, Token);
+        engines.Alive = false;
+
+        var outcome = await answering.WaitAsync(Bound, Token);
+        var left = Assert.Single(store.ReadInbox(run)!.Answers);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Equal("run 'r1' began of workflow 'flow', which the repository's config no longer declares as one that holds; a run goes on only under the definition it began with. Nothing of the run was changed.", outcome.Message);
+        Assert.Equal(
+            ["the answer 'go' handed over for question 'q1' stays in '" + run.InboxFile + "', and the next session of the run takes it", $"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"],
+            outcome.Details!.TakeLast(3));
+        Assert.Equal(run.InboxFile, JsonNode.Parse(Assert.Single(outcome.Data))!["records"]!["inbox"]!.GetValue<string>());
+        Assert.Equal(("q1", "go"), (left.Question, left.Answer));
+        Assert.Equal("open", Assert.Single(store.ReadFlowQuestions(run)!.Questions).State);
+    }
+
+    /// <summary>
+    /// The wait for what became of an answer handed over is the service's own clock's, as every wait of the service is;
+    /// cancelled, the command answers in its own shape - the answer stays handed over, and the inbox is named - never
+    /// thrown past its document.
+    /// </summary>
+    [Fact]
+    public async Task TheWaitOnAnAnswerHandedOver_IsTheServicesClocks_AndACancelAnswersNamingTheInbox()
+    {
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var clock = new TimerClock();
+        var service = Service(repository.Harness, runner, clock, HandedOverTimings);
+        var identity = repository.Harness.Identity;
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token);
+
+        repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, DateTimeOffset.UtcNow, identity.Current));
+
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: true, cancellationToken: cancel.Token);
+
+        // The wait stands on the service's clock, which nothing moves: the command waits there, and nowhere else.
+        await clock.WaitingAsync(1).WaitAsync(Bound, Token);
+        Assert.False(answering.IsCompleted);
+
+        await cancel.CancelAsync();
+        var outcome = await answering.WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Equal("waiting for the engine running 'r1' to take 'go' for question 'q1' was cancelled; the answer stays handed over, and the engine takes it at its poll", outcome.Message);
+        Assert.Equal([$"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"], outcome.Details);
+        Assert.Equal(run.InboxFile, JsonNode.Parse(Assert.Single(outcome.Data))!["records"]!["inbox"]!.GetValue<string>());
+        Assert.Equal("q1", Assert.Single(repository.Harness.OrchestrationStore.ReadInbox(run)!.Answers).Question);
+    }
+
+    /// <summary>A pause step holding the run open, and a step after it.</summary>
+    private const string HoldingFlow = """
+        name: flow
+        steps:
+          - name: holding
+            type: pause
+            question: what now?
+            options: [stay, go]
+          - name: after
+            type: orient
+            dependsOn: [holding]
+        """;
+
+    /// <summary>
+    /// What an engine records of the run's one question as it weighs answers handed over: <paramref name="answered"/>
+    /// taken, the question answered by it, and <paramref name="refused"/> - where one is - refused under its entry's id.
+    /// </summary>
+    private static void Engine(OrchestrationStore store, OrchestratorLayout run, FlowAnswerRecord answered, FlowRefusedAnswer? refused = null)
+    {
+        var questions = store.ReadFlowQuestions(run)!;
+        var asked = Assert.Single(questions.Questions);
+
+        store.WriteFlowQuestions(run, questions with
+        {
+            Questions = [asked with { State = "answered", Answers = [answered] }],
+            Refused = refused is null ? null : [refused],
+        });
+    }
+
     /// <summary>A pause asked where no engine runs the run is refused (13): there is nothing to pause.</summary>
     [Fact]
     public async Task APauseAskedWhereNoEngineRunsIsRefused()
