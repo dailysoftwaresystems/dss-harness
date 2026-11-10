@@ -60,7 +60,7 @@ public sealed class StoppedDocumentTests
             "exitCode", "summary", "base", "baseCommit", "commit", "merging", "openAtBase", "openNow", "netNew", "passed", "closed", "lost",
             "opened", "missingAtBase", "malformedAtBase", "findings",
         ],
-        ["check-anchor-arms"] = ["exitCode", "summary", "armsRegistry", "mutationRecord", "legs", "rows", "doneRows", "namedArms", "passed", "findings"],
+        ["check-anchor-arms"] = ["exitCode", "summary", "armsRegistry", "mutationRecord", "legs", "rows", "doneRows", "namedArms", "judgedArms", "passed", "findings"],
         ["check-anchor-citations"] = ["exitCode", "summary", "subject", "roots", "filesScanned", "citationsFound", "registryRows", "passed", "unresolved"],
         ["fix-line-endings"] = ["exitCode", "summary", "scope", "check", "considered", "binary", "undeclared", "excluded", "changed"],
         ["check-ci-legs"] = ["exitCode", "summary", "branch", "runs"],

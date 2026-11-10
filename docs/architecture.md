@@ -4250,8 +4250,9 @@ pending, its refusal the reason. An arm no selected leg judges is said, never pa
 held: where `--legs` left out every leg its S row names, a note names them, for the check run
 on those legs judges it; where no leg is declared at all, nothing ever could, and it is a
 finding. "Unmoved here" is never "holds", the line a passing check ends on speaks only of the
-arms a selected leg judged, and the listing's closing note is said here too. An open row's
-arms are not judged: only a done row claims its work is closed.
+arms a selected leg judged, its document names them (`judgedArms`) beside those the done rows
+name (`namedArms`), and the listing's closing note is said here too. An open row's arms are not
+judged: only a done row claims its work is closed.
 
 A pass word followed by only whitespace and brackets or punctuation and then a run id - the
 words are `anchors.passWords`, `passed` where the configuration names none, matched ignoring
@@ -4263,15 +4264,18 @@ history is where a row may state a pass, and the forms say what its history look
 citation is judged in every row of both registries, a done row's no less than a pending one's.
 
 A backticked id no A row holds is reported only where git history shows an A row declared it
-once - the newest 512 commits that changed the registry, each version read for its ids, all of
-them by one git process, at the path the registry had then: the history is followed back across
-each rename of the registry, so an id declared before it moved is one it declared - so one
-renamed or retired is a finding, once a row however often the row cites it, while an id that
-never was an arm is left alone, whatever else a row may cite in backticks. Where more commits
-changed the registry than were read, or the clone is shallow, that is noted rather than failed,
-for an id may have been declared before either cut and no change can repair the history; so is
-a version that cannot be read as the registry is read, for an id only it declared is not known.
-A note fails nothing, as the balance notes a registry malformed at the base.
+once - the newest 512 commits that changed the registry under any name it had, each version
+read for its ids, all of them by one git process: the names are its path now and each it had
+before a rename git follows (`git log --follow`), and HEAD's whole history is walked once for
+all of them, down both sides of every merge, so an id declared at a former path - before the
+registry moved, or on a line merged in that never moved it - is one it declared. So one renamed
+or retired is a finding, once a row however often the row cites it, while an id that never was
+an arm is left alone, whatever else a row may cite in backticks. Each version is read as the
+registry itself is read, as UTF-8 and nothing else. Where more commits changed the registry
+than were read, or the clone is shallow, that is noted rather than failed, for an id may have
+been declared before either cut and no change can repair the history; so is a version that is
+not UTF-8, for an id only it declared is not known. A note fails nothing, as the balance notes
+a registry malformed at the base.
 
 Exit codes and `--json` follow the balance: a finding exits 1 in the anchor commands' own
 range, and the line a failing check ends on counts only the findings that fail it; every exit
@@ -6950,6 +6954,12 @@ left above them; an empty last line is ended whatever the main tree's is; and an
 would follow a lone carriage return is ended by a carriage return and a line feed. What the merge
 offers is a text: whether it is a registry a sweep can read, in the tree it would stand in, is the
 validation's to say.
+
+The registry is read as UTF-8 and nothing else, by the one reader of a registry's bytes
+(`RegistryText.TryRead`), whether a sweep, a listing or `check-anchor-arms` reads it - as its
+merge and the reading of its history read every version of it - and a byte order mark at its
+start is no part of its first row: one that is not UTF-8, or a line of which opens with a byte
+order mark, is refused, exit 12, naming why, rather than read as another text.
 
 The whole registry is read, with every text it cites, before any host is touched, and every
 problem is listed with its line, exit 12: a sweep refused from inside a leg would end the run once

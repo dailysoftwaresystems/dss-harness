@@ -41,16 +41,10 @@ public interface IAnchorArmsService : IUseCase
 /// a finding where no leg is declared, for then nothing ever could. A pass word followed by a run id is a citation of
 /// one sweep's judgement, true only of the bytes that run read; it belongs in history, spelled by a form the
 /// configuration names, and is reported wherever it is not. A backticked id no A row holds is recognized as an arm only
-/// where some commit's registry declared it - read at the path the registry had then, its renames followed - so an id
+/// where some commit's registry declared it - read under every name the registry had, its renames followed - so an id
 /// that never was one is left alone.
 /// </remarks>
-public sealed partial class AnchorArmsService(
-    IHarnessContextLoader contextLoader,
-    IAnchorRegistryLocator locator,
-    IAnchorRegistryLock registryLock,
-    ArmListingReader listings,
-    IGitClient gitClient,
-    IFileSystem fileSystem) : IAnchorArmsService
+public sealed partial class AnchorArmsService : IAnchorArmsService
 {
     /// <summary>The command this use case is the body of, as a refusal names it.</summary>
     public const string CommandName = "check-anchor-arms";
@@ -64,12 +58,59 @@ public sealed partial class AnchorArmsService(
     /// </summary>
     private const string CommitText = "[0-9a-fA-F]{7,64}";
 
-    private readonly IHarnessContextLoader _contextLoader = contextLoader;
-    private readonly IAnchorRegistryLocator _locator = locator;
-    private readonly IAnchorRegistryLock _registryLock = registryLock;
-    private readonly ArmListingReader _listings = listings;
-    private readonly IGitClient _gitClient = gitClient;
-    private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly IHarnessContextLoader _contextLoader;
+    private readonly IAnchorRegistryLocator _locator;
+    private readonly IAnchorRegistryLock _registryLock;
+    private readonly ArmListingReader _listings;
+    private readonly IGitClient _gitClient;
+    private readonly IFileSystem _fileSystem;
+    private readonly int _historyCommits;
+
+    /// <summary>The check over its services, reading the newest <see cref="HistoryCommits"/> commits of the arms registry's history.</summary>
+    /// <param name="contextLoader">Loads the repository and its configuration.</param>
+    /// <param name="locator">Finds the two anchor registries.</param>
+    /// <param name="registryLock">The anchor registries' lock, held while both are read.</param>
+    /// <param name="listings">The one reading of the arms registry a listing is made of.</param>
+    /// <param name="gitClient">Reads the arms registry's history.</param>
+    /// <param name="fileSystem">Reads the anchor registries.</param>
+    public AnchorArmsService(
+        IHarnessContextLoader contextLoader,
+        IAnchorRegistryLocator locator,
+        IAnchorRegistryLock registryLock,
+        ArmListingReader listings,
+        IGitClient gitClient,
+        IFileSystem fileSystem)
+        : this(contextLoader, locator, registryLock, listings, gitClient, fileSystem, HistoryCommits)
+    {
+    }
+
+    /// <summary>The check, reading the newest <paramref name="historyCommits"/> commits of the arms registry's history.</summary>
+    /// <param name="contextLoader">Loads the repository and its configuration.</param>
+    /// <param name="locator">Finds the two anchor registries.</param>
+    /// <param name="registryLock">The anchor registries' lock, held while both are read.</param>
+    /// <param name="listings">The one reading of the arms registry a listing is made of.</param>
+    /// <param name="gitClient">Reads the arms registry's history.</param>
+    /// <param name="fileSystem">Reads the anchor registries.</param>
+    /// <param name="historyCommits">How many commits of the arms registry's history are read: one or more.</param>
+    internal AnchorArmsService(
+        IHarnessContextLoader contextLoader,
+        IAnchorRegistryLocator locator,
+        IAnchorRegistryLock registryLock,
+        ArmListingReader listings,
+        IGitClient gitClient,
+        IFileSystem fileSystem,
+        int historyCommits)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(historyCommits, 1);
+
+        _contextLoader = contextLoader;
+        _locator = locator;
+        _registryLock = registryLock;
+        _listings = listings;
+        _gitClient = gitClient;
+        _fileSystem = fileSystem;
+        _historyCommits = historyCommits;
+    }
 
     /// <summary>The arm ids a row may name in a cell: a backticked token of the characters an arm's id takes, as the registry's own rule spells them.</summary>
     [GeneratedRegex("`(" + MutationRegistryParser.IdCharacterClass + "+)`", RegexOptions.CultureInvariant)]
@@ -307,10 +348,13 @@ public sealed partial class AnchorArmsService(
     /// read.
     /// </summary>
     /// <remarks>
-    /// The history is read where the registry was: at its path now, back to the commit that gave it that path, and from
-    /// that commit's parent at the path it had before, rename by rename - so an id an A row declared before the registry
-    /// moved is one it declared. Every version is read by one git process, as the one reading of a registry's bytes reads
-    /// it (<see cref="RegistryText.TryRead"/>): a byte order mark at its start is no part of its first row.
+    /// The history is read under every name the registry had - its path now and each it had before a rename git follows -
+    /// in one walk of HEAD's whole history, down both sides of every merge: a version at a former path committed on a
+    /// line the rename's own parent never reached is one the registry held, and one budget of commits covers every name.
+    /// A file that took a former path after the registry left it is read too, and holds no A row of the registry's shape
+    /// unless it is a registry. Every version is read by one git process, as the one reading of a registry's bytes reads
+    /// it (<see cref="RegistryText.TryRead"/>) - as the registry itself is read now: a byte order mark at its start is no
+    /// part of its first row, and a version that is not UTF-8 is noted, never read another way.
     /// </remarks>
     private async Task<(HashSet<string> Ids, IReadOnlyList<AnchorFinding> Notes)> RetiredIdsAsync(HarnessContext context, MutationRegistry current, CancellationToken cancellationToken)
     {
@@ -318,32 +362,10 @@ public sealed partial class AnchorArmsService(
         var named = context.Config.Mutations.Registry!;
         var registry = AnchorRegistryLocator.Normalize(named);
         var renames = await _gitClient.ListRenamesAsync(root, "HEAD", registry, cancellationToken).ConfigureAwait(false);
-        IReadOnlyList<(string Tip, string Path)> spans = [("HEAD", registry), .. renames.Select(rename => (rename.Parent, rename.From))];
-
-        var versions = new List<(GitHeldAt Version, string Path)>();
-        var left = HistoryCommits;
-        var cut = false;
-
-        foreach (var (tip, path) in spans)
-        {
-            if (left == 0)
-            {
-                // The budget is spent, and the registry had another name before: that history is more than was read.
-                cut = true;
-                break;
-            }
-
-            var history = await _gitClient.ListHeldInHistoryAsync(root, tip, [path], left, cancellationToken).ConfigureAwait(false);
-
-            versions.AddRange((history.Held.GetValueOrDefault(path) ?? []).Select(version => (version, path)));
-            left -= history.Commits;
-
-            if (history.Cut)
-            {
-                cut = true;
-                break;
-            }
-        }
+        IReadOnlyList<string> names = [.. new[] { registry }.Concat(renames.Select(rename => rename.From)).Distinct(StringComparer.Ordinal)];
+        var history = await _gitClient.ListHeldInHistoryAsync(root, "HEAD", names, _historyCommits, cancellationToken).ConfigureAwait(false);
+        var cut = history.Cut;
+        List<(GitHeldAt Version, string Path)> versions = [.. names.SelectMany(path => (history.Held.GetValueOrDefault(path) ?? []).Select(version => (version, path)))];
 
         var blobs = await _gitClient.ReadBlobsAsync(root, [.. versions.Select(held => held.Version.Blob)], cancellationToken).ConfigureAwait(false);
         var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

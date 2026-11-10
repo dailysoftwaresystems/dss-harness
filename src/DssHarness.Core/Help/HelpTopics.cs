@@ -1101,7 +1101,10 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"The whole registry is read before any host is touched, and every problem is listed with its line ({HarnessExit.ConfigInvalid}): "
+            "The registry is read as UTF-8 and nothing else - by a sweep, a listing and check-anchor-arms alike, as its merge and "
+            + "its history are - a byte order mark at its start no part of its first row; one that is not UTF-8, or a line of which "
+            + $"opens with a byte order mark, is refused ({HarnessExit.ConfigInvalid}), naming why. "
+            + $"The whole registry is read before any host is touched, and every problem is listed with its line ({HarnessExit.ConfigInvalid}): "
             + "a row of no kind it reads; an arm id outside [A-Za-z0-9_-], or one another reads as ignoring case; a path outside "
             + "[A-Za-z0-9_./-], absolute, climbing out with '..', ending in '/', or with an empty or '.' segment; a target or "
             + "runner outside [A-Za-z0-9_.+-]; a row naming an arm no A row above it declares; a case both red and green, or "
@@ -4189,10 +4192,11 @@ public static class HelpTopics
         builder.AppendLine("it is reported wherever it does not sit inside a span matching a form of");
         builder.AppendLine("anchors.historyForms, whose {commit} and {run} placeholders stand for a commit and a");
         builder.AppendLine("run id. A backticked id no A row holds is reported where git history shows an A row");
-        builder.AppendLine("declared it once - renamed, or retired - the history read at the path the registry had");
-        builder.AppendLine("then, across each of its renames; where more commits changed the registry than were");
-        builder.AppendLine("read, or the clone is shallow, that is noted, for an id may have been declared before");
-        builder.AppendLine("either cut. 'Unmoved here' is not 'holds': the listing's closing note is said here too.");
+        builder.AppendLine("declared it once - renamed, or retired - the history read under every name the registry");
+        builder.AppendLine("had, across each of its renames and down both sides of every merge; where more commits");
+        builder.AppendLine("changed the registry than were read, or the clone is shallow, that is noted, for an id");
+        builder.AppendLine("may have been declared before either cut, and so is a version that is not UTF-8.");
+        builder.AppendLine("'Unmoved here' is not 'holds': the listing's closing note is said here too.");
         builder.AppendLine();
         builder.AppendLine("Every change holds a machine-wide lock on its two registries. A change that cannot");
         builder.AppendLine($"take it within {NamedMutexAnchorRegistryLock.DefaultTimeout.TotalSeconds:0} seconds writes nothing and exits {HarnessExit.Refused}. A read takes it");

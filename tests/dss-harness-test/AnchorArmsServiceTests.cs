@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Build;
@@ -184,6 +185,11 @@ public sealed class AnchorArmsServiceTests
             "1 row(s) across both registries; every arm a done row names that a selected leg judges is unmoved here with a "
                 + "recorded passed, and 1 arm(s) none of them judges",
             AnchorReports.Arms(report, json: false).Message);
+
+        using var document = JsonDocument.Parse(Assert.Single(AnchorReports.Arms(report, json: true).Data));
+
+        Assert.Equal(["one"], document.RootElement.GetProperty("namedArms").EnumerateArray().Select(arm => arm.GetString()));
+        Assert.Empty(document.RootElement.GetProperty("judgedArms").EnumerateArray());
     }
 
     /// <summary>
@@ -416,8 +422,8 @@ public sealed class AnchorArmsServiceTests
     }
 
     /// <summary>
-    /// An id an A row declared before the arms registry was renamed is one it declared: the history is read at the path
-    /// the registry had then, across the rename, so a row citing an arm retired before the move is still a finding.
+    /// An id an A row declared before the arms registry was renamed is one it declared: the history is read under every
+    /// name the registry had, across the rename, so a row citing an arm retired before the move is still a finding.
     /// </summary>
     [Fact]
     public async Task AnIdRetiredBeforeTheRegistryWasRenamed_IsAFinding()
@@ -460,6 +466,151 @@ public sealed class AnchorArmsServiceTests
         var report = await service.CheckAsync(repository, null, Token);
 
         Assert.Equal($"anchor '{One}' names arm 'old-name', which no A row of 'arms.md' holds: {Retired}", Assert.Single(report.Findings).Message);
+    }
+
+    /// <summary>
+    /// An id declared and retired at the registry's former path on a line merged in that never moved it is one the
+    /// registry declared: the history is read under every name the registry had in one walk of HEAD's whole history, down
+    /// both sides of every merge - not from the rename's own parent alone, which never reached that line.
+    /// </summary>
+    [Fact]
+    public async Task AnIdDeclaredAndRetiredAtAFormerPath_OnALineMergedIn_IsAFinding()
+    {
+        using var temp = new TempDirectory();
+        var (harness, repository, service) = await PrepareAsync(temp);
+        await harness.RunGitAsync(repository, ["switch", "--quiet", "-c", "moved"], Token);
+        Directory.CreateDirectory(temp.Combine("mutations"));
+        await harness.RunGitAsync(repository, ["mv", "arms.md", "mutations/arms.md"], Token);
+        harness.WriteConfig(repository, ConfigOf(harness, ["native"], mutations: new MutationSettings { Registry = "mutations/arms.md", TextDirectory = "texts" }));
+        await harness.CommitAllAsync(repository, "the registry moved", Token);
+
+        await harness.RunGitAsync(repository, ["switch", "--quiet", "-"], Token);
+        RegistryWritten(temp, Registry + "\nA | tmp | src/site.txt | texts/one.before | texts/one.after | BUILD-RED | app | - | 0 | PAIRED-CONTROL | why tmp\n");
+        await harness.CommitAllAsync(repository, "an arm declared", Token);
+        RegistryWritten(temp, Registry);
+        await harness.CommitAllAsync(repository, "the arm retired", Token);
+        await harness.RunGitAsync(repository, ["merge", "--quiet", "--no-edit", "moved"], Token);
+        await CloseAsync(harness, repository, One, "closed with `tmp`");
+
+        var report = await service.CheckAsync(repository, null, Token);
+
+        Assert.Equal(
+            $"anchor '{One}' names arm 'tmp', which no A row of 'mutations/arms.md' holds: {Retired}",
+            Assert.Single(report.Findings).Message);
+    }
+
+    /// <summary>
+    /// A version of the arms registry that is not UTF-8 is never read another way: it is noted whole, naming the commit
+    /// and the byte, and an id only it declared is not reported, for what it declared is not known.
+    /// </summary>
+    [Fact]
+    public async Task AVersionThatIsNotUtf8_IsNoted_AndAnIdOnlyItDeclaredIsNotReported()
+    {
+        using var temp = new TempDirectory();
+        var (harness, repository, service) = await PrepareAsync(temp);
+        var declaring = Encoding.UTF8.GetBytes(
+            Registry.ReplaceLineEndings("\n") + "\nA | gone | src/site.txt | texts/one.before | texts/one.after | BUILD-RED | app | - | 0 | PAIRED-CONTROL | why gone ");
+        await File.WriteAllBytesAsync(temp.Combine("arms.md"), [.. declaring, 0xFF, (byte)'\n'], Token);
+        await harness.CommitAllAsync(repository, "an arm declared, its line not UTF-8", Token);
+        var commit = (await harness.RunGitAsync(repository, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        RegistryWritten(temp, Registry);
+        await harness.CommitAllAsync(repository, "the arm retired", Token);
+        await CloseAsync(harness, repository, One, "closed with `gone`");
+
+        var report = await service.CheckAsync(repository, null, Token);
+
+        Assert.True(report.Passed);
+        var note = Assert.Single(report.Findings);
+
+        Assert.Equal(
+            (AnchorFindingSeverity.Note, "arms.md", 0,
+                $"'arms.md' as {commit} holds it is not UTF-8: the byte at offset {declaring.Length} (0xFF) does not form a UTF-8 "
+                    + "character: an id only it declared is not known"),
+            (note.Severity, note.File, note.LineNumber, note.Message));
+    }
+
+    /// <summary>
+    /// The history read is bounded: past the commits the check reads, an id declared only before the cut is not reported,
+    /// and the cut is noted whole and fails nothing - while the same history read whole reports it.
+    /// </summary>
+    [Fact]
+    public async Task TheHistoryRead_IsCutAtItsBudget_AndTheCutIsNoted()
+    {
+        using var temp = new TempDirectory();
+        var (harness, repository, whole) = await PrepareAsync(
+            temp,
+            registry: Registry.Replace("| one |", "| old-name |", StringComparison.Ordinal));
+        RegistryWritten(temp, Registry);
+        await harness.CommitAllAsync(repository, "the arm renamed", Token);
+        await CloseAsync(harness, repository, One, "closed with `old-name`");
+
+        var cut = await Service(harness, historyCommits: 1).CheckAsync(repository, null, Token);
+
+        Assert.True(cut.Passed);
+        var note = Assert.Single(cut.Findings);
+
+        Assert.Equal(
+            (AnchorFindingSeverity.Note, "arms.md", 0, "more commits changed 'arms.md' than were read: an id no A row holds may have been declared before that cut"),
+            (note.Severity, note.File, note.LineNumber, note.Message));
+        Assert.Equal(
+            $"anchor '{One}' names arm 'old-name', which no A row of 'arms.md' holds: {Retired}",
+            Assert.Single((await whole.CheckAsync(repository, null, Token)).Findings).Message);
+    }
+
+    /// <summary>
+    /// The arms registry now is read as every version of it is, as UTF-8 and nothing else: one that is not is refused,
+    /// exit 12, naming the byte - by this check, by a listing and by a sweep alike - and one a line of which opens with a
+    /// byte order mark, naming the line.
+    /// </summary>
+    [Fact]
+    public async Task ARegistryThatIsNotUtf8_IsRefused_ByTheCheckAListingAndASweepAlike()
+    {
+        using var temp = new TempDirectory();
+        var (harness, repository, service) = await PrepareAsync(temp);
+        var readable = Encoding.UTF8.GetBytes(Registry.ReplaceLineEndings("\n") + "\n");
+        await File.WriteAllBytesAsync(temp.Combine("arms.md"), [.. readable, 0xFF, (byte)'\n'], Token);
+        var refused = $"mutations.registry names 'arms.md', which is not UTF-8: the byte at offset {readable.Length} (0xFF) does not form a "
+            + "UTF-8 character; save it as UTF-8 - the arms registry is read as UTF-8 and nothing else, as its merge and its history are.";
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.CheckAsync(repository, null, Token));
+
+        Assert.Equal((HarnessExit.ConfigInvalid, refused), (refusal.ExitCode, refusal.Message));
+
+        var checkedArms = await CliRunner.RunAsync(["check-anchor-arms", "--json", "-C", repository], Token);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, checkedArms.ExitCode);
+
+        using (var document = JsonDocument.Parse(checkedArms.StandardOutput.TrimEnd()))
+        {
+            Assert.Equal(refused, document.RootElement.GetProperty("summary").GetString());
+        }
+
+        string[][] commands = [["check-mutations", "--list"], ["check-mutations"]];
+
+        foreach (var command in commands)
+        {
+            var run = await CliRunner.RunAsync([.. command, "-C", repository], Token);
+
+            Assert.True(HarnessExit.ConfigInvalid == run.ExitCode, run.StandardError + run.StandardOutput);
+            Assert.Contains(refused, run.StandardError, StringComparison.Ordinal);
+        }
+
+        byte[] markedLine = [.. readable, .. Encoding.UTF8.Preamble, .. "# a note\n"u8];
+        await File.WriteAllBytesAsync(temp.Combine("arms.md"), markedLine, Token);
+
+        var marked = await Assert.ThrowsAsync<HarnessException>(() => service.CheckAsync(repository, null, Token));
+
+        Assert.Equal(
+            (HarnessExit.ConfigInvalid,
+                "mutations.registry names 'arms.md', whose line 3 opens with a byte order mark, which no line may open with: standing "
+                    + "first, it would be read as the text's own; take the mark off that line."),
+            (marked.ExitCode, marked.Message));
+        Assert.Contains(
+            "The registry is read as UTF-8 and nothing else - by a sweep, a listing and check-anchor-arms alike, as its merge and its "
+                + "history are - a byte order mark at its start no part of its first row; one that is not UTF-8, or a line of which opens "
+                + $"with a byte order mark, is refused ({HarnessExit.ConfigInvalid}), naming why.",
+            Prose.Words(HelpTopics.Render("mutations")),
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -612,7 +763,7 @@ public sealed class AnchorArmsServiceTests
         using (var document = JsonDocument.Parse(findings.StandardOutput.TrimEnd()))
         {
             Assert.Equal(
-                ["armsRegistry", "mutationRecord", "legs", "rows", "doneRows", "namedArms", "passed", "findings"],
+                ["armsRegistry", "mutationRecord", "legs", "rows", "doneRows", "namedArms", "judgedArms", "passed", "findings"],
                 document.RootElement.EnumerateObject().Select(member => member.Name));
             Assert.Equal("arms.md", document.RootElement.GetProperty("armsRegistry").GetString());
             Assert.Equal(CitationOf(One, $"PASSED ({Run}"), document.RootElement.GetProperty("findings").EnumerateArray().Single().GetProperty("message").GetString());
@@ -664,8 +815,8 @@ public sealed class AnchorArmsServiceTests
 
     /// <summary>
     /// The anchors topic says what this check reports and how it exits: a missing or malformed registry is one of its
-    /// findings, as it is --lint's and the balance's, and an arms registry left unset or refused exits as the
-    /// configuration's refusal.
+    /// findings, as it is --lint's and the balance's, an arms registry left unset or refused exits as the configuration's
+    /// refusal, and the registry's history is read under every name it had, down both sides of every merge.
     /// </summary>
     [Fact]
     public void TheAnchorsTopic_SaysHowThisCheckReportsARegistryAndExits()
@@ -683,6 +834,12 @@ public sealed class AnchorArmsServiceTests
         Assert.Contains("set-anchor with nothing to change, or a --legs of check-anchor-arms naming no leg or leg set", topic, StringComparison.Ordinal);
         Assert.Contains(
             "An arm none of the selected legs judges is noted, naming the legs its S row names, and is a finding where no leg is declared.",
+            topic,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the history read under every name the registry had, across each of its renames and down both sides of every merge; where "
+                + "more commits changed the registry than were read, or the clone is shallow, that is noted, for an id may have been "
+                + "declared before either cut, and so is a version that is not UTF-8.",
             topic,
             StringComparison.Ordinal);
     }
@@ -749,15 +906,19 @@ public sealed class AnchorArmsServiceTests
             Anchors = anchors ?? new AnchorSettings(),
         };
 
-    /// <summary>The check over the harness's own services, its registries' lock <paramref name="registryLock"/> where one is given.</summary>
-    private static AnchorArmsService Service(HarnessFactory harness, IAnchorRegistryLock? registryLock = null)
+    /// <summary>
+    /// The check over the harness's own services, its registries' lock <paramref name="registryLock"/> where one is given,
+    /// reading the newest <paramref name="historyCommits"/> commits of the arms registry's history.
+    /// </summary>
+    private static AnchorArmsService Service(HarnessFactory harness, IAnchorRegistryLock? registryLock = null, int historyCommits = AnchorArmsService.HistoryCommits)
         => new(
             harness.ContextLoader,
             harness.AnchorRegistryLocator,
             registryLock ?? harness.AnchorRegistryLock,
             new ArmListingReader(SyncKit.Service(harness), harness.FileSystem, harness.Platform),
             harness.GitClient,
-            harness.FileSystem);
+            harness.FileSystem,
+            historyCommits);
 
     /// <summary>Writes the registry and every file it cites.</summary>
     private static void RegistryWritten(TempDirectory temp, string registry)

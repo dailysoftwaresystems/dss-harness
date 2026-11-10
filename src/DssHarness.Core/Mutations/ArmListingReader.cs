@@ -109,7 +109,8 @@ public sealed class ArmListingReader(
     /// <param name="cancellationToken">Stops the reading.</param>
     /// <param name="sweeps">Whether what is read is to be swept, rather than listed or checked: a sweep needs more of it.</param>
     /// <exception cref="HarnessException">
-    /// No registry is configured, it or a text it cites cannot be read whole, it or a text it cites is one a sync
+    /// No registry is configured, it or a text it cites cannot be read whole, the registry is not UTF-8 or a line of it
+    /// opens with a byte order mark (<see cref="RegistryText.TryRead"/>), it or a text it cites is one a sync
     /// withholds from every copy of the tree - by the configuration's rules or by git's - a scope names no leg, or a
     /// selected arm runs a binary with no report arguments configured where <paramref name="sweeps"/> - a listing runs
     /// none, and needs none (<see cref="HarnessExit.ConfigInvalid"/>); or
@@ -136,17 +137,32 @@ public sealed class ArmListingReader(
         var registry = settings.Registry!;
         var file = TreeRegistryFiles.In(root, registry);
 
-        string rows;
+        byte[] bytes;
 
         try
         {
-            rows = _fileSystem.ReadAllText(file);
+            bytes = _fileSystem.ReadAllBytes(file);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // There, and not read: the registry's refusal, as one that is not there is - never a defect of this tool.
             throw new HarnessException(HarnessExit.ConfigInvalid, $"mutations.registry names '{registry}', which could not be read: {ex.Message}");
         }
+
+        // Read as the one reader of a registry's bytes reads it - UTF-8 and nothing else, a byte order mark at its start
+        // no part of its first row - as its merge and the reading of its history read every version of it: read leniently
+        // here, a registry one of those refuses would be swept, listed and checked as another text.
+        if (!RegistryText.TryRead(bytes, out var text, out var unread, out var line))
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                line is { } number
+                    ? $"mutations.registry names '{registry}', whose line {number} {unread}; take the mark off that line."
+                    : $"mutations.registry names '{registry}', which {unread}; save it as UTF-8 - the arms registry is read as UTF-8 and "
+                        + "nothing else, as its merge and its history are.");
+        }
+
+        var rows = text.Text;
 
         // What a sync withholds is in no copy of the tree, and a worker is such a copy, as a host's is: by the rules the
         // configuration names, which the registry and the text directory are held to as it is read, and by git's - what

@@ -193,6 +193,7 @@ public static class AnchorReports
             ["rows"] = report?.Rows ?? 0,
             ["doneRows"] = report?.DoneRows ?? 0,
             ["namedArms"] = Strings(report?.NamedArms ?? []),
+            ["judgedArms"] = Strings(report?.JudgedArms ?? []),
             ["passed"] = report?.Passed ?? false,
             ["findings"] = FindingsJson(report?.Findings ?? []),
         };
