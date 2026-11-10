@@ -545,7 +545,7 @@ public sealed class FlowService(
                 Details =
                 [
                     .. outcome.Details ?? [],
-                    $"the answer '{answer}' handed over for question '{asked.Id}' stays in '{layout.InboxFile}', and the next session of the run takes it",
+                    StaysHandedOver(layout, answer, asked.Id),
                     $"inbox: {layout.InboxFile}",
                 ],
             };
@@ -582,9 +582,12 @@ public sealed class FlowService(
     /// <summary>
     /// Hands an answer to the engine running the run: written to the inbox under an id of its own, then waited for - on
     /// the service's clock, at most two of the engine's polls - until the run's questions say what became of that entry,
-    /// or the engine's owner is gone. Taken, the command answers so; refused - the question answered by another answer
-    /// first, or no longer asked - it answers the run's refusal; neither, with the engine still running, it answers that
-    /// the engine takes it at its poll. Every answer names the inbox, a cancelled wait's among them, for the entry stands.
+    /// or the engine's owner is gone. An engine writes what it made of an entry before it lets its owner go, so where the
+    /// owner is seen gone the entry is weighed once more, and that weighing answers: a read made before the look at the
+    /// owner may have missed what the engine wrote as it left. Taken, the command answers so; refused - the question
+    /// answered by another answer first, or no longer asked - it answers the run's refusal; neither, with the engine still
+    /// running, it answers that the engine takes it at its poll. Every answer names the inbox, a cancelled wait's among
+    /// them, for the entry stands.
     /// </summary>
     /// <returns>The command's answer where it ends here; else, the owner gone and the entry not weighed, the entry's id, which the command's own session takes.</returns>
     private async Task<(CommandOutcome? Ended, string Entry)> HandOverAsync(OrchestratorLayout layout, string run, FlowQuestionEntry asked, string answer, string? text, bool json, CancellationToken cancellationToken)
@@ -616,6 +619,15 @@ public sealed class FlowService(
             return (Ended(layout, AnswerCommand, cancelled, ResultOf(layout, cancelled) with { Records = records }, json), entry);
         }
 
+        // The owner seen gone, what became of the entry is read after it: the last poll of the engine's session may have
+        // weighed it between this command's read and its look at the owner.
+        var gone = weighed is (null, null) && _owner.Live(layout) is null;
+
+        if (gone)
+        {
+            weighed = Weighed();
+        }
+
         if (weighed.Took is not null)
         {
             var taken = new CommandOutcome(
@@ -632,13 +644,13 @@ public sealed class FlowService(
         if (weighed.Refused is { } refusal)
         {
             var refused = CommandOutcome.Refused(
-                $"the engine running '{run}' did not take '{answer}' for question '{asked.Id}': {refusal.Why}",
+                NotTaken(run, answer, asked.Id, refusal.Why),
                 [$"questions: {layout.QuestionsFile}", $"inbox: {layout.InboxFile}"]);
 
             return (Ended(layout, AnswerCommand, refused, ResultOf(layout, refused) with { Records = [new FlowRecordPath("questions", layout.QuestionsFile), .. records] }, json), entry);
         }
 
-        if (_owner.Live(layout) is not null)
+        if (!gone)
         {
             var reads = new CommandOutcome(
                 HarnessExit.Success,
@@ -1357,7 +1369,9 @@ public sealed class FlowService(
                 // one already given - a change held to its window and to once by the engine, which says why where it
                 // was not taken. An answer the command handed over first is its inbox entry, weighed under the entry's
                 // id by the one owner of an entry weighed once: taken or refused, the run's records hold it under that
-                // id, so the inbox's pass below never weighs it a second time, and the poller empties it as settled.
+                // id, so the inbox's pass below never weighs it a second time, and the poller empties it as settled. One
+                // a session before this one weighed already is settled by what the records hold under its id: refused,
+                // the run's refusal, with its why; taken, said so - never a "taken" the records do not say.
                 string? problem;
                 bool taken;
 
@@ -1370,6 +1384,18 @@ public sealed class FlowService(
                     var handed = coordinator.AnswerHandedOver(given.Question, given.Answer, given.Text, out problem, AnswerCommand, entry);
                     offered[entry] = Task.FromResult(handed);
                     taken = handed != FlowHandedOver.Refused;
+
+                    if (handed == FlowHandedOver.RecordedAlready)
+                    {
+                        if (_store.ReadFlowQuestions(layout)?.Weighed(entry).Refused is { } refusal)
+                        {
+                            (taken, problem) = (false, NotTaken(layout.Name, given.Answer, given.Question, refusal.Why));
+                        }
+                        else
+                        {
+                            said.Add($"the answer '{given.Answer}' handed over for question '{given.Question}' was taken already, under its inbox entry, by a session of the run before this one");
+                        }
+                    }
                 }
                 else
                 {
@@ -1449,7 +1475,7 @@ public sealed class FlowService(
 
             if (answered is { Inbox: { } own } unweighed && !offered.ContainsKey(own))
             {
-                said.Add($"the answer '{unweighed.Answer}' handed over for question '{unweighed.Question}' stays in '{layout.InboxFile}', and the next session of the run takes it");
+                said.Add(StaysHandedOver(layout, unweighed.Answer, unweighed.Question));
             }
 
             inbox |= SayUnemptied(layout, offered, Empty(layout, offered), said);
@@ -1639,6 +1665,27 @@ public sealed class FlowService(
             return ex.Message.TrimEnd('.');
         }
     }
+
+    /// <summary>
+    /// The line saying an answer the command handed over that no session weighed - its own session refused before it
+    /// did - stays in the inbox, for the next session of the run to take.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="answer">The answer handed over.</param>
+    /// <param name="question">The question it answers.</param>
+    private static string StaysHandedOver(OrchestratorLayout layout, string answer, string question)
+        => $"the answer '{answer}' handed over for question '{question}' stays in '{layout.InboxFile}', and the next session of the run takes it";
+
+    /// <summary>
+    /// The run's refusal of an answer the command handed over, as the run's records hold it under the entry's id - read
+    /// by the command's wait, or by its own session where a session before it weighed the entry.
+    /// </summary>
+    /// <param name="run">The run's name.</param>
+    /// <param name="answer">The answer handed over.</param>
+    /// <param name="question">The question it answers.</param>
+    /// <param name="why">Why the run did not take it, as its records say.</param>
+    private static string NotTaken(string run, string answer, string question, string why)
+        => $"the engine running '{run}' did not take '{answer}' for question '{question}': {why}";
 
     /// <summary>
     /// Says the answers handed over that the session never settled - never weighed, or handed back by the loop, as a
