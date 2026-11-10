@@ -451,10 +451,12 @@ public sealed partial class HelpTests
         Assert.Contains(
             "and on every client so is a command that leaves a process running after it ends - one the shell runs in the "
                 + "background (a lone &, never cmd's, which runs the next command in turn; a coproc; a >(...)'s body; PowerShell's "
-                + "job &) that no bare wait of the same shell waits for after it, or one run by "
-                + $"{string.Join(", ", DssHarness.Core.Agents.Policy.CommandAnalysis.Detaching)} (by its bare name, wherever a "
-                + "program of the command runs; a path or a script's end names the repository's own script), in every script the "
-                + "command runs, one it wrote and then runs among them; what a program detaches by itself - a dev server's own "
+                + "job &) that no bare wait the same shell surely runs after it waits for - none in a conditional's, a loop's or a "
+                + "case's body, nor after && or || - or one run by "
+                + $"{string.Join(", ", DssHarness.Core.Agents.Policy.CommandAnalysis.Detaching)} (wherever a program of the command "
+                + "runs; a program by any path to it, the shells' own start, Start-Process, saps and disown by the bare word alone, "
+                + "so ./bin/start or start.cmd is the repository's own script), in every script the command runs, one it wrote and "
+                + "then runs among them; what a program detaches by itself - a dev server's own "
                 + "daemon mode, an interpreter's code - is not read, for the refusal is of what the command names - and a lock "
                 + "that cannot be taken refuses the write or command it was taken for, saying why, the chat going on.",
             prose,

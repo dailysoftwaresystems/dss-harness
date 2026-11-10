@@ -106,19 +106,31 @@ public static partial class CommandAnalysis
 
     /// <summary>
     /// The programs whose work is to keep what they start running apart from the command that starts it - past its shell's
-    /// end, its hangup or its session: <c>nohup</c>, <c>setsid</c>, <c>disown</c>, <c>daemonize</c>,
-    /// <c>start-stop-daemon</c>, <c>at</c> and <c>batch</c> given a job, which their daemon runs, and Windows' <c>start</c> -
-    /// cmd's own, and PowerShell's name for <c>Start-Process</c> - <c>Start-Process</c> and <c>saps</c>.
+    /// end, its hangup or its session - that are files, found by any path to them: <c>nohup</c>, <c>setsid</c>,
+    /// <c>daemonize</c>, <c>start-stop-daemon</c>, and <c>at</c> and <c>batch</c> given a job, which their daemon runs.
     /// </summary>
-    public static IReadOnlyList<string> Detaching { get; } =
-        ["nohup", "setsid", "disown", "daemonize", "start-stop-daemon", "at", "batch", "start", "Start-Process", "saps"];
+    private static readonly string[] DetachingPrograms = ["nohup", "setsid", "daemonize", "start-stop-daemon", "at", "batch"];
+
+    /// <summary>
+    /// The shell's and PowerShell's own commands that keep what they start apart, which no path reaches: <c>disown</c>,
+    /// Windows' <c>start</c> - cmd's own, and PowerShell's name for <c>Start-Process</c> - <c>Start-Process</c> and
+    /// <c>saps</c>.
+    /// </summary>
+    private static readonly string[] DetachingCommands = ["disown", "start", "Start-Process", "saps"];
+
+    /// <summary>
+    /// The programs and the shells' own commands whose work is to keep what they start running apart from the command
+    /// that starts it: <see cref="DetachingPrograms"/>, then <see cref="DetachingCommands"/>.
+    /// </summary>
+    public static IReadOnlyList<string> Detaching { get; } = [.. DetachingPrograms, .. DetachingCommands];
 
     /// <summary>
     /// Whether <paramref name="command"/> leaves a process running after the command it stands in ends: it runs in the
     /// background (<see cref="AnalyzedCommand.Background"/>), or one of <see cref="Detaching"/> runs at a place a program of
     /// it runs (<see cref="RunsAt"/>) - among its words, or among a wrapper's stripped before them, as <c>nohup</c> is - at
     /// and batch where they schedule a job (<see cref="AtJob"/>), not where they list, remove or print one. A program is
-    /// matched by its bare name, a Windows program's <c>.exe</c> folded: a word with a directory part or a script's end
+    /// matched by the last segment of any path to it, a Windows program's <c>.exe</c> folded (<c>/usr/bin/setsid</c>); a
+    /// shell's own command by its bare word alone, for a word with a directory part or a script's end
     /// (<c>./bin/start</c>, <c>start.cmd</c>) names the repository's own script, never cmd's <c>start</c>.
     /// </summary>
     /// <param name="command">The command, as this read it.</param>
@@ -131,10 +143,11 @@ public static partial class CommandAnalysis
             for (var at = EnvironmentOf(words); at < words.Count && RunsAt(words, at); at++)
             {
                 var word = words[at].TrimStart('@');
-                var bare = word.Length > 4 && word.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? word[..^4] : word;
+                var segment = word.TrimEnd('/', '\\').Replace('\\', '/').Split('/')[^1];
+                var program = segment.Length > 4 && segment.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? segment[..^4] : segment;
 
-                if (word.IndexOfAny(['/', '\\']) < 0 && Is(bare, [.. Detaching])
-                    && (!Is(bare, "at", "batch") || AtJob([.. words.Skip(at)], redirects, program: false).Count > 0))
+                if (Is(word, DetachingCommands)
+                    || (Is(program, DetachingPrograms) && (!Is(program, "at", "batch") || AtJob([.. words.Skip(at)], redirects, program: false).Count > 0)))
                 {
                     return true;
                 }

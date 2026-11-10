@@ -68,10 +68,11 @@ public sealed class CommandAnalysisTests
     }
 
     /// <summary>
-    /// A bare <c>wait</c> - no job named, no option - waits for every job its shell started before it: one in a loop, a
-    /// group or a conditional of the same shell, a coprocess among them. It waits for none started after it, none a
-    /// subshell, a pipeline's command or a backgrounded list started, none of a <c>&gt;(...)</c>, and none where it is
-    /// itself a pipeline's, in the background, a subshell's or joined by <c>&amp;&amp;</c> or <c>||</c>.
+    /// A bare <c>wait</c> - no job named, no option - the shell surely runs waits for every job that shell started before
+    /// it: one in a loop, a group or a conditional of the same shell, a coprocess among them. It waits for none started after
+    /// it, none a subshell, a pipeline's command or a backgrounded list started, none of a <c>&gt;(...)</c>, and none where
+    /// it may not run - in a conditional's, a loop's or a case's body, a function's, or a group or a command
+    /// <c>&amp;&amp;</c> or <c>||</c> joins - or where it is itself a pipeline's, in the background or a subshell's.
     /// </summary>
     [Fact]
     public void ABareWait_WaitsForTheJobsItsShellStartedBeforeIt()
@@ -82,12 +83,18 @@ public sealed class CommandAnalysisTests
         Assert.Equal([("a", false), ("b", false), ("wait", false)], Read("a & b & wait"));
         Assert.Equal([("for", false), ("gzip", false), ("wait", false)], Read("for f in a b; do gzip \"$f\" & done; wait"));
         Assert.Equal([("a", false), ("wait", false)], Read("a & { wait; }"));
-        Assert.Equal([("a", false), ("true", false), ("wait", false)], Read("a & if true; then wait; fi"));
+        Assert.Equal([("a", false), ("b", false), ("c", false), ("wait", false)], Read("{ a & b && c; wait; }"));
+        Assert.Equal([("a", false), ("x", false), ("wait", false)], Read("a & { x; { wait; }; }"));
         Assert.Equal([("a", false), ("wait", false), ("b", true)], Read("a & wait; b &"));
         Assert.Equal([("a", false), ("wait", false)], Read("coproc a; wait"));
         Assert.Equal([("a", false), ("wait", false)], Read("(a & wait)"));
 
         Assert.Equal([("a", true), ("wait", false)], Read("a & wait -n"));
+        Assert.Equal([("a", true), ("true", false), ("wait", false)], Read("a & if true; then wait; fi"));
+        Assert.Equal([("a", true), ("wait", false)], Read("a & case x in x) wait;; esac"));
+        Assert.Equal([("a", true), ("true", false), ("wait", false)], Read("a & while true; do wait; done"));
+        Assert.Equal([("a", true), ("x", false), ("y", false), ("wait", false)], Read("a & x && { y; wait; }"));
+        Assert.Equal([("a", true), ("wait", false)], Read("a & f() { wait; }"));
         Assert.Equal([("a", true), ("wait", false)], Read("(a &); wait"));
         Assert.Equal([("a", true), ("wait", false)], Read("a & (wait)"));
         Assert.Equal([("a", true), ("b", false), ("wait", false)], Read("a & b && wait"));

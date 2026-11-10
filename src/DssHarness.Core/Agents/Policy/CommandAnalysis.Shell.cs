@@ -129,6 +129,16 @@ public static partial class CommandAnalysis
         private readonly Stack<int> _opened = new();
 
         /// <summary>
+        /// Whether each group, loop, conditional and case the reader stands in runs its commands whenever it runs - a
+        /// <c>{ }</c> group no <c>&amp;&amp;</c> or <c>||</c> joins - where a conditional's, a loop's and a case's body may run
+        /// none of them; in step with <see cref="_opened"/>.
+        /// </summary>
+        private readonly Stack<bool> _surely = new();
+
+        /// <summary>Whether a function's definition was read, whose body - the next group or command - runs only where the function is called.</summary>
+        private bool _defining;
+
+        /// <summary>
         /// The level a pipe was read at (<see cref="Level"/>), whose next command - and every command a group, loop or
         /// subshell it begins holds - reads what the command before the pipe printed: until a separator at that level or
         /// above. -1 where none is.
@@ -198,6 +208,8 @@ public static partial class CommandAnalysis
                     coproc = null;
                 }
 
+                // A wait the pipe finds still unsettled runs in the pipeline's shell, and is dropped whole: a job of that shell
+                // it did wait for - '{ make & wait; } | cat' - stays in the background, the reader's limit, a refusal too many.
                 if (separator == "|")
                 {
                     piped.Add(level);
@@ -358,9 +370,11 @@ public static partial class CommandAnalysis
                     coproc = (before, open);
                 }
 
-                // One joined by '&&' or '||' may not run; one after a pipe at its level or one around it runs in a pipeline's
-                // shell of its own.
-                if (read.Words is ["wait"] && read.Joined is null && !piped.Any(level => level <= _open))
+                // A wait that may not run waits for nothing here: one joined by '&&' or '||', one in a conditional's, a loop's or
+                // a case's body or in a group one of those joins - only a plain element of the list or of a '{ }' group of it
+                // surely runs. One after a pipe at its level or one around it runs in a pipeline's shell of its own.
+                if (read.Words is ["wait"] && read.Joined is null && end is not ListEnd.CaseClause
+                    && _surely.Take(_open - bottom).All(surely => surely) && !piped.Any(level => level <= _open))
                 {
                     waits.Add((_read.Count - 1, _open));
                 }
@@ -377,6 +391,7 @@ public static partial class CommandAnalysis
             var start = _at;
             var first = _read.Count;
             _at += 2;
+            _defining = false;
             var arithmetic = At(start, "((") && ReadArithmetic(bracket: false);
 
             if (!arithmetic)
@@ -502,11 +517,17 @@ public static partial class CommandAnalysis
             }
         }
 
-        /// <summary>A group, loop, conditional or case begins: the commands read from here stand in it.</summary>
-        private void Open()
+        /// <summary>
+        /// A group, loop, conditional or case begins: the commands read from here stand in it - each of them run whenever the
+        /// command it begins at is where <paramref name="surely"/>: a <c>{ }</c> group no <c>&amp;&amp;</c> or <c>||</c> joins and no
+        /// function's definition begins.
+        /// </summary>
+        private void Open(bool surely = false)
         {
             _open++;
             _opened.Push(_read.Count);
+            _surely.Push(surely && !_defining);
+            _defining = false;
         }
 
         /// <summary>The innermost group, loop, conditional or case ends at <paramref name="command"/>, which a redirect after it is made for.</summary>
@@ -519,6 +540,7 @@ public static partial class CommandAnalysis
 
             _open--;
             LeavePipe();
+            _surely.Pop();
             var first = _opened.Pop();
             command.Closes = Math.Min(command.Closes ?? first, first);
         }
@@ -559,6 +581,7 @@ public static partial class CommandAnalysis
                     if (command.Words.Count == 1 && command.Redirects.Count == 0 && !IsAssignment(command.Words[0]) && EmptyParentheses())
                     {
                         command.Words.Clear();
+                        _defining = true;
                         continue;
                     }
 
@@ -610,6 +633,7 @@ public static partial class CommandAnalysis
                         SkipBlanks();
                         _ = ReadWord(false);
                         _ = EmptyParentheses();
+                        _defining = true;
                         continue;
                     }
 
@@ -622,7 +646,13 @@ public static partial class CommandAnalysis
 
                     if (Reserved.Contains(word))
                     {
-                        if (word is "{" or "if" or "while" or "until")
+                        // A group runs its commands whenever the command it begins runs: never one a function's definition
+                        // begins, which runs where the function is called, or one '&&' or '||' joins.
+                        if (word == "{")
+                        {
+                            Open(surely: command.Joined is null);
+                        }
+                        else if (word is "if" or "while" or "until")
                         {
                             Open();
                         }

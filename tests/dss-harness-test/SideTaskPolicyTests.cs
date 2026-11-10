@@ -540,8 +540,20 @@ public sealed class SideTaskPolicyTests
     [InlineData("{ make & } & wait", "make")]
     [InlineData("find . -name '*.log' | while read f; do gzip \"$f\" & done; wait", "gzip $f")]
     [InlineData("bash -c 'make &'; wait", "bash -c make &")]
+    [InlineData("make & if false; then wait; fi", "make")]
+    [InlineData("make & case x in y) wait;; esac", "make")]
+    [InlineData("make & case x in x) wait;; esac | cat", "make")]
+    [InlineData("make & while false; do wait; done", "make")]
+    [InlineData("for f in a.log b.log; do gzip \"$f\" & wait; done", "gzip $f")]
+    [InlineData("make & test -f x || wait", "make")]
+    [InlineData("make & test -f x && { echo waiting; wait; }", "make")]
+    [InlineData("make & f() { wait; }", "make")]
+    [InlineData("make & function f { wait; }", "make")]
     [InlineData("nohup make", "nohup make")]
+    [InlineData("bin/nohup make", "bin/nohup make")]
     [InlineData("setsid make", "setsid make")]
+    [InlineData("/usr/bin/setsid -f make", "/usr/bin/setsid -f make")]
+    [InlineData("./tools/daemonize.exe make", "./tools/daemonize.exe make")]
     [InlineData("stdbuf -oL setsid -f npm run codegen", "stdbuf -oL setsid -f npm run codegen")]
     [InlineData("ionice -c3 nohup make", "ionice -c3 nohup make")]
     [InlineData("disown -a", "disown -a")]
@@ -589,16 +601,18 @@ public sealed class SideTaskPolicyTests
     }
 
     /// <summary>
-    /// What leaves nothing running after the command ends refuses a side-task's command nothing: jobs a bare <c>wait</c> of
-    /// the same shell waits for after them - in a loop, a group or a conditional of that shell, a coprocess among them -
-    /// a <c>&lt;(...)</c>'s body, whose output its command reads to the end, at given no job, and a repository's own
-    /// script named as a detaching program is, by a path or a script's end.
+    /// What leaves nothing running after the command ends refuses a side-task's command nothing: jobs a bare <c>wait</c> the
+    /// same shell surely runs waits for after them - in a loop, a group or a conditional of that shell, a coprocess among
+    /// them; the wait a plain element of the list or of a <c>{ }</c> group of it - a <c>&lt;(...)</c>'s body, whose output
+    /// its command reads to the end, at given no job, and a repository's own script named as one of the shells' own
+    /// detaching commands is, by a path or a script's end.
     /// </summary>
     [Theory]
     [InlineData("make a & make b & wait")]
     [InlineData("for f in a.log b.log; do gzip \"$f\" & done; wait")]
     [InlineData("make & { wait; }")]
-    [InlineData("make & if true; then wait; fi")]
+    [InlineData("make & { echo waiting; { wait; }; }")]
+    [InlineData("if true; then make & fi; wait")]
     [InlineData("make &\nwait")]
     [InlineData("make & wait && make test")]
     [InlineData("coproc make; wait")]
@@ -608,7 +622,7 @@ public sealed class SideTaskPolicyTests
     [InlineData("at -l")]
     [InlineData("at -r 3")]
     [InlineData("./bin/start")]
-    [InlineData("bin/nohup make")]
+    [InlineData("./scripts/disown")]
     [InlineData("start.cmd")]
     [InlineData("scripts/start.ps1")]
     [InlineData("cmd /c \".\\start.cmd\"")]
