@@ -318,7 +318,10 @@ public sealed class OrchestrationStoreTests
         // another thread's - is refused at once, so no second map is made beside it.
         var first = harness.OrchestrationStore.MapOnce(layout, reads: null, () =>
         {
-            whileMaking = Record.Exception(() => Task.Run(() => MachineWideFile.Update(layout.GraphMapFile, TimeSpan.Zero, () => 0), TestContext.Current.CancellationToken).GetAwaiter().GetResult());
+            // A thread of its own, never this one: a machine-wide section is the thread's that took it, taken again freely.
+            var other = new Thread(() => whileMaking = Record.Exception(() => MachineWideFile.Update(layout.GraphMapFile, TimeSpan.Zero, () => 0)));
+            other.Start();
+            other.Join();
             return ("the first map", new System.Text.Json.Nodes.JsonObject { ["by"] = "first" });
         });
 
