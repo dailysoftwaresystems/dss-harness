@@ -1072,16 +1072,17 @@ public sealed class FlowCoordinator
             // carried out now, from its entry, once.
             FinishTheChanges();
 
-            // A check that waited on a plan update whose settling a crash cut off - its paused visit in the run's
-            // records, the update done in its - runs again now, from the records alone.
-            _ = RetryTheWaitingChecks();
-
             if (stopPending)
             {
                 ApplyTheStop();
             }
             else
             {
+                // A check that waited on a plan update whose settling a crash cut off - its paused visit in the run's
+                // records, the update done in its - runs again now, from the records alone. A stop asked between
+                // sessions leaves it as the records hold it, for the session that goes on: the stop draws nothing, and a
+                // visit ended now would have no successor to stand in its place.
+                _ = RetryTheWaitingChecks();
                 AnswerWhatTheConfigurationAnswers();
             }
 
@@ -2386,7 +2387,9 @@ public sealed class FlowCoordinator
     /// over - ended stopped for the update, as a visit the update brought to rest is - and the check is drawn again,
     /// through its dependencies and its when as it drew the first, so it runs on the list as it now is and ends on
     /// what it finds. A crash between the update's done and this leaves the paused visit in the run's records, and
-    /// the session that meets it draws the check again from it. Whether anything was drawn.
+    /// the session that meets it draws the check again from it; a stop or a crash between this and the new visit's draw
+    /// leaves the visit ended for the update with nothing in its place, which the resume draws again from the records
+    /// (<see cref="EndedForTheUpdateItRaised"/>). Whether anything was drawn.
     /// </summary>
     private bool RetryTheWaitingChecks()
     {
@@ -2423,6 +2426,15 @@ public sealed class FlowCoordinator
 
         return changed;
     }
+
+    /// <summary>
+    /// Whether <paramref name="check"/> is a visit of a check that a plan update it raised ended (<see cref="RetryTheWaitingChecks"/>):
+    /// stopped for that update, its visit over, and the check owed a new visit drawn through its dependencies and its
+    /// <c>when</c> - which the records alone say, so a resume draws it where a stop or a crash came before it was drawn.
+    /// </summary>
+    private bool EndedForTheUpdateItRaised(FlowInstance check)
+        => check.StoppedForAnUpdate
+            && _updates.Updates.Any(update => update.Cause == FlowUpdateCauses.PlanCheck && update.Id == check.EndedFor && update.Check == check.Id);
 
     /// <summary>Why the run refuses a change of its plan, as it stands now; null where it takes one. The same gates as the command's, read of the run as this engine holds it.</summary>
     private string? GatesRefused(string cause)
@@ -3746,16 +3758,18 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Whether the plan the update under way brought does not pass the check the <c>amend</c> block's <c>then</c> names:
-    /// the newest word of that check over every iteration it ran in ended <c>ok</c> false. It is what keeps the plan
-    /// from standing - the loop around the planning settles it, its next iteration - and what lets that loop go round
-    /// again while the update holds: no other falseness of its until is the hold's to iterate over.
+    /// the newest word of that check said since the planning step was raised for the update - by the visit its
+    /// <c>then</c> ran, or one a later iteration ran - ended <c>ok</c> false. A word said before, of an earlier plan, is
+    /// no answer to this one's. It is what keeps the plan from standing - the loop around the planning settles it, its
+    /// next iteration - and what lets that loop go round again while the update holds: no other falseness of its until
+    /// is the hold's to iterate over.
     /// </summary>
     /// <param name="planner">The planning step the update raised.</param>
     /// <param name="scope">The scope it stands in.</param>
     private bool TheThenRefuses(FlowInstance planner, Scope scope)
         => _definition.Amend?.Then is { } refused
             && DeclarationsOf(scope).FirstOrDefault(declaration => declaration.Name == refused) is { Type: "validate-plan" } check
-            && EndedDoneLastWord(check) is { Output: { } outcome }
+            && EndedDoneLastWord(check, since: planner) is { Output: { } outcome }
             && outcome["ok"]?.GetValue<bool>() == false;
 
     /// <summary>
@@ -6531,8 +6545,6 @@ public sealed class FlowCoordinator
             TriageOf(instance);
         }
 
-        // What the code alone cannot say of a failure - a refusal over a held lock - is the ending's own, in its record:
-        // the run that ends on it counts it as incomplete, from the records alone.
         if (passed && CheckThatOpensARoundRaises(instance) is { } waiting)
         {
             // The check that opens a round found what does not pass: the step does not end. It is paused, as a step
@@ -6545,6 +6557,8 @@ public sealed class FlowCoordinator
             return;
         }
 
+        // What the code alone cannot say of a failure - a refusal over a held lock - is the ending's own, in its record:
+        // the run that ends on it counts it as incomplete, from the records alone.
         instance.Cause = passed ? OutcomeCause.None : cause;
         End(instance, passed ? FlowInstanceState.Done : FlowInstanceState.Failed, exit, error);
 
@@ -7169,18 +7183,26 @@ public sealed class FlowCoordinator
         foreach (var handler in fitting)
         {
             // One visit for each handler raised: the one a when that could not be read failed is that visit, and so is
-            // one an earlier raise of this ending made.
-            var raised = RaisedFor(instance, handler, scope) ?? NewVisit(scope, handler, FlowInstanceState.NotStarted, made: raised => raised.RaisedBy = instance);
+            // one an earlier raise of this ending made. A handler that is a group is a block of its own in the scope its
+            // source stands in, its steps scheduled as any scope's are - the admission walk starts no group, so it is
+            // made running, in its first record, as the recovery's own raise makes its (TakeRecoveryOf): no crash leaves
+            // a record of it that never starts.
+            var raised = RaisedFor(instance, handler, scope)
+                ?? NewVisit(scope, handler, handler.IsGroup ? FlowInstanceState.Running : FlowInstanceState.NotStarted, made: raised => raised.RaisedBy = instance);
 
-            // A handler that is a group is a block of its own in the scope its source stands in, its steps scheduled as
-            // any scope's are - the admission walk starts no group, so its block is made here, as the recovery's own
-            // raise makes its (TakeRecoveryOf).
-            if (handler.IsGroup && raised.OwnScope is null && raised.State is FlowInstanceState.NotStarted)
+            if (handler.IsGroup && raised.State is FlowInstanceState.NotStarted)
             {
+                // A visit its record left not started, its block never begun: it starts now, as it would have had that
+                // session gone on.
                 raised.State = FlowInstanceState.Running;
+                Record(FlowChangeKind.Step, raised, from: FlowInstanceState.NotStarted, to: FlowInstanceState.Running);
+            }
+
+            if (handler.IsGroup && raised.State is FlowInstanceState.Running && raised.OwnScope is null)
+            {
+                // The block of a visit made now; one a resume holds was given its block as it was read back.
                 raised.OwnScope = NewScope(raised.Id, PathOf(scope, handler), scope, handler, FlowValue.Missing, null, null, null);
                 raised.OwnScope.OwnGroupInstance = raised;
-                Record(FlowChangeKind.Step, raised, to: FlowInstanceState.Running);
             }
 
             raisedFor.Add(raised);
@@ -9756,18 +9778,22 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The visit of <paramref name="declaration"/> that ended done last, over every iteration it ran in: the word that
-    /// stands newest of a step a loop carries, whatever iteration said it. Null where none of its visits ended done.
+    /// The visit of <paramref name="declaration"/> made after <paramref name="since"/> that ended done last, over every
+    /// iteration it ran in: the word that stands newest of a step a loop carries, whatever iteration said it - and never
+    /// one said before <paramref name="since"/> was made. Null where none of those visits ended done.
     /// </summary>
-    /// <param name="declaration">The step, every visit of the run's considered.</param>
-    private FlowInstance? EndedDoneLastWord(WorkflowStep declaration)
+    /// <param name="declaration">The step.</param>
+    /// <param name="since">The instance whose visits made after it are considered, by the order the run made them.</param>
+    private FlowInstance? EndedDoneLastWord(WorkflowStep declaration, FlowInstance since)
         => _created
-            .Where(visit => ReferenceEquals(visit.Step, declaration) && visit.State == FlowInstanceState.Done && visit.FinishedAt is not null)
+            .Select((visit, made) => (Visit: visit, Made: made))
+            .Skip(_created.IndexOf(since) + 1)
+            .Where(each => ReferenceEquals(each.Visit.Step, declaration) && each.Visit.State == FlowInstanceState.Done && each.Visit.FinishedAt is not null)
             .Aggregate(
-                (FlowInstance?)null,
-                (newest, other) => newest is null || (other.FinishedAt!.Value, _created.IndexOf(other)).CompareTo((newest.FinishedAt!.Value, _created.IndexOf(newest))) > 0
+                ((FlowInstance Visit, int Made)?)null,
+                (newest, other) => newest is not { } standing || (other.Visit.FinishedAt!.Value, other.Made).CompareTo((standing.Visit.FinishedAt!.Value, standing.Made)) > 0
                     ? other
-                    : newest);
+                    : newest)?.Visit;
 
     /// <summary>
     /// What <paramref name="instance"/>'s agents assumed, as a step's <c>assumptions</c> fact reads it: the envelope's
@@ -11320,11 +11346,12 @@ public sealed class FlowCoordinator
 
             foreach (var scope in _scopes)
             {
-                foreach (var name in scope.Members.Where(member => member.Value.LeftBy is not null).Select(member => member.Key).ToList())
+                foreach (var name in scope.Members.Where(member => member.Value.LeftBy is not null || EndedForTheUpdateItRaised(member.Value)).Select(member => member.Key).ToList())
                 {
-                    // A redirect took the run back past this visit, and its next visit is not drawn yet: the schedule
-                    // draws it, as it would have had the session gone on - the redirect itself may be gone from the
-                    // run's records, which it leaves once every visit it resets says so.
+                    // A redirect took the run back past this visit, or a plan update it raised ended it to run again on
+                    // the list as it now is, and its next visit is not drawn yet - a stop or a crash came first: the
+                    // schedule draws it, as it would have had the session gone on - the redirect itself may be gone from
+                    // the run's records, which it leaves once every visit it resets says so.
                     _ = scope.Members.Remove(name);
                     _ = scope.Instantiated.Remove(name);
                 }
