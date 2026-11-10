@@ -1810,7 +1810,7 @@ public sealed partial class AgentPolicy
         {
             var command = analyzed.Words;
             var environment = CommandAnalysis.EnvironmentOf(command);
-            var powerShell = ReadBy(analyzed) is Reader.PowerShell;
+            var powerShell = CommandAnalysis.ReadBy(analyzed) is CommandAnalysis.Reader.PowerShell;
 
             // A pattern of this command's matches dot-names where a setting of the string's makes it, or where the shell
             // that expands it does: PowerShell's, cmd.exe's, or a -Force of the command's own.
@@ -2723,62 +2723,12 @@ public sealed partial class AgentPolicy
     /// Whether the shell that expands <paramref name="analyzed"/>'s patterns matches a name beginning with a dot by a star,
     /// a question mark or a bracket of its own: PowerShell and cmd.exe, whose wildcards match every name a directory lists
     /// that it does not hide (on Windows a dot-name is hidden only by its attribute) - read by the shell that reads this
-    /// command (<see cref="ReadBy"/>) - or a command given PowerShell's <c>-Force</c>, which matches a hidden name too.
+    /// command (<see cref="CommandAnalysis.ReadBy"/>) - or a command given PowerShell's <c>-Force</c>, which matches a hidden name too.
     /// Read of this command alone: another command of the string is read by its own shell.
     /// </summary>
     private static bool MatchesDotNames(AnalyzedCommand analyzed)
-        => ReadBy(analyzed) is Reader.PowerShell or Reader.Cmd
+        => CommandAnalysis.ReadBy(analyzed) is CommandAnalysis.Reader.PowerShell or CommandAnalysis.Reader.Cmd
             || analyzed.Words.Any(word => word.Length >= 3 && word.StartsWith("-fo", StringComparison.OrdinalIgnoreCase) && "-force".StartsWith(word.Split(':', 2)[0], StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>The shells a command may be read by, each expanding its words in its own way.</summary>
-    private enum Reader
-    {
-        /// <summary>A POSIX shell, or fish: the string's own, or one a command runs.</summary>
-        Shell,
-
-        /// <summary>PowerShell, whose cmdlets expand their wildcards themselves, quoted or not.</summary>
-        PowerShell,
-
-        /// <summary>cmd.exe.</summary>
-        Cmd,
-    }
-
-    /// <summary>
-    /// The shell that reads <paramref name="analyzed"/>: the innermost of the commands that run it that is a shell
-    /// (<see cref="AnalyzedCommand.Wrappers"/>) - <c>pwsh -c</c>'s PowerShell, <c>cmd /c</c>'s cmd.exe, <c>bash -c</c>'s
-    /// shell - else the shell the string was given to.
-    /// </summary>
-    private static Reader ReadBy(AnalyzedCommand analyzed)
-    {
-        foreach (var words in analyzed.Wrappers.Reverse())
-        {
-            var at = CommandAnalysis.EnvironmentOf(words);
-
-            if (at >= words.Count)
-            {
-                continue;
-            }
-
-            var name = CommandAnalysis.Name(words[at]);
-
-            if (name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase))
-            {
-                return Reader.PowerShell;
-            }
-
-            if (name.Equals("cmd", StringComparison.OrdinalIgnoreCase))
-            {
-                return Reader.Cmd;
-            }
-
-            if (CommandAnalysis.IsShell(name))
-            {
-                return Reader.Shell;
-            }
-        }
-
-        return Reader.Shell;
-    }
 
     /// <summary>Whether <paramref name="word"/>'s last name is one a Windows may read as its device's, with any extension (<see cref="Runtime.ConfinedPaths.DeviceNames"/>).</summary>
     private static bool IsDevice(string word)

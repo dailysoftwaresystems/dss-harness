@@ -1456,9 +1456,11 @@ command; a process substitution's body, `<(...)` or `>(...)`, which the shell do
 reads; PowerShell's job `&`; or one run by a program that keeps what it starts apart
 (`CommandAnalysis.Detaching`) wherever a program of the command runs (`CommandAnalysis.RunsAt`) - a program by the
 last segment of any path to it, the shells' and PowerShell's own commands - `start`, `Start-Process`, `Start-Job`,
-`disown` and their kin - by the bare word alone or a module-qualified name PowerShell resolves
-(`Microsoft.PowerShell.Management\Start-Process`), so `./bin/start` is the repository's script - or one PowerShell gives
-`-AsJob`, which a contained `run_command`'s end would not reach either where it leaves the session. A terminal session's program given what to run, `systemd-run`, and a `start` or `Start-Process`
+`disown` and their kin - by the bare word alone, so `./bin/start` and `scripts\start` are the repository's scripts, and
+where PowerShell reads the command (`CommandAnalysis.ReadBy`, the innermost shell that runs it) its cmdlets by a
+module-qualified name too (`Microsoft.PowerShell.Management\Start-Process`) - or one PowerShell reads given `-AsJob`,
+never another program's `-as` cluster - which a contained `run_command`'s end would not reach either where it leaves
+the session. A terminal session's program given what to run, `systemd-run`, and a `start` or `Start-Process`
 told to wait, which hands its program a command line of its own, are refused to every agent before the lock weighs
 them. The refusal is of what the command names: what a program detaches by itself - a dev server's own daemon mode, an
 interpreter's code - is not read, the OS layer standing behind the words. Holding the lock until the command's process

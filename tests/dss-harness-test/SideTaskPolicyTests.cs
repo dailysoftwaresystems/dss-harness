@@ -590,6 +590,7 @@ public sealed class SideTaskPolicyTests
     [InlineData("pwsh -c 'ThreadJob\\Start-ThreadJob { npm run codegen }'", "pwsh -c ThreadJob\\Start-ThreadJob { npm run codegen }")]
     [InlineData("pwsh -c 'Invoke-Command -ScriptBlock { npm run codegen } -AsJob'", "pwsh -c Invoke-Command -ScriptBlock { npm run codegen } -AsJob")]
     [InlineData("pwsh -c 'Invoke-Command { npm run codegen } -asj'", "pwsh -c Invoke-Command { npm run codegen } -asj")]
+    [InlineData("pwsh -c 'Get-Thing -AsJob'", "pwsh -c Get-Thing -AsJob")]
     public void ASideTasksCommandThatLeavesAProcessBehind_IsRefusedByTheMainTreesLock(string command, string named)
     {
         var (side, _, _) = Policy();
@@ -626,8 +627,9 @@ public sealed class SideTaskPolicyTests
 
     /// <summary>
     /// What leaves nothing running after the command ends refuses a side-task's command nothing: at given no job, a
-    /// repository's own script named as one of the shells' own detaching commands is, by a path or a script's end, a
-    /// module's command that keeps nothing apart, and a parameter of PowerShell's that only begins as <c>-AsJob</c> does.
+    /// repository's own script named as one of the shells' own detaching commands is, by a path - one directory deep
+    /// under cmd or PowerShell among them - or a script's end, a module's command that keeps nothing apart, a parameter of
+    /// PowerShell's that only begins as <c>-AsJob</c> does, and another program's option cluster that spells it.
     /// </summary>
     [Theory]
     [InlineData("at -l")]
@@ -642,6 +644,16 @@ public sealed class SideTaskPolicyTests
     [InlineData("pwsh -c '.\\scripts\\start'")]
     [InlineData("pwsh -c 'Get-Content a.json | ConvertFrom-Json -AsHashtable'")]
     [InlineData("pwsh -c 'Invoke-Command { npm run codegen } -AsJob:$false'")]
+    [InlineData("ls -aS")]
+    [InlineData("ls -as")]
+    [InlineData("grep -as x f")]
+    [InlineData("rsync -aS a b")]
+    [InlineData("uname -as")]
+    [InlineData("git commit -as -m x")]
+    [InlineData("bash -c 'ls -aS'")]
+    [InlineData("cmd /c \"scripts\\start\"")]
+    [InlineData("pwsh -c 'scripts\\start'")]
+    [InlineData("pwsh -c 'Tools\\start'")]
     public void ACommandThatLeavesNothingRunning_IsRefusedASideTaskNothing(string command)
     {
         var (side, _, _) = Policy();
