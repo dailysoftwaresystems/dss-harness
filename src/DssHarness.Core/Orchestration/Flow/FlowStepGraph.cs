@@ -239,13 +239,13 @@ public sealed class FlowStepGraph(string mode, string from, string view, int tok
 
     /// <summary>
     /// The changes the conversation the step goes on with is told of the codebase (part 08, "Deltas, never a rewrite of
-    /// what was sent"): the declarations its view changed since that conversation's last pack or delta, and the nodes of
-    /// its own pack the conversation was not given - in the one new user message, never a map or a pack again whole.
-    /// Null where the step was given no pack.
+    /// what was sent"): the declarations its view changed since what that conversation was told of them - its pack and
+    /// every delta after it - and the nodes of its own pack the conversation was not given - in the one new user message,
+    /// never a map or a pack again whole. Null where the step was given no pack.
     /// </summary>
-    /// <param name="last">The codebase part the conversation held last - its pack, or the delta before this one; null where it held none.</param>
-    public string? ChangesSince(string? last)
-        => view is null || Pack is null ? null : CodebaseConversationChanges.Make(view, Pack, last, Tokens);
+    /// <param name="told">The codebase parts the conversation holds, in the order it was given them: its pack, then each delta after it.</param>
+    public string? ChangesSince(IReadOnlyList<string> told)
+        => view is null || Pack is null ? null : CodebaseConversationChanges.Make(view, Pack, told, Tokens);
 
     /// <summary>Why no pack was given, where none was - the sentence for a step that left no output; null where one was.</summary>
     public string? Missing { get; } = missing;

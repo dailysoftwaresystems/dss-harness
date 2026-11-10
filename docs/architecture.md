@@ -1427,8 +1427,11 @@ the folds back for as long as it runs, so nothing the engine weighed is changed 
 step's output says how long it waited and for what (`MainTreeWriteLock.WaitedFor`). The command's or the step's own
 stop ends the engine's wait, nothing weighed or written. While a run's owner is live
 (`.orchestrators/<run>.owner.json`, asked at each call through `AgentPolicyGround.LiveRun`), a side-task's agent is
-refused the git verbs that move HEAD, the index or the stash (`AgentPolicy.HeadMovingGitVerbs`) with the run's name -
-a run that starts while the chat is open is held to from its first step, and one that ends releases it - and the run's
+refused, with the run's name, every command that writes the git state the run works over (`AgentPolicy.LiveRunHeld`:
+git's state-writing verbs, the verbs that write its index and gh's that write git's state) - met as the worktree rules
+meet a command, by every reading `CommandAnalysis.ForRules` gives it and with a verb the shell expands held as one that
+may be any, their listing forms open (`AgentPolicy.LiveRunOpen`) - a run that starts while the chat is open is held to
+from its first step, and one that ends releases it - and the run's
 own verbs and the agent verbs are refused it always, as every verb that writes the tool's state is. Both trees and the seed then agree, so the agent's next fold starts from
 the reconciliation, and delete-agent's proof that nothing is left to fold holds without being told which paths were
 settled. rebase-agent's `--settled` is another option: there the person reconciled the agent's copy, which stays as its
@@ -2916,7 +2919,8 @@ question the engine raises itself, `FlowCoordinator.SeekAdvice` runs the orchest
 `IFlowAdvisorRunner` (`Runners\AdvisorRunner.cs`) - one reason step that only reads, wherever the asking step works,
 its model resolved and its order built as a step's is, the Claude Code its order starts only found and never installed
 or updated (`ReasonLaunch.ProgramAsync` with `change: false`, as the reporter's is: one missing or too old leaves the
-advice not obtained, saying why), its records and its own conversations under `advice/<n>/` of
+advice not obtained, saying why, where the entry that would serve first is on that client, and is passed over with
+the finder's words where only a later entry is), its records and its own conversations under `advice/<n>/` of
 the asking step's own directory (`OrchestratorLayout.InstanceDirectory`, named on the request as `RecordDirectory` and
 `SessionsDirectory`, whatever agent the step names or none), numbered one past the highest already there, its prompt
 filled by the one grammar with the question as an object of its texts (`{question.step}`, `{question.kind}`,
@@ -3448,7 +3452,9 @@ from, the mask its records and answers are held to - every secret the configurat
 slot answers, each provider's keys and each client's token, beside every form of each search key -
 and the Claude Code it starts, made ready as a step's is and refused on the finder's own code and
 words (12 the configuration, 13 an update refused, 14 the program missing, 21 the install of Claude
-Code timed out or could not reach the registry) - and refused, 14, where `agentPolicy.isolation` is
+Code timed out or could not reach the registry) where the entry that would serve first is on that client - one
+`ReasonLaunch.ProgramAsync` decides for every asker, a step, the advisor and the reporter alike, a later entry on it
+passed over when its turn comes with the finder's words as why - and refused, 14, where `agentPolicy.isolation` is
 `required` and the machine cannot isolate its commands (`AgentIsolation`, below). What differs is what it is given: its
 ground (`SideTaskPolicy`) - no restriction list, no allow list of pages, all four capabilities, the
 main checkout the writable root, the worktree rules and the protected paths off, this tool's own

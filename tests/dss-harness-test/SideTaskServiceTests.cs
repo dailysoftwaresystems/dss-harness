@@ -682,8 +682,8 @@ public sealed class SideTaskServiceTests
             ],
         };
 
-        // A tier of two models Claude Code reaches, for a move between two launches held open; and one of three, the third
-        // reached by an API client.
+        // A tier of two models Claude Code reaches, for a move between two launches held open; one of three, the third
+        // reached by an API client; and one whose first model an API client reaches, Claude Code its fallback.
         foreach (var model in agents.Providers.SelectMany(provider => provider.Models).Where(model => model.Code is "claude-sonnet-5-5" or "claude-opus-5-5"))
         {
             model.Tiers.Add("claudes");
@@ -694,12 +694,17 @@ public sealed class SideTaskServiceTests
             model.Tiers.Add("trio");
         }
 
+        foreach (var model in agents.Providers.SelectMany(provider => provider.Models).Where(model => model.Code is "claude-sonnet-5-5" or "glm-5.3"))
+        {
+            model.Tiers.Add("api-first");
+        }
+
         temp.WriteFile("file.txt", "content\n");
         await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig
         {
             Defaults = new() { AgentTier = agents.AgentTier },
             Providers = [.. agents.Providers, narrow],
-            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) { ["narrow"] = ["narrow-1"], ["pair"] = ["narrow-2", "narrow-1"], ["claudes"] = ["claude-sonnet-5-5", "claude-opus-5-5"], ["trio"] = ["claude-sonnet-5-5", "claude-opus-5-5", "glm-5.3"] },
+            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) { ["narrow"] = ["narrow-1"], ["pair"] = ["narrow-2", "narrow-1"], ["claudes"] = ["claude-sonnet-5-5", "claude-opus-5-5"], ["trio"] = ["claude-sonnet-5-5", "claude-opus-5-5", "glm-5.3"], ["api-first"] = ["glm-5.3", "claude-sonnet-5-5"] },
             AgentClients = clients ?? new(StringComparer.OrdinalIgnoreCase),
         });
 
@@ -2086,6 +2091,102 @@ public sealed class SideTaskServiceTests
         Assert.Equal([SideTaskService.NoRecords], outcome.Details);
         Assert.Empty(rendered.Runs);
         Assert.False(Directory.Exists(LayoutOf(temp, "held-back").Directory));
+    }
+
+    /// <summary>
+    /// A Claude Code that is not ready refuses a side-task only where the entry that would serve it first needs it: on a
+    /// tier whose first model an API client reaches, with npm off the PATH, the side-task runs on that model - Claude
+    /// Code, its fallback, never asked to start - as a step on the same tier does; on a tier whose first model Claude Code
+    /// reaches, it is refused with the finder's own words and code.
+    /// </summary>
+    [Fact]
+    public async Task AClaudeCodeNotReady_RefusesASideTask_OnlyWhereItsFirstEntryNeedsIt()
+    {
+        using var kit = new ClaudeCodeUpdateServiceTests.Kit(npm: false);
+        var finder = await kit.Service().ReadyAsync(kit.Layout, [], client: null, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeAsker.SideTask("claude-first"), Token);
+        var (_, temp, service, stored, rendered) = await RepoAsync(updates: kit.Service());
+        using var tree = temp;
+
+        var served = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Tier: "api-first", Name: "api-first"), Token);
+
+        Assert.Equal((HarnessExit.Success, "side-task 'api-first' answered on glm-5.3"), (served.ExitCode, served.Message));
+        Assert.Equal(["glm-5.3"], stored.Runs.Select(run => run.Model!));
+        Assert.Empty(rendered.Runs);
+
+        var refused = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Tier: "claudes", Name: "claude-first"), Token);
+
+        Assert.Equal((false, HarnessExit.ToolMissing, finder.Message), (finder.Ready, refused.ExitCode, refused.Message));
+        Assert.Empty(rendered.Runs);
+        Assert.False(Directory.Exists(LayoutOf(temp, "claude-first").Directory));
+    }
+
+    /// <summary>
+    /// While a run's owner is live over the main tree - the record the engine writes, read where the side-task asks -
+    /// the side-task's agent is refused a command that writes the git state the run works over, the refusal naming the
+    /// run and nothing committed; once the owner is released, the same command runs and commits.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksCommit_IsRefusedWhileARunsOwnerIsLive_NamingTheRun_AndRunsOnceItIsReleased()
+    {
+        var endpoint = new ApiEndpoint();
+        var opened = new List<IDisposable>();
+
+        try
+        {
+            var (harness, temp, service, _, _) = await RepoAsync(apis: ApiClients(endpoint, opened));
+            using var tree = temp;
+            await harness.CommitAllAsync(temp.Path, "base", Token);
+            temp.WriteFile("file.txt", "changed\n");
+
+            var run = DssHarness.Core.Orchestration.OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path), "r1");
+            harness.OrchestrationStore.WriteOrchestrator(run, new DssHarness.Core.Orchestration.OrchestratorRecord { Kind = DssHarness.Core.Orchestration.OrchestratorRecord.KindName, Name = "r1", Model = "flow-engine", Parallel = 1, CreatedAt = DateTimeOffset.UnixEpoch });
+            var owner = new FlowRunOwner(harness.OrchestrationStore, harness.Identity);
+            _ = owner.Claim(run);
+
+            async Task<string> SubjectAsync() => (await harness.RunGitAsync(temp.Path, ["log", "-1", "--format=%s"], Token)).StandardOutput.Trim();
+
+            // The agent asks to commit, then answers once it is told what came of it.
+            void Scripted()
+                => endpoint
+                    .Then(ApiReply.Stream(ClaudeApiFixtures.Events(
+                    [
+                        ClaudeApiFixtures.Start("claude-sonnet-5-5"),
+                        ("content_block_start", """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_000000000000000000000001","name":"run_command","input":{}}}"""),
+                        ("content_block_delta", """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"program\":\"git\",\"args\":[\"commit\",\"-am\",\"x\"]}"}}"""),
+                        ("content_block_stop", """{"type":"content_block_stop","index":0}"""),
+                        .. ClaudeApiFixtures.End("tool_use"),
+                    ])))
+                    .Then(ApiReply.Stream(ClaudeApiFixtures.Events(
+                    [
+                        ClaudeApiFixtures.Start("claude-sonnet-5-5"),
+                        ("content_block_start", """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"""),
+                        ("content_block_delta", """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"told"}}"""),
+                        ("content_block_stop", """{"type":"content_block_stop","index":0}"""),
+                        .. ClaudeApiFixtures.End("end_turn"),
+                    ])));
+
+            Scripted();
+            var held = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "commit it", Model: "claude-sonnet-5-5", Client: ClaudeApiClient.ClientName, Name: "held"), Token);
+
+            Assert.Equal(HarnessExit.Success, held.ExitCode);
+            var denied = Assert.Single(harness.OrchestrationStore.ReadStepStream(LayoutOf(temp, "held").Directory).OfType<PermissionDenied>());
+            Assert.Equal(
+                (AgentTools.RunCommand, DssHarness.Core.Agents.Policy.AgentPolicy.LiveRunRule, "run 'r1' is working over this tree, and 'git commit -am x' writes the git state it works over - its HEAD, index, refs, stash, configuration or worktrees; ask again when it ends, or pause it yourself"),
+                (denied.Tool, denied.Rule, denied.Reason));
+            Assert.Equal("base", await SubjectAsync());
+
+            owner.Release(run);
+            Scripted();
+            var free = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "commit it", Model: "claude-sonnet-5-5", Client: ClaudeApiClient.ClientName, Name: "free"), Token);
+
+            Assert.Equal(HarnessExit.Success, free.ExitCode);
+            Assert.Empty(harness.OrchestrationStore.ReadStepStream(LayoutOf(temp, "free").Directory).OfType<PermissionDenied>());
+            Assert.Equal("x", await SubjectAsync());
+        }
+        finally
+        {
+            opened.ForEach(each => each.Dispose());
+        }
     }
 
     /// <summary>

@@ -1729,13 +1729,23 @@ public sealed class ToolLoop(
     /// A message of the engine's, said as the event that records it and sent with the next request - masked, as the
     /// system prompt is: the agent is never told a secret of the run's, and the stored conversation never holds one the
     /// engine wrote. Where <paramref name="mapBreak"/> names the message's head as the run's repository map, the
-    /// provider is asked for that part of its own - a cache mark set on it alone where the provider sets one.
+    /// provider is asked for that part of its own - a cache mark set on it alone where the provider sets one - the map and
+    /// the rest each masked apart, for the mask may change the map's length and no secret stands across the map's
+    /// closing tag, and the message recorded is the two masked parts joined, as the provider is sent them.
     /// </summary>
     private async Task SayAsync(string text, AgentMessageKind kind, string? mapBreak = null)
     {
-        var masked = Masked(text);
-        await Emit(new MessageSent(masked, kind)).ConfigureAwait(false);
-        _pending.Add(mapBreak is null ? provider.UserMessage(masked) : provider.UserMessage(Masked(mapBreak), masked[mapBreak.Length..]));
+        if (mapBreak is null)
+        {
+            var masked = Masked(text);
+            await Emit(new MessageSent(masked, kind)).ConfigureAwait(false);
+            _pending.Add(provider.UserMessage(masked));
+            return;
+        }
+
+        var (map, rest) = (Masked(mapBreak), Masked(text[mapBreak.Length..]));
+        await Emit(new MessageSent(map + rest, kind)).ConfigureAwait(false);
+        _pending.Add(provider.UserMessage(map, rest));
     }
 
         /// <summary>

@@ -131,13 +131,16 @@ public sealed class AdvisorRunner(
         var order = launch.Order(providers, resolution, context.Layout);
 
         // The advisor only reads, so a Claude Code its order starts is only found: one that is not there, or is too old,
-        // is why no advice was obtained, and installing or updating it is a run's step's or a side-task's to do.
+        // is why no advice was obtained where the entry that would serve first needs it - and only passed over where a
+        // later entry does - and installing or updating it is a run's step's or a side-task's to do.
         var program = await launch.ProgramAsync(context.Layout, providers, order, Agents.ClaudeCode.ClaudeCodeAsker.Run(" (the run's advisor)"), change: false, cancellationToken).ConfigureAwait(false);
 
-        if (program is { Ready: false })
+        if (program.Refusal is { } notFound)
         {
-            return Unasked(program.Message);
+            return Unasked(notFound.Message);
         }
+
+        order = program.Order;
 
         // The asking step's agent decides where the advice works: its worktree where it has one - at the path its record
         // resolves, as every launch's is - else the main tree; the advice only reads either way, its own work directory
@@ -209,8 +212,8 @@ public sealed class AdvisorRunner(
             Order = order,
             Retries = call.Advisor.Retries,
             BackoffSeconds = call.Advisor.BackoffSeconds,
-            Program = program?.Program,
-            ProgramVersion = program?.Version,
+            Program = program.Program,
+            ProgramVersion = program.Version,
             RecordDirectory = directory,
             SessionsDirectory = Path.Combine(directory, OrchestratorLayout.SessionsDirectoryName),
         };

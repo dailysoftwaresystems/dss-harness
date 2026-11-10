@@ -2430,6 +2430,25 @@ public static class HelpTopics
     }
 
     /// <summary>
+    /// What a side-task's agent is held off while a run works over the tree, said from the lists the policy holds it by
+    /// (<see cref="Agents.Policy.AgentPolicy.LiveRunHeld"/>, <see cref="Agents.Policy.AgentPolicy.LiveRunOpen"/>), so the
+    /// help names every command the policy does.
+    /// </summary>
+    internal static string SideTaskLiveRunHold
+        => "While a run is working over the tree, the commands that write the git state it works over - its HEAD, index, "
+            + "refs, stash, configuration or worktrees - are refused with the run's name: git's state-writing verbs ("
+            + string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs) + "), the verbs that write its index ("
+            + string.Join(", ", Agents.Policy.AgentPolicy.GitIndexVerbs) + " - apply whole, for its --index and --cached "
+            + "may stand anywhere among its words) and gh's that write git's state ("
+            + string.Join(", ", Agents.Policy.AgentPolicy.GhStateCommands) + "), each met as the worktree rules meet a "
+            + "command - git's options before its verb seen through, git-commit read as git commit, a configuration set "
+            + "where it runs (git -c alias.x=commit x) read as the git config it is, and a verb the shell expands held as "
+            + "one that may be any - checked at each call, so a run that starts while the chat is open is held to from its "
+            + "first step and one that ends releases it. Their listing forms stay open ("
+            + string.Join(", ", Agents.Policy.AgentPolicy.LiveRunOpen) + ", a trailing * any words after the form), as "
+            + "does the git that writes none of it, and the person may do any of it by hand.";
+
+    /// <summary>
     /// The side-tasks topic: what a side-task is - an agent outside every workflow, a conversation between a person and
     /// one agent over the repository's main tree - the two commands, what the side-task's agent may do and may not, its
     /// model and effort, and where its records live.
@@ -2501,7 +2520,7 @@ public static class HelpTopics
             + "git does not ignore, a side-task started under an agent or whose starting processes could not be read, an "
             + "update of Claude Code refused - a session of "
             + "it running, or the machine's processes unread - and in one shot a key missing or the tool running "
-            + $"elevated; {HarnessExit.ToolMissing} a client that cannot start - no claude, no npm - or, under "
+            + $"elevated; {HarnessExit.ToolMissing} a client that cannot start where the entry that would serve first is on it - no claude, no npm - or, under "
             + $"agentPolicy.isolation \"{Agents.Isolation.AgentIsolationMode.Required}\", a machine that cannot isolate the agent's commands; "
             + $"{HarnessExit.Incomplete} the install of Claude Code timed out or could not reach the registry; and in one "
             + $"shot besides, {HarnessExit.CommandFailed} the model failed past its retries and fallback, "
@@ -2533,11 +2552,7 @@ public static class HelpTopics
             + "read no credential slot and write none of its state as the person could. One write at a time: every write "
             + "tool and every command of the side-task's agent holds the main tree's lock for its duration, as the engine's "
             + "folds and commits do - each side waits the other out, a long command holding the folds back for as long as it "
-            + "runs - and the chat says when its command waited. While a run is working over the tree, the git verbs that "
-            + "move HEAD, the index or the stash are refused with the run's name - commit, stash, reset, clean, checkout, "
-            + "switch, restore, rebase, merge, cherry-pick, revert, pull, am, worktree, branch, tag and update-ref - checked "
-            + "at each call, so a run that starts while the chat is open is held to from its first step and one that ends "
-            + "releases it; the git that moves nothing stays open, and the person may do any of it by hand. An edit of "
+            + "runs - and the chat says when its command waited. " + SideTaskLiveRunHold + " An edit of "
             + "config.json - a search source added, a provider changed - reaches the run's steps that start after it and "
             + "never one under way, for the agents' configuration is read when each step starts, as its prompts are; the "
             + "chat says so where a run is live. Its web_search asks one more source beside the configured ones: native, the provider's "
@@ -5068,14 +5083,17 @@ public static class HelpTopics
             "The run's repository map is the tree at a glance: a header line - the commit it is of, how many files and "
             + "declarations the graph holds, and that the graph tool answers for the tree as it is now - the projects and "
             + "top directories with their counts, then the most central declarations one line each as find gives it, a "
-            + "declaration's centrality the number of other files whose references bind to it, raised where its name holds "
-            + $"the run's task terms, no test and nothing generated. It is made once, from the base as it stands when the run's first graphed reason step is given its prompt, kept in {OrchestratorLayout.GraphMapFileName} with what it was made from in "
+            + "declaration's centrality the number of files other than its own and a test's whose references bind to it, raised by how "
+            + "its name matches the run's task as find weighs a name's words - the share of the task's words its name holds "
+            + "whole, each weighed by how often the task says it and how rare it is among the view's names, a name that "
+            + $"holds them all raised as far as {Codebase.CodebaseGraphQueries.TaskRaise.ToString(CultureInfo.InvariantCulture)} more such files would raise it - no "
+            + $"declaration of a file that declares a test and nothing generated. It is made once, from the base as it stands when the run's first graphed reason step is given its prompt, kept in {OrchestratorLayout.GraphMapFileName} with what it was made from in "
             + $"{OrchestratorLayout.GraphMapMetaFileName} under the run's graph, and never made again in the run, a resumed run included - the base moves as folds land and the map does not - cut at whole lines under "
             + $"codebaseGraph.mapTokens ({Codebase.CodebaseGraphShape.DefaultMapTokens.ToString(CultureInfo.InvariantCulture)} by default; 0 gives no map). Every step that has a graph is given it as the <repository-map> part ahead of its "
             + "context pack, the same bytes for every one of them, so a client that caches a prefix reads it from the "
             + "cache ('help agent-clients' says where each client sets its marks). A step that goes on with a stored "
             + "conversation on the API clients is told, in its one new user message, <codebase-changes> instead: the "
-            + "declarations its view changed since that conversation's last pack or delta - moved or changed with their new "
+            + "declarations its view changed since what that conversation was told of them - its pack and every delta after it - moved or changed with their new "
             + "range and hash, removed - and the nodes of its own pack the conversation was not given; never a map or a "
             + "pack again whole, for a conversation's prefix is never changed, and no earlier message, tool result, map or "
             + "pack is ever sent changed. Claude Code, whose every launch begins a conversation of its own, is given the "

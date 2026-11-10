@@ -448,7 +448,7 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("side-tasks").StandardOutput);
 
         Assert.Contains(
-            $"{HarnessExit.ToolMissing} a client that cannot start - no claude, no npm - or, under agentPolicy.isolation \"required\", a "
+            $"{HarnessExit.ToolMissing} a client that cannot start where the entry that would serve first is on it - no claude, no npm - or, under agentPolicy.isolation \"required\", a "
                 + $"machine that cannot isolate the agent's commands; {HarnessExit.Incomplete} the install of "
                 + $"Claude Code timed out or could not reach the registry; and in one shot besides, {HarnessExit.CommandFailed} "
                 + "the model failed past its retries and fallback, "

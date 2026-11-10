@@ -34,11 +34,11 @@ public interface IChatProvider
     /// <summary>
     /// A message of the engine's that begins a conversation with the run's repository map at its head, in the provider's
     /// own form: the map carried as its own part where the provider's message holds parts - a cache mark the provider
-    /// sets on that part alone, where it sets one - and as the head of the one text where it does not. The two texts
-    /// joined are the message as the engine records it.
+    /// sets on that part alone, where it sets one - and as the head of the one text where it does not. Each is masked apart
+    /// by the loop, and the two texts joined are the message as the engine records it.
     /// </summary>
-    /// <param name="map">The repository map's part, masked, as the first user message holds it.</param>
-    /// <param name="rest">The rest of the message after it, masked, as the first user message holds it.</param>
+    /// <param name="map">The repository map's part, masked on its own, as the first user message holds it.</param>
+    /// <param name="rest">The rest of the message after it, masked on its own, as the first user message holds it.</param>
     string UserMessage(string map, string rest) => UserMessage(map + rest);
 
     /// <summary>

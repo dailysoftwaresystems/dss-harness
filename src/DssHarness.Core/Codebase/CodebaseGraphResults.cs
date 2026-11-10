@@ -256,8 +256,8 @@ public sealed class GraphNearness
     }
 }
 
-/// <summary>How a node is written in the lines the <c>graph</c> tool and the context pack give.</summary>
-public static class GraphLines
+/// <summary>How a node is written in the lines the <c>graph</c> tool and the context pack give, and read back.</summary>
+public static partial class GraphLines
 {
     /// <summary>
     /// The one line a node is named by in every answer and in the context pack: its handle, kind and signature (its
@@ -298,4 +298,54 @@ public static class GraphLines
 
         return marks.Count > 0 ? $"{line} | {string.Join(", ", marks)}" : line;
     }
+
+    /// <summary>The separator between the parts of a node's line (<see cref="Of"/>).</summary>
+    private const string Part = " | ";
+
+    /// <summary>
+    /// Where a node line - one <see cref="Of"/> writes, with or without what a pack says after it - says its node stands:
+    /// its handle, the line's first word, and the first part after its first that reads as a place, <c>path:start-end</c>
+    /// with <c>#hash</c> where it has one. A signature that holds the separator itself (a default of <c>A | B</c>) is
+    /// passed over to the place after it, and a place-like text a summary says is never reached, for the place comes
+    /// first. Null where the line is no node's: a pack's first or last line, a declaration it says was taken out, a count.
+    /// </summary>
+    /// <param name="line">The line, whole.</param>
+    public static GraphPlace? Placed(string line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        var parts = line.Split(Part);
+
+        if (parts.Length < 2 || parts[0].Split(' ') is not [{ Length: > 0 } handle, ..])
+        {
+            return null;
+        }
+
+        foreach (var part in parts.Skip(1))
+        {
+            if (PlaceForm().Match(part) is { Success: true } place)
+            {
+                return new GraphPlace(
+                    handle,
+                    place.Groups["path"].Value,
+                    int.Parse(place.Groups["start"].Value, CultureInfo.InvariantCulture),
+                    int.Parse(place.Groups["end"].Value, CultureInfo.InvariantCulture),
+                    place.Groups["hash"].Success ? place.Groups["hash"].Value : null);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>A place as <see cref="Of"/> writes one: <c>path:start-end</c>, then <c>#hash</c> where the node has one.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(?<path>[^ ].*):(?<start>\d+)-(?<end>\d+)(?: #(?<hash>[0-9a-fA-F]+))?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex PlaceForm();
 }
+
+/// <summary>Where a node line says its node stands (<see cref="GraphLines.Placed"/>).</summary>
+/// <param name="Handle">The node's handle, as every line of the graph names it.</param>
+/// <param name="Path">The file it is declared in, relative to the tree with forward separators.</param>
+/// <param name="Start">The line its own lines begin at.</param>
+/// <param name="End">The line its own lines end at.</param>
+/// <param name="Hash">The hash of what stands there; null where the line names none.</param>
+public sealed record GraphPlace(string Handle, string Path, int Start, int End, string? Hash);

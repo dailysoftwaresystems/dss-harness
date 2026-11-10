@@ -25,8 +25,8 @@ public sealed class CodebaseGraphServingTests
 
     /// <summary>
     /// For every task of the three fixture repositories: the pack made from the task's text holds every declaration the
-    /// task needs, and the bytes the pack and the bodies of those declarations serve are a pinned share - and less -
-    /// than the bytes of the whole files that hold them.
+    /// task needs, the bodies of those declarations cost under half the bytes of the whole files that hold them, the pack
+    /// stays within its cap, and the bytes the pack and the bodies serve together are a pinned share of the whole files'.
     /// </summary>
     [Fact]
     public async Task EveryTaskOfTheThreeFixtureRepositories_IsServedItsDeclarationsForAPinnedShareOfTheWholeFiles()
@@ -66,7 +66,13 @@ public sealed class CodebaseGraphServingTests
                 // The bytes of the whole files that hold what the task needs.
                 var whole = needed.Select(card => card.Path).Distinct(StringComparer.Ordinal).Sum(path => Bytes(files[path]));
 
-                Assert.True(served < whole, $"{language} '{task.Task}': served {served} of {whole} whole bytes");
+                // What the graph saves is the files: the bodies a task needs cost under half the bytes of the files that
+                // hold them. The pack is what orientation costs, held to its cap whatever the fixture's size - so a line
+                // more in its header moves the pinned share below, never these bounds.
+                var bodies = served - Bytes(pack.Text);
+
+                Assert.True(bodies * 2 < whole, $"{language} '{task.Task}': the bodies served {bodies} of {whole} whole bytes");
+                Assert.True(EstimatedTokens.Of(pack.Text) <= CodebaseContextPack.DefaultTokens, $"{language} '{task.Task}': the pack is {EstimatedTokens.Of(pack.Text)} estimated tokens, past its cap of {CodebaseContextPack.DefaultTokens}");
                 ratios.Add((language, task.Task, Math.Round(served * 100.0 / whole, 1)));
             }
         }

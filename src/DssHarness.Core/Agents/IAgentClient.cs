@@ -548,8 +548,8 @@ public sealed record AgentStepRequest(
     /// <summary>
     /// The changes of the codebase a stored conversation the run goes on with is told, the
     /// <c>&lt;codebase-changes&gt;</c> part of its one new user message in the place of a pack - the declarations its
-    /// view changed since that conversation's last pack or delta, and the nodes of its own pack the conversation was
-    /// not given; null where the run was given none, and the run's own pack sent as every new conversation's is.
+    /// view changed since what that conversation was told of them - its pack and every delta after it - and the nodes of
+    /// its own pack the conversation was not given; null where the run was given none, and the run's own pack sent as every new conversation's is.
     /// </summary>
     public string? CodebaseChanges { get; init; }
 

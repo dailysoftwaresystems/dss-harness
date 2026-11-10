@@ -150,14 +150,15 @@ public sealed class ReasonStepRunner(
         // Where the order holds the client that starts a program, the program is found ready here - installed and
         // brought up to date where it must be - and the run starts what was found, never a launcher of its own: a
         // program not ready refuses the step where the entry that would serve first needs it, and where only a
-        // fallback does, that fallback is passed over when its turn comes - said so by the walk, never refusing a run.
+        // fallback does, the order the step runs by passes that fallback over, the finder's words as why.
         var program = await launch.ProgramAsync(context.Layout, providers, order, ClaudeCodeAsker.Run($" (step '{run.Instance}')"), change: true, cancellationToken).ConfigureAwait(false);
 
-        if (program is { Ready: false } notReady && order.FirstOrDefault(entry => entry.Usable) is { Client: { } serving }
-            && string.Equals(serving, ClaudeCodeClient.ClientName, StringComparison.Ordinal))
+        if (program.Refusal is { } notReady)
         {
             return FlowStepResult.Ended(passed: false, notReady.ExitCode, notReady.Message);
         }
+
+        order = program.Order;
 
         var workspace = launch.Workspace(agentRecord, context.Layout, layout.WorkDirectory(agent), layout.Directory);
         var sources = Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild);
@@ -296,9 +297,10 @@ public sealed class ReasonStepRunner(
         var compaction = goingOn is { Compact: true } ? CompactedFrom(stream, run.Attempt, context) : null;
 
         // The changes of the codebase the conversation this attempt goes on with is told: what its view changed since
-        // that conversation's last pack or delta, and the nodes of its own pack it was not given - in the one new user
-        // message, never a map or a pack again whole, for the conversation's prefix is never changed.
-        var codebaseChanges = conversation is null ? null : stepGraph?.ChangesSince(LastCodebaseOf(stream));
+        // what that conversation was told of it - its pack and every delta after it - and the nodes of its own pack it
+        // was not given - in the one new user message, never a map or a pack again whole, for the conversation's prefix
+        // is never changed.
+        var codebaseChanges = conversation is null ? null : stepGraph?.ChangesSince(CodebaseToldOf(stream));
 
         var request = new AgentStepRequest(
             place.Run,
@@ -338,8 +340,8 @@ public sealed class ReasonStepRunner(
             Compaction = compaction,
             Retries = place.Definition.RetriesOf(run.Step),
             BackoffSeconds = run.Step.BackoffSeconds ?? place.Definition.BackoffSeconds,
-            Program = program?.Program,
-            ProgramVersion = program?.Version,
+            Program = program.Program,
+            ProgramVersion = program.Version,
             Skills = skills,
             SessionId = conversation is null ? session : null,
 
@@ -944,31 +946,29 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The codebase part the conversation the step's own stream holds was given last - its pack, or the delta it was
-    /// told before this one - read from the stream's first messages as they were sent; null where it was given none.
+    /// The codebase parts the conversation the step's own stream holds was told, in order - its last pack, then each
+    /// delta after it - read from the stream's first messages as they were sent; empty where it was given none. A pack
+    /// begins what a conversation holds of the codebase afresh, so nothing before the last one counts.
     /// </summary>
     /// <param name="stream">The step's own events, every attempt's.</param>
-    private static string? LastCodebaseOf(IReadOnlyList<AgentEvent> stream)
+    private static IReadOnlyList<string> CodebaseToldOf(IReadOnlyList<AgentEvent> stream)
     {
-        foreach (var sent in stream.OfType<MessageSent>().Reverse())
-        {
-            if (sent.Which != AgentMessageKind.FirstPrompt)
-            {
-                continue;
-            }
+        var told = new List<string>();
 
+        foreach (var sent in stream.OfType<MessageSent>().Where(sent => sent.Which == AgentMessageKind.FirstPrompt))
+        {
             if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseChangesTag) is { Length: > 0 } changes)
             {
-                return changes;
+                told.Add(changes);
             }
-
-            if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseTag) is { Length: > 0 } pack)
+            else if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseTag) is { Length: > 0 } pack)
             {
-                return pack;
+                told.Clear();
+                told.Add(pack);
             }
         }
 
-        return null;
+        return told;
     }
 
     /// <summary>

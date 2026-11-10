@@ -56,6 +56,7 @@ public sealed partial class AgentPolicy
     /// agent whose HEAD left its base, and these are the verbs that move it or write what the
     /// repository holds beside it - its refs, objects, configuration, remotes and worktrees, its experimental history
     /// rewriters (<c>history</c>, <c>replay</c>) among them. Reading git - status, diff, log, show, blame, grep - stays allowed.
+    /// Held off a side-task's agent too while a run works over the tree (<see cref="LiveRunHeld"/>).
     /// </summary>
     public static IReadOnlyList<string> GitStateVerbs { get; } =
         ["commit", "stash", "reset", "clean", "checkout", "switch", "restore", "rebase", "merge", "cherry-pick", "revert", "pull", "push", "am", "worktree", "branch", "tag", "update-ref", "config", "gc",
@@ -121,7 +122,8 @@ public sealed partial class AgentPolicy
     /// repository or a remote written into git's configuration, a fork or a new repository made with its remote, its push
     /// or its clone, a repository renamed with its remote, and gh made git's credential helper - and gh's own
     /// configuration, which names the editor, pager and browser every gh command runs. Opening a pull request, which may
-    /// push its branch, is a CI start (<see cref="GhCiReaches"/>).
+    /// push its branch, is a CI start (<see cref="GhCiReaches"/>). Held off a side-task's agent too while a run works over
+    /// the tree (<see cref="LiveRunHeld"/>).
     /// </summary>
     public static IReadOnlyList<string> GhStateCommands { get; } =
     [
@@ -262,15 +264,50 @@ public sealed partial class AgentPolicy
     ];
 
     /// <summary>
-    /// The git verbs that move HEAD, the index or the stash, refused to a side-task's agent while a run works over the
-    /// tree (<see cref="AgentPolicyGround.LiveRun"/>): the run moves HEAD itself, and an agent's moving it beside it
-    /// would weigh the run's work against a tree the run never saw. Read-only git - <c>status</c>, <c>log</c>,
-    /// <c>diff</c> - stays open, as everything of the person's own session that moves nothing does.
+    /// The git verbs that write its index beside its state-writing verbs (<see cref="GitStateVerbs"/>): staging, taking
+    /// out, moving and the index's own plumbing - and <c>apply</c>, whose <c>--index</c> and <c>--cached</c> write it
+    /// wherever they stand among its words, so the verb is held whole. Open to a step's agent in its own worktree, and held
+    /// off a side-task's while a run works over the tree (<see cref="LiveRunHeld"/>), for the run's commit step stages its
+    /// own set and refuses an index that holds anything else.
     /// </summary>
-    public static IReadOnlyList<string> HeadMovingGitVerbs { get; } =
+    public static IReadOnlyList<string> GitIndexVerbs { get; } = ["add", "stage", "rm", "mv", "apply", "update-index"];
+
+    /// <summary>
+    /// The commands held off a side-task's agent while a run works over the tree (<see cref="AgentPolicyGround.LiveRun"/>),
+    /// each with any words after it: git's state-writing verbs (<see cref="GitStateVerbs"/>), the verbs that write its
+    /// index (<see cref="GitIndexVerbs"/>) and gh's that write git's state (<see cref="GhStateCommands"/>) - every way a
+    /// command writes the HEAD, index, refs, stash, configuration or worktrees the run works over. The run moves HEAD and
+    /// stages and commits its own work, and an agent's moving any of it beside the run would weigh the run's work against
+    /// a tree the run never saw. Each is met as the worktree rules' commands are, by every reading of the command
+    /// (<see cref="CommandAnalysis.ForRules(IReadOnlyList{string}, bool, IReadOnlyList{string}?)"/>) - git's options
+    /// before its verb dropped, <c>git-commit</c> read as <c>git commit</c>, a configuration set where it runs read as the
+    /// <c>git config</c> it is - and a word the shell expands where a held word would stand is held as one that may be it.
+    /// Their listing forms stay open (<see cref="LiveRunOpen"/>), as does the git that writes none of it.
+    /// </summary>
+    public static IReadOnlyList<string> LiveRunHeld { get; } =
+        [.. GitStateVerbs.Select(verb => $"git {verb}"), .. GitIndexVerbs.Select(verb => $"git {verb}"), .. GhStateCommands];
+
+    /// <summary>
+    /// The forms of the held commands (<see cref="LiveRunHeld"/>) that only list or read, open to a side-task's agent while
+    /// a run works over the tree, each a <c>Run</c> pattern - a trailing <c>*</c> any words after it, every other form
+    /// exactly as written: the listings an agent runs to see where it stands. Each holds a mode git takes as the
+    /// command's one action, so no word after it makes the command one that writes. A form is open only where the command
+    /// is it for certain: one a word the shell expands may make another is held.
+    /// </summary>
+    public static IReadOnlyList<string> LiveRunOpen { get; } =
     [
-        "commit", "stash", "reset", "clean", "checkout", "switch", "restore", "rebase", "merge", "cherry-pick", "revert",
-        "pull", "am", "worktree", "branch", "tag", "update-ref",
+        "git branch", "git branch -a", "git branch --all", "git branch -r", "git branch --remotes", "git branch -v",
+        "git branch -vv", "git branch --verbose", "git branch --list *", "git branch --show-current *",
+        "git tag", "git tag -l *", "git tag --list *",
+        "git stash list *", "git stash show *",
+        "git worktree list *",
+        "git config --list *", "git config -l *", "git config --get *", "git config --get-all *", "git config --get-regexp *",
+        "git config get *", "git config list *",
+        "git remote", "git remote -v", "git remote --verbose", "git remote show *", "git remote get-url *",
+        "git reflog", "git reflog show *",
+        "git notes list *", "git notes show *",
+        "git submodule", "git submodule status *",
+        "git sparse-checkout list *",
     ];
 
     /// <summary>
@@ -328,6 +365,8 @@ public sealed partial class AgentPolicy
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _writes;
     private readonly IReadOnlyList<AgentRule> _worktreeRunRules;
     private readonly IReadOnlyList<AgentRule> _outOfStepRules = [.. GhOutOfStepCommands.Select(command => AgentRule.Parse($"Run({command} *)"))];
+    private readonly IReadOnlyList<AgentRule> _liveRunHeldRules = [.. LiveRunHeld.Select(command => AgentRule.Parse($"Run({command} *)"))];
+    private readonly IReadOnlyList<AgentRule> _liveRunOpenRules = [.. LiveRunOpen.Select(form => AgentRule.Parse($"Run({form})"))];
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _worktreePolicyWrites;
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _protectedPaths;
     private readonly string _workingRoot;
@@ -2315,39 +2354,6 @@ public sealed partial class AgentPolicy
         };
     }
 
-    /// <summary>
-    /// The verb of git's the command at <paramref name="start"/> names that moves HEAD, the index or the stash, or null
-    /// where it is no git or names none: git's own options before the verb are skipped, the ones that take a value with
-    /// it, so <c>git -C path commit</c> is read as the <c>commit</c> it is.
-    /// </summary>
-    private static string? MovingHead(string program, AnalyzedCommand analyzed, int start)
-    {
-        if (!program.Equals("git", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        var command = analyzed.Words;
-
-        for (var at = start + 1; at < command.Count;)
-        {
-            var word = command[at];
-
-            if (word.Length > 0 && word[0] is '-')
-            {
-                at += GitOptionValues.Contains(word, StringComparer.Ordinal) ? 2 : 1;
-                continue;
-            }
-
-            return HeadMovingGitVerbs.Contains(word, StringComparer.Ordinal) ? word : null;
-        }
-
-        return null;
-    }
-
-    /// <summary>Git's own options that take the word after them as their value, skipped with it on the way to the verb.</summary>
-    private static readonly IReadOnlyList<string> GitOptionValues = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"];
-
     /// <summary>The refusal of a verb that reads a credential slot or writes the tool's own state (<see cref="SlotOrStateVerbs"/>), after <paramref name="opening"/>.</summary>
     /// <param name="opening">What is refused, as the sentence opens.</param>
     private static AgentPolicyAnswer.Denied SlotOrStateRefusal(string opening)
@@ -2496,19 +2502,6 @@ public sealed partial class AgentPolicy
             return SlotOrStateRefusal($"'{ToolPackage.Command} {sideVerb}' is refused");
         }
 
-        // A run working over the tree is what a side-task reads to hold its agent off HEAD: while the run's owner is
-        // live, the git verbs that move HEAD, the index or the stash are refused with the run's name. It is checked at
-        // each call, so a run that starts while the chat is open is held to from its first step, and one that ends
-        // releases it. The person may do any of it by hand; the agent may not, so that a run nobody watches is never
-        // moved by an agent of a conversation it does not know of.
-        if (_ground is { SideTask: true, LiveRun: { } liveRun } && MovingHead(program, analyzed, start) is { } moving && liveRun() is { } run)
-        {
-            return new AgentPolicyAnswer.Denied(
-                "a run working over the tree",
-                AgentPolicySource.Builtin,
-                $"run '{run}' is working over this tree and moves HEAD itself; ask again when it ends, or pause it yourself");
-        }
-
         if (!_ground.SideTask && ToolVerbOf(program, analyzed, start) is var (verb, expansion))
         {
             if (ToolVerbs.Contains(verb, roots))
@@ -2548,7 +2541,7 @@ public sealed partial class AgentPolicy
 
         // A rule the command is decides it first, group by group (RunRules), so a command that prints a credential is
         // named as one whatever else it meets.
-        foreach (var group in (RunRules[])[RunRules.Credentials, RunRules.OutOfStep, RunRules.Restrictions, RunRules.Worktree])
+        foreach (var group in (RunRules[])[RunRules.Credentials, RunRules.OutOfStep, RunRules.Restrictions, RunRules.Worktree, RunRules.LiveRun])
         {
             if (readings.Select(reading => Met(group, reading, AgentRuleMatch.Yes, whole, comparison)).OfType<AgentPolicyAnswer.Denied>().FirstOrDefault() is { } certain)
             {
@@ -2557,9 +2550,10 @@ public sealed partial class AgentPolicy
         }
 
         // Only then a rule the command may be, where a word the rule reads is one the shell expands: the person's own
-        // named first, so 'git $VERB' under their Run(git push *) is said as theirs, then the worktree rules', then the
-        // tool's own refusals - a credential's only where no rule of the person's or the worktree's may be the command.
-        foreach (var group in (RunRules[])[RunRules.Restrictions, RunRules.Worktree, RunRules.Credentials, RunRules.OutOfStep])
+        // named first, so 'git $VERB' under their Run(git push *) is said as theirs, then the worktree rules', then a run
+        // working over the tree, which names the run, then the tool's own refusals - a credential's only where nothing
+        // before it may be the command.
+        foreach (var group in (RunRules[])[RunRules.Restrictions, RunRules.Worktree, RunRules.LiveRun, RunRules.Credentials, RunRules.OutOfStep])
         {
             if (readings.Select(reading => Met(group, reading, AgentRuleMatch.Expanded, whole, comparison)).OfType<AgentPolicyAnswer.Denied>().FirstOrDefault() is { } possible)
             {
@@ -2869,6 +2863,12 @@ public sealed partial class AgentPolicy
 
         /// <summary>The worktree rules' commands, where the ground has them on.</summary>
         Worktree,
+
+        /// <summary>
+        /// The commands held off a side-task's agent while a run works over the tree (<see cref="LiveRunHeld"/>), their
+        /// listing forms open (<see cref="LiveRunOpen"/>), asked of the run at the call.
+        /// </summary>
+        LiveRun,
     }
 
     /// <summary>
@@ -2889,6 +2889,11 @@ public sealed partial class AgentPolicy
                     : MayBe($"Run({printing})", AgentPolicySource.Builtin, whole);
         }
 
+        if (group is RunRules.LiveRun)
+        {
+            return LiveRunHold(reading, wanted, whole, comparison);
+        }
+
         IEnumerable<(AgentRule Rule, AgentRestriction? Declared)> rules = group switch
         {
             RunRules.OutOfStep => _outOfStepRules.Select(rule => (rule, (AgentRestriction?)null)),
@@ -2907,6 +2912,42 @@ public sealed partial class AgentPolicy
                 ? new AgentPolicyAnswer.Denied(rule.Text, AgentPolicySource.Builtin, $"'{whole}' is denied by {rule.Text}, a rule of this tool: an agent does not leave its step's limits")
                 : new AgentPolicyAnswer.Denied(rule.Text, AgentPolicySource.Builtin, $"'{whole}' is denied by {rule.Text}, a worktree rule of this tool");
     }
+
+    /// <summary>
+    /// The hold a run working over the tree puts on a side-task's agent: the refusal, naming the run, of a reading that
+    /// meets one of the held commands (<see cref="LiveRunHeld"/>) as <paramref name="wanted"/> says - and is not, for
+    /// certain, one of their listing forms (<see cref="LiveRunOpen"/>) - while a run's owner is live. Null where the
+    /// ground is no side-task's, the reading meets none, or no run is live: the run is asked only where a command would
+    /// be held, at each call, so a run that starts while the chat is open is held to from its first step and one that
+    /// ends releases it. The person may do any of it by hand; the agent may not, so that a run nobody watches is never
+    /// moved by an agent of a conversation it does not know of.
+    /// </summary>
+    private AgentPolicyAnswer.Denied? LiveRunHold(RuleReading reading, AgentRuleMatch wanted, string whole, StringComparison comparison)
+    {
+        if (_ground is not { SideTask: true, LiveRun: { } liveRun }
+            || !_liveRunHeldRules.Any(rule => rule.Match(reading.Words, comparison, reading.Quoted) == wanted))
+        {
+            return null;
+        }
+
+        var open = _liveRunOpenRules.Select(rule => rule.Match(reading.Words, comparison, reading.Quoted)).ToList();
+
+        if (open.Contains(AgentRuleMatch.Yes) || liveRun() is not { } run)
+        {
+            return null;
+        }
+
+        // A word the shell expands may make it a listing, or a command that writes: what it is cannot be told.
+        return new AgentPolicyAnswer.Denied(
+            LiveRunRule,
+            AgentPolicySource.Builtin,
+            wanted is AgentRuleMatch.Yes && !open.Contains(AgentRuleMatch.Expanded)
+                ? $"run '{run}' is working over this tree, and '{whole}' writes the git state it works over - its HEAD, index, refs, stash, configuration or worktrees; ask again when it ends, or pause it yourself"
+                : $"run '{run}' is working over this tree, and '{whole}' may write the git state it works over: a word of it is one the shell expands, which this does not read; ask again when it ends, or pause it yourself");
+    }
+
+    /// <summary>The rule a refusal of a command held while a run works over the tree names (<see cref="LiveRunHeld"/>).</summary>
+    public const string LiveRunRule = "a run working over the tree";
 
     /// <summary>
     /// How <paramref name="reading"/> meets <paramref name="printing"/>, one of <see cref="CredentialPrintingCommands"/>:

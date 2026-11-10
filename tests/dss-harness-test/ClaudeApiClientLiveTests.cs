@@ -105,8 +105,9 @@ public sealed class ClaudeApiClientLiveTests
 
         using var run = new LiveApiRun(root!, "anthropic", ClaudeApiClient.ClientName, (harness, tools, connection) => new ClaudeApiClient(harness.FileSystem, tools, TimeProvider.System, connection));
 
-        // A map of a few hundred tokens, as a run's own would be.
-        var map = string.Join('\n', Enumerable.Range(0, 60).Select(index => $"at{index:D3} member void Member{index}() | src/File{index:D2}.cs:{index + 1}-{index + 9} #a1b2c{index:D3} | it does what member {index} does, and nothing else"));
+        // A map of a few hundred tokens, as a run's own would be - headed by this run's own nonce, so a run again within
+        // the cache's lifetime writes a map of its own rather than reading the last run's.
+        var map = string.Join('\n', Enumerable.Range(0, 60).Select(index => $"at{index:D3} member void Member{index}() | src/File{index:D2}.cs:{index + 1}-{index + 9} #a1b2c{index:D3} | it does what member {index} does, and nothing else").Prepend($"at commit {Guid.NewGuid():N}"));
         var tokens = DssHarness.Core.Codebase.EstimatedTokens.Of(map);
 
         var first = await run.StepAsync("s1", First, "low", "Use the view_file tool to read the file a.txt. Then give as your answer the one word it holds.", null, null, Token, map: map);

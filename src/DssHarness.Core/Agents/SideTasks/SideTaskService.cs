@@ -628,13 +628,16 @@ public sealed class SideTaskService(
 
         // Where the order holds the client that starts a program, it is made ready here - installed and brought up to
         // date where it must be - as a step's is: one not ready refuses the side-task with the finder's own words and
-        // code - the configuration (12), an update refused (13), a program missing (14).
+        // code - the configuration (12), an update refused (13), a program missing (14) - where the entry that would
+        // serve first needs it, and where only a later entry does, the side-task runs by an order that passes it over.
         var program = await _launch.ProgramAsync(layout, providers, order, ClaudeCodeAsker.SideTask(task), change: true, cancellationToken).ConfigureAwait(false);
 
-        if (program is { Ready: false })
+        if (program.Refusal is { } notReady)
         {
-            return (null, new CommandOutcome(program.ExitCode, program.Message, program.Details));
+            return (null, new CommandOutcome(notReady.ExitCode, notReady.Message, notReady.Details));
         }
+
+        order = program.Order;
 
         var ground = SideTaskPolicy.Ground(
             layout,
@@ -652,13 +655,14 @@ public sealed class SideTaskService(
             return (null, CommandOutcome.Failed(HarnessExit.ToolMissing, $"{unisolated}. Nothing was started."));
         }
 
-        return (new SideTaskSetUp(resolution, order, program?.Program, program?.Version, ground, runsOn, isolated), null);
+        return (new SideTaskSetUp(resolution, order, program.Program, program.Version, ground, runsOn, isolated), null);
     }
 
     /// <summary>
     /// The name of the run whose owner is live over <paramref name="layout"/>'s main tree, or null where none is: what a
-    /// side-task's agent is held off HEAD by, asked at each call that would move it. An owner on another machine stands
-    /// until somebody takes it over, as every owner does.
+    /// side-task's agent is held off the git state the run works over by (<see cref="AgentPolicy.LiveRunHeld"/>), asked
+    /// at each call that would write it. An owner on another machine stands until somebody takes it over, as every owner
+    /// does.
     /// </summary>
     /// <param name="layout">The repository's layout.</param>
     private string? LiveRunOf(Repository.HarnessLayout layout)

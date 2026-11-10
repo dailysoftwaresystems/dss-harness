@@ -1,28 +1,36 @@
-using System.Globalization;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Output;
 
 namespace DssHarness.Core.Codebase;
 
 /// <summary>
-/// The repository map a side-task is given with its first message (part 08, "The repository map"): the tree at a glance,
-/// made once from the base as it stands when the side-task opens - a cache every later message reads as it is, while the
-/// pack and the tool say what the tree is now.
+/// The repository map ("The repository map"): the tree at a glance, given at the head of a conversation's first message
+/// - a run's, made once from the base as it stands when its first graphed reason step is given its prompt and raised for
+/// the run's task, and a side-task's, made once from the base as it stands when the side-task opens - a cache every later
+/// message reads as it is, while the pack and the tool say what the tree is now.
 /// </summary>
 public static class CodebaseRepositoryMap
 {
     /// <summary>
     /// The map of <paramref name="queries"/>'s view: a header line, the projects and top directories with their counts,
-    /// then the most central declarations one line each as <see cref="GraphLines"/> writes a node - a declaration's
-    /// centrality the number of other files whose references bind to it, raised where its name holds the task's terms -
-    /// capped by <paramref name="tokens"/>, cut at whole lines.
+    /// then the most central declarations one line each as <see cref="GraphLines"/> writes a node - ranked by
+    /// <see cref="CodebaseGraphQueries.Central"/>, no test and nothing generated, raised where their names hold
+    /// <paramref name="terms"/>' words - capped by <paramref name="tokens"/>, cut at whole lines with the header always
+    /// kept. A cap of 0 gives no map: empty text, and the meta saying 0 tokens.
     /// </summary>
-    /// <param name="queries">The view, as the side-task's opening sync left it.</param>
-    /// <param name="terms">The words of the task the map is made for - a side-task's first message - split as a name is.</param>
+    /// <param name="queries">The view, as the run's or the side-task's sync left it.</param>
+    /// <param name="terms">The task the map is made for - a run's inputs and the issue it triages - or empty for none, as a side-task's is.</param>
     /// <param name="tokens">The map's cap in estimated tokens; 0 gives none.</param>
     public static (string Text, JsonNode Meta) Make(CodebaseGraphQueries queries, string terms, int tokens)
     {
         ArgumentNullException.ThrowIfNull(queries);
+        ArgumentNullException.ThrowIfNull(terms);
+        ArgumentOutOfRangeException.ThrowIfNegative(tokens);
+
+        if (tokens == 0)
+        {
+            return (string.Empty, Meta(queries, declarations: 0, text: string.Empty));
+        }
 
         var lines = new List<string>
         {
@@ -34,8 +42,7 @@ public static class CodebaseRepositoryMap
         lines.AddRange(overview.Projects.Select(project => $"{project.Qualified} ({GraphLines.Of(project)})"));
         lines.AddRange(overview.Directories.Select(directory => $"{directory.Directory} {directory.Files.Count} files"));
 
-        var words = CodebaseGraphQueries.Split(terms).Distinct(StringComparer.Ordinal).ToArray();
-        var central = queries.Central(words);
+        var central = queries.Central(terms);
 
         foreach (var card in central)
         {
@@ -44,14 +51,18 @@ public static class CodebaseRepositoryMap
 
         var text = Cap(lines, tokens);
 
-        return (text, new JsonObject
+        return (text, Meta(queries, central.Count, text));
+    }
+
+    /// <summary>What a map was made of: the view's commit and files, the declarations ranked for it, and its tokens.</summary>
+    private static JsonObject Meta(CodebaseGraphQueries queries, int declarations, string text)
+        => new()
         {
             ["head"] = queries.Head,
             ["files"] = queries.FileCount,
-            ["declarations"] = central.Count,
+            ["declarations"] = declarations,
             ["tokens"] = EstimatedTokens.Of(text),
-        });
-    }
+        };
 
     /// <summary>
     /// The lines that fit <paramref name="tokens"/> estimated tokens, cut at a whole line with the header always kept.

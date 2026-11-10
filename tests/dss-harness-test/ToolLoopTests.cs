@@ -2145,6 +2145,28 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
+    /// A map the mask changes the length of is masked apart from the rest of the first message: the provider is sent the
+    /// masked map as its own part and the masked rest whole after it - not a character of the rest lost or said twice -
+    /// and the message the engine records is those two parts joined.
+    /// </summary>
+    [Fact]
+    public async Task AMapTheMaskChangesTheLengthOf_IsMaskedApartFromTheRest_TheRecordTheTwoJoined()
+    {
+        _chat.Answer(FakeChat.Said("done"));
+
+        var run = Run() with { Map = "the map names sk-1 and sk-1 again", Codebase = "the pack names sk-1 too", Mask = new Masking("sk-1") };
+        var first = AgentPromptParts.FirstMessage(run, newConversation: true);
+        var mapPart = AgentPromptParts.MapPart(run.Map!);
+        var (map, rest) = (mapPart.Replace("sk-1", "***", StringComparison.Ordinal), first[mapPart.Length..].Replace("sk-1", "***", StringComparison.Ordinal));
+
+        await Ran(run);
+
+        Assert.Equal([FakeChat.User(map, rest)], _chat.Requests[0].Messages);
+        Assert.Equal(map + rest, _events.All.OfType<MessageSent>().First().Text);
+        Assert.Equal(first.Replace("sk-1", "***", StringComparison.Ordinal), map + rest);
+    }
+
+    /// <summary>
     /// The ask for JSON alone is the one request after an answer that read as no JSON: after an answer the engine told the
     /// agent something while it was written, the agent goes on as in any other request, and the handoff turn is asked as
     /// every turn is.

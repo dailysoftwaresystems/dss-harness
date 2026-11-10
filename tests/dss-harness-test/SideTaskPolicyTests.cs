@@ -126,40 +126,100 @@ public sealed class SideTaskPolicyTests
     }
 
     /// <summary>
-    /// While a run's owner is live over the tree, the side-task's agent is refused the git verbs that move HEAD, the
-    /// index or the stash, the run's name in the refusal and git's own options before the verb seen through - and the
-    /// git that moves nothing stays open beside them. It is checked at each call: a run that starts while the chat is
-    /// open is held to from its first step, and one that ends releases it.
+    /// While a run's owner is live over the tree, the side-task's agent is refused every command that writes the git
+    /// state the run works over - HEAD, the index, a ref, the stash, the configuration, a worktree - the run's name in the
+    /// refusal; each command read as the worktree rules read one, so neither git's own options before the verb, the
+    /// verb's own program, a configuration that makes a name for it nor a verb the shell expands passes it by. It is
+    /// checked at each call: a run that starts while the chat is open is held to from its first step, and one that ends
+    /// releases it.
     /// </summary>
     [Fact]
-    public void AGitVerbThatMovesHead_IsRefusedWhileARunsOwnerIsLive_WithTheRunsName_AndOpenWhereNoneIs()
+    public void ACommandThatWritesTheGitStateARunWorksOver_IsRefusedWhileItsOwnerIsLive_WithTheRunsName_AndOpenWhereNoneIs()
     {
-        const string run = "impl-2026-10-19";
+        const string run = "r1";
         var live = false;
         var (side, _, _) = Policy(liveRun: () => live ? run : null);
 
-        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "commit", "-am", "wip"]));
-        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "status"]));
-        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "log", "-1"]));
+        foreach (var command in new[] { "git commit -am wip", "git add -A", "git stash", "gh pr checkout 5" })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+        }
 
         live = true;
 
-        foreach (var verb in AgentPolicy.HeadMovingGitVerbs)
+        // Each way a command writes what the run works over, spelled here rather than read off the policy's own list.
+        foreach (var command in new[]
         {
-            var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run((IReadOnlyList<string>)["git", verb]));
+            "git commit -am wip", "git stash", "git reset --hard HEAD~1", "git clean -fd", "git checkout other", "git switch other",
+            "git restore --staged a.txt", "git rebase main", "git merge other", "git cherry-pick abc", "git revert abc", "git pull",
+            "git push", "git am p.mbox", "git worktree add ../w", "git branch other", "git branch -D other", "git tag v1",
+            "git update-ref refs/heads/x HEAD", "git config user.name x", "git bisect start", "git symbolic-ref HEAD refs/heads/other",
+            "git notes add -m x", "git replace a b", "git sparse-checkout set src", "git read-tree HEAD",
+            "git add -A", "git stage a.txt", "git rm a.txt", "git mv a.txt b.txt", "git update-index --assume-unchanged a.txt",
+            "git apply --index p.patch", "git apply -p1 --cached p.patch", "gh pr checkout 5",
+
+            // git's own options before the verb, the verb's own program, and a name a configuration makes for it.
+            "git -C . stash", "git --attr-source HEAD commit -am m", "git --shallow-file f commit", "git --no-pager stash",
+            "/usr/lib/git-core/git-commit -am m", "git -c alias.x=commit x -am msg", "git -c core.pager=less log",
+        })
+        {
+            var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command));
 
             Assert.Equal(
-                ("a run working over the tree", $"run '{run}' is working over this tree and moves HEAD itself; ask again when it ends, or pause it yourself"),
+                (AgentPolicy.LiveRunRule, AgentPolicySource.Builtin, $"run '{run}' is working over this tree, and '{command}' writes the git state it works over - its HEAD, index, refs, stash, configuration or worktrees; ask again when it ends, or pause it yourself"),
+                (refused.Rule, refused.Source, refused.Reason));
+        }
+
+        // A word the shell expands where a held word would stand may be any of them: held, and said so.
+        foreach (var (command, whole) in new[]
+        {
+            ("v=commit; git $v -am msg", "git $v -am msg"),
+            ("git co${E}mmit -am m", "git co${E}mmit -am m"),
+            ("git branch $X", "git branch $X"),
+        })
+        {
+            var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command));
+
+            Assert.Equal(
+                (AgentPolicy.LiveRunRule, $"run '{run}' is working over this tree, and '{whole}' may write the git state it works over: a word of it is one the shell expands, which this does not read; ask again when it ends, or pause it yourself"),
                 (refused.Rule, refused.Reason));
         }
 
-        Assert.Equal("a run working over the tree", Assert.IsType<AgentPolicyAnswer.Denied>(side.Run((IReadOnlyList<string>)["git", "-C", ".", "stash"])).Rule);
-        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "-C", ".", "status"]));
+        // The git that writes none of it, and the listing forms of the verbs that do, stay open.
+        foreach (var command in new[]
+        {
+            "git status", "git log -1", "git diff HEAD", "git -C . status", "git rev-parse --abbrev-ref HEAD",
+            "git branch", "git branch -a", "git branch -vv", "git branch --show-current", "git branch --list 'feat*'", "git --no-pager branch",
+            "git tag", "git tag -l 'v*'", "git stash list", "git stash show -p stash@{0}", "git worktree list --porcelain",
+            "git config --get user.name", "git config --list", "git remote -v", "git reflog", "git submodule status",
+        })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+        }
 
         live = false;
 
-        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "commit", "-am", "wip"]));
-        Assert.Equal(AgentPolicyAnswer.Allow, side.Run((IReadOnlyList<string>)["git", "stash"]));
+        foreach (var command in new[] { "git commit -am wip", "git add -A", "git -c alias.x=commit x -am msg" })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+        }
+    }
+
+    /// <summary>
+    /// The help says what a side-task's agent is held off while a run works over the tree from the very lists the policy
+    /// holds it by: a verb added to one is said where it is refused.
+    /// </summary>
+    [Fact]
+    public void TheHelp_NamesEveryCommandHeldWhileARunWorksOverTheTree_AndEveryListingFormLeftOpen()
+    {
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("side-tasks"));
+
+        Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}), the verbs that write its index ({string.Join(", ", AgentPolicy.GitIndexVerbs)} - apply whole,", help, StringComparison.Ordinal);
+        Assert.Contains($"gh's that write git's state ({string.Join(", ", AgentPolicy.GhStateCommands)}),", help, StringComparison.Ordinal);
+        Assert.Contains($"Their listing forms stay open ({string.Join(", ", AgentPolicy.LiveRunOpen)}, a trailing * any words after the form)", help, StringComparison.Ordinal);
+        Assert.Equal(
+            [.. AgentPolicy.GitStateVerbs.Select(verb => $"git {verb}"), .. AgentPolicy.GitIndexVerbs.Select(verb => $"git {verb}"), .. AgentPolicy.GhStateCommands],
+            AgentPolicy.LiveRunHeld);
     }
 
     /// <summary>
