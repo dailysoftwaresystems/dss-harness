@@ -1446,10 +1446,20 @@ thread would wait on the first's hold forever. A lock that cannot be taken denie
 client (`MainTreeWriteLock.Refusal`), recorded as every denial is, the run going on; Claude Code's shell command asked
 to run in the background is refused (`MainTreeWriteLock.InBackground`), for its result comes back before it ends and
 its end is never seen; and the side-task's policy refuses, on every client, a command that leaves a process running
-after it ends (`MainTreeWriteLock.LeftBehind`): one the command reader reads as run in the background - a lone `&`
-ends its list (`AnalyzedCommand.Background`), never `&&`, a redirect's `&` or a quoted one - or one run by a program
-that keeps what it starts apart (`CommandAnalysis.Detaching`), which a contained `run_command`'s end would not reach
-either where it leaves the session.
+after it ends (`MainTreeWriteLock.LeftBehind`), asked of each command where its rules are (`AgentPolicy.RunDecided`), so
+a script a shell runs and one the string wrote and then runs meet it as the string's own commands do: one the command
+reader reads as run in the background (`AnalyzedCommand.Background`) - a lone `&` ends its list, never `&&`, a
+redirect's `&` or a quoted one, nor cmd's, which runs the next command in turn and is read as `;`; a `coproc`'s
+command; a `>(...)`'s body, which the shell does not wait for, never a `<(...)`'s, whose output its command reads to the
+end; PowerShell's job `&` - unless a bare `wait` of the same shell follows it, the reader keeping whose job each is (a
+subshell, a substitution, a pipeline's command and a list run in the background are each a shell of their own); or one
+run by a program that keeps what it starts apart (`CommandAnalysis.Detaching`), by its bare name wherever a program of
+the command runs (`CommandAnalysis.RunsAt`), which a contained `run_command`'s end would not reach either where it
+leaves the session. A terminal session's program given what to run, `systemd-run`, and a `start` or `Start-Process`
+told to wait, which hands its program a command line of its own, are refused to every agent before the lock weighs
+them. The refusal is of what the command names: what a program detaches by itself - a dev server's own daemon mode, an
+interpreter's code - is not read, the OS layer standing behind the words. Holding the lock until the command's process
+group is gone was rejected: the client never sees a detached command's end, only the result it is handed.
 While a run's owner is live
 (`.orchestrators/<run>.owner.json`, asked at each call through `AgentPolicyGround.LiveRun`), a side-task's agent is
 refused, with the run's name, every command that writes the git state the run works over (`AgentPolicy.LiveRunHeld`:

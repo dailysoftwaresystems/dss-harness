@@ -40,6 +40,65 @@ public sealed class CommandAnalysisTests
         Assert.Equal([("a", false), ("b", false), ("echo", false)], Read("a && b &> log; echo 'x & y' 2>&1"));
     }
 
+    /// <summary>
+    /// The shell's other ways to run a command in the background are read as a lone <c>&amp;</c> is: a <c>coproc</c>'s
+    /// command - a compound one after its name, whole - and a <c>&gt;(...)</c>'s body, which the shell does not wait for; a
+    /// <c>&lt;(...)</c>'s body, whose output its command reads to the end, is not. PowerShell's job <c>&amp;</c> runs every
+    /// pipeline of its statement so; cmd's lone <c>&amp;</c> runs the next command once the one before it ends, a
+    /// redirect's <c>&amp;</c> staying one.
+    /// </summary>
+    [Fact]
+    public void ACoprocessAProcessSubstitutionsWriterAndAJob_RunInTheBackground_AndCmdsAmpersandRunsInTurn()
+    {
+        static IReadOnlyList<(string, bool)> Read(string shell)
+            => [.. CommandAnalysis.Commands(shell).Select(command => (command.Words[0], command.Background))];
+
+        Assert.Equal([("make", true), ("x", false)], Read("coproc make; x"));
+        Assert.Equal([("make", true), ("date", true), ("x", false)], Read("coproc gen { make; date; }; x"));
+        Assert.Equal([("make", true), ("x", false)], Read("coproc gen (make)\nx"));
+        Assert.Equal([("make", true), (":", true), ("x", false)], Read("coproc while make; do :; done; x"));
+        Assert.Equal([("gzip", true), ("tee", false)], Read("tee log > >(gzip)"));
+        Assert.Equal([("sort", false), ("sort", false), ("diff", false)], Read("diff <(sort a) <(sort b)"));
+        Assert.Equal([("make", true), ("make", true), ("x", false)], Read("pwsh -c 'make && make test &; x'"));
+        Assert.Equal([("make", false)], Read("pwsh -c 'make'"));
+        Assert.Equal([("a", false), ("b", false)], Read("cmd /c \"a & b\""));
+        Assert.Equal([("a", false), ("b", false)], Read("cmd /c \"a 2>&1 & b >&2\""));
+        Assert.Equal([("a", false), ("b", false)], Read("cmd /c \"a && b\""));
+        Assert.Equal([("a", true)], Read("cmd /c \"a\" &"));
+    }
+
+    /// <summary>
+    /// A bare <c>wait</c> - no job named, no option - waits for every job its shell started before it: one in a loop, a
+    /// group or a conditional of the same shell, a coprocess among them. It waits for none started after it, none a
+    /// subshell, a pipeline's command or a backgrounded list started, none of a <c>&gt;(...)</c>, and none where it is
+    /// itself a pipeline's, in the background, a subshell's or joined by <c>&amp;&amp;</c> or <c>||</c>.
+    /// </summary>
+    [Fact]
+    public void ABareWait_WaitsForTheJobsItsShellStartedBeforeIt()
+    {
+        static IReadOnlyList<(string, bool)> Read(string shell)
+            => [.. CommandAnalysis.Commands(shell).Select(command => (command.Words[0], command.Background))];
+
+        Assert.Equal([("a", false), ("b", false), ("wait", false)], Read("a & b & wait"));
+        Assert.Equal([("for", false), ("gzip", false), ("wait", false)], Read("for f in a b; do gzip \"$f\" & done; wait"));
+        Assert.Equal([("a", false), ("wait", false)], Read("a & { wait; }"));
+        Assert.Equal([("a", false), ("true", false), ("wait", false)], Read("a & if true; then wait; fi"));
+        Assert.Equal([("a", false), ("wait", false), ("b", true)], Read("a & wait; b &"));
+        Assert.Equal([("a", false), ("wait", false)], Read("coproc a; wait"));
+        Assert.Equal([("a", false), ("wait", false)], Read("(a & wait)"));
+
+        Assert.Equal([("a", true), ("wait", false)], Read("a & wait -n"));
+        Assert.Equal([("a", true), ("wait", false)], Read("(a &); wait"));
+        Assert.Equal([("a", true), ("wait", false)], Read("a & (wait)"));
+        Assert.Equal([("a", true), ("b", false), ("wait", false)], Read("a & b && wait"));
+        Assert.Equal([("a", true), ("b", false), ("wait", false)], Read("a & b | wait"));
+        Assert.Equal([("a", true), ("wait", false), ("b", false)], Read("a & wait | b"));
+        Assert.Equal([("a", true), ("wait", true)], Read("a & wait &"));
+        Assert.Equal([("a", true), ("wait", false)], Read("{ a & } & wait"));
+        Assert.Equal([("a", true), ("cat", false), ("wait", false)], Read("{ a & } | cat; wait"));
+        Assert.Equal([("b", true), ("a", false), ("wait", false)], Read("a > >(b); wait"));
+    }
+
     [Fact]
     public void QuotesKeepOneWordOne()
     {

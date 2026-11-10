@@ -106,25 +106,44 @@ public static partial class CommandAnalysis
 
     /// <summary>
     /// The programs whose work is to keep what they start running apart from the command that starts it - past its shell's
-    /// end, its hangup or its session: <c>nohup</c>, <c>setsid</c>, <c>disown</c>, <c>daemonize</c>, and Windows' <c>start</c>
-    /// - cmd's own, and PowerShell's name for <c>Start-Process</c> - <c>Start-Process</c> and <c>saps</c>.
+    /// end, its hangup or its session: <c>nohup</c>, <c>setsid</c>, <c>disown</c>, <c>daemonize</c>,
+    /// <c>start-stop-daemon</c>, <c>at</c> and <c>batch</c> given a job, which their daemon runs, and Windows' <c>start</c> -
+    /// cmd's own, and PowerShell's name for <c>Start-Process</c> - <c>Start-Process</c> and <c>saps</c>.
     /// </summary>
-    public static IReadOnlyList<string> Detaching { get; } = ["nohup", "setsid", "disown", "daemonize", "start", "Start-Process", "saps"];
+    public static IReadOnlyList<string> Detaching { get; } =
+        ["nohup", "setsid", "disown", "daemonize", "start-stop-daemon", "at", "batch", "start", "Start-Process", "saps"];
 
     /// <summary>
     /// Whether <paramref name="command"/> leaves a process running after the command it stands in ends: it runs in the
-    /// background (<see cref="AnalyzedCommand.Background"/>), or it - or a wrapper stripped before it, as <c>nohup</c> is -
-    /// is one of <see cref="Detaching"/>, by its name as this reads a program's.
+    /// background (<see cref="AnalyzedCommand.Background"/>), or one of <see cref="Detaching"/> runs at a place a program of
+    /// it runs (<see cref="RunsAt"/>) - among its words, or among a wrapper's stripped before them, as <c>nohup</c> is - at
+    /// and batch where they schedule a job (<see cref="AtJob"/>), not where they list, remove or print one. A program is
+    /// matched by its bare name, a Windows program's <c>.exe</c> folded: a word with a directory part or a script's end
+    /// (<c>./bin/start</c>, <c>start.cmd</c>) names the repository's own script, never cmd's <c>start</c>.
     /// </summary>
     /// <param name="command">The command, as this read it.</param>
     public static bool LeavesAProcessBehind(AnalyzedCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        bool Detaches(IReadOnlyList<string> words)
-            => EnvironmentOf(words) is var at && at < words.Count && Is(Name(words[at]), [.. Detaching]);
+        bool Detaches(IReadOnlyList<string> words, IReadOnlyList<ShellRedirect> redirects)
+        {
+            for (var at = EnvironmentOf(words); at < words.Count && RunsAt(words, at); at++)
+            {
+                var word = words[at].TrimStart('@');
+                var bare = word.Length > 4 && word.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? word[..^4] : word;
 
-        return command.Background || Detaches(command.Words) || command.Wrappers.Any(Detaches);
+                if (word.IndexOfAny(['/', '\\']) < 0 && Is(bare, [.. Detaching])
+                    && (!Is(bare, "at", "batch") || AtJob([.. words.Skip(at)], redirects, program: false).Count > 0))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return command.Background || Detaches(command.Words, command.Redirects) || command.Wrappers.Any(words => Detaches(words, []));
     }
 
     /// <summary>
@@ -2916,7 +2935,9 @@ public static partial class CommandAnalysis
     /// <summary>
     /// A cmd script spelled for the shell reader: cmd quotes with double quotes alone and escapes
     /// with a caret, while a backslash, a single quote, a dollar and a backtick are its ordinary
-    /// characters - each escaped here, so the reader splits the script where cmd does.
+    /// characters - each escaped here - and its lone '&amp;' runs the next command once the one
+    /// before it ends, spelled ';' - so the reader splits the script where cmd does, and runs
+    /// nothing of it in the background.
     /// </summary>
     private static string CmdAsPosix(string script)
     {
@@ -2939,6 +2960,17 @@ public static partial class CommandAnalysis
             else if (character is '\\' or '$' or '`' || (!quoted && character == '\''))
             {
                 builder.Append('\\').Append(character);
+            }
+            else if (!quoted && character == '&' && at + 1 < script.Length && script[at + 1] == '&')
+            {
+                builder.Append("&&");
+                at++;
+            }
+            else if (!quoted && character == '&' && (at == 0 || script[at - 1] is not ('>' or '<')))
+            {
+                // cmd's lone '&' runs the next command once the one before it ends, as a ';' does - never in the
+                // background; a redirect's ('2>&1', '>&2') stays one.
+                builder.Append(';');
             }
             else
             {

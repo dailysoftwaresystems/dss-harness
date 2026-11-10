@@ -1764,14 +1764,7 @@ public sealed partial class AgentPolicy
 
         // Every directory a path may be read against: the working directory, and each a cd of the
         // string moved to - a path is tried against all of them, for a subshell's cd ends with it.
-        var decided = RunDecided(commands, [startsIn ?? _ground.WorkingDirectory], scripts: 0);
-
-        // A side-task's command holds the main tree's lock for its duration, which its end ends: one that leaves a process
-        // running after it - in the background, or by a program that keeps what it starts apart - would write the tree
-        // outside the lock, on every client. It is named as it was written, its outermost wrapper with it (nohup, sh -c).
-        return decided is AgentPolicyAnswer.Allowed && _ground.SideTask && commands.FirstOrDefault(CommandAnalysis.LeavesAProcessBehind) is { } left
-            ? MainTreeWriteLock.LeftBehind(string.Join(' ', left.Wrappers.Count > 0 ? left.Wrappers[0] : left.Whole))
-            : decided;
+        return RunDecided(commands, [startsIn ?? _ground.WorkingDirectory], scripts: 0);
     }
 
     /// <summary>
@@ -1975,7 +1968,14 @@ public sealed partial class AgentPolicy
             state.Record(analyzed, readings, environment, places, Wholes);
         }
 
-        return AgentPolicyAnswer.Allow;
+        // A side-task's command holds the main tree's lock for its duration, which its end ends: one that leaves a process
+        // running after it - in the background, or by a program that keeps what it starts apart - would write the tree
+        // outside the lock, on every client. Asked of every command a string runs - one a shell it runs reads, and one of a
+        // script it wrote and then runs - once what each runs is allowed, so a refusal of that is said first; named as it was
+        // written, its outermost wrapper with it (nohup, sh -c).
+        return _ground.SideTask && commands.FirstOrDefault(CommandAnalysis.LeavesAProcessBehind) is { } left
+            ? MainTreeWriteLock.LeftBehind(string.Join(' ', left.Wrappers.Count > 0 ? left.Wrappers[0] : left.Whole))
+            : AgentPolicyAnswer.Allow;
     }
 
     /// <summary>

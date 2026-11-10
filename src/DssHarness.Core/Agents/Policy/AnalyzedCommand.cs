@@ -48,9 +48,11 @@ public sealed record AnalyzedCommand(IReadOnlyList<string> Words, IReadOnlyList<
 
     /// <summary>
     /// Whether the shell runs the command in the background - a list a lone <c>&amp;</c> ends, the command and every command
-    /// of that list: its pipes, its <c>&amp;&amp;</c> and <c>||</c>, the groups and subshells in it - so the shell goes on, and
-    /// may end, while the command still runs. A command a script runs is in the background where the command that runs the
-    /// script is.
+    /// of that list: its pipes, its <c>&amp;&amp;</c> and <c>||</c>, the groups and subshells in it; the command a
+    /// <c>coproc</c> begins, whole; the body of a <c>&gt;(...)</c>; the pipelines of a PowerShell statement its job
+    /// <c>&amp;</c> ends - so the shell goes on, and may end, while the command still runs; but none a bare <c>wait</c> of the
+    /// shell whose job it is waits for after it, and none cmd's lone <c>&amp;</c> ends, which runs the next command in turn.
+    /// A command a script runs is in the background where the command that runs the script is.
     /// </summary>
     public bool Background { get; init; }
 

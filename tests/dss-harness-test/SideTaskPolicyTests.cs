@@ -504,8 +504,10 @@ public sealed class SideTaskPolicyTests
     /// <summary>
     /// A side-task's command that leaves a process running after it ends is refused by the main tree's lock, named as it was
     /// written: one the shell runs in the background - a lone <c>&amp;</c> takes its whole list, a pipe's, an and-or's, a
-    /// group's, a loop's and a subshell's with it, and a script a shell runs is read the same - and one a program keeps
-    /// apart. A step's agent, which holds no such lock, is refused none of it.
+    /// group's, a loop's and a subshell's with it, a <c>coproc</c> its command, a <c>&gt;(...)</c> its body, PowerShell's job
+    /// <c>&amp;</c> its pipelines - and one a program keeps apart, wherever a program of the command runs; a script a shell
+    /// runs, and one the command wrote and then runs, read the same. A step's agent, which holds no such lock, is refused
+    /// none of it.
     /// </summary>
     [Theory]
     [InlineData("make &", "make")]
@@ -518,12 +520,40 @@ public sealed class SideTaskPolicyTests
     [InlineData("make & echo started", "make")]
     [InlineData("echo started; make &", "make")]
     [InlineData("bash -c 'make &'", "bash -c make &")]
+    [InlineData("cat > gen.sh <<'EOF'\nnpm run codegen > gen.log 2>&1 &\nEOF\nsh gen.sh", "npm run codegen >gen.log")]
+    [InlineData("cat > gen.sh <<'EOF'\nnohup make\nEOF\n. gen.sh", "nohup make")]
+    [InlineData("coproc npm run codegen > gen.log 2>&1", "npm run codegen >gen.log")]
+    [InlineData("coproc gen { make; }", "make")]
+    [InlineData("coproc (make)", "make")]
+    [InlineData(": > >(npm run codegen > gen.log 2>&1)", "npm run codegen >gen.log")]
+    [InlineData("tee build.log > >(gzip > build.log.gz)", "gzip >build.log.gz")]
+    [InlineData("pwsh -c 'npm run codegen &'", "pwsh -c npm run codegen &")]
+    [InlineData("make & wait; make test &", "make test")]
+    [InlineData("make & wait -n", "make")]
+    [InlineData("make & wait %1", "make")]
+    [InlineData("(make &); wait", "make")]
+    [InlineData("make & (wait)", "make")]
+    [InlineData("make & test -f x && wait", "make")]
+    [InlineData("make & cat log | wait", "make")]
+    [InlineData("make & wait | cat", "make")]
+    [InlineData("make & wait &", "make")]
+    [InlineData("{ make & } & wait", "make")]
+    [InlineData("find . -name '*.log' | while read f; do gzip \"$f\" & done; wait", "gzip $f")]
+    [InlineData("bash -c 'make &'; wait", "bash -c make &")]
     [InlineData("nohup make", "nohup make")]
     [InlineData("setsid make", "setsid make")]
+    [InlineData("stdbuf -oL setsid -f npm run codegen", "stdbuf -oL setsid -f npm run codegen")]
+    [InlineData("ionice -c3 nohup make", "ionice -c3 nohup make")]
     [InlineData("disown -a", "disown -a")]
+    [InlineData("daemonize /usr/bin/make", "daemonize /usr/bin/make")]
+    [InlineData("start-stop-daemon --start --background --exec /usr/bin/make", "start-stop-daemon --start --background --exec /usr/bin/make")]
+    [InlineData("at now <<< 'npm run codegen'", "at now <<<npm run codegen")]
+    [InlineData("batch <<< make", "batch <<<make")]
     [InlineData("start notepad", "start notepad")]
     [InlineData("cmd /c start notepad", "cmd /c start notepad")]
+    [InlineData("cmd /c @start notepad", "cmd /c @start notepad")]
     [InlineData("pwsh -c 'Start-Process notepad'", "pwsh -c Start-Process notepad")]
+    [InlineData("pwsh -c 'start notepad'", "pwsh -c start notepad")]
     public void ASideTasksCommandThatLeavesAProcessBehind_IsRefusedByTheMainTreesLock(string command, string named)
     {
         var (side, _, _) = Policy();
@@ -534,7 +564,8 @@ public sealed class SideTaskPolicyTests
 
     /// <summary>
     /// An <c>&amp;</c> that runs nothing in the background refuses a side-task's command nothing: one that joins two
-    /// commands, one of a redirect's, one a pipe of both outputs spells, and one quoted or escaped.
+    /// commands, one of a redirect's, one a pipe of both outputs spells, one quoted or escaped, and cmd's own, which runs
+    /// the command after it once the one before it ends.
     /// </summary>
     [Theory]
     [InlineData("make && make test")]
@@ -546,11 +577,67 @@ public sealed class SideTaskPolicyTests
     [InlineData("echo 'a & b'")]
     [InlineData("echo \"a & b\"")]
     [InlineData("echo a\\&b")]
+    [InlineData("cmd /c \"a & b\"")]
+    [InlineData("cmd /c \"cd /d src & dotnet build >build.log 2>&1\"")]
+    [InlineData("cmd /c \"a && b\"")]
+    [InlineData("cmd /c \"echo a^&b\"")]
     public void AnAmpersandThatRunsNothingInTheBackground_RefusesASideTasksCommandNothing(string command)
     {
         var (side, _, _) = Policy();
 
         Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+    }
+
+    /// <summary>
+    /// What leaves nothing running after the command ends refuses a side-task's command nothing: jobs a bare <c>wait</c> of
+    /// the same shell waits for after them - in a loop, a group or a conditional of that shell, a coprocess among them -
+    /// a <c>&lt;(...)</c>'s body, whose output its command reads to the end, at given no job, and a repository's own
+    /// script named as a detaching program is, by a path or a script's end.
+    /// </summary>
+    [Theory]
+    [InlineData("make a & make b & wait")]
+    [InlineData("for f in a.log b.log; do gzip \"$f\" & done; wait")]
+    [InlineData("make & { wait; }")]
+    [InlineData("make & if true; then wait; fi")]
+    [InlineData("make &\nwait")]
+    [InlineData("make & wait && make test")]
+    [InlineData("coproc make; wait")]
+    [InlineData("(make & wait)")]
+    [InlineData("bash -c 'make & wait'")]
+    [InlineData("diff <(sort a.txt) <(sort b.txt)")]
+    [InlineData("at -l")]
+    [InlineData("at -r 3")]
+    [InlineData("./bin/start")]
+    [InlineData("bin/nohup make")]
+    [InlineData("start.cmd")]
+    [InlineData("scripts/start.ps1")]
+    [InlineData("cmd /c \".\\start.cmd\"")]
+    [InlineData("cmd /c start.cmd")]
+    public void ACommandThatLeavesNothingRunning_IsRefusedASideTaskNothing(string command)
+    {
+        var (side, _, _) = Policy();
+
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+    }
+
+    /// <summary>
+    /// <c>start</c>, <c>Start-Process</c> and <c>saps</c> told to wait name more than their program, which hands it a command
+    /// line of its own every agent is refused, before the main tree's lock weighs it; a terminal session's program given what
+    /// to run, and <c>systemd-run</c>, are refused to every agent too.
+    /// </summary>
+    [Theory]
+    [InlineData("start /wait notepad", "undecided")]
+    [InlineData("cmd /c start \"\" /wait notepad", "undecided")]
+    [InlineData("pwsh -c 'Start-Process notepad -Wait'", "undecided")]
+    [InlineData("screen -dmS gen make", "undecided")]
+    [InlineData("tmux new -d make", "undecided")]
+    [InlineData("systemd-run --user make", "the root actions")]
+    public void AWaitingStartAndASessionsProgram_AreRefusedToEveryAgent_BeforeTheLock(string command, string rule)
+    {
+        var (side, _, _) = Policy();
+
+        Assert.Equal(rule, Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command)).Rule);
+        Assert.Equal(rule, Assert.IsType<AgentPolicyAnswer.Denied>(StepPolicy().Run(command)).Rule);
     }
 
     /// <summary>The root actions stay refused to the side-task's agent as to every agent's, wherever they stand.</summary>

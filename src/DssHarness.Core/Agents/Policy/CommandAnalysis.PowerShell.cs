@@ -224,9 +224,14 @@ public static partial class CommandAnalysis
             }
         }
 
-        /// <summary>One statement: its pipelines, joined by <c>&amp;&amp;</c> and <c>||</c>, each a line; a job's <c>&amp;</c> after them.</summary>
+        /// <summary>
+        /// One statement: its pipelines, joined by <c>&amp;&amp;</c> and <c>||</c>, each a line; a job's <c>&amp;</c> after them
+        /// runs them all in the background, each line ended so.
+        /// </summary>
         private void Statement(List<string> lines, char close)
         {
+            var first = lines.Count;
+
             // A loop's label (:outer foreach ...) names the statement after it.
             if (At() == ':' && IsNameChar(At(1)))
             {
@@ -264,6 +269,11 @@ public static partial class CommandAnalysis
                 if (At() == '&')
                 {
                     _at++;
+
+                    for (var line = first; line < lines.Count; line++)
+                    {
+                        lines[line] += " &";
+                    }
                 }
 
                 return;
