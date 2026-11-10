@@ -790,6 +790,13 @@ public enum FlowChangeKind
     /// <summary>The safe pause completed: its last handoff written and everything it left running recorded.</summary>
     PauseCompleted,
 
+    /// <summary>
+    /// A stop of the steps in flight was applied - the run's hard stop, or a safe pause's <c>all</c> asked once the pause
+    /// had begun: recorded as it is applied, before any step it stops is touched, so the run's state says it from then
+    /// on, whatever a runner its drain waits for still does.
+    /// </summary>
+    StopApplied,
+
     /// <summary>A session ended, however it ended.</summary>
     SessionEnded,
 

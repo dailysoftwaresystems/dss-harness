@@ -763,10 +763,11 @@ public sealed class FlowCoordinator
                 return ended.Status;
             }
 
-            if (_hardStop)
+            if (_stopApplied)
             {
                 // A stop is in force whatever still runs under it - its drain is ending the runners - so the run's
-                // standing on disk is the stop's own from the moment it is applied, as the session's end says it.
+                // standing on disk is the stop's own from the moment it is applied, which is recorded then
+                // (ApplyTheStop), as the session's end says it.
                 return FlowRunStatus.Stopped;
             }
 
@@ -921,11 +922,6 @@ public sealed class FlowCoordinator
         DropPauseRequest();
         DeferAdvice("the run was stopped while the advisor ran");
 
-        foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).ToList())
-        {
-            Stop(instance);
-        }
-
         // No handoff this pause wrote is kept: the stop cancelled its turns, and whatever they had written is not a
         // stop's to keep. One an earlier pause wrote that no prompt holds yet stays, for the resume gives it.
         foreach (var handed in _created.Where(instance => instance.Handoff is not null && _pause?._handoffs.Contains(instance.Id) == true).ToList())
@@ -937,6 +933,16 @@ public sealed class FlowCoordinator
         {
             _pause._handoffs.Clear();
             _pause = null;
+        }
+
+        // The stop is a change of the run, recorded as it is applied and before any step it stops is touched, as a
+        // pause's beginning is: the run's state says Stopped from here on, whatever a runner its drain waits for does -
+        // a step whose runner still runs is only marked draining, which no record of its own says.
+        Record(FlowChangeKind.StopApplied, detail: "stop");
+
+        foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).ToList())
+        {
+            Stop(instance);
         }
     }
 
@@ -1171,6 +1177,10 @@ public sealed class FlowCoordinator
                     // second time: it ends as that stop ends it, as the pause itself left it.
                     _pauseAllAsked = false;
                     _pause.All = true;
+
+                    // Recorded as it is applied, before any step it stops is touched, as the stop's is: the pause's
+                    // record says all from here on, whatever a runner its drain waits for does.
+                    Record(FlowChangeKind.StopApplied, detail: $"{_pause.Cause}, all");
 
                     foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup && instance.Step.Type is not ("reason" or "ci-wait") && !instance.Draining && !instance.PastTimeLimit).ToList())
                     {
