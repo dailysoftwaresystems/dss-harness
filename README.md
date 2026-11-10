@@ -864,7 +864,9 @@ file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a
 (`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
 can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
 `help agent-clients`) and the forms of git's other commands that write the same - a fetch's `--update-head-ok`,
-wherever it stands among its words (`AgentPolicy.GitStateForms`) - a git configured where it runs, by `-c` or `--config-env` of any key but
+wherever it stands among its words (`AgentPolicy.GitStateForms`), a word the shell expands held as one that may be it
+only where its expansion may begin it (`git fetch $OPT`, `-f$X`), never inside a word that begins otherwise
+(`--depth=$n`, `refs/heads/$b:refs/remotes/o/$b`) - a git configured where it runs, by `-c` or `--config-env` of any key but
 the ones that only shape what git prints, by clone's own `-c` or `--config` and clone's and init's `--template`, or by
 its environment - a home it reads its global
 configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it - the `git config`

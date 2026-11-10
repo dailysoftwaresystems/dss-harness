@@ -2433,6 +2433,16 @@ public static class HelpTopics
     }
 
     /// <summary>
+    /// How the forms of git's commands that write its state (<see cref="Agents.Policy.AgentPolicy.GitStateForms"/>) are met
+    /// among a command's words, said once for the worktree rules and the hold a run puts on a side-task.
+    /// </summary>
+    private const string GitStateFormsMet =
+        "the option met wherever it stands among the command's words, by any cluster that holds its letter or any start "
+        + "of its name git takes, and a word the shell expands held as one that may be it only where its expansion may "
+        + "begin it - a word it begins, quoted or not, or one after a start the option's own may have (-f$X) - never "
+        + "inside a word that begins otherwise (--depth=$n, refs/heads/$b:refs/remotes/o/$b)";
+
+    /// <summary>
     /// What a side-task's agent is held off while a run works over the tree, said from the lists the policy holds it by
     /// (<see cref="Agents.Policy.AgentPolicy.LiveRunHeld"/>, <see cref="Agents.Policy.AgentPolicy.GitStateForms"/>,
     /// <see cref="Agents.Policy.AgentPolicy.LiveRunOpen"/>) and the modes git reads as only reading
@@ -2445,8 +2455,8 @@ public static class HelpTopics
             + string.Join(", ", Agents.Policy.AgentPolicy.GitIndexVerbs) + " - apply whole, for its --index and --cached "
             + "may stand anywhere among its words), gh's that write git's state ("
             + string.Join(", ", Agents.Policy.AgentPolicy.GhStateCommands) + ", each whole) and the forms of git's other "
-            + "commands that write the same (" + string.Join(", ", Agents.Policy.AgentPolicy.GitStateForms) + ", the option "
-            + "met wherever it stands among the command's words), each met as the worktree rules meet a "
+            + "commands that write the same (" + string.Join(", ", Agents.Policy.AgentPolicy.GitStateForms) + ", "
+            + GitStateFormsMet + "), each met as the worktree rules meet a "
             + "command - git's options before its verb seen through, git-commit read as git commit, a configuration set "
             + "where it runs (git -c alias.x=commit x) read as the git config it is, and a verb the shell expands held as "
             + "one that may be any - checked at each call, so a run that starts while the chat is open is held to from its "
@@ -3065,7 +3075,8 @@ public static class HelpTopics
         builder.AppendLine($"loads ({string.Join(", ", Agents.Policy.AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too -");
         builder.AppendLine("nor does any command print a credential, whatever the worktree rules say");
         builder.AppendLine($"({string.Join(", ", Agents.Policy.AgentPolicy.CredentialPrintingCommands)}; a * any helper's name, and");
-        builder.AppendLine("the words after a command met anywhere after it, options before or between them):");
+        builder.AppendLine("the words after a command met anywhere after it, options before or between them, and a word");
+        builder.AppendLine("the shell expands among them, wherever the expansion stands in it, held as one that may be them):");
         builder.AppendLine("a credential leaves its slot only by the key store that holds it, never through an");
         builder.AppendLine("agent's words. Nor is git or gh called by a name none of its own commands is - an alias,");
         builder.AppendLine("an extension - on any ground, as the reading of a command below says.");
@@ -3616,9 +3627,7 @@ public static class HelpTopics
             + "process apart from the agent's tree does. The worktree rules "
             + "(agentPolicy.worktreeRules, true where nothing is said) keep an agent's worktree a thing the engine can "
             + $"measure: git's state-writing verbs ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateVerbs)}) and the forms "
-            + $"of its other commands that write the same ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateForms)}, the option met "
-            + "wherever it stands among the command's words, by any cluster that holds its letter or any start of its name git "
-            + "takes) are "
+            + $"of its other commands that write the same ({string.Join(", ", Agents.Policy.AgentPolicy.GitStateForms)}, {GitStateFormsMet}) are "
             + $"refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", Agents.Policy.AgentPolicy.GhStateCommands)}; "
             + "a command gh names by an alias of its own, pr co for pr checkout among them, read as the command it names, and "
             + "where gh reads its configuration from - GH_CONFIG_DIR, XDG_CONFIG_HOME, AppData, HOME - set for a command the gh config set it is) "

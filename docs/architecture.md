@@ -1449,7 +1449,8 @@ While a run's owner is live
 (`.orchestrators/<run>.owner.json`, asked at each call through `AgentPolicyGround.LiveRun`), a side-task's agent is
 refused, with the run's name, every command that writes the git state the run works over (`AgentPolicy.LiveRunHeld`:
 git's state-writing verbs, the verbs that write its index and gh's that write git's state, each whole, and beside them
-`AgentPolicy.GitStateForms`, a fetch's `--update-head-ok` wherever it stands) - met as the worktree rules meet a command,
+`AgentPolicy.GitStateForms`, a fetch's `--update-head-ok` wherever it stands, an expansion held as one that may be it
+only where it may begin it) - met as the worktree rules meet a command,
 by every reading `CommandAnalysis.ForRules` gives it and with a verb the shell expands held as one that may be any, their
 forms that only read open: those a verb decides as patterns (`AgentPolicy.LiveRunOpen`), and git branch, tag, config,
 symbolic-ref, reflog and notes in a mode that only reads, read as git reads their options wherever they stand
@@ -2101,7 +2102,10 @@ runs, the code an interpreter is given (`python -c`, `perl -e`, `node -e`, awk's
 file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a command computes
 (`$(printf ...)`), and what a process apart from the agent's tree does. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the forms of its other
-commands that write the same (`AgentPolicy.GitStateForms`, each option met wherever it stands), the `gh` commands that run them
+commands that write the same (`AgentPolicy.GitStateForms`, each option met wherever it stands, by `AgentPolicy.Meets`: a
+word the shell expands held as one that may be the option only where its expansion may begin it - a word it begins,
+quoted or not, or one after a start the option's own may have - never inside a word that begins otherwise, as
+`--depth=$n` or a refspec a variable names), the `gh` commands that run them
 or write gh's own configuration (`AgentPolicy.GhStateCommands`; gh's own aliases read as the commands they name,
 `CommandAnalysis.GhAliases`, and a place gh reads its configuration from set for a command read as `gh config set`),
 and the merges
@@ -2128,8 +2132,10 @@ says, and so are the `gh` commands that hand the work to another agent or instal
 gh's token by itself, by `gh auth status --show-token`, by gh as git's credential helper and by
 gh's configuration, and git's credential helpers' `get` and `fill`, any helper's by `credential-*` -
 each its program and its command, then the words that make it print met anywhere after its command
-(`AgentPolicy.PrintsCredential`), options before or between them, a short option by any cluster
-holding its letter - a credential leaves its slot only by the key store that holds it, never through
+(`AgentPolicy.Meets`), options before or between them, a short option by any cluster
+holding its letter, and any word the shell expands among them held as one that may be them, wherever the expansion stands
+in it, for an unquoted one is split where its value holds a blank and cmd reads a percent's value before a quote - a
+credential leaves its slot only by the key store that holds it, never through
 an agent's words). An alias given a command line is read as that command where it is given -
 `git config`'s setting of a key git runs (`CommandAnalysis.ConfigSetting` beside `-c`'s), and
 `gh alias set`'s expansion - for the command that later calls it does so by a name no rule reads,

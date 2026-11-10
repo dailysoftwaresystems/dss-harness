@@ -2243,6 +2243,16 @@ public sealed class AgentPolicyTests
                 Assert.Equal(expected, policy.Run((IReadOnlyList<string>)spelled.Split(' ')));
             }
 
+            // An expansion among a printing command's words may be the words that make it print, wherever it stands: inside a
+            // word that begins with an option of another's too, for the shell splits it where it is unquoted, and cmd's
+            // percent is read before cmd reads a quote.
+            foreach (var command in new[] { "gh auth status --hostname=$H", "gh auth status --hostname=\"$H\"", "gh auth status $FLAGS" })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied("Run(gh auth token)", AgentPolicySource.Builtin, $"'{command.Replace("\"", string.Empty, StringComparison.Ordinal)}' may be what Run(gh auth token) denies: a word the rule reads is one the shell expands, which this does not read"),
+                    policy.Run(command));
+            }
+
             // A wrapper stripped leaves the command it runs, which the refusal names.
             Assert.Equal(
                 new AgentPolicyAnswer.Denied("Run(git credential fill)", AgentPolicySource.Builtin, "'git credential fill' is denied by Run(git credential fill), a rule of this tool: it prints a credential, which an agent of this tool is never handed"),
@@ -2780,8 +2790,9 @@ public sealed class AgentPolicyTests
     /// A fetch that may write the branch a worktree has checked out - its <c>--update-head-ok</c> wherever it stands among
     /// its words, by any cluster that holds its <c>-u</c> or any start of its name git takes - is refused by the worktree
     /// rules as git's state-writing verbs are, and so is the verb that migrates the ref store; a fetch without it, which git
-    /// refuses into a branch any worktree has checked out, stays allowed, and a word the shell expands where the option
-    /// may stand is said as one that may be it.
+    /// refuses into a branch any worktree has checked out, stays allowed. A word the shell expands is said as one that may
+    /// be the option only where it can give it - an expansion that begins its word, or one after a start the option's own
+    /// could be - never one inside a word that begins otherwise: a depth, a refspec, a pattern of refs.
     /// </summary>
     [Fact]
     public void AFetchIntoTheBranchAWorktreeHasCheckedOut_AndTheRefStoresMigration_AreRefusedByTheWorktreeRules()
@@ -2808,11 +2819,30 @@ public sealed class AgentPolicyTests
                 Assert.Equal((rule, AgentPolicySource.Builtin, $"'{command}' is denied by {rule}, a worktree rule of this tool"), (denied.Rule, denied.Source, denied.Reason));
             }
 
-            var expanded = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git fetch $REMOTE"));
+            // An expansion that begins its word, quoted or not, or follows a start that may be the option's own - each said as
+            // the command reads with its quotes taken off.
+            foreach (var (command, rule) in new[]
+            {
+                ("git fetch $REMOTE", "Run(git fetch --update-head-ok)"), ("git fetch $OPT origin main:main", "Run(git fetch --update-head-ok)"),
+                ("git fetch \"$O\" origin", "Run(git fetch --update-head-ok)"), ("git fetch origin \"$BASE\"", "Run(git fetch --update-head-ok)"),
+                ("git fetch origin \"${B}:main\"", "Run(git fetch --update-head-ok)"), ("git fetch --upd$X origin main:main", "Run(git fetch --update-head-ok)"),
+                ("git fetch --$X origin", "Run(git fetch --update-head-ok)"), ("git fetch -f$X origin main:main", "Run(git fetch -u)"),
+            })
+            {
+                var expanded = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
 
-            Assert.Equal(("Run(git fetch --update-head-ok)", "'git fetch $REMOTE' may be what Run(git fetch --update-head-ok) denies: a word the rule reads is one the shell expands, which this does not read"), (expanded.Rule, expanded.Reason));
+                Assert.Equal((rule, $"'{command.Replace("\"", string.Empty, StringComparison.Ordinal)}' may be what {rule} denies: a word the rule reads is one the shell expands, which this does not read"), (expanded.Rule, expanded.Reason));
+            }
 
-            foreach (var command in new[] { "git fetch", "git fetch origin", "git fetch --all --prune --tags", "git fetch origin main:refs/remotes/origin/main", "git fetch --unshallow origin" })
+            // A depth, a refspec and a pattern of refs, each with an expansion inside a word that begins with what no option of
+            // a fetch begins, quoted or not, stay allowed, as a fetch without the option does.
+            foreach (var command in new[]
+            {
+                "git fetch", "git fetch origin", "git fetch --all --prune --tags", "git fetch origin main:refs/remotes/origin/main", "git fetch --unshallow origin",
+                "git fetch --depth=$n origin", "git fetch --depth=\"$n\" origin", "git fetch origin refs/heads/$b:refs/remotes/o/$b",
+                "git fetch origin \"refs/heads/$b:refs/remotes/o/$b\"", "git fetch origin refs/heads/*:refs/remotes/o/*",
+                "for b in a c; do git fetch origin refs/heads/$b:refs/remotes/origin/$b; done",
+            })
             {
                 Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
             }

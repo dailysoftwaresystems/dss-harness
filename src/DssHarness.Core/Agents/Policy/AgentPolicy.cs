@@ -2900,7 +2900,7 @@ public sealed partial class AgentPolicy
     {
         if (group is RunRules.Credentials)
         {
-            return CredentialPrintingCommands.FirstOrDefault(printing => Meets(printing, reading) == wanted) is not { } printing ? null
+            return CredentialPrintingCommands.FirstOrDefault(printing => Meets(printing, reading, everyExpansion: true) == wanted) is not { } printing ? null
                 : wanted is AgentRuleMatch.Yes
                     ? new AgentPolicyAnswer.Denied(
                         $"Run({printing})",
@@ -2924,7 +2924,7 @@ public sealed partial class AgentPolicy
         if (rules.FirstOrDefault(each => each.Rule.Match(reading.Words, comparison, reading.Quoted) == wanted) is not { Rule: { } rule } met)
         {
             // git's other commands, in the forms that write what its state-writing verbs do, wherever the option stands.
-            return group is RunRules.Worktree && _ground.WorktreeRules && GitStateForms.FirstOrDefault(form => Meets(form, reading) == wanted) is { } form
+            return group is RunRules.Worktree && _ground.WorktreeRules && GitStateForms.FirstOrDefault(form => Meets(form, reading, everyExpansion: false) == wanted) is { } form
                 ? wanted is AgentRuleMatch.Expanded
                     ? MayBe($"Run({form})", AgentPolicySource.Builtin, whole)
                     : new AgentPolicyAnswer.Denied($"Run({form})", AgentPolicySource.Builtin, $"'{whole}' is denied by Run({form}), a worktree rule of this tool")
@@ -2952,7 +2952,7 @@ public sealed partial class AgentPolicy
     {
         if (_ground is not { SideTask: true, LiveRun: { } liveRun }
             || !(_liveRunHeldRules.Any(rule => rule.Match(reading.Words, comparison, reading.Quoted) == wanted)
-                || GitStateForms.Any(form => Meets(form, reading) == wanted)))
+                || GitStateForms.Any(form => Meets(form, reading, everyExpansion: false) == wanted)))
         {
             return null;
         }
@@ -2983,9 +2983,24 @@ public sealed partial class AgentPolicy
     /// the entry anywhere among the reading's words after its command, in any order, whatever options stand before or
     /// between them: a long option with its value glued after an <c>=</c> too - and, for git, by any start of its name, as
     /// git takes one - and a short one by any cluster of short options that holds its letter (<c>-at</c> holds
-    /// <c>-t</c>). Where a word the entry would read is one the shell expands, the command may be the entry.
+    /// <c>-t</c>). Where no word is a word of the entry's but a word the shell expands may give it, the command may be the
+    /// entry: for <paramref name="everyExpansion"/>, any word the shell expands among the command's words after its
+    /// command; otherwise only one whose expansion may begin the entry's word - one that begins its word, quoted or not
+    /// (<c>$OPT</c>, <c>"$O"</c>), or follows a start the entry's word may have (<c>-f$X</c>, <c>--upd$X</c>) - never one
+    /// inside a word that begins with what no word of the entry's begins with (<c>--depth=$n</c>,
+    /// <c>refs/heads/$b:refs/remotes/o/$b</c>, <c>refs/heads/*</c>).
     /// </summary>
-    private static AgentRuleMatch Meets(string entry, RuleReading reading)
+    /// <param name="entry">The entry: its program, its command, then the words that make it what it is.</param>
+    /// <param name="reading">The command as its rules read it, each word with how it stands to the shell.</param>
+    /// <param name="everyExpansion">
+    /// Whether every word the shell expands may be a word of the entry's, wherever the expansion stands in it: so for the
+    /// commands that print a credential (<see cref="CredentialPrintingCommands"/>), for an unquoted expansion inside a word
+    /// is split by the shell where its value holds a blank (<c>--hostname=$H</c> holding <c>" --show-token"</c>), and cmd
+    /// reads a percent's value before it reads a quote - a credential printed is the one refusal no reading of where an
+    /// expansion stands may narrow; not so for the forms of git's commands that write its state
+    /// (<see cref="GitStateForms"/>), where the narrower reading keeps a fetch of a depth or a refspec a variable names open.
+    /// </param>
+    private static AgentRuleMatch Meets(string entry, RuleReading reading, bool everyExpansion)
     {
         var named = entry.Split(' ');
         var words = reading.Words;
@@ -3013,14 +3028,16 @@ public sealed partial class AgentPolicy
         var expanded = false;
         var after = Enumerable.Range(2, words.Count - 2).ToList();
 
+        var git = named[0] == "git";
+
         foreach (var wanted in named.Skip(2))
         {
-            if (after.Any(at => MeetsWord(words[at], wanted, named[0] == "git")))
+            if (after.Any(at => MeetsWord(words[at], wanted, git)))
             {
                 continue;
             }
 
-            if (!after.Any(Expands))
+            if (!after.Any(at => everyExpansion ? Expands(at) : MayGiveWord(words[at], reading.QuotedAt(at), wanted, git)))
             {
                 return AgentRuleMatch.No;
             }
@@ -3029,6 +3046,40 @@ public sealed partial class AgentPolicy
         }
 
         return expanded ? AgentRuleMatch.Expanded : AgentRuleMatch.Yes;
+    }
+
+    /// <summary>
+    /// Whether the shell's expansion of <paramref name="word"/> may give a word that is <paramref name="wanted"/>
+    /// (<see cref="MeetsWord"/>): where the word expands at all, the text before its first expansion is a start a word
+    /// that is <paramref name="wanted"/> may have - none, where the expansion begins the word. Where the first expansion
+    /// begins is read of what <see cref="CommandAnalysis.Expansion"/> reads, the one reader of what the shell expands: the
+    /// shortest start of the word that expands ends in that expansion, and the longest end of that start that still
+    /// expands begins it.
+    /// </summary>
+    /// <param name="word">The word, its quotes read as the shell reads them.</param>
+    /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
+    /// <param name="wanted">A word of an entry's after its command.</param>
+    /// <param name="git">Whether the entry is git's, which takes a long option by any start of its name.</param>
+    private static bool MayGiveWord(string word, string? quoted, string wanted, bool git)
+    {
+        string? Expands(int from, int to) => CommandAnalysis.Expansion(word[from..to], quoted?[from..to]);
+
+        if (Enumerable.Range(1, word.Length).FirstOrDefault(to => Expands(0, to) is not null) is not (> 0 and var end))
+        {
+            return false;
+        }
+
+        var before = word[..Enumerable.Range(0, end).Last(from => Expands(from, end) is not null)];
+
+        // A long option: the start of it, or of its name's start before a value glued after an '='; a short one: a dash
+        // alone, or a cluster of short options; any other word: the start of it.
+        return wanted.StartsWith("--", StringComparison.Ordinal)
+            ? before.Split('=', 2) is [var name, _]
+                ? name == wanted || (git && name.Length > 2 && wanted.StartsWith(name, StringComparison.Ordinal))
+                : wanted.StartsWith(before, StringComparison.Ordinal)
+            : wanted.StartsWith('-')
+                ? before.Length == 0 || before == "-" || (before[0] == '-' && before[1] != '-')
+                : wanted.StartsWith(before, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

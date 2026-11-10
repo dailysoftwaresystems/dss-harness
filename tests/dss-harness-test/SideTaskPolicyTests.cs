@@ -222,6 +222,7 @@ public sealed class SideTaskPolicyTests
         {
             "git status", "git log -1", "git diff HEAD", "git -C . status", "git rev-parse --abbrev-ref HEAD",
             "git fetch", "git fetch origin", "git fetch --all --prune", "git fetch origin main:refs/remotes/origin/main",
+            "git fetch --depth=$n origin", "git fetch origin refs/heads/$b:refs/remotes/origin/$b", "git fetch origin refs/heads/*:refs/remotes/o/*",
             "git branch", "git branch -a", "git branch -vv", "git branch -av", "git branch --show-current", "git branch --list 'feat*'",
             "git branch -l", "git branch -l 'feat*'", "git --no-pager branch", "git branch --contains abc", "git branch --merged",
             "git branch --no-merged main", "git branch -a --contains abc", "git branch -r --merged main", "git branch --points-at HEAD",
@@ -272,7 +273,13 @@ public sealed class SideTaskPolicyTests
 
         Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}), the verbs that write its index ({string.Join(", ", AgentPolicy.GitIndexVerbs)} - apply whole,", help, StringComparison.Ordinal);
         Assert.Contains($"gh's that write git's state ({string.Join(", ", AgentPolicy.GhStateCommands)}, each whole)", help, StringComparison.Ordinal);
-        Assert.Contains($"the forms of git's other commands that write the same ({string.Join(", ", AgentPolicy.GitStateForms)}, the option met wherever it stands among the command's words)", help, StringComparison.Ordinal);
+        Assert.Contains(
+            $"the forms of git's other commands that write the same ({string.Join(", ", AgentPolicy.GitStateForms)}, the option met wherever it stands among the command's words, "
+                + "by any cluster that holds its letter or any start of its name git takes, and a word the shell expands held as one that may be it only where its "
+                + "expansion may begin it - a word it begins, quoted or not, or one after a start the option's own may have (-f$X) - never inside a word that "
+                + "begins otherwise (--depth=$n, refs/heads/$b:refs/remotes/o/$b))",
+            help,
+            StringComparison.Ordinal);
         Assert.Contains($"Their forms that only read stay open: {string.Join(", ", AgentPolicy.LiveRunOpen)} (a trailing * any words after the form)", help, StringComparison.Ordinal);
         Assert.Contains(
             $"git branch in a listing mode ({string.Join(", ", CommandAnalysis.GitBranchListing)}) or naming no branch, with no mode that writes; "

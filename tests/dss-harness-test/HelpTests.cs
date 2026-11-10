@@ -726,7 +726,7 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too - nor does any command print a credential, whatever the worktree rules say ({string.Join(", ", AgentPolicy.CredentialPrintingCommands)}; a * any helper's name, and the words after a command met anywhere after it, options before or between them): a credential leaves its slot only by the key store that holds it, never through an agent's words.",
+            $"nor leave its step's limits - nor do the gh commands that hand its work to another agent or install what the next launch loads ({string.Join(", ", AgentPolicy.GhOutOfStepCommands)}), by gh's own aliases too - nor does any command print a credential, whatever the worktree rules say ({string.Join(", ", AgentPolicy.CredentialPrintingCommands)}; a * any helper's name, and the words after a command met anywhere after it, options before or between them, and a word the shell expands among them, wherever the expansion stands in it, held as one that may be them): a credential leaves its slot only by the key store that holds it, never through an agent's words.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's, or of a place the user keeps credentials in (the isolation's list, below), and every search over one", prose, StringComparison.Ordinal);
@@ -835,7 +835,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             $"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) and the forms of its other commands that write the same "
                 + $"({string.Join(", ", AgentPolicy.GitStateForms)}, the option met wherever it stands among the command's words, by any cluster that holds "
-                + $"its letter or any start of its name git takes) are refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", AgentPolicy.GhStateCommands)}; "
+                + "its letter or any start of its name git takes, and a word the shell expands held as one that may be it only where its expansion may begin it - "
+                + "a word it begins, quoted or not, or one after a start the option's own may have (-f$X) - never inside a word that begins otherwise "
+                + $"(--depth=$n, refs/heads/$b:refs/remotes/o/$b)) are refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", AgentPolicy.GhStateCommands)}; "
                 + "a command gh names by an alias of its own, pr co for pr checkout among them, read as the command it names, and "
                 + "where gh reads its configuration from - GH_CONFIG_DIR, XDG_CONFIG_HOME, AppData, HOME - set for a command the gh config set it is) - reading git",
             prose,
