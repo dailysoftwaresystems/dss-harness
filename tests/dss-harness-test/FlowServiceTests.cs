@@ -2211,8 +2211,9 @@ public sealed class FlowServiceTests
 
     /// <summary>
     /// A session the terminal cuts off answers as every command over a run does: the line names the run and the command
-    /// that goes on with it, the text and the --json document name every record the run holds, and the run's log has
-    /// the command's line.
+    /// that goes on with it, the text and the --json document name every record the run holds - the run's standing the
+    /// stop's own, which it is on disk from the moment the stop is applied while its drain still runs - and the run's log
+    /// has the command's line.
     /// </summary>
     [Fact]
     public async Task ASessionCutOffByTheTerminal_NamesTheRunAndItsRecords_InTextJsonAndItsLog()
@@ -2238,6 +2239,9 @@ public sealed class FlowServiceTests
         terminal.Interrupted();
         terminal.Interrupted();
         await clock.WaitingAsync(3).WaitAsync(Bound, Token);
+
+        // The stop is applied and written before the terminal's bound runs out: the step it stopped still drains.
+        _ = await UntilAsync(() => repository.Harness.OrchestrationStore.ReadFlow(RunOf(repository)) is { Status: "Stopped" } flow ? flow : null);
         clock.Advance(TimeSpan.FromSeconds(10));
 
         var outcome = await driving.WaitAsync(Bound, Token);
@@ -2269,7 +2273,7 @@ public sealed class FlowServiceTests
         Assert.True(outcome.Quiet);
         Assert.Equal(130, document["exitCode"]!.GetValue<int>());
         Assert.Equal("r1", document["run"]!.GetValue<string>());
-        Assert.Equal("Running", document["status"]!.GetValue<string>());
+        Assert.Equal("Stopped", document["status"]!.GetValue<string>());
         Assert.Equal(
             ["run", "state", "status", "questions", "updates", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
