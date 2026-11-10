@@ -1787,7 +1787,7 @@ public sealed partial class AgentPolicy
         var environmentDrive = commands.Any(command => command.Wrappers.Append(command.Words).Any(words => words.Any(CommandAnalysis.NamesEnvironmentDrive)));
 
         // What the string's own assignments set, and what its commands write, as each command after them reads it.
-        var state = new StringState();
+        var state = new StringState(OnWindows);
 
         // Where each command may stand, as the moves before it at its level left it.
         var standing = new Standing(places);
@@ -2048,7 +2048,8 @@ public sealed partial class AgentPolicy
     /// each variable, the variables it sets to a value it computes, the files it writes and the text a here-document gives
     /// one, and whether a command of it moved.
     /// </summary>
-    private sealed class StringState
+    /// <param name="windows">Whether the string runs on Windows, whose device names reach no file (<see cref="WritesNoFile"/>).</param>
+    private sealed class StringState(bool windows)
     {
         /// <summary>The values each variable the string set to text it spells may hold, by its name.</summary>
         public Dictionary<string, List<string>> Values { get; } = new(StringComparer.Ordinal);
@@ -2089,7 +2090,8 @@ public sealed partial class AgentPolicy
         /// PowerShell content cmdlet's - in each of <paramref name="readings"/>, by every place <paramref name="wholes"/>
         /// says it may be, with the text a here-document or here-string gives cat or tee for it; or by the end its name
         /// holds past the last expansion the shell makes of it, where it is named by one this does not read - a tilde of a
-        /// variable the string set to a value it computes among them (<see cref="Unread"/>).
+        /// variable the string set to a value it computes among them (<see cref="Unread"/>). A device it writes to is no
+        /// file (<see cref="WritesNoFile"/>).
         /// </summary>
         public void Record(AnalyzedCommand analyzed, IReadOnlyList<AnalyzedCommand> readings, int environment, IReadOnlyList<string> places, Func<string, IReadOnlyList<string>?> wholes)
         {
@@ -2140,7 +2142,8 @@ public sealed partial class AgentPolicy
                         ? input.Target
                         : null;
 
-                foreach (var target in targets)
+                // A device is no file: nothing written there is run after.
+                foreach (var target in targets.Where(target => !WritesNoFile(target, windows)))
                 {
                     if (Unread(target, quoted: null) || wholes(target) is not { } spelled)
                     {
@@ -2161,19 +2164,29 @@ public sealed partial class AgentPolicy
         /// <summary>
         /// Whether <paramref name="word"/> - spelled with <paramref name="quoted"/>, reaching <paramref name="wholes"/> -
         /// may name a file the string wrote that this cannot tell by its path: a word the shell expands into a name this
-        /// does not read (<see cref="Unread"/>) may name any file the string wrote, and one that reaches a place this cannot
-        /// tell; else a file named by what the shell expands where the word's place ends in that name's end
-        /// (<see cref="UnreadEnds"/>) - its path, where the end holds a separator, its name where not. An end that is empty
-        /// is a name the shell gives whole, which no word this reads is taken to be.
+        /// does not read (<see cref="Unread"/>), and one that reaches a place this cannot tell, may name any file the string
+        /// wrote where it is read as the program or a script file (<paramref name="runs"/>), and one it named by what the
+        /// shell expands where it is a word a program that runs its words may run; else a file named by what the shell
+        /// expands where the word's place ends in that name's end (<see cref="UnreadEnds"/>) - its path, where the end
+        /// holds a separator, its name where not. An end that is empty is a name the shell gives whole, which no word this
+        /// reads is taken to be.
         /// </summary>
-        public bool MayBeUnread(string word, string? quoted, IReadOnlyList<string>? wholes)
+        /// <param name="word">The word.</param>
+        /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
+        /// <param name="wholes">Every place the word may reach, or null where this cannot tell one.</param>
+        /// <param name="runs">
+        /// Whether the word is read as the program the command runs or as a script file a program reads, rather than any
+        /// word of a program that runs its words (<see cref="CommandAnalysis.RunsAt"/>) - an option, a remote command, a
+        /// script's text among them.
+        /// </param>
+        public bool MayBeUnread(string word, string? quoted, IReadOnlyList<string>? wholes, bool runs)
         {
-            if (wholes is null || Unread(word, quoted))
+            if ((wholes is null || Unread(word, quoted)) && (runs || UnreadEnds.Count > 0))
             {
                 return true;
             }
 
-            return UnreadEnds.Any(end => end.Length > 0 && wholes.Select(whole => whole.Replace('\\', '/'))
+            return wholes is not null && UnreadEnds.Any(end => end.Length > 0 && wholes.Select(whole => whole.Replace('\\', '/'))
                 .Any(whole => (end.Contains('/', StringComparison.Ordinal) ? whole : whole[(whole.LastIndexOf('/') + 1)..]).EndsWith(end, StringComparison.OrdinalIgnoreCase)));
         }
 
@@ -2323,10 +2336,11 @@ public sealed partial class AgentPolicy
     /// <summary>
     /// The script file a reading of <paramref name="readings"/> runs that a command of its string wrote before it, with
     /// the text a here-document or here-string gave it where one did: the program itself, or the script file a shell,
-    /// <c>source</c>, PowerShell or sed reads (<see cref="CommandAnalysis.ScriptFilesOf"/>) - each where a program runs
-    /// (<see cref="CommandAnalysis.RunsAt"/>) - by every place it may be (<paramref name="wholes"/>); or one that may be a
-    /// file the string wrote this cannot tell by its path (<see cref="StringState.MayBeUnread"/>) - named by what the shell
-    /// expands, or run by a word the shell expands - whose text this does not know. Null where it runs none.
+    /// <c>source</c>, PowerShell or sed reads (<see cref="CommandAnalysis.ScriptFilesOf"/>) - named by a word or given as
+    /// its input - each where a program runs (<see cref="CommandAnalysis.RunsAt"/>), by every place it may be
+    /// (<paramref name="wholes"/>); or one that may be a file the string wrote this cannot tell by its path
+    /// (<see cref="StringState.MayBeUnread"/>) - named by what the shell expands, or run as the program or a script file
+    /// by a word the shell expands - whose text this does not know. Null where it runs none.
     /// </summary>
     private static (string File, string? Text)? WrittenScripts(IReadOnlyList<AnalyzedCommand> readings, int environment, StringState state, Func<string, IReadOnlyList<string>?> wholes)
     {
@@ -2345,11 +2359,16 @@ public sealed partial class AgentPolicy
                 var posix = CommandAnalysis.IsShell(name) || name is "source" or ".";
                 List<string> masks = [.. Enumerable.Range(at, words.Count - at).Select(reading.QuotedWord)];
 
-                // The program itself, its text read as it runs it; and each script file it reads, its text read where a
-                // POSIX shell reads it.
-                IEnumerable<(string Word, string? Quoted, bool Read)> runs = [(words[at], masks[0], true), .. CommandAnalysis.ScriptFilesOf([.. words.Skip(at)], masks).Select(file => (file, (string?)null, posix))];
+                // The program itself, its text read as it runs it - the command's own, or any word a program that runs its
+                // words may run; and each script file it reads, named or its input, its text read where a POSIX shell
+                // reads it.
+                IEnumerable<(string Word, string? Quoted, bool Read, bool Runs)> runs =
+                [
+                    (words[at], masks[0], true, at == environment),
+                    .. CommandAnalysis.ScriptFilesOf([.. words.Skip(at)], masks, reading.Redirects).Select(file => (file, (string?)null, posix, true)),
+                ];
 
-                foreach (var (word, quoted, read) in runs)
+                foreach (var (word, quoted, read, runsIt) in runs)
                 {
                     var places = wholes(word);
 
@@ -2358,7 +2377,7 @@ public sealed partial class AgentPolicy
                         return (word, read ? state.Written[written] : null);
                     }
 
-                    if (state.MayBeUnread(word, quoted, places))
+                    if (state.MayBeUnread(word, quoted, places, runsIt))
                     {
                         return (word, null);
                     }
@@ -2751,6 +2770,17 @@ public sealed partial class AgentPolicy
     private static bool MatchesDotNames(AnalyzedCommand analyzed)
         => CommandAnalysis.ReadBy(analyzed) is CommandAnalysis.Reader.PowerShell or CommandAnalysis.Reader.Cmd
             || analyzed.Words.Any(word => word.Length >= 3 && word.StartsWith("-fo", StringComparison.OrdinalIgnoreCase) && "-force".StartsWith(word.Split(':', 2)[0], StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Whether a write to <paramref name="target"/> reaches a device and no file: the null device the shells name
+    /// (<c>/dev/null</c>), and on Windows (<paramref name="windows"/>) a name every Windows reads as its device in any
+    /// directory, bare (<c>NUL</c>, <c>\\.\NUL</c>, <see cref="Runtime.ConfinedPaths.DeviceNames"/>) - one with an extension
+    /// (<c>NUL.txt</c>) is a file to a Windows that reads it so, and each such name is a file on another system.
+    /// </summary>
+    private static bool WritesNoFile(string target, bool windows)
+        => target.Replace('\\', '/') is var path
+            && (path == "/dev/null"
+                || (windows && Runtime.ConfinedPaths.DeviceNames.Contains(Path.GetFileName(path).TrimEnd(':', ' ', '.'), StringComparer.OrdinalIgnoreCase)));
 
     /// <summary>Whether <paramref name="word"/>'s last name is one a Windows may read as its device's, with any extension (<see cref="Runtime.ConfinedPaths.DeviceNames"/>).</summary>
     private static bool IsDevice(string word)

@@ -136,6 +136,40 @@ public sealed class AgentPolicyTests
     }
 
     /// <summary>
+    /// A device is no file the string writes - the null device on every system, a device's bare name on Windows - so a
+    /// script file named by a tilde whose HOME the string computes is no file of the string's after a write there alone;
+    /// elsewhere NUL is a file like any other.
+    /// </summary>
+    [Fact]
+    public void AWriteToADevice_IsNoFileTheStringRunsAfter()
+    {
+        foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
+        {
+            using var ground = Ground(platform);
+            var policy = ground.Policy(worktreeRules: false);
+
+            foreach (var command in new[] { "HOME=$(pwd); make 2>/dev/null; bash ~/scripts/report.sh", "HOME=$(pwd); make > /dev/null 2>&1; ~/scripts/report.sh" })
+            {
+                Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused on {platform}: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+            }
+
+            foreach (var target in new[] { "NUL", "nul", "NUL:", "out/CON" })
+            {
+                var command = $"HOME=$(pwd); make > '{target}'; bash ~/scripts/report.sh";
+
+                Assert.Equal(
+                    platform == PlatformId.Windows
+                        ? AgentPolicyAnswer.Allow
+                        : new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, "this tool could not decide 'bash ~/scripts/report.sh' ('~/scripts/report.sh' is a script file this command wrote before it runs it, whose text this does not read): it denies what it cannot decide"),
+                    policy.Run(command));
+            }
+
+            // A device's name with an extension is a file to a Windows that reads it so.
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("HOME=$(pwd); make > NUL.txt; bash ~/scripts/report.sh"));
+        }
+    }
+
+    /// <summary>
     /// A leading tilde the shell expands from a variable - <c>~+</c> PWD's, <c>~-</c> OLDPWD's, <c>~N</c>, <c>~+N</c> and
     /// <c>~-N</c> the directory stack's - is a word the shell expands, whatever the string set the variable to: as an
     /// option of a fetch, as git's verb, and as the program itself. Where a path is read, <c>~+</c> is where the shell

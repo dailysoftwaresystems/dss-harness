@@ -2549,7 +2549,7 @@ public static partial class CommandAnalysis
 
                 if (option == "--")
                 {
-                    return at + 1 < words.Count ? ScriptFile(words[at + 1], name, redirects, program, quoted: At(quoted, at + 1), seen: scriptFile, inputGiven: inputGiven) : Input(name, redirects, program, inputGiven: inputGiven);
+                    return at + 1 < words.Count ? ScriptFile(words[at + 1], name, redirects, program, quoted: At(quoted, at + 1), seen: scriptFile, inputGiven: inputGiven) : Input(name, redirects, program, inputGiven: inputGiven, seen: scriptFile);
                 }
 
                 if (!(option.StartsWith('-') || option.StartsWith('+')))
@@ -2590,7 +2590,7 @@ public static partial class CommandAnalysis
                 }
             }
 
-            return Input(name, redirects, program, inputGiven: inputGiven);
+            return Input(name, redirects, program, inputGiven: inputGiven, seen: scriptFile);
         }
 
         if (Is(name, "source", "."))
@@ -2618,7 +2618,7 @@ public static partial class CommandAnalysis
                 }
             }
 
-            return Input(name, redirects, program, CmdAsPosix, inputGiven: inputGiven);
+            return Input(name, redirects, program, CmdAsPosix, inputGiven: inputGiven, seen: scriptFile);
         }
 
         if (Is(name, "powershell", "pwsh"))
@@ -2633,7 +2633,7 @@ public static partial class CommandAnalysis
 
                 if (option == "-")
                 {
-                    return Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven);
+                    return Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven, seen: scriptFile);
                 }
 
                 if (PowerShellParameter(option) is not { } parameter)
@@ -2675,13 +2675,13 @@ public static partial class CommandAnalysis
                 {
                     return at + 1 >= words.Count ? null
                         : words[at + 1] != "-" ? [PowerShellAsPosix(string.Join(' ', words.Skip(at + 1)))]
-                        : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven);
+                        : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven, seen: scriptFile);
                 }
 
                 if ("file".StartsWith(parameter, StringComparison.Ordinal))
                 {
                     return at + 1 >= words.Count ? null
-                        : words[at + 1] == "-" ? Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven)
+                        : words[at + 1] == "-" ? Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven, seen: scriptFile)
                         : ScriptFile(words[at + 1], name, redirects, program, PowerShellAsPosix, seen: scriptFile, inputGiven: inputGiven);
                 }
 
@@ -2711,7 +2711,7 @@ public static partial class CommandAnalysis
             }
 
             return file is not null ? ScriptFile(file, name, redirects, program, PowerShellAsPosix, seen: scriptFile, inputGiven: inputGiven)
-                : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven);
+                : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven, seen: scriptFile);
         }
 
         // trap's first word is the command it runs at a signal; script's and flock's -c, and the
@@ -2774,25 +2774,28 @@ public static partial class CommandAnalysis
     /// <c>source $F</c>) or another open descriptor does (<c>/dev/fd/3</c>), where the words are a
     /// command's own, for what it runs is what another command printed. The expansion is read where
     /// the shell would make it: a file named in quotes is a file of that name, not one a variable
-    /// gave. <paramref name="seen"/> is told the file first.
+    /// gave. <paramref name="seen"/> is told the file first, and the file the input is where it names the input.
     /// </summary>
     private static IReadOnlyList<string>? ScriptFile(string file, string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null, string? quoted = null, Action<string>? seen = null, bool inputGiven = true)
     {
         seen?.Invoke(file);
 
-        return Folded(file) is "/dev/stdin" or "/dev/fd/0" or "/proc/self/fd/0" ? Input(name, redirects, program, spelled, inputGiven)
+        return Folded(file) is "/dev/stdin" or "/dev/fd/0" or "/proc/self/fd/0" ? Input(name, redirects, program, spelled, inputGiven, seen)
             : program && Unread(file, quoted) is { } unread ? throw new NotSupportedException($"'{file}' names the script it runs by {unread}, which this does not read")
             : null;
     }
 
     /// <summary>
     /// The script files the program <paramref name="words"/> start with reads and runs: a shell's, <c>source</c>'s and
-    /// PowerShell's script file, as <see cref="Into"/> reads their words, and sed's <c>-f</c> files - never a word a
-    /// <c>-c</c> runs as a command line, nor the arguments after a script. None where it reads none.
+    /// PowerShell's script file, as <see cref="Into"/> reads their words - the file its input is, where it reads its
+    /// script from its input (<c>bash &lt; x.sh</c>, <c>sh -s &lt; x.sh</c>, <c>source /dev/stdin &lt; x.sh</c>) - and sed's
+    /// <c>-f</c> files - never a word a <c>-c</c> runs as a command line, nor the arguments after a script. None where it
+    /// reads none.
     /// </summary>
     /// <param name="words">The program and its words.</param>
     /// <param name="quoted">How each word's characters stand to the shell, kept in step with <paramref name="words"/>.</param>
-    internal static IReadOnlyList<string> ScriptFilesOf(IReadOnlyList<string> words, IReadOnlyList<string> quoted)
+    /// <param name="redirects">The redirects the shell makes for the command the words stand in.</param>
+    internal static IReadOnlyList<string> ScriptFilesOf(IReadOnlyList<string> words, IReadOnlyList<string> quoted, IReadOnlyList<ShellRedirect> redirects)
     {
         if (words.Count == 0)
         {
@@ -2809,7 +2812,7 @@ public static partial class CommandAnalysis
                 return SedOf(words, quoted)?.Files ?? [];
             }
 
-            _ = Into(name, words, quoted, [], program: false, files.Add);
+            _ = Into(name, words, quoted, redirects, program: false, files.Add);
         }
         catch (NotSupportedException)
         {
@@ -2862,9 +2865,10 @@ public static partial class CommandAnalysis
     /// script file, unseen as any is. A program given no input of its own reads the one around it
     /// (<paramref name="inputGiven"/>): what an earlier command printed, or the text the tool runtime
     /// writes to it, refused where the words are a command's own; or, where nothing gives it one -
-    /// the agent's own command's input - no script at all, null.
+    /// the agent's own command's input - no script at all, null. <paramref name="seen"/> is told the
+    /// file its input is, as <see cref="ScriptFile"/> tells it a file a word names.
     /// </summary>
-    private static IReadOnlyList<string>? Input(string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null, bool inputGiven = true)
+    private static IReadOnlyList<string>? Input(string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null, bool inputGiven = true, Action<string>? seen = null)
     {
         // The shell reads what the last redirect of its descriptor 0 gives it: a text, or a file
         // unseen as any script file is; one duplicated from another descriptor, or named by one,
@@ -2874,6 +2878,7 @@ public static partial class CommandAnalysis
             case { Operator: "<<<" } text:
                 return [spelled is null ? text.Target : spelled(text.Target)];
             case { Operator: not "<&" } file when Unread(file.Target) is not { } || !program:
+                seen?.Invoke(file.Target);
                 return null;
             case { } other when program:
                 throw new NotSupportedException($"'{name}' reads the script it runs from '{other}', which this does not read");
@@ -2999,7 +3004,7 @@ public static partial class CommandAnalysis
 
         var read = commanded ? [.. words.Skip(at).Where(word => word != InputWord)]
             : at < words.Count ? ScriptFile(words[at], name, redirects, program, seen: scriptFile, inputGiven: inputGiven)
-            : Input(name, redirects, program, inputGiven: inputGiven);
+            : Input(name, redirects, program, inputGiven: inputGiven, seen: scriptFile);
 
         return scripts.Count > 0 ? [.. scripts, .. read ?? []] : read;
     }

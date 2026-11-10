@@ -766,7 +766,8 @@ public sealed class CommandWordsPolicyTests
     /// end the run word's - so a log written to a variable's path, or a script of the same name in another directory,
     /// runs on both grounds, and the file it wrote does not. A tilde whose variable this does not read - <c>~+</c> where
     /// the string set PWD to a value it computes, <c>~</c> where it so set HOME - is such an expansion, as a target and as
-    /// a run word.
+    /// a run word; a program or a script file the shell expands may be any file the string wrote, a word a runner such as
+    /// wsl or ssh is given none, and the null device is none. A script a shell reads from its input is the file it names.
     /// </summary>
     [Fact]
     public void AFileTheStringWrote_IsTheScriptItRunsOnlyWhereTheRunWordMayReachIt()
@@ -781,6 +782,8 @@ public sealed class CommandWordsPolicyTests
                 "dotnet test > \"$OUT/test.log\"; ./build/bin/app", "make > \"$TMPDIR/log\" 2>&1; ./check.sh",
                 "echo x > out/test.sh; bash scripts/test.sh", "printf x > \"$D/run.sh\"; bash scripts/build.sh",
                 "PWD=$(pwd); echo x > ~+/out/test.sh; bash scripts/test.sh",
+                "make 2>/dev/null; wsl -e bash -lc \"cd /mnt/c/src && make $TARGET\"", "scp f h:/tmp > /dev/null && ssh h \"cd /tmp && ./run $ARGS\"",
+                "make > build.log; wsl -e bash -lc \"cd /mnt/c/src && make $TARGET\"", "bash < scripts/test.sh", "echo x > out/test.sh; sh -s < scripts/test.sh",
             })
             {
                 Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
@@ -794,25 +797,48 @@ public sealed class CommandWordsPolicyTests
                 ("PWD=$(pwd); echo 'gh auth token' > ~+/x.sh; bash x.sh", "bash x.sh", "x.sh"),
                 ("PWD=$(pwd); cat > ~+/x.sh <<'EOF'\ngh auth token\nEOF\nbash x.sh", "bash x.sh", "x.sh"),
                 ("PWD=$(pwd); echo x > ~+/out/test.sh; bash out/test.sh", "bash out/test.sh", "out/test.sh"),
+                ("echo 'gh auth token' > x.sh; bash < x.sh", "bash <x.sh", "x.sh"),
+                ("echo 'gh auth token' > x.sh; sh -s < x.sh", "sh -s <x.sh", "x.sh"),
+                ("echo 'gh auth token' > x.sh; source /dev/stdin < x.sh", "source /dev/stdin <x.sh", "x.sh"),
             })
             {
                 Assert.Equal(
                     new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"this tool could not decide '{subject}' ('{word}' is a script file this command wrote before it runs it, whose text this does not read): it denies what it cannot decide"),
                     policy.Run(command));
             }
+
+            // A script the shell reads from its input is read as one it is named: the text a here-document gave it, and a
+            // file the string did not write as the one it names.
+            foreach (var (fed, named) in new[]
+            {
+                ("cat > x.sh <<'EOF'\ngh auth token\nEOF\nbash < x.sh", "cat > x.sh <<'EOF'\ngh auth token\nEOF\nbash x.sh"),
+                ("cat > x.sh <<'EOF'\nmake test\nEOF\nbash < x.sh", "cat > x.sh <<'EOF'\nmake test\nEOF\nbash x.sh"),
+                ("bash < scripts/test.sh", "bash scripts/test.sh"),
+            })
+            {
+                Assert.Equal(policy.Run(named), policy.Run(fed));
+            }
+
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("cat > x.sh <<'EOF'\ngh auth token\nEOF\nbash < x.sh"));
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("cat > x.sh <<'EOF'\nmake test\nEOF\nbash < x.sh"));
         }
 
         // A worktree rule refuses HOME's setting itself, as git's configuration; without one, a ~ of the HOME the string
         // computes is read as the expansion it is.
         var side = tree.Side();
-        const string Report = "HOME=$(pwd); make > ~/build.log; bash scripts/report.sh";
 
-        Assert.True(side.Run(Report) == AgentPolicyAnswer.Allow, $"'{Report}' was refused: {(side.Run(Report) as AgentPolicyAnswer.Denied)?.Reason}");
+        // The null device is no file the string writes: a run word after it may be no file of the string's.
+        foreach (var command in new[] { "HOME=$(pwd); make > ~/build.log; bash scripts/report.sh", "HOME=$(pwd); make 2>/dev/null; bash ~/scripts/report.sh" })
+        {
+            Assert.True(side.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(side.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+        }
 
         foreach (var (command, subject, word) in new[]
         {
             ("HOME=$(pwd); echo 'gh auth token' > ~/x.sh; bash x.sh", "bash x.sh", "x.sh"),
             ("HOME=$(pwd); echo 'gh auth token' > x.sh; bash ~/x.sh", "bash ~/x.sh", "~/x.sh"),
+            ("HOME=$(pwd); echo 'gh auth token' > x.sh; ~/x.sh", "~/x.sh", "~/x.sh"),
+            ("HOME=$(pwd); echo 'gh auth token' > x.sh; valgrind bash ~/x.sh", "valgrind bash ~/x.sh", "~/x.sh"),
         })
         {
             Assert.Equal(

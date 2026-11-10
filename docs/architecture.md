@@ -1986,10 +1986,12 @@ with `-s`, cargo watch's `-s`), read as `sh -c`'s and as `cmd /c`'s, and the job
 `at` and `batch` take from a here-document or a here-string (`CommandAnalysis.ScriptsItRuns`), and a
 script file the string itself writes before it runs it, read as the text a here-document gave it
 (`AgentPolicy.WrittenScripts`: each file the string writes kept by the full path it reaches from each
-place its command stands, `StringState.Written`, a target the shell expands - a tilde whose variable
-the string set to a value it computes among them, `StringState.Unread` - kept by its literal end,
-a run word - a program's or a shell's, `source`'s or sed's script file - that file only where it
-reaches that path or that end, and any such file where the shell expands the run word itself), each by its own
+place its command stands, `StringState.Written`, a device it writes to none (`AgentPolicy.WritesNoFile`),
+a target the shell expands - a tilde whose variable the string set to a value it computes among them,
+`StringState.Unread` - kept by its literal end, a run word - a program's or a shell's, `source`'s or
+sed's script file, named or the file its input is (`CommandAnalysis.ScriptFilesOf` over the command's
+redirects) - that file only where it reaches that path or that end, and any such file where the shell
+expands the program or the script file itself, never a word a runner is given), each by its own
 shell's quoting - PowerShell by a reader of its own (`CommandAnalysis.PowerShellReader`), which
 follows pwsh's tokenizer and grammar and writes each statement on a line and each word whole and
 quoted for the shell reader, so the shell reads no syntax of its own into it: a command's words as
