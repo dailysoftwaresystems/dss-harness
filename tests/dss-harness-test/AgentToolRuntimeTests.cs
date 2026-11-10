@@ -1823,8 +1823,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal("written\n", Read("w.txt"));
 
         var said = Assert.Single(_events.All.OfType<Notice>());
-        Assert.StartsWith("waited ", said.Text);
-        Assert.EndsWith($" s for {DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOnFromSideTask} to end", said.Text);
+        Assert.Matches($@"^waited (a moment|\d+(\.\d)? s) for {Regex.Escape(DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOnFromSideTask)} to end$", said.Text);
     }
 
     /// <summary>

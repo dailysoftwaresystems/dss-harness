@@ -392,8 +392,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Empty(sink.Of<PermissionDenied>());
-        Assert.StartsWith("waited ", Assert.Single(sink.Of<Notice>()).Text);
-        Assert.EndsWith($" s for {DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOnFromSideTask} to end", Assert.Single(sink.Of<Notice>()).Text);
+        Assert.Matches($@"^waited (a moment|\d+(\.\d)? s) for {System.Text.RegularExpressions.Regex.Escape(DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOnFromSideTask)} to end$", Assert.Single(sink.Of<Notice>()).Text);
 
         // The call's result let the hold go: the tree's lock is free again once the run has ended.
         using var taken = DssHarness.Core.Platform.MachineWideMutex.TryHold(

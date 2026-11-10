@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Platform;
 
@@ -62,6 +63,25 @@ public static class MainTreeWriteLock
         ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckoutRoot);
 
         return MachineWideMutex.HoldAsync(NameFor(mainCheckoutRoot), $"the main tree '{mainCheckoutRoot}'", System.Threading.Timeout.InfiniteTimeSpan, cancellationToken);
+    }
+
+    /// <summary>
+    /// What a side-task's chat says of its write's or command's wait for the lock, where it waited - the one form of it on
+    /// every client: the seconds to a tenth, in the invariant culture, or "a moment" for a wait shorter than a tenth would
+    /// show; null where it did not wait.
+    /// </summary>
+    /// <param name="waited">How long the take waited; zero where nobody held the lock.</param>
+    public static string? WaitedNotice(TimeSpan waited)
+    {
+        if (waited <= TimeSpan.Zero)
+        {
+            return null;
+        }
+
+        var seconds = Math.Round(waited.TotalSeconds, 1);
+        var said = seconds == 0 ? "a moment" : string.Create(CultureInfo.InvariantCulture, $"{seconds:0.#} s");
+
+        return $"waited {said} for {WaitedOutOnFromSideTask} to end";
     }
 
     /// <summary>

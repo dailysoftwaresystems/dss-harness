@@ -352,10 +352,9 @@ public sealed partial class AgentToolRuntime : IDisposable
                 ?? throw new OperationCanceledException(cancellationToken)
             : null;
 
-        if (tree?.Waited > TimeSpan.Zero)
+        if (tree is not null && MainTreeWriteLock.WaitedNotice(tree.Waited) is { } waited)
         {
-            await _events.EmitAsync(new Notice(
-                $"waited {Math.Round(tree.Waited.TotalSeconds, 1):0.#} s for {MainTreeWriteLock.WaitedOutOnFromSideTask} to end")).ConfigureAwait(false);
+            await _events.EmitAsync(new Notice(waited)).ConfigureAwait(false);
         }
 
         try

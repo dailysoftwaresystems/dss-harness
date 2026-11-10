@@ -1303,10 +1303,9 @@ public sealed class ClaudeCodeClient(
             {
                 hold.Dispose();
             }
-            else if (hold.Waited > TimeSpan.Zero)
+            else if (MainTreeWriteLock.WaitedNotice(hold.Waited) is { } waited)
             {
-                await Emit(new Notice(
-                    $"waited {Math.Round(hold.Waited.TotalSeconds, 1):0.#} s for {MainTreeWriteLock.WaitedOutOnFromSideTask} to end")).ConfigureAwait(false);
+                await Emit(new Notice(waited)).ConfigureAwait(false);
             }
 
             Control(Answer(held.Asked.RequestId, new JsonObject
