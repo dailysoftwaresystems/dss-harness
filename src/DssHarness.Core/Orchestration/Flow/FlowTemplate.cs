@@ -185,7 +185,7 @@ public static class FlowTemplate
     /// <summary>
     /// Fills <paramref name="template"/> as the overload beside it does, with one case spelled rather than refused: a
     /// placeholder that reads nothing where <paramref name="spell"/> says what it names - a step that left no output in
-    /// this run, as a prompt's placeholder is filled for its agent (part 03), so the agent is told what it does not
+    /// this run, as a prompt's placeholder is filled for its agent, so the agent is told what it does not
     /// have - fills with the sentence <paramref name="spell"/> gives it. A name that reads nothing and is spelled
     /// nothing says why, in <paramref name="problem"/>, and fills nothing.
     /// </summary>

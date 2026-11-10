@@ -206,7 +206,7 @@ public sealed class ClaudeCodeClient(
 
         // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web, the
         // file tools where Claude Code's own are not given, and the graph tool, on a step that has one (graph: tools) -
-        // served beside --tools with an ask rule, as part 03's table gives it, from the same owner the API clients'
+        // served beside --tools with an ask rule, from the same owner the API clients'
         // tool comes from: the tool runtime.
         var served = ClaudeCodeTools.Served(AgentTools.Offered(ground, run.Commands, run.WebSearch), ownFiles);
 
@@ -221,7 +221,7 @@ public sealed class ClaudeCodeClient(
         }
 
         // The probe measured an Edit taken after a ranged Read, inside the range and outside it, on every version
-        // taken (the probe's ranged-edit launch, 2026-11-04): an agent that means to change a body reads its lines
+        // taken (its ranged-edit launch, fixtures/claude-code): an agent that means to change a body reads its lines
         // with Read and Edits them, and the graph tool's edit operation is not given on this client - the one
         // change made here to the operations the run's step was given, the same owner serving it as on the APIs.
         if (run.Graph is { } support)

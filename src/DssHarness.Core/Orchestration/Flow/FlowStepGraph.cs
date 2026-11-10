@@ -543,7 +543,7 @@ public sealed class FlowStepGraph
     }
 
     /// <summary>
-    /// The sentence for a step that left no output, as a prompt's placeholder is filled with it (part 03): the graphify
+    /// The sentence for a step that left no output, as a prompt's placeholder is filled with it: the graphify
     /// step that was to make the run's graph, and why it left nothing - it has not run, it was skipped, or it failed.
     /// </summary>
     private static string MissingOutputOf(OrchestrationStore store, OrchestratorLayout layout, WorkflowDefinition definition, string instance)

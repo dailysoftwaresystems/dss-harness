@@ -252,7 +252,7 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>
     /// The most lines a file may hold and a whole read of it still pass the narrowing: a longer one the view holds as
-    /// parsed is denied, with the way to the graph (<c>graphReads: narrow</c>, value 380).
+    /// parsed is denied, with the way to the graph (<c>graphReads: narrow</c>).
     /// </summary>
     public const int NarrowLines = 200;
 

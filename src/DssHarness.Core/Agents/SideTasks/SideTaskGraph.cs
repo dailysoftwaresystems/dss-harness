@@ -11,7 +11,7 @@ using DssHarness.Core.Repository;
 namespace DssHarness.Core.Agents.SideTasks;
 
 /// <summary>
-/// A side-task's own codebase graph, under its records as a run's is under its own (part 03, "The graph"): seeded from
+/// A side-task's own codebase graph, under its records as a run's is under its own: seeded from
 /// the newest graph of the repository's runs or side-tasks at its opening, then incremental, synced again after each of
 /// its agent's writes and commands on either client (<see cref="AfterWrites"/>). Its agent is given the <c>graph</c> tool
 /// with every operation its client serves and no narrowing, held to the side-task's own policy, the repository map with
