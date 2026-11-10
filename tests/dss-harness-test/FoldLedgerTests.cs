@@ -2,6 +2,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
@@ -66,9 +67,9 @@ public sealed class FoldLedgerTests
     }
 
     /// <summary>
-    /// A settle records what the fold left at each path and whether that is what it held: applied for a fold that went
-    /// through, stopped for one that stopped part way; a refusal wrote nothing and reads nothing - it holds nothing a
-    /// commit would take.
+    /// A settle records what the fold reports it left at each path and whether that is what it held: applied for a fold
+    /// that went through, stopped for one that stopped part way; a refusal wrote nothing and settles nothing - it holds
+    /// nothing a commit would take.
     /// </summary>
     [Fact]
     public async Task ASettle_RecordsWhatTheFoldLeft_AndARefusalHoldsNothing()
@@ -83,14 +84,14 @@ public sealed class FoldLedgerTests
         var applied = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
         File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "after\n");
         File.Delete(Path.Combine(temp.Path, "gone.txt"));
-        await ledger.SettleAsync(layout, temp.Path, applied, HarnessExit.Success);
+        ledger.Settle(layout, applied, HarnessExit.Success, OrchestrationKit.Left(temp.Path, planned));
 
         var refused = await ledger.IntendAsync(layout, temp.Path, "fold", 2, "fold", "a1", planned, Token);
-        await ledger.SettleAsync(layout, temp.Path, refused, HarnessExit.Refused);
+        ledger.Settle(layout, refused, HarnessExit.Refused, left: null);
 
         var stopped = await ledger.IntendAsync(layout, temp.Path, "fold", 3, "fold", "a1", planned with { Deleted = [] }, Token);
         File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "part way\n");
-        await ledger.SettleAsync(layout, temp.Path, stopped, HarnessExit.Incomplete);
+        ledger.Settle(layout, stopped, HarnessExit.Incomplete, OrchestrationKit.Left(temp.Path, planned with { Deleted = [] }));
 
         var file = harness.OrchestrationStore.ReadFolds(layout)!;
         var first = file.Of(applied)!;
@@ -121,13 +122,13 @@ public sealed class FoldLedgerTests
 
     /// <summary>
     /// A settle records a fold that failed - a code no refusal answers with, which a verb may answer after writing part of
-    /// it - as failed, with what the main tree holds at each path: never as refused, which reads nothing and so would hide
-    /// what it wrote.
+    /// it - as failed, with what it reports it left at each path: never as refused, which settles nothing and so would
+    /// hide what it wrote.
     /// </summary>
     [Theory]
     [InlineData(HarnessExit.CommandFailed)]
     [InlineData(HarnessExit.InternalError)]
-    public async Task ASettleOfAFoldThatFailed_ReadsWhatItLeft(int exitCode)
+    public async Task ASettleOfAFoldThatFailed_RecordsWhatItLeft(int exitCode)
     {
         using var temp = new TempDirectory();
         var (harness, layout, ledger) = Ledger(temp);
@@ -135,7 +136,7 @@ public sealed class FoldLedgerTests
 
         var failed = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
         File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "part of it\n");
-        var settled = await ledger.SettleAsync(layout, temp.Path, failed, exitCode);
+        var settled = ledger.Settle(layout, failed, exitCode, OrchestrationKit.Left(temp.Path, planned));
         var file = harness.OrchestrationStore.ReadFolds(layout)!;
 
         Assert.Equal(FlowFoldEntry.Failed, settled.State);
@@ -162,7 +163,7 @@ public sealed class FoldLedgerTests
         var mine = await FoldedAsync(ledger, layout, temp.Path, "items[0].fold", ("a.txt", "mine\n"), ("r.md", "row one\n"), ("same.txt", "same\n"));
         var theirs = await FoldedAsync(ledger, layout, temp.Path, "items[1].fold", ("b.txt", "theirs\n"), ("r.md", "row one\nrow two\n"));
         var refused = await ledger.IntendAsync(layout, temp.Path, "items[0].fold", 2, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["c.txt"] }, Token);
-        await ledger.SettleAsync(layout, temp.Path, refused, HarnessExit.Refused);
+        ledger.Settle(layout, refused, HarnessExit.Refused, left: null);
 
         var owed = FoldLedger.Owed(harness.OrchestrationStore.ReadFolds(layout), ["items[0].fold"]);
 
@@ -384,11 +385,11 @@ public sealed class FoldLedgerTests
 
         var applied = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
         File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "after\n");
-        await ledger.SettleAsync(layout, temp.Path, applied, HarnessExit.Success);
+        ledger.Settle(layout, applied, HarnessExit.Success, OrchestrationKit.Left(temp.Path, planned));
         var refused = await ledger.IntendAsync(layout, temp.Path, "fold", 2, "fold", "a1", planned, Token);
-        await ledger.SettleAsync(layout, temp.Path, refused, HarnessExit.Refused);
+        ledger.Settle(layout, refused, HarnessExit.Refused, left: null);
         var interrupted = await ledger.IntendAsync(layout, temp.Path, "fold", 3, "fold", "a1", planned, Token);
-        _ = await ledger.SettleInterruptedAsync(layout, temp.Path, "fold");
+        _ = await ledger.SettleInterruptedAsync(layout, temp.Path, "fold", Token);
         _ = await ledger.IntendAsync(layout, temp.Path, "other", 1, "fold", "a2", planned, Token);
 
         Assert.Equal([applied, interrupted], FoldLedger.Ungraphed(harness.OrchestrationStore.ReadFolds(layout)).Select(entry => entry.Id));
@@ -416,14 +417,116 @@ public sealed class FoldLedgerTests
         var other = await ledger.IntendAsync(layout, temp.Path, "items[1].fold", 1, "fold", "a2", planned, Token);
         File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "written before the crash\n");
 
-        var settled = await ledger.SettleInterruptedAsync(layout, temp.Path, "fold");
+        var settled = await ledger.SettleInterruptedAsync(layout, temp.Path, "fold", Token);
         var file = harness.OrchestrationStore.ReadFolds(layout)!;
 
         Assert.Single(settled);
         Assert.Equal(FlowFoldEntry.Interrupted, file.Of(mine)!.State);
         Assert.Equal((FileContentHash.Of("written before the crash\n"u8), true), (file.Of(mine)!.Paths[0].Left, file.Of(mine)!.Paths[0].Changed));
         Assert.Equal(FlowFoldEntry.Intended, file.Of(other)!.State);
-        Assert.Empty(await ledger.SettleInterruptedAsync(layout, temp.Path, "fold"));
+        Assert.Empty(await ledger.SettleInterruptedAsync(layout, temp.Path, "fold", Token));
+    }
+
+    /// <summary>
+    /// A settle records what the verb reports it left - read under the main tree's lock its write was made under - never
+    /// what the tree holds by the time the settle comes, which a side-task's write that waited on that lock may have
+    /// changed since; where it reports nothing, it never reached its write - a stop while it waited - and each path stands
+    /// as it found it, owed by no commit, whatever a side-task wrote there meanwhile. A refusal's code over what it reports
+    /// it wrote is failed, never refused, which would hide it; a verb that went through and reports nothing, or leaves out a
+    /// path its intent names, is the engine's fault, its intent left for the next attempt to settle.
+    /// </summary>
+    [Fact]
+    public async Task ASettle_RecordsWhatTheVerbReadItLeft_NeverWhatTheTreeHoldsAfter()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "before\n");
+        var planned = new AgentPlanned([], [], [], [], null) { Written = ["a.txt", "new.txt"] };
+
+        var applied = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "the fold's\n");
+        File.WriteAllText(Path.Combine(temp.Path, "new.txt"), "made\n");
+        var reported = OrchestrationKit.Left(temp.Path, planned);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "a side-task's, once the fold let go\n");
+        ledger.Settle(layout, applied, HarnessExit.Success, reported);
+
+        var stopped = await ledger.IntendAsync(layout, temp.Path, "fold", 2, "fold", "a1", planned, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "a side-task's, while the fold waited\n");
+        ledger.Settle(layout, stopped, HarnessExit.Incomplete, left: null);
+
+        var refusedAfterWriting = await ledger.IntendAsync(layout, temp.Path, "fold", 3, "fold", "a1", planned, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "written, then refused\n");
+        ledger.Settle(layout, refusedAfterWriting, HarnessExit.Refused, OrchestrationKit.Left(temp.Path, planned));
+
+        var file = harness.OrchestrationStore.ReadFolds(layout)!;
+
+        Assert.Equal(
+            [(FileContentHash.Of("the fold's\n"u8), (bool?)true), (FileContentHash.Of("made\n"u8), true)],
+            file.Of(applied)!.Paths.Select(path => (path.Left, path.Changed)));
+        Assert.Equal("stopped", file.Of(stopped)!.State);
+        Assert.All(file.Of(stopped)!.Paths, path => Assert.Equal((path.Before, (bool?)false), (path.Left, path.Changed)));
+        Assert.Equal(FileContentHash.Of("a side-task's, once the fold let go\n"u8), file.Of(stopped)!.Paths[0].Before);
+        Assert.Equal(FlowFoldEntry.Failed, file.Of(refusedAfterWriting)!.State);
+        Assert.Equal((FileContentHash.Of("written, then refused\n"u8), (bool?)true), (file.Of(refusedAfterWriting)!.Paths[0].Left, file.Of(refusedAfterWriting)!.Paths[0].Changed));
+        Assert.Equal([applied, refusedAfterWriting], FoldLedger.Uncommitted(file, differing: null).Select(entry => entry.Id));
+        Assert.Null(file.Problem());
+
+        var unreported = await ledger.IntendAsync(layout, temp.Path, "fold", 4, "fold", "a1", planned, Token);
+
+        Assert.Equal(HarnessExit.InternalError, Assert.Throws<HarnessException>(() => ledger.Settle(layout, unreported, HarnessExit.Success, left: null)).ExitCode);
+        Assert.Equal(
+            HarnessExit.InternalError,
+            Assert.Throws<HarnessException>(() => ledger.Settle(layout, unreported, HarnessExit.Incomplete, new Dictionary<string, string?>(StringComparer.Ordinal) { ["a.txt"] = null })).ExitCode);
+        Assert.Equal(FlowFoldEntry.Intended, harness.OrchestrationStore.ReadFolds(layout)!.Of(unreported)!.State);
+    }
+
+    /// <summary>
+    /// An intent a crash left is settled from the tree under the main tree's lock: where a side-task holds it, the settle
+    /// waits it out and reads the path as the side-task left it whole, never part way through its write; a stop while it
+    /// waits leaves the intent for the next attempt; and an instance with no intent takes no lock at all.
+    /// </summary>
+    [Fact]
+    public async Task AnIntentACrashLeft_IsSettledUnderTheTreesLock_NeverPartWayThroughASideTasksWrite()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        var planned = new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] };
+        var crashed = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
+        var waiting = await ledger.IntendAsync(layout, temp.Path, "items[1].fold", 1, "fold", "a2", planned, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "written before the crash\n");
+        var tree = MainTreeWriteLock.NameFor(temp.Path);
+        Task<IReadOnlyList<FlowFoldEntry>> settling;
+
+        using (var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task"))
+        {
+            Assert.NotNull(sideTask);
+            File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "part of a side-task's\n");
+
+            // Bounded, so a settle that waits where it must not fails here rather than holding the suite.
+            Assert.Empty(await ledger.SettleInterruptedAsync(layout, temp.Path, "none", Token).WaitAsync(TimeSpan.FromMinutes(2), Token));
+
+            var waits = MachineWideHold.WaitBegins(tree);
+            settling = Task.Run(() => ledger.SettleInterruptedAsync(layout, temp.Path, "fold", Token));
+
+            Assert.Same(waits, await Task.WhenAny(waits, settling).WaitAsync(TimeSpan.FromMinutes(2), Token));
+
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+            var stopsWaiting = MachineWideHold.WaitBegins(tree);
+            var stopped = Task.Run(() => ledger.SettleInterruptedAsync(layout, temp.Path, "items[1].fold", stop.Token));
+
+            await stopsWaiting.WaitAsync(TimeSpan.FromMinutes(2), Token);
+            await stop.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stopped.WaitAsync(TimeSpan.FromMinutes(2), Token));
+
+            File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "a side-task's, whole\n");
+        }
+
+        var settled = Assert.Single(await settling.WaitAsync(TimeSpan.FromMinutes(2), Token));
+        var file = harness.OrchestrationStore.ReadFolds(layout)!;
+
+        Assert.Equal((crashed, FlowFoldEntry.Interrupted), (settled.Id, file.Of(crashed)!.State));
+        Assert.Equal(FileContentHash.Of("a side-task's, whole\n"u8), file.Of(crashed)!.Paths[0].Left);
+        Assert.Equal(FlowFoldEntry.Intended, file.Of(waiting)!.State);
     }
 
     /// <summary>
@@ -622,7 +725,7 @@ public sealed class FoldLedgerTests
         var ledger = new FoldLedger(harness.OrchestrationStore, harness.FileSystem, TimeProvider.System);
         var id = await ledger.IntendAsync(other, temp.Path, "one", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }, Token);
         File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "folded\n");
-        await ledger.SettleAsync(other, temp.Path, id, HarnessExit.Success);
+        ledger.Settle(other, id, HarnessExit.Success, OrchestrationKit.Left(temp.Path, new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }));
 
         var held = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, wantedName: "second", cancellationToken: Token));
 
@@ -670,7 +773,7 @@ public sealed class FoldLedgerTests
         var ledger = new FoldLedger(harness.OrchestrationStore, harness.FileSystem, TimeProvider.System);
         var id = await ledger.IntendAsync(other, temp.Path, "one", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["run.log"] }, Token);
         File.WriteAllText(Path.Combine(temp.Path, "run.log"), "evidence\n");
-        await ledger.SettleAsync(other, temp.Path, id, HarnessExit.Success);
+        ledger.Settle(other, id, HarnessExit.Success, OrchestrationKit.Left(temp.Path, new AgentPlanned([], [], [], [], null) { Written = ["run.log"] }));
 
         Assert.Equal("second", (await sessions.CreateAsync(layout, definition, wantedName: "second", cancellationToken: Token)).Run.Name);
 
@@ -678,7 +781,7 @@ public sealed class FoldLedgerTests
         Directory.Delete(OrchestratorLayout.Of(layout, "second").Directory, recursive: true);
         id = await ledger.IntendAsync(other, temp.Path, "one", 2, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }, Token);
         File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "folded\n");
-        await ledger.SettleAsync(other, temp.Path, id, HarnessExit.Success);
+        ledger.Settle(other, id, HarnessExit.Success, OrchestrationKit.Left(temp.Path, new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }));
         _ = await harness.RunGitAsync(temp.Path, ["update-index", "--assume-unchanged", "--", "a.txt"], Token);
 
         var held = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, wantedName: "third", cancellationToken: Token));
@@ -740,7 +843,7 @@ public sealed class FoldLedgerTests
         var ledger = new FoldLedger(harness.OrchestrationStore, harness.FileSystem, TimeProvider.System);
         var id = await ledger.IntendAsync(other, temp.Path, "one", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }, Token);
         File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "folded\r\n");
-        await ledger.SettleAsync(other, temp.Path, id, HarnessExit.Success);
+        ledger.Settle(other, id, HarnessExit.Success, OrchestrationKit.Left(temp.Path, new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }));
         _ = await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "the fold, by hand", "--", "a.txt"], Token);
 
         Assert.Equal("folded\r\n", (await harness.RunGitAsync(temp.Path, ["show", "HEAD:a.txt"], Token)).StandardOutput);
@@ -756,14 +859,15 @@ public sealed class FoldLedgerTests
     /// <summary>A fold of <paramref name="instance"/> that wrote each of <paramref name="writes"/> into the tree at <paramref name="main"/>, settled applied.</summary>
     private static async Task<string> FoldedAsync(FoldLedger ledger, OrchestratorLayout layout, string main, string instance, params (string Path, string Text)[] writes)
     {
-        var id = await ledger.IntendAsync(layout, main, instance, 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = [.. writes.Select(write => write.Path)] }, Token);
+        var planned = new AgentPlanned([], [], [], [], null) { Written = [.. writes.Select(write => write.Path)] };
+        var id = await ledger.IntendAsync(layout, main, instance, 1, "fold", "a1", planned, Token);
 
         foreach (var (path, text) in writes)
         {
             File.WriteAllText(Path.Combine(main, path), text);
         }
 
-        await ledger.SettleAsync(layout, main, id, HarnessExit.Success);
+        ledger.Settle(layout, id, HarnessExit.Success, OrchestrationKit.Left(main, planned));
         return id;
     }
 

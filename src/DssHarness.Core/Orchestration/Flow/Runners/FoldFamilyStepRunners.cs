@@ -223,11 +223,12 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
         if (ledger is not null)
         {
-            // An intent a crash left - the verb called, nothing recorded after - is settled from what the tree holds,
-            // before this attempt does anything: a deletion whose crash came after its closing folds nothing now, and
-            // what its fold wrote is the ledger's all the same - and the graph's base is synced by every path the
-            // ledger's folds changed that it has not taken yet.
-            _ = await ledger.SettleInterruptedAsync(layout, place.Repository, run.Instance).ConfigureAwait(false);
+            // An intent a crash left - the verb called, nothing recorded after - is settled from what the tree holds, read
+            // under the tree's lock, before this attempt does anything: a deletion whose crash came after its closing
+            // folds nothing now, and what its fold wrote is the ledger's all the same - and the graph's base is synced by
+            // every path the ledger's folds changed that it has not taken yet. A stop while it waits for the lock leaves
+            // the intent for the attempt after.
+            _ = await ledger.SettleInterruptedAsync(layout, place.Repository, run.Instance, cancellationToken).ConfigureAwait(false);
             await graph.AfterFoldAsync(run, place, context, cancellationToken).ConfigureAwait(false);
         }
 
@@ -335,14 +336,32 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
             {
                 applied = await CallAsync(applying, cancellationToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (intent is not null)
+            {
+                // A stop wrote nothing of the main tree: all an apply writes after its measure is written uncancelled, so
+                // a stop that ends it came before its write - while it waited for the tree's lock, a side-task perhaps
+                // writing what it plans. The intent is settled as it found each path, the tree unread; where even that
+                // cannot be written, it stays for the next attempt to settle, and what goes on is the stop.
+                try
+                {
+                    _ = ledger!.Settle(layout, intent, HarnessExit.Incomplete, left: null);
+                }
+                catch (Exception)
+                {
+                    // Left intended: the next attempt settles it before it does anything.
+                }
+
+                throw;
+            }
             catch when (intent is not null)
             {
-                // What it wrote before it stopped is read from the tree: nothing reaches the main tree unrecorded. Where
-                // that read fails as well, the intent stays for the next attempt to settle, and what goes on is the
+                // Anything else may have come after its write: what it wrote is read from the tree under the tree's lock,
+                // as a crash's is, so nothing reaches the main tree unrecorded. Where that read fails as well, or a stop
+                // ends its wait for the lock, the intent stays for the next attempt to settle, and what goes on is the
                 // apply's own exception, which says what happened, never the read's.
                 try
                 {
-                    _ = await ledger!.SettleInterruptedAsync(layout, place.Repository, run.Instance).ConfigureAwait(false);
+                    _ = await ledger!.SettleInterruptedAsync(layout, place.Repository, run.Instance, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception)
                 {
@@ -354,13 +373,15 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
             // The step's record first: what the apply answered is kept whatever the ledger's settle meets after - an
             // intent it cannot settle stays for the next attempt to settle - and a stop while the graph is synced leaves
-            // the apply recorded, and what the graph was not given stays owed in the ledger.
+            // the apply recorded, and what the graph was not given stays owed in the ledger. The settle is by what the
+            // apply read it left under its own hold of the tree, never by the tree now, which a side-task that waited
+            // on that hold may have written since.
             record = record with { Applied = AppliedOf(applied, intent) };
             store.WriteFoldRecord(directory, record);
 
             if (intent is not null)
             {
-                _ = await ledger!.SettleAsync(layout, place.Repository, intent, applied.Outcome.ExitCode).ConfigureAwait(false);
+                _ = ledger!.Settle(layout, intent, applied.Outcome.ExitCode, applied.Facts?.Left);
             }
 
             if (ledger is not null)

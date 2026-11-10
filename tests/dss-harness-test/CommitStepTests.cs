@@ -240,7 +240,7 @@ public sealed class CommitStepTests
         var ledger = Ledger(kit);
         var id = await ledger.IntendAsync(kit.Layout, kit.Main, "fold", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }, Token);
         File.Delete(Path.Combine(kit.Main, "b.txt"));
-        await ledger.SettleAsync(kit.Layout, kit.Main, id, HarnessExit.Success);
+        ledger.Settle(kit.Layout, id, HarnessExit.Success, OrchestrationKit.Left(kit.Main, new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }));
 
         var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
 
@@ -261,7 +261,7 @@ public sealed class CommitStepTests
         var ledger = Ledger(kit);
         var id = await ledger.IntendAsync(kit.Layout, kit.Main, "fold", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }, Token);
         File.Delete(Path.Combine(kit.Main, "b.txt"));
-        await ledger.SettleAsync(kit.Layout, kit.Main, id, HarnessExit.Success);
+        ledger.Settle(kit.Layout, id, HarnessExit.Success, OrchestrationKit.Left(kit.Main, new AgentPlanned([], [], [], [], null) { Deleted = ["b.txt"] }));
         Directory.CreateDirectory(Path.Combine(kit.Main, "b.txt"));
         File.WriteAllText(Path.Combine(kit.Main, "b.txt", "inside.txt"), "made since\n");
 
@@ -1204,14 +1204,15 @@ public sealed class CommitStepTests
     private static async Task<string> FoldedAsync(OrchestrationKit kit, string instance, params (string Path, string Text)[] writes)
     {
         var ledger = Ledger(kit);
-        var id = await ledger.IntendAsync(kit.Layout, kit.Main, instance, 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = [.. writes.Select(write => write.Path)] }, Token);
+        var planned = new AgentPlanned([], [], [], [], null) { Written = [.. writes.Select(write => write.Path)] };
+        var id = await ledger.IntendAsync(kit.Layout, kit.Main, instance, 1, "fold", "a1", planned, Token);
 
         foreach (var (path, text) in writes)
         {
             OrchestrationKit.Write(kit.Main, path, text);
         }
 
-        await ledger.SettleAsync(kit.Layout, kit.Main, id, HarnessExit.Success);
+        ledger.Settle(kit.Layout, id, HarnessExit.Success, OrchestrationKit.Left(kit.Main, planned));
         return id;
     }
 

@@ -1738,8 +1738,10 @@ public sealed class AgentService(
             var written = await WriteAsync(context, layout, record, path, seed!, measured, tree).ConfigureAwait(false);
 
             // What the fold wrote rides the answer as its facts, whatever form the answer is asked in - as far as it went,
-            // where it stopped part way, since that much is in the main tree now.
+            // where it stopped part way, since that much is in the main tree now - and what it left at each path, read
+            // while the hold it wrote under is held.
             met.Folded = FoldedOf(written, context);
+            met.Left = await FoldLeftAsync(context.Layout.MainCheckoutRoot, met.Planned!, tree).ConfigureAwait(false);
 
             return written.Failure ?? CommandOutcome.Ok(
                 $"folded {Lower(Agent(record))}: wrote {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
@@ -2064,8 +2066,10 @@ public sealed class AgentService(
                 var written = await WriteAsync(context, layout, record, path, seed!, fold, tree!).ConfigureAwait(false);
 
                 // The work the delete folded back rides the answer as its facts, whatever form the answer is asked in - as
-                // far as it went, where it stopped part way, since that much is in the main tree now.
+                // far as it went, where it stopped part way, since that much is in the main tree now - and what it left at
+                // each path, read while the hold it wrote under is held: the hold is let go before the worktree is removed.
                 met.Folded = FoldedOf(written, context);
+                met.Left = await FoldLeftAsync(context.Layout.MainCheckoutRoot, met.Planned!, tree!).ConfigureAwait(false);
 
                 if (written.Failure is { } failure)
                 {
@@ -3697,7 +3701,8 @@ public sealed class AgentService(
             had?.Refusals ?? Reasons(standing, met.Reasons),
             met.Folded ?? had?.Folded,
             had?.Planned ?? met.Planned,
-            met.Waited);
+            met.Waited,
+            met.Left ?? had?.Left);
 
         return json && answered.Data.Count == 0
             ? OrchestrationReports.Document(answered, facts)
@@ -3736,6 +3741,31 @@ public sealed class AgentService(
 
         met.Waited = tree.Waited;
         return tree;
+    }
+
+    /// <summary>
+    /// What the main tree holds at each path <paramref name="planned"/> changes there (<see cref="AgentPlanned.InMainTree"/>),
+    /// once a fold's write was made: read under <paramref name="tree"/>, the hold it was made under, before it is let go -
+    /// a side-task's write that waited on it comes after, and is never read as the fold's. What the fold's facts carry
+    /// (<see cref="AgentVerbFacts.Left"/>), which the run's ledger of its folds settles it by. Never cancelled: the write is
+    /// in.
+    /// </summary>
+    /// <exception cref="InvalidOperationException"><paramref name="tree"/> was let go: what is read outside the lock is not the fold's.</exception>
+    private async Task<IReadOnlyDictionary<string, string?>> FoldLeftAsync(string main, AgentPlanned planned, MachineWideHold tree)
+    {
+        if (tree.Released)
+        {
+            throw new InvalidOperationException("what a fold left is read under the tree's lock its write was made under, and the hold it was given was let go");
+        }
+
+        var left = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        foreach (var (changed, _) in planned.InMainTree)
+        {
+            left[changed] = await FileContentHash.OfFileAsync(_fileSystem, Path.Combine(main, changed), CancellationToken.None).ConfigureAwait(false);
+        }
+
+        return left;
     }
 
     /// <summary>
@@ -4108,6 +4138,9 @@ public sealed class AgentService(
 
         /// <summary>How long the apply waited for the main tree's lock, which a side-task held; zero where it did not wait.</summary>
         public TimeSpan Waited { get; set; }
+
+        /// <summary>What a fold left at each path it changes in the main tree, read under its hold; <see langword="null"/> where it wrote nothing.</summary>
+        public IReadOnlyDictionary<string, string?>? Left { get; set; }
 
         /// <summary>The reasons the --apply's own measure was refused for, by kind, where it typed any; empty otherwise.</summary>
         public IReadOnlyList<RefusalKind> Reasons { get; set; } = [];

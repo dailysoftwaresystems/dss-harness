@@ -23,13 +23,15 @@ public sealed record FoldOwedPath(string Path, string? Digest, string? Before, s
 /// <summary>
 /// The one writer of the run's ledger of its folds (<see cref="FlowFoldLedgerFile"/>): a fold's intent - every path it
 /// means to write with what the main tree holds there - appended before the verb is called, and what it left there
-/// recorded after, so nothing reaches the main tree unrecorded, and a crash between the two leaves an intent the next
-/// attempt of the step settles from what the tree holds; and a commit's staged set, written before its first
-/// <c>git add</c> and marked committed - with each fold path it took - or unstaged after, or left staged with the commit
-/// made of it where that commit was not the set's alone.
+/// recorded after, as the verb read it under the main tree's lock its write was made under, never read again from a tree
+/// a side-task may have written since, so nothing reaches the main tree unrecorded and nothing else is recorded as the
+/// fold's; a crash between the two leaves an intent the next attempt of the step settles from what the tree holds, read
+/// under that lock; and a commit's staged set, written before its first <c>git add</c> and marked committed - with each
+/// fold path it took - or unstaged after, or left staged with the commit made of it where that commit was not the set's
+/// alone.
 /// </summary>
 /// <param name="store">Reads and writes the ledger, inside the run's own section.</param>
-/// <param name="fileSystem">Reads what the main tree holds at each path.</param>
+/// <param name="fileSystem">Reads what the main tree holds at each path before a fold, and after a crash.</param>
 /// <param name="clock">Says when each entry was written.</param>
 public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem, TimeProvider clock)
 {
@@ -60,14 +62,10 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
         ArgumentNullException.ThrowIfNull(planned);
 
         var paths = new List<FlowFoldPath>();
-        var named = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var (path, what) in PathsOf(planned))
+        foreach (var (path, what) in planned.InMainTree)
         {
-            if (named.Add(path))
-            {
-                paths.Add(new FlowFoldPath(path, what, await FileContentHash.OfFileAsync(fileSystem, Path.Combine(main, path), cancellationToken).ConfigureAwait(false)));
-            }
+            paths.Add(new FlowFoldPath(path, what, await FileContentHash.OfFileAsync(fileSystem, Path.Combine(main, path), cancellationToken).ConfigureAwait(false)));
         }
 
         var written = store.UpdateFolds(layout, ledger => ledger with
@@ -83,31 +81,45 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
     }
 
     /// <summary>
-    /// Records what became of the fold <paramref name="id"/> once its verb answered <paramref name="exitCode"/>: applied
-    /// (0), stopped part way (21), or failed otherwise - after it may have written part of it - each with what the main
-    /// tree holds at each path now; refused, having written nothing, only for a refusal's code
-    /// (<see cref="HarnessExit.RefusesTheRun"/>), which no verb answers after writing. Never cancelled: what was written is
-    /// recorded whatever stops the step.
+    /// Records what became of the fold <paramref name="id"/> once its verb answered <paramref name="exitCode"/> - or was
+    /// stopped before its write, which a stop's 21 says - from what the verb reports it left at each path
+    /// (<see cref="AgentVerbFacts.Left"/>), read under the main tree's lock its write was made under: never from the tree
+    /// now, where a side-task's write that waited on that lock may stand. Applied (0), stopped (21) or failed otherwise,
+    /// each with what it left; where it reports nothing, it never reached its write, and each path stands as it held
+    /// before; refused, settling nothing, for a refusal's code (<see cref="HarnessExit.RefusesTheRun"/>) where it reports
+    /// nothing, and failed where it reports what it wrote. Reads nothing of the tree, so nothing stops it: what was
+    /// written is recorded whatever stops the step.
     /// </summary>
     /// <param name="layout">The run's orchestrator.</param>
-    /// <param name="main">The main tree's root.</param>
     /// <param name="id">The entry's id, as <see cref="IntendAsync"/> gave it.</param>
-    /// <param name="exitCode">The code the verb answered with.</param>
+    /// <param name="exitCode">The code the verb answered with; 21 for a verb stopped before its write.</param>
+    /// <param name="left">What the verb reports it left, by path; null where it never reached its write.</param>
     /// <returns>The entry as it was settled.</returns>
-    public async Task<FlowFoldEntry> SettleAsync(OrchestratorLayout layout, string main, string id, int exitCode)
+    /// <exception cref="HarnessException">
+    /// The ledger holds no such fold, the verb went through and reports nothing of what it left, or its report leaves out
+    /// a path its intent names: a write held to its dry run changes exactly what that named, so each is the engine's fault
+    /// (<see cref="HarnessExit.InternalError"/>), and the intent is left for the step's next attempt to settle from the
+    /// tree.
+    /// </exception>
+    public FlowFoldEntry Settle(OrchestratorLayout layout, string id, int exitCode, IReadOnlyDictionary<string, string?>? left)
     {
         ArgumentNullException.ThrowIfNull(layout);
+
+        if (exitCode == HarnessExit.Success && left is null)
+        {
+            throw new HarnessException(HarnessExit.InternalError, $"fold '{id}' went through and reports nothing of what it left: what it wrote cannot be told, and the step's next attempt settles it from the tree");
+        }
 
         var state = exitCode switch
         {
             HarnessExit.Success => "applied",
             HarnessExit.Incomplete => "stopped",
-            _ when HarnessExit.RefusesTheRun(exitCode) => FlowFoldEntry.Refused,
+            _ when left is null && HarnessExit.RefusesTheRun(exitCode) => FlowFoldEntry.Refused,
             _ => FlowFoldEntry.Failed,
         };
 
         var entry = store.ReadFolds(layout)?.Of(id) ?? throw new HarnessException(HarnessExit.InternalError, $"the run's ledger of its folds holds no fold '{id}' to settle");
-        var paths = state == FlowFoldEntry.Refused ? entry.Paths : await LeftAsync(main, entry.Paths).ConfigureAwait(false);
+        var paths = state == FlowFoldEntry.Refused ? entry.Paths : Leaving(entry, left);
         var settled = entry with { State = state, SettledAt = clock.GetUtcNow(), Paths = paths };
 
         Replace(layout, settled);
@@ -116,14 +128,18 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
 
     /// <summary>
     /// Settles every intent of <paramref name="instance"/> a crash left - its verb called and nothing recorded after - as
-    /// interrupted, with what the main tree holds at each path now: what the step's next attempt reads before it folds
-    /// anything again.
+    /// interrupted, with what the main tree holds at each path now, read under the main tree's lock - so never a file a
+    /// side-task's write or command is part way through - which it takes only where it has an intent to settle: what the
+    /// step's next attempt reads before it folds anything again. Its callers hold no lock of the tree, and nothing it
+    /// calls takes one.
     /// </summary>
     /// <param name="layout">The run's orchestrator.</param>
     /// <param name="main">The main tree's root.</param>
     /// <param name="instance">The step instance.</param>
+    /// <param name="cancellationToken">Ends the wait for the lock, each intent left as it was.</param>
     /// <returns>Each intent it settled, as it was settled.</returns>
-    public async Task<IReadOnlyList<FlowFoldEntry>> SettleInterruptedAsync(OrchestratorLayout layout, string main, string instance)
+    /// <exception cref="OperationCanceledException">The wait for the tree's lock was ended: nothing was settled.</exception>
+    public async Task<IReadOnlyList<FlowFoldEntry>> SettleInterruptedAsync(OrchestratorLayout layout, string main, string instance, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
@@ -132,9 +148,17 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
             .ToList();
         var settled = new List<FlowFoldEntry>();
 
+        if (left.Count == 0)
+        {
+            return settled;
+        }
+
+        using var tree = await MainTreeWriteLock.HoldAsync(main, cancellationToken).ConfigureAwait(false)
+            ?? throw new OperationCanceledException(cancellationToken);
+
         foreach (var entry in left)
         {
-            settled.Add(entry with { State = FlowFoldEntry.Interrupted, SettledAt = clock.GetUtcNow(), Paths = await LeftAsync(main, entry.Paths).ConfigureAwait(false) });
+            settled.Add(entry with { State = FlowFoldEntry.Interrupted, SettledAt = clock.GetUtcNow(), Paths = await HeldAsync(main, entry.Paths).ConfigureAwait(false) });
             Replace(layout, settled[^1]);
         }
 
@@ -454,28 +478,33 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
     }
 
     /// <summary>
-    /// Every path a fold's plan writes in the main tree, with what it does to each: written, merged - the arm registry
-    /// among them - removed, and each registry file its rows change.
+    /// Each path of <paramref name="entry"/> with what its verb reports it left there - each as it held before where the
+    /// verb never reached its write - and whether that is not what it held before.
     /// </summary>
-    private static IEnumerable<(string Path, string What)> PathsOf(AgentPlanned planned)
-        => planned.Written.Select(path => (path, "written"))
-            .Concat(planned.Merged.Concat(planned.ArmRegistry is { } arms ? [arms] : []).Select(path => (path, "merged")))
-            .Concat(planned.Deleted.Select(path => (path, "deleted")))
-            .Concat(planned.Registries.Select(path => (path, "registry")));
+    /// <exception cref="HarnessException">The report leaves out a path the intent names.</exception>
+    private static IReadOnlyList<FlowFoldPath> Leaving(FlowFoldEntry entry, IReadOnlyDictionary<string, string?>? left)
+        => [.. entry.Paths.Select(path => Left(path, left is null ? path.Before
+            : left.TryGetValue(path.Path, out var digest) ? digest
+            : throw new HarnessException(
+                HarnessExit.InternalError,
+                $"fold '{entry.Id}' of '{entry.Instance}' reports nothing of '{path.Path}', which its intent names: what it left cannot be told, and the step's next attempt settles it from the tree")))];
 
-    /// <summary>Each of <paramref name="paths"/> with what the main tree holds there now, and whether that is not what it held before.</summary>
-    private async Task<IReadOnlyList<FlowFoldPath>> LeftAsync(string main, IReadOnlyList<FlowFoldPath> paths)
+    /// <summary>Each of <paramref name="paths"/> with what the main tree holds there now - read by its caller under the tree's lock - and whether that is not what it held before.</summary>
+    private async Task<IReadOnlyList<FlowFoldPath>> HeldAsync(string main, IReadOnlyList<FlowFoldPath> paths)
     {
-        var left = new List<FlowFoldPath>();
+        var held = new List<FlowFoldPath>();
 
         foreach (var path in paths)
         {
-            var digest = await FileContentHash.OfFileAsync(fileSystem, Path.Combine(main, path.Path), CancellationToken.None).ConfigureAwait(false);
-            left.Add(path with { Left = digest, Changed = !string.Equals(digest, path.Before, StringComparison.Ordinal) });
+            held.Add(Left(path, await FileContentHash.OfFileAsync(fileSystem, Path.Combine(main, path.Path), CancellationToken.None).ConfigureAwait(false)));
         }
 
-        return left;
+        return held;
     }
+
+    /// <summary><paramref name="path"/> settled as holding <paramref name="digest"/>, and whether that is not what it held before.</summary>
+    private static FlowFoldPath Left(FlowFoldPath path, string? digest)
+        => path with { Left = digest, Changed = !string.Equals(digest, path.Before, StringComparison.Ordinal) };
 
     /// <summary>Writes <paramref name="entry"/> over the one of its id, inside the run's own section.</summary>
     private void Replace(OrchestratorLayout layout, FlowFoldEntry entry)

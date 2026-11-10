@@ -1798,7 +1798,8 @@ none appeared, some are still running, or one ended neither green nor red; and t
 `refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
 consent, a path outside a fold's `within`, conflicting merges - with what it is about, a fold and a deletion applying
 only what it named, write each path a fold means to write to the run's ledger of its folds (`folds.json`) before the
-verb and what it left after, and, of `others`, work on each other open agent of the run in turn; and `commit`, which
+verb and what it left after - read under the main tree's lock the fold wrote under, so a side-task's write made once it
+let go is never taken for the fold's - and, of `others`, work on each other open agent of the run in turn; and `commit`, which
 commits the folds upstream of it and no other work - each path they changed that no commit of the run took, held to what
 its fold left there (a path edited or restored since, a path the index marks assume-unchanged or skip-worktree, the
 main checkout off the branch the run started on, or a fold upstream whose intent nobody settled, fails it, and nothing

@@ -154,6 +154,17 @@ internal sealed class OrchestrationKit
 
     public static string Read(string root, string relative) => File.ReadAllText(Path.Combine(root, relative));
 
+    /// <summary>
+    /// What a fold's apply reports it left at each path <paramref name="planned"/> changes in <paramref name="tree"/>, as
+    /// the verb reads it under its hold (<see cref="AgentVerbFacts.Left"/>): what the tree holds there now, none where it
+    /// holds no file.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string?> Left(string tree, AgentPlanned planned)
+        => planned.InMainTree.ToDictionary(
+            change => change.Path,
+            change => File.Exists(Path.Combine(tree, change.Path)) ? DssHarness.Core.FileSystem.FileContentHash.Of(File.ReadAllBytes(Path.Combine(tree, change.Path))) : (string?)null,
+            StringComparer.Ordinal);
+
     /// <summary>Files a row for <paramref name="agent"/>, one file for each cell given.</summary>
     public void FileRow(string agent, string id, IReadOnlyDictionary<string, string> cells)
         => WriteRow(Layout.RowsDirectory(agent), id, [.. cells.Select(cell => (cell.Key, cell.Value))]);

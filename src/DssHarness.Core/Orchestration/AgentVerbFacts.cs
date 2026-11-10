@@ -122,6 +122,20 @@ public sealed record AgentPlanned(
     public IReadOnlyList<string> WouldWrite
         => [.. Written.Concat(Deleted).Concat(Merged).Concat(ArmRegistry is { } arms ? [arms] : []).Concat(Mergeable).Distinct(StringComparer.Ordinal)];
 
+    /// <summary>
+    /// Every path a fold changes in the main tree, each once, with what it does to it as the run's ledger of its folds
+    /// names it: <c>written</c>, <c>merged</c> - the arm registry among them - <c>deleted</c>, and <c>registry</c> for each
+    /// registry file its rows change, in that order, a path named twice taking the first. What the ledger's intent holds a
+    /// fold to, and what its <c>--apply</c> reports it left at each (<see cref="AgentVerbFacts.Left"/>).
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<(string Path, string What)> InMainTree
+        => [.. Written.Select(path => (path, "written"))
+            .Concat(Merged.Concat(ArmRegistry is { } arms ? [arms] : []).Select(path => (path, "merged")))
+            .Concat(Deleted.Select(path => (path, "deleted")))
+            .Concat(Registries.Select(path => (path, "registry")))
+            .DistinctBy(change => change.path, StringComparer.Ordinal)];
+
     /// <summary>What a consent of <paramref name="kind"/> it lacks is about: the rows, the cells or the paths it names.</summary>
     /// <param name="kind">The consent.</param>
     public IReadOnlyList<string> Named(ConsentKind kind) => kind switch
@@ -170,8 +184,9 @@ public sealed record AgentPlanned(
 /// <summary>
 /// What one answer of fold-agent, delete-agent, refresh-agent or rebase-agent knows beyond its lines: the document the
 /// verbs answer with under <c>--json</c> is this record serialised, member by member
-/// (<see cref="OrchestrationReports.Document(Results.CommandOutcome, AgentVerbFacts)"/>), and a step of an orchestrator
-/// run will read it typed - one thing, so the two cannot drift. An answer stopped before anything was weighed - its
+/// (<see cref="OrchestrationReports.Document(Results.CommandOutcome, AgentVerbFacts)"/>), but for what only a step of an
+/// orchestrator run reads - <see cref="Waited"/> and <see cref="Left"/> - and the step reads it typed: one thing, so the
+/// two cannot drift. An answer stopped before anything was weighed - its
 /// arguments a usage error, its agent not found - answers with the stopped form of the document
 /// (<see cref="OrchestrationReports.Stopped"/>), which says what its facts say: nothing applied, no standing, nobody
 /// asked, no lines, nothing needed and no reason typed.
@@ -208,6 +223,13 @@ public sealed record AgentPlanned(
 /// How long the apply waited for the main tree's lock before it wrote, held by a side-task's write or command; zero where
 /// it did not wait, and for every dry run, which writes nothing.
 /// </param>
+/// <param name="Left">
+/// What the main tree held at each path the fold changes there (<see cref="AgentPlanned.InMainTree"/>) once its write was
+/// made - fold-agent's <c>--apply</c>, and delete-agent's that folds - by path: the file's SHA-256, null where none is
+/// there. Read under the main tree's lock the write was made under, before it was let go, so a side-task's write that
+/// waited on it is never taken for the fold's: what the run's ledger of its folds settles the fold by. Null where the
+/// apply never reached its write - a dry run, a refusal, anything that stopped it before - and for every other verb.
+/// </param>
 public sealed record AgentVerbFacts(
     int ExitCode,
     string Summary,
@@ -219,4 +241,5 @@ public sealed record AgentVerbFacts(
     IReadOnlyList<RefusalKind> Refusals,
     AgentFolded? Folded = null,
     AgentPlanned? Planned = null,
-    TimeSpan Waited = default);
+    TimeSpan Waited = default,
+    IReadOnlyDictionary<string, string?>? Left = null);

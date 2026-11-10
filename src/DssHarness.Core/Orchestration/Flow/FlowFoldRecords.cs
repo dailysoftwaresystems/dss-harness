@@ -149,10 +149,12 @@ public sealed record FlowCommitPath(string Path, [property: JsonIgnore(Condition
 /// <param name="Agent">The agent whose work it folds.</param>
 /// <param name="State">
 /// What became of it: <c>intended</c> (written before the verb is called, and nothing after yet), <c>applied</c> (the verb
-/// went through), <c>stopped</c> (it wrote part of it and stopped, 21), <c>refused</c> (it refused, writing nothing: its
-/// trees moved, or a holder stood in the way), <c>failed</c> (it failed otherwise, after it may have written part of it)
-/// or <c>interrupted</c> (a crash cut it off after its intent, and the next attempt read what it left). Each but an intent
-/// and a refusal says what the main tree held at each path once it was settled.
+/// went through), <c>stopped</c> (it stopped, 21: part way, or - a stop of the step - before it wrote anything),
+/// <c>refused</c> (it refused, writing nothing: its trees moved, or a holder stood in the way), <c>failed</c> (it failed
+/// otherwise, after it may have written part of it) or <c>interrupted</c> (a crash, or a throw out of the verb, cut it off
+/// after its intent, and what it left was read from the tree under the tree's lock). Each but an intent and a refusal says
+/// what the main tree held at each path once it was settled - as the verb read it under the hold it wrote under, where it
+/// answered; as it held before, where it wrote nothing.
 /// </param>
 /// <param name="IntendedAt">When its intent was written.</param>
 /// <param name="Paths">Every path it meant to write in the main tree, the registry files its rows change among them, in order.</param>
@@ -178,10 +180,10 @@ public sealed record FlowFoldEntry(
     /// <summary>The state an entry is written in before its verb is called.</summary>
     public const string Intended = "intended";
 
-    /// <summary>The state of an entry whose verb wrote nothing.</summary>
+    /// <summary>The state of an entry whose verb refused, writing nothing.</summary>
     public const string Refused = "refused";
 
-    /// <summary>The state of an entry whose intent a crash left, settled by the next attempt.</summary>
+    /// <summary>The state of an entry whose intent a crash or a throw out of its verb left, settled from the tree under the tree's lock.</summary>
     public const string Interrupted = "interrupted";
 
     /// <summary>The state of an entry whose verb failed otherwise than by a refusal, after it may have written part of it.</summary>
@@ -229,8 +231,12 @@ public sealed record FlowFoldEntry(
 /// <param name="Path">The path, relative to the tree and spelt with forward slashes.</param>
 /// <param name="What">What the fold does to it: <c>written</c>, <c>deleted</c>, <c>merged</c>, or <c>registry</c> for a registry file its rows change.</param>
 /// <param name="Before">The SHA-256 the main tree held there when the intent was written; null where it held no file.</param>
-/// <param name="Left">The SHA-256 it held once the fold was settled; null where it holds no file, and while nothing was read.</param>
-/// <param name="Changed">Whether what it left is not what it held before; null while nothing was read.</param>
+/// <param name="Left">
+/// The SHA-256 the fold left there - as its verb read it under the tree's lock it wrote under, as it held before where it
+/// wrote nothing, as the tree held it after a crash - once it was settled; null where that is no file, and for an intent
+/// and a refusal.
+/// </param>
+/// <param name="Changed">Whether what it left is not what it held before; null for an intent and a refusal, which settle nothing of it.</param>
 /// <param name="Committed">The id of the run's commit (<see cref="FlowCommitEntry"/>) that took what it left; null while none has.</param>
 /// <param name="Ignored">True where git ignores the path, so the run's commits leave it out; null otherwise.</param>
 public sealed record FlowFoldPath(
