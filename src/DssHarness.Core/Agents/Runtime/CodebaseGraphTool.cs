@@ -234,6 +234,21 @@ public sealed class CodebaseGraphTool(
     /// <param name="op">An operation.</param>
     public static string NameOf(GraphOp op) => Names[op];
 
+    /// <summary>The operation <c>op</c> says by <paramref name="name"/>; null for a name it says none by.</summary>
+    /// <param name="name">The name, as an input's <c>op</c> spells it.</param>
+    public static GraphOp? OpOf(string name)
+    {
+        foreach (var (op, said) in Names)
+        {
+            if (string.Equals(said, name, StringComparison.Ordinal))
+            {
+                return op;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>The operations a step is given: the read ones always, <c>edit</c> where it may write, <c>wholeFile</c> where its reads are narrowed.</summary>
     /// <param name="write">Whether the step has the <c>write</c> capability.</param>
     /// <param name="narrow">Whether the step's reads are narrowed (<c>graphReads: narrow</c>).</param>
@@ -260,8 +275,11 @@ public sealed class CodebaseGraphTool(
     /// </summary>
     public const int NarrowLines = 200;
 
-    /// <summary>The files whose narrowing a <c>wholeFile</c> lifted, each once, for the rest of the step.</summary>
-    private readonly HashSet<string> _lifted = new(StringComparer.Ordinal);
+    /// <summary>
+    /// The files whose narrowing a <c>wholeFile</c> lifted, each once, for the rest of the step: read by every narrowed read
+    /// and written by a <c>wholeFile</c> on whichever thread serves it - Claude Code's served calls run beside its own reads.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _lifted = new(StringComparer.Ordinal);
 
     /// <summary>
     /// What a whole read of the file at <paramref name="path"/> of <paramref name="lines"/> lines is under the narrowing
@@ -296,7 +314,7 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>Whether a <c>wholeFile</c> lifted the narrowing of the file at <paramref name="path"/> for the rest of the step.</summary>
     /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
-    public bool Lifted(string path) => Held(path) is { } held && _lifted.Contains(held);
+    public bool Lifted(string path) => Held(path) is { } held && _lifted.ContainsKey(held);
 
     /// <summary>
     /// Whether a whole read of the file at <paramref name="path"/> may be narrowed at all - the view holds it as parsed and no
@@ -307,7 +325,7 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>The path the view holds a parsed file at that <paramref name="path"/> names, where no <c>wholeFile</c> lifted it; null otherwise.</summary>
     private string? Narrowable(string path)
-        => Held(path) is { } held && _queries.Parsed(held) && !_lifted.Contains(held) ? held : null;
+        => Held(path) is { } held && _queries.Parsed(held) && !_lifted.ContainsKey(held) ? held : null;
 
     /// <summary>
     /// The path the view holds the file <paramref name="path"/> names at, by the tree's own rule of case: as given, or the one
@@ -905,7 +923,7 @@ public sealed class CodebaseGraphTool(
             return Usage($"'{held}' is a file your reads do not reach");
         }
 
-        _lifted.Add(held);
+        _lifted.TryAdd(held, true);
 
         return Answered($"the narrowing of reads is lifted for '{held}' for the rest of this step: {reason}") with
         {

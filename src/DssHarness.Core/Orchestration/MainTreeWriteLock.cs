@@ -43,6 +43,54 @@ public static class MainTreeWriteLock
     /// <summary>The member of a step's output that says what its wait for the lock was.</summary>
     public const string WaitedMember = "waited";
 
+    /// <summary>
+    /// The rule a side-task's write or command is refused by where the lock cannot hold it for its duration, on every
+    /// client: a lock that could not be taken (<see cref="Refusal"/>), a command run in the background (<see cref="InBackground"/>),
+    /// and a command that leaves a process running after it ends (<see cref="LeftBehind"/>).
+    /// </summary>
+    public const string Rule = "the main tree's lock";
+
+    /// <summary>
+    /// What a side-task's shell command asked to run in the background - Claude Code's <c>run_in_background</c> - is refused
+    /// with: its result comes back as it starts, and its end is never seen.
+    /// </summary>
+    public static Agents.Policy.AgentPolicyAnswer.Denied InBackground { get; } = new(
+        Rule,
+        Agents.Policy.AgentPolicySource.Builtin,
+        "a side-task's command holds the main tree's lock for its duration, and a command run in the background is never seen to end: run it in the foreground, without run_in_background");
+
+    /// <summary>
+    /// What a side-task's write or command is refused with where the lock could not be taken for it - the mutex not
+    /// opened, as <see cref="MachineWideMutex.Open(string, string)"/> refuses: the lock's own words, so the agent reads
+    /// why and its run goes on.
+    /// </summary>
+    /// <param name="fault">Why the lock could not be taken.</param>
+    public static Agents.Policy.AgentPolicyAnswer.Denied Refusal(Exception fault)
+    {
+        ArgumentNullException.ThrowIfNull(fault);
+
+        return new(
+            Rule,
+            Agents.Policy.AgentPolicySource.Builtin,
+            $"the main tree's lock, which a side-task's write or command holds for its duration, could not be taken: {fault.Message.TrimEnd('.')}");
+    }
+
+    /// <summary>
+    /// What a side-task's command is refused with where it leaves a process running after it ends - one run in the
+    /// background, or by a program that starts it apart (<see cref="Agents.Policy.CommandAnalysis.LeavesAProcessBehind"/>):
+    /// the lock is held for the command's duration and goes with its end, and what it left would write the tree outside it.
+    /// </summary>
+    /// <param name="command">The command that leaves one, as it is read.</param>
+    public static Agents.Policy.AgentPolicyAnswer.Denied LeftBehind(string command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        return new(
+            Rule,
+            Agents.Policy.AgentPolicySource.Builtin,
+            $"'{command}' leaves a process running after it ends, and a side-task's command holds the main tree's lock for its duration alone: run what it starts in the foreground, and wait for it");
+    }
+
     /// <summary>One mutex per main tree, however its path is spelled.</summary>
     public static string NameFor(string mainCheckoutRoot)
         => MachineWideMutex.NameFor(Prefix, [mainCheckoutRoot], ignoreCase: true);

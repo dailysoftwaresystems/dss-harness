@@ -1431,9 +1431,16 @@ is changed under it before it writes, and the step's output says how long it wai
 (`MainTreeWriteLock.WaitedFor`). The command's or the step's own stop ends the engine's wait, nothing weighed or
 written. On Claude Code the lock is taken off the launch's loop for the call whose permission waits on it, with a token
 of its own that an ask withdrawn, the call's result or its turn's end cancels, and the permission is answered on the
-loop - a take that ends for a call no longer waiting is let go at once and nothing sent, and a lock that cannot be taken
-denies the call with its refusal, recorded as every denial is; a shell command asked to run in the background is
-refused (`ClaudeCodeClient.BackgroundRefused`), for its result comes back before it ends and its end is never seen.
+loop - a take that ends for a call no longer waiting is let go at once and nothing sent, an ask of a call already held
+is allowed under its hold and one of a call whose take still waits waits on that take, for a second take on another
+thread would wait on the first's hold forever. A lock that cannot be taken denies the call with its refusal on every
+client (`MainTreeWriteLock.Refusal`), recorded as every denial is, the run going on; Claude Code's shell command asked
+to run in the background is refused (`MainTreeWriteLock.InBackground`), for its result comes back before it ends and
+its end is never seen; and the side-task's policy refuses, on every client, a command that leaves a process running
+after it ends (`MainTreeWriteLock.LeftBehind`): one the command reader reads as run in the background - a lone `&`
+ends its list (`AnalyzedCommand.Background`), never `&&`, a redirect's `&` or a quoted one - or one run by a program
+that keeps what it starts apart (`CommandAnalysis.Detaching`), which a contained `run_command`'s end would not reach
+either where it leaves the session.
 While a run's owner is live
 (`.orchestrators/<run>.owner.json`, asked at each call through `AgentPolicyGround.LiveRun`), a side-task's agent is
 refused, with the run's name, every command that writes the git state the run works over (`AgentPolicy.LiveRunHeld`:
@@ -3956,10 +3963,11 @@ directory held from the root it was decided in (`AgentFiles.Write`). The schema 
 it needs, is a usage line (`CodebaseGraphTool.Misused`). A reason step whose `graph` is `tools` is given the tool by the
 runtime among the harness's own, under `read`, with the operations its capabilities and its `graphReads` give
 (`FlowStepGraph`), a conversation that goes on keeping the tool and the operations it began with; an `edit` runs alone
-between the reads - the tool's barrier is its edit alone, every read operation running with the turn's other reads
-(`AgentToolRuntime.Alone`), and a side-task's edit alone holding the main tree's lock - held to the write rules as
-`replace_in_file` is and counted among the files written, and a body served and an edit made count as views of their
-files for the edit check. After each write and each command of the agent's, on every client - the runtime's file tools,
+between the reads - held to the write rules as `replace_in_file` is and counted among the files written - and so does a
+`wholeFile`, which changes how the reads beside it are narrowed, every other read operation running with the turn's
+other reads (`AgentToolRuntime.Alone`); a side-task's edit alone holds the main tree's lock (`AgentToolRuntime.Locks`),
+and the files a `wholeFile` lifted are kept in a set that Claude Code's served calls, which run beside its own reads, may
+read and write at once. A body served and an edit made count as views of their files for the edit check. After each write and each command of the agent's, on every client - the runtime's file tools,
 its `run_command`, the graph's edit, and Claude Code's own `Write`, `Edit`, `NotebookEdit` and `Bash` - the one owner
 of what follows a write (`AfterWrites.FollowAsync`) syncs the view: by the paths written, beneath the view's tree alone
 (`AgentPolicy.Beneath`) - a directory moved or deleted naming every file git lists beneath it and every file the graph

@@ -451,14 +451,91 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal([(true, "held"), (false, ClaudeCodeClient.BackgroundRefused)], sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
+        Assert.Equal([(true, "held"), (false, MainTreeWriteLock.InBackground.Reason)], sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
         Assert.Equal(1, result.Denials);
 
         var denied = Assert.Single(sink.Of<PermissionDenied>());
-        Assert.Equal(("Bash", "echo later", ClaudeCodeClient.TreeLockRule, AgentPermissionSource.Builtin, ClaudeCodeClient.BackgroundRefused), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
+        Assert.Equal(("Bash", "echo later", MainTreeWriteLock.Rule, AgentPermissionSource.Builtin, MainTreeWriteLock.InBackground.Reason), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
 
         var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!;
-        Assert.Equal(("Bash", ClaudeCodeClient.TreeLockRule, ClaudeCodeClient.BackgroundRefused), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
+        Assert.Equal(("Bash", MainTreeWriteLock.Rule, MainTreeWriteLock.InBackground.Reason), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A side-task's shell command on Claude Code that leaves a process running after it ends - one the shell runs in the
+    /// background, one a program keeps apart - is refused by the side-task's policy before anything runs, recorded as every
+    /// denial is, while one whose <c>&amp;</c> joins, redirects or is quoted runs under the main tree's lock.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksShellCommandThatLeavesAProcessBehind_IsRefusedOnClaudeCode_WhileAnAmpersandThatDoesNotRuns()
+    {
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "npm run codegen > gen.log 2>&1 &" } },
+                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "nohup make" } },
+                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "make && make test &> test.log; echo 'a & b' 2>&1" }, ["probesLock"] = kit.TreeLockName }),
+            },
+        ]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(2, result.Denials);
+        Assert.Equal(
+            [
+                (false, MainTreeWriteLock.LeftBehind("npm run codegen >gen.log").Reason),
+                (false, MainTreeWriteLock.LeftBehind("nohup make").Reason),
+                (true, "held"),
+            ],
+            sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
+        Assert.All(sink.Of<PermissionDenied>(), denied => Assert.Equal((MainTreeWriteLock.Rule, AgentPermissionSource.Builtin), (denied.Rule, denied.Source)));
+        Assert.Equal(2, File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName)).Length);
+    }
+
+    /// <summary>
+    /// A call Claude Code asks about twice - again once it was allowed, or again while the first ask's take of the main
+    /// tree's lock still waits - is allowed under the call's one hold: each ask answered, one take alone begun - a second, on
+    /// another thread of this process, would wait on the first's hold forever - the write running with the lock held and the
+    /// call after it finding it free.
+    /// </summary>
+    [Theory]
+    [InlineData("afterAllowed")]
+    [InlineData("atOnce")]
+    public async Task ACallAskedAboutTwice_IsAllowedUnderItsOneHoldOfTheTreesLock(string again)
+    {
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" }, ["askedAgain"] = again, ["probesLock"] = kit.TreeLockName },
+                    new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["probesLock"] = kit.TreeLockName }),
+            },
+        ]);
+        var takes = 0;
+        kit.TreeLock = (main, token) =>
+        {
+            Interlocked.Increment(ref takes);
+            return MainTreeWriteLock.HoldAsync(main, token);
+        };
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([(true, "held"), (true, "free")], sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
+        Assert.Equal(1, takes);
+        Assert.Equal(
+            ["allow", "allow", "allow"],
+            Assert.Single(kit.Launches()).Read
+                .Where(line => line["type"]?.GetValue<string>() == "control_response" && line["response"]?["response"]?["behavior"] is not null)
+                .Select(line => line["response"]!["response"]!["behavior"]!.GetValue<string>()));
     }
 
     /// <summary>
@@ -558,10 +635,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.False(File.Exists(Path.Combine(kit.Worktree, "w.txt")));
 
         var denied = Assert.Single(sink.Of<PermissionDenied>());
-        Assert.Equal(("Write", "w.txt", ClaudeCodeClient.TreeLockRule, AgentPermissionSource.Builtin, Said), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
+        Assert.Equal(("Write", "w.txt", MainTreeWriteLock.Rule, AgentPermissionSource.Builtin, Said), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
 
         var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!;
-        Assert.Equal(("Write", ClaudeCodeClient.TreeLockRule, Said), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
+        Assert.Equal(("Write", MainTreeWriteLock.Rule, Said), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
     }
 
     /// <summary>

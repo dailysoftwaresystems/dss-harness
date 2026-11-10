@@ -21,6 +21,25 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["a"], ["b"]], Commands("a\r\nb"));
     }
 
+    /// <summary>
+    /// A lone <c>&amp;</c> runs the list it ends in the background - each command of it, its pipe, its and-or and the group
+    /// it closes with it - and nothing after it; a script a command in the background runs is in the background with it,
+    /// and an <c>&amp;</c> that joins, redirects or is quoted puts nothing there.
+    /// </summary>
+    [Fact]
+    public void ALoneAmpersand_RunsTheListItEndsInTheBackground()
+    {
+        static IReadOnlyList<(string, bool)> Read(string shell)
+            => [.. CommandAnalysis.Commands(shell).Select(command => (command.Words[0], command.Background))];
+
+        Assert.Equal([("a", true), ("b", true), ("c", true), ("d", false)], Read("a | b && c & d"));
+        Assert.Equal([("a", false), ("b", true), ("c", true)], Read("a; { b; c; } &"));
+        Assert.Equal([("a", false), ("b", true), ("c", false)], Read("a\nb &\nc"));
+        Assert.Equal([("make", true)], Read("sh -c 'make' &"));
+        Assert.Equal([("make", true), ("x", false)], Read("sh -c 'make &'; x"));
+        Assert.Equal([("a", false), ("b", false), ("echo", false)], Read("a && b &> log; echo 'x & y' 2>&1"));
+    }
+
     [Fact]
     public void QuotesKeepOneWordOne()
     {

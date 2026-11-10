@@ -187,7 +187,8 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         // The run's graph tool, where it is given one: offered among the harness's own, with the operations the run's
         // step is given - a side-task's every one its client serves (Claude Code's none but the reads), with no narrowing
-        // of its reads. It is no barrier by its name: of its operations only an edit writes, and stands alone (Alone).
+        // of its reads. It is no barrier by its name: of its operations an edit, which writes, stands alone and holds a
+        // side-task's lock (Locks), and a wholeFile, which changes what the reads beside it are answered, stands alone (Alone).
         if (run.Graph is { } graph)
         {
             var operations = graph.Operations ?? CodebaseGraphTool.Operations(write: true, narrow: false);
@@ -346,54 +347,75 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         // A side-task's write or command - a file tool that writes, run_command, the graph's edit - holds the main tree's
         // lock for its duration: the engine's folds and commits wait it out, as it waits out theirs, and its chat says
-        // when it waited - the engine's step records say the same of theirs. A read, the graph's among them, takes none.
-        using var tree = _run.Ground is { SideTask: true } && Alone(call)
-            ? await MainTreeWriteLock.HoldAsync(_run.Workspace.MainCheckout, cancellationToken).ConfigureAwait(false)
-                ?? throw new OperationCanceledException(cancellationToken)
-            : null;
+        // when it waited - the engine's step records say the same of theirs. A read, the graph's among them, takes none. A
+        // lock that cannot be taken refuses the call in its own words, recorded as every denial is, and the run goes on.
+        MachineWideHold? tree = null;
 
-        if (tree is not null && MainTreeWriteLock.WaitedNotice(tree.Waited) is { } waited)
+        if (_run.Ground is { SideTask: true } && Locks(call))
         {
-            await _events.EmitAsync(new Notice(waited)).ConfigureAwait(false);
+            try
+            {
+                tree = await _host.TreeLock(_run.Workspace.MainCheckout, cancellationToken).ConfigureAwait(false)
+                    ?? throw new OperationCanceledException(cancellationToken);
+            }
+            catch (HarnessException ex)
+            {
+                return await KeptAsync(call, Answer.Refused(call.Name, MainTreeWriteLock.Refusal(ex))).ConfigureAwait(false);
+            }
         }
 
-        try
+        using (tree)
         {
-            answer = await AnswerAsync(call, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException && Faulted(ex))
-        {
-            answer = Answer.Failed($"{call.Name} failed: {ex.Message.TrimEnd('.')}");
+            if (tree is not null && MainTreeWriteLock.WaitedNotice(tree.Waited) is { } waited)
+            {
+                await _events.EmitAsync(new Notice(waited)).ConfigureAwait(false);
+            }
+
+            try
+            {
+                answer = await AnswerAsync(call, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && Faulted(ex))
+            {
+                answer = Answer.Failed($"{call.Name} failed: {ex.Message.TrimEnd('.')}");
+            }
         }
 
         return await KeptAsync(call, answer).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Whether <paramref name="call"/> stands alone in its turn - after every call before it and before every call after - and,
-    /// for a side-task, holds the main tree's lock for its duration: a call of a tool that writes or runs, and of the graph
-    /// tool its <c>edit</c> alone, the one operation of it that writes. A call of a tool not given, or whose input does not
+    /// Whether <paramref name="call"/> stands alone in its turn - after every call before it and before every call after: a
+    /// call of a tool that writes or runs (<see cref="Locks"/>), and of the graph tool its <c>wholeFile</c> as well, which
+    /// changes what the narrowed reads beside it would be answered. A call of a tool not given, or whose input does not
     /// read, runs nothing, and reads with the rest.
     /// </summary>
     /// <param name="call">The call.</param>
-    private bool Alone(AgentToolCallRequest call)
-        => _tools.TryGetValue(call.Name, out var tool)
-            && (tool.Barrier || (tool.Name == AgentGraphSupport.ToolName && EditsTheGraph(call.Input)));
+    internal bool Alone(AgentToolCallRequest call)
+        => Locks(call) || (call.Name == AgentGraphSupport.ToolName && _tools.ContainsKey(call.Name) && GraphOpOf(call.Input) == GraphOp.WholeFile);
 
-    /// <summary>Whether a <c>graph</c> call's input asks its <c>edit</c>; false for one that does not read, which runs no operation.</summary>
+    /// <summary>
+    /// Whether <paramref name="call"/>, for a side-task, holds the main tree's lock for its duration: a call of a tool that
+    /// writes or runs, and of the graph tool its <c>edit</c> alone, the one operation of it that writes.
+    /// </summary>
+    /// <param name="call">The call.</param>
+    internal bool Locks(AgentToolCallRequest call)
+        => _tools.TryGetValue(call.Name, out var tool)
+            && (tool.Barrier || (tool.Name == AgentGraphSupport.ToolName && GraphOpOf(call.Input) == GraphOp.Edit));
+
+    /// <summary>The operation a <c>graph</c> call's input asks; null for one that does not read, which runs no operation.</summary>
     /// <param name="input">The call's input, as JSON.</param>
-    private static bool EditsTheGraph(string input)
+    private static GraphOp? GraphOpOf(string input)
     {
         try
         {
-            return JsonNode.Parse(input) is JsonObject members
-                && members["op"] is JsonValue op
-                && op.TryGetValue<string>(out var name)
-                && string.Equals(name, CodebaseGraphTool.NameOf(GraphOp.Edit), StringComparison.Ordinal);
+            return JsonNode.Parse(input) is JsonObject members && members["op"] is JsonValue op && op.TryGetValue<string>(out var name)
+                ? CodebaseGraphTool.OpOf(name)
+                : null;
         }
         catch (JsonException)
         {
-            return false;
+            return null;
         }
     }
 
@@ -744,6 +766,12 @@ public sealed class AgentToolHost(
 
     /// <summary>The harness's own web search; none for a host whose runs search no source.</summary>
     internal Web.Search.HarnessWebSearch? Search { get; } = search;
+
+    /// <summary>
+    /// Takes the main tree's lock for a side-task's write or command (<see cref="MainTreeWriteLock.HoldAsync"/>): a test's
+    /// seam alone, for a lock that cannot be opened is no fault a test can make of the machine's own.
+    /// </summary>
+    internal Func<string, CancellationToken, Task<MachineWideHold?>> TreeLock { get; init; } = MainTreeWriteLock.HoldAsync;
 
     /// <summary>Why this host cannot run <paramref name="tools"/>; null where it can: a run offered <c>web_search</c> searches with the harness's own.</summary>
     /// <param name="tools">The tools a run is offered.</param>

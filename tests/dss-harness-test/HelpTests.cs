@@ -447,6 +447,14 @@ public sealed partial class HelpTests
     {
         var prose = Prose.Words(HelpText.Of("side-tasks").StandardOutput);
 
+        // What the main tree's lock refuses a side-task, on every client, its programs read from the command reader's own list.
+        Assert.Contains(
+            "and on every client so is a command that leaves a process running after it ends - one a lone & runs in the "
+                + $"background, or one run by {string.Join(", ", DssHarness.Core.Agents.Policy.CommandAnalysis.Detaching)} - and a lock "
+                + "that cannot be taken refuses the write or command it was taken for, saying why, the chat going on.",
+            prose,
+            StringComparison.Ordinal);
+
         Assert.Contains(
             $"{HarnessExit.ToolMissing} a client that cannot start where the entry that would serve first is on it - no claude, no npm - or, under agentPolicy.isolation \"required\", a "
                 + $"machine that cannot isolate the agent's commands; {HarnessExit.Incomplete} the install of "
@@ -1510,7 +1518,7 @@ public sealed partial class HelpTests
         Assert.Contains("an answer past 32,768 characters is given as its first 8,192 and its last 24,576, the whole kept in the step's tool-results/.", prose, StringComparison.Ordinal);
         Assert.Contains("A step whose graph is tools - a graphify-codebase step upstream of it, 'help workflows' - is offered the graph tool among these, under read, with the operations its agent's capabilities give, edit among them where it may write, and its context pack in its first message, after the run's map", prose, StringComparison.Ordinal);
         Assert.Contains("its graphReads narrow (the default) denies a whole view_file of a file the graph parsed over 200 lines, saying the way to the graph instead - a range, a search and a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's wholeFile lifts the narrowing for one file the graph parsed for the rest of the step, an escape stated with the lines the graph read it as, a path it holds no parsed file at refused as a misuse", prose, StringComparison.Ordinal);
-        Assert.Contains("an edit it made is a write, alone in its turn and counted among the files written, the graph's reads running with the other reads. The step's view is synced after each write - by the paths it wrote, a directory moved or deleted by every file beneath it - and whole after each command, on every client, and the graph tool answers from what each sync leaves.", prose, StringComparison.Ordinal);
+        Assert.Contains("an edit it made is a write, alone in its turn and counted among the files written; a wholeFile is alone in its turn too, for the reads beside it are narrowed by what it lifts, the graph's other reads running with the other reads. The step's view is synced after each write - by the paths it wrote, a directory moved or deleted by every file beneath it - and whole after each command, on every client, and the graph tool answers from what each sync leaves.", prose, StringComparison.Ordinal);
     }
 
     /// <summary>

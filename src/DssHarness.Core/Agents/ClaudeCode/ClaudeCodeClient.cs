@@ -99,15 +99,6 @@ public sealed class ClaudeCodeClient(
     /// <summary>The control request that carries a message of an MCP server the host serves.</summary>
     private const string McpMessage = "mcp_message";
 
-    /// <summary>
-    /// The rule a side-task's write or command is refused by where the main tree's lock cannot hold it for its duration: a
-    /// lock that could not be taken, and a command asked to run in the background, whose end is never seen.
-    /// </summary>
-    public const string TreeLockRule = "the main tree's lock";
-
-    /// <summary>What a side-task's shell command asked to run in the background is refused with.</summary>
-    public const string BackgroundRefused = "a side-task's command holds the main tree's lock for its duration, and a command run in the background is never seen to end: run it in the foreground, without run_in_background";
-
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly IProcessRunner _processes = processes ?? throw new ArgumentNullException(nameof(processes));
@@ -385,7 +376,7 @@ public sealed class ClaudeCodeClient(
         /// that let the holds before it go were read meanwhile: <paramref name="Hold"/> where it was taken, <paramref name="Fault"/>
         /// where the lock could not be taken, neither where the take was withdrawn first.
         /// </summary>
-        public sealed record TreeHeld(ClaudeLine.ControlRequest Asked, MachineWideHold? Hold, Exception? Fault) : Arrival;
+        public sealed record TreeHeld(TreeTake Take, MachineWideHold? Hold, Exception? Fault) : Arrival;
 
         /// <summary>The stall bound of a message the launch had not taken, counted from when <paramref name="Taken"/> messages were taken.</summary>
         public sealed record Untaken(int Taken) : Arrival;
@@ -411,13 +402,27 @@ public sealed class ClaudeCodeClient(
 
     /// <summary>
     /// One take of the main tree's lock a side-task's write or command waits on: the call it is for, its own token - linked to
-    /// the launch's, so the launch's end cancels it too - and whether its call stopped waiting for it.
+    /// the launch's, so the launch's end cancels it too - the asks of the call's permission that wait on it, and whether its
+    /// call stopped waiting for it. Read and written on the launch's loop alone.
     /// </summary>
-    /// <param name="CallId">The call whose permission waits on the take.</param>
-    /// <param name="Token">Cancels the take's wait.</param>
-    private sealed record TreeTake(string CallId, CancellationTokenSource Token)
+    /// <param name="callId">The call whose permission waits on the take.</param>
+    /// <param name="token">Cancels the take's wait.</param>
+    private sealed class TreeTake(string callId, CancellationTokenSource token)
     {
-        /// <summary>Whether the call stopped waiting for the take: its ask withdrawn, its result come, its turn ended or cut.</summary>
+        /// <summary>The call whose permission waits on the take.</summary>
+        public string CallId { get; } = callId;
+
+        /// <summary>Cancels the take's wait.</summary>
+        public CancellationTokenSource Token { get; } = token;
+
+        /// <summary>
+        /// The asks of the call's permission waiting on the take, each answered once it ends: the one that began it, and any
+        /// Claude Code asked again of the same call meanwhile - none of which begins a take of its own, for a second take
+        /// in this process would wait on the first's hold forever.
+        /// </summary>
+        public List<ClaudeLine.ControlRequest> Asks { get; } = [];
+
+        /// <summary>Whether the call stopped waiting for the take: every ask withdrawn, its result come, its turn ended or cut.</summary>
         public bool Withdrawn { get; set; }
     }
 
@@ -469,14 +474,15 @@ public sealed class ClaudeCodeClient(
         // Every call of the engine's tool server run, by its id: each runs once.
         private readonly HashSet<string> _served = new(StringComparer.Ordinal);
 
-        // Each take of the main tree's lock a side-task's own write or command waits on, by the request that asked its
-        // permission: the call it is for, and its own token, cancelled where the ask is withdrawn, the call's result comes,
-        // or its turn ends or is cut. Kept, and answered, on the loop alone: a take that ends for a call no longer waiting
-        // is let go at once, and nothing is sent.
+        // Each take of the main tree's lock a side-task's own write or command waits on, by each request that asked its
+        // permission and waits on it: the call it is for, and its own token, cancelled where every ask is withdrawn, the
+        // call's result comes, or its turn ends or is cut. Kept, and answered, on the loop alone: a take that ends for a
+        // call no longer waiting is let go at once, and nothing is sent.
         private readonly Dictionary<string, TreeTake> _taking = new(StringComparer.Ordinal);
 
         // Each of a side-task's own writes and commands that holds the main tree's lock, by its call id: taken where its
-        // permission was asked, let go where its result comes and at the launch's end. Read and written on the loop alone.
+        // permission was first asked - an ask of the call again allowed under the same hold - let go where its result
+        // comes and at the launch's end. Read and written on the loop alone.
         private readonly Dictionary<string, MachineWideHold> _treeHeld = new(StringComparer.Ordinal);
 
         // Where the launch hands its commands to the isolation: the directory each command's receipt is written in, Claude
@@ -721,7 +727,7 @@ public sealed class ClaudeCodeClient(
                     }
                 }
 
-                foreach (var take in _taking.Values)
+                foreach (var take in _taking.Values.Distinct())
                 {
                     take.Token.Dispose();
                 }
@@ -856,10 +862,16 @@ public sealed class ClaudeCodeClient(
                 case ClaudeLine.ControlCancel cancelled:
                     Record(cancelled.Node);
 
-                    // An ask withdrawn wants no answer: a take of the tree's lock it waits on is withdrawn with it.
-                    if (_taking.TryGetValue(cancelled.RequestId, out var withdrawn))
+                    // An ask withdrawn wants no answer: a take of the tree's lock it waits on waits for it no more, and is
+                    // withdrawn where no other ask of its call waits on it.
+                    if (_taking.Remove(cancelled.RequestId, out var withdrawn))
                     {
-                        Withdraw(withdrawn);
+                        withdrawn.Asks.RemoveAll(ask => ask.RequestId == cancelled.RequestId);
+
+                        if (withdrawn.Asks.Count == 0)
+                        {
+                            Withdraw(withdrawn);
+                        }
                     }
 
                     return null;
@@ -996,7 +1008,8 @@ public sealed class ClaudeCodeClient(
                 }
 
                 // Its result come, the call is done writing or running - a side-task's command never runs in the background
-                // (BackgroundRefused) - so the tree's lock it held goes with it.
+                // nor leaves a process behind it (MainTreeWriteLock.InBackground, MainTreeWriteLock.LeftBehind) - so the tree's
+                // lock it held goes with it.
                 if (_treeHeld.Remove(result.CallId, out var heldTree))
                 {
                     heldTree.Dispose();
@@ -1208,14 +1221,31 @@ public sealed class ClaudeCodeClient(
                 && ClaudeCodeTools.Find(tool) is { Capability: AgentCapability.Write or AgentCapability.Run }
                 && asked.CallId is { Length: > 0 } callId)
             {
-                var token = CancellationTokenSource.CreateLinkedTokenSource(_ending);
-
-                if (!_taking.TryAdd(asked.RequestId, new TreeTake(callId, token)))
+                if (_taking.ContainsKey(asked.RequestId))
                 {
-                    token.Dispose();
                     Control(Error(asked.RequestId, $"this host is answering the request '{asked.RequestId}' already"));
                     return null;
                 }
+
+                // A call is held once, by one thread of this process: an ask of a call already held is allowed under that
+                // hold, and one of a call whose take still waits waits on that take - a second take would wait on the first's
+                // hold, which goes only with the call's result, forever.
+                if (_treeHeld.ContainsKey(callId))
+                {
+                    Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = Receipted(asked.CallId, tool, asked.Input) }));
+                    return null;
+                }
+
+                if (_taking.Values.FirstOrDefault(waiting => waiting.CallId == callId && !waiting.Withdrawn) is { } waiting)
+                {
+                    waiting.Asks.Add(asked);
+                    _taking.Add(asked.RequestId, waiting);
+                    return null;
+                }
+
+                var taking = new TreeTake(callId, CancellationTokenSource.CreateLinkedTokenSource(_ending));
+                taking.Asks.Add(asked);
+                _taking.Add(asked.RequestId, taking);
 
                 var take = client.TreeLock;
                 var main = run.Workspace.MainCheckout;
@@ -1226,15 +1256,15 @@ public sealed class ClaudeCodeClient(
 
                     try
                     {
-                        ended = new(asked, await take(main, token.Token).ConfigureAwait(false), null);
+                        ended = new(taking, await take(main, taking.Token.Token).ConfigureAwait(false), null);
                     }
                     catch (OperationCanceledException)
                     {
-                        ended = new(asked, null, null);
+                        ended = new(taking, null, null);
                     }
                     catch (Exception ex)
                     {
-                        ended = new(asked, null, ex);
+                        ended = new(taking, null, ex);
                     }
 
                     _arrivals.Writer.TryWrite(ended);
@@ -1261,23 +1291,19 @@ public sealed class ClaudeCodeClient(
         }
 
         /// <summary>
-        /// The take of the tree's lock a side-task's own write or command waited on ended. Held, for a call still waiting: its
-        /// permission is answered now, and where it waited, the chat says so as the engine's step records say the same of
-        /// theirs. Not taken - the lock could not be opened - for a call still waiting: its permission is denied with the
-        /// lock's own refusal, recorded as every denial is. For a call no longer waiting - its ask withdrawn, its result come,
-        /// its turn ended or cut - the hold is let go at once, and nothing is sent.
+        /// The take of the tree's lock a side-task's own write or command waited on ended. Held, for a call still waiting:
+        /// each ask of its permission waiting on the take is answered now, and where it waited, the chat says so as the
+        /// engine's step records say the same of theirs. Not taken - the lock could not be opened - for a call still waiting:
+        /// each ask is denied with the lock's own refusal (<see cref="MainTreeWriteLock.Refusal"/>), recorded as every denial
+        /// is. For a call no longer waiting - every ask withdrawn, its result come, its turn ended or cut - the hold is let go
+        /// at once, and nothing is sent.
         /// </summary>
         private async Task<LaunchOutcome?> OnTreeHeldAsync(Arrival.TreeHeld held)
         {
-            if (!_taking.Remove(held.Asked.RequestId, out var take))
-            {
-                held.Hold?.Dispose();
-                return null;
-            }
+            var take = held.Take;
+            Forget(take);
 
-            take.Token.Dispose();
-
-            if (take.Withdrawn)
+            if (take.Withdrawn || take.Asks.Count == 0)
             {
                 held.Hold?.Dispose();
                 return null;
@@ -1285,11 +1311,12 @@ public sealed class ClaudeCodeClient(
 
             if (held.Fault is { } fault)
             {
-                Asked(take.CallId, held.Asked.Tool ?? string.Empty, allowed: false);
-                await DenyAsync(held.Asked, new AgentPolicyAnswer.Denied(
-                    TreeLockRule,
-                    AgentPolicySource.Builtin,
-                    $"the main tree's lock, which a side-task's write or command holds for its duration, could not be taken: {fault.Message.TrimEnd('.')}")).ConfigureAwait(false);
+                foreach (var ask in take.Asks)
+                {
+                    Asked(take.CallId, ask.Tool ?? string.Empty, allowed: false);
+                    await DenyAsync(ask, MainTreeWriteLock.Refusal(fault)).ConfigureAwait(false);
+                }
+
                 return null;
             }
 
@@ -1298,23 +1325,34 @@ public sealed class ClaudeCodeClient(
                 return null;
             }
 
-            // A call is held once: a second ask of the same call runs under the hold its first took.
-            if (!_treeHeld.TryAdd(take.CallId, hold))
-            {
-                hold.Dispose();
-            }
-            else if (MainTreeWriteLock.WaitedNotice(hold.Waited) is { } waited)
+            _treeHeld.Add(take.CallId, hold);
+
+            if (MainTreeWriteLock.WaitedNotice(hold.Waited) is { } waited)
             {
                 await Emit(new Notice(waited)).ConfigureAwait(false);
             }
 
-            Control(Answer(held.Asked.RequestId, new JsonObject
+            foreach (var ask in take.Asks)
             {
-                ["behavior"] = "allow",
-                ["updatedInput"] = Receipted(held.Asked.CallId, held.Asked.Tool ?? string.Empty, held.Asked.Input),
-            }));
+                Control(Answer(ask.RequestId, new JsonObject
+                {
+                    ["behavior"] = "allow",
+                    ["updatedInput"] = Receipted(ask.CallId, ask.Tool ?? string.Empty, ask.Input),
+                }));
+            }
 
             return null;
+        }
+
+        /// <summary>The take <paramref name="take"/> ended: no ask waits on it any more, and its token, its task ended, is let go.</summary>
+        private void Forget(TreeTake take)
+        {
+            foreach (var ask in take.Asks)
+            {
+                _taking.Remove(ask.RequestId);
+            }
+
+            take.Token.Dispose();
         }
 
         /// <summary>The take <paramref name="take"/> withdrawn: its call waits for it no more, and its wait is cancelled.</summary>
@@ -1330,7 +1368,7 @@ public sealed class ClaudeCodeClient(
         /// <summary>Withdraws every take of the tree's lock still waiting that <paramref name="which"/> names.</summary>
         private void WithdrawAll(Func<TreeTake, bool> which)
         {
-            foreach (var take in _taking.Values.Where(which))
+            foreach (var take in _taking.Values.Where(which).Distinct())
             {
                 Withdraw(take);
             }
@@ -1343,11 +1381,7 @@ public sealed class ClaudeCodeClient(
         private void Unanswered(Arrival.TreeHeld held)
         {
             held.Hold?.Dispose();
-
-            if (_taking.Remove(held.Asked.RequestId, out var take))
-            {
-                take.Token.Dispose();
-            }
+            Forget(held.Take);
         }
 
         /// <summary>
@@ -1626,8 +1660,9 @@ public sealed class ClaudeCodeClient(
         /// The engine's answer to a call of <paramref name="tool"/>: its policy's, or, in the handoff turn, that turn's
         /// refusal. A fault of the engine's own while deciding is a denial too, by <see cref="AgentPolicy.UndecidedRule"/> - recorded as
         /// every denial is, and never a failure that escapes - for nothing runs that was not decided. A side-task's shell
-        /// command asked to run in the background is refused (<see cref="BackgroundRefused"/>): its command holds the main
-        /// tree's lock for its duration, and a command in the background comes back before it ends, its end never seen. A
+        /// command asked to run in the background is refused (<see cref="MainTreeWriteLock.InBackground"/>): its command holds the main
+        /// tree's lock for its duration, and a command in the background comes back before it ends, its end never seen - as
+        /// the side-task's policy refuses one that leaves a process behind it by its words (<see cref="MainTreeWriteLock.LeftBehind"/>). A
         /// whole read of a file the graph holds parsed is narrowed here too (<c>graphReads: narrow</c>), by the same owner
         /// that narrows <c>view_file</c> on the APIs, its denial and its two escapes recorded as the graph's own lines.
         /// </summary>
@@ -1653,7 +1688,7 @@ public sealed class ClaudeCodeClient(
                     && ClaudeCodeTools.Find(tool) is { Capability: AgentCapability.Run }
                     && holding[BackgroundMember] is JsonValue background && background.TryGetValue<bool>(out var behind) && behind)
                 {
-                    return new AgentPolicyAnswer.Denied(TreeLockRule, AgentPolicySource.Builtin, BackgroundRefused);
+                    return MainTreeWriteLock.InBackground;
                 }
 
                 return tool == ClaudeCodeTools.Read

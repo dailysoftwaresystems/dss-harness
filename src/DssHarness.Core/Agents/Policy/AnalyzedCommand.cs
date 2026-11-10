@@ -47,6 +47,14 @@ public sealed record AnalyzedCommand(IReadOnlyList<string> Words, IReadOnlyList<
     public string? Joined { get; init; }
 
     /// <summary>
+    /// Whether the shell runs the command in the background - a list a lone <c>&amp;</c> ends, the command and every command
+    /// of that list: its pipes, its <c>&amp;&amp;</c> and <c>||</c>, the groups and subshells in it - so the shell goes on, and
+    /// may end, while the command still runs. A command a script runs is in the background where the command that runs the
+    /// script is.
+    /// </summary>
+    public bool Background { get; init; }
+
+    /// <summary>
     /// How one word's characters stand to the shell, where the word's own spelling was kept: <see cref="WordQuoting"/>
     /// for each of its characters, in step.
     /// </summary>

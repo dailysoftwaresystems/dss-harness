@@ -105,6 +105,29 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
+    /// The programs whose work is to keep what they start running apart from the command that starts it - past its shell's
+    /// end, its hangup or its session: <c>nohup</c>, <c>setsid</c>, <c>disown</c>, <c>daemonize</c>, and Windows' <c>start</c>
+    /// - cmd's own, and PowerShell's name for <c>Start-Process</c> - <c>Start-Process</c> and <c>saps</c>.
+    /// </summary>
+    public static IReadOnlyList<string> Detaching { get; } = ["nohup", "setsid", "disown", "daemonize", "start", "Start-Process", "saps"];
+
+    /// <summary>
+    /// Whether <paramref name="command"/> leaves a process running after the command it stands in ends: it runs in the
+    /// background (<see cref="AnalyzedCommand.Background"/>), or it - or a wrapper stripped before it, as <c>nohup</c> is -
+    /// is one of <see cref="Detaching"/>, by its name as this reads a program's.
+    /// </summary>
+    /// <param name="command">The command, as this read it.</param>
+    public static bool LeavesAProcessBehind(AnalyzedCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        bool Detaches(IReadOnlyList<string> words)
+            => EnvironmentOf(words) is var at && at < words.Count && Is(Name(words[at]), [.. Detaching]);
+
+        return command.Background || Detaches(command.Words) || command.Wrappers.Any(Detaches);
+    }
+
+    /// <summary>
     /// Refuses <paramref name="words"/> where one holds a NUL: the system hands a program its name and its arguments cut
     /// at the first, so the command that would run is not the one read here.
     /// </summary>
@@ -3102,7 +3125,8 @@ public static partial class CommandAnalysis
         {
             foreach (var flat in FromWords(command.Words, [.. command.Quoted ?? command.Words.Select(_ => string.Empty)], command.Redirects, depth, environment, wrappers, inputGiven || command.InputGiven, level + command.Level, command.Joined))
             {
-                yield return flat;
+                // What a command in the background runs - its own words, a script they name - runs in the background with it.
+                yield return command.Background && !flat.Background ? flat with { Background = true } : flat;
             }
         }
     }

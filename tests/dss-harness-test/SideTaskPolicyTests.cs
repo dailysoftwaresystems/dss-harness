@@ -416,6 +416,58 @@ public sealed class SideTaskPolicyTests
         Assert.Equal("'gh auth token' is denied by Run(gh auth token), a rule of this tool: it prints a credential, which an agent of this tool is never handed", printing.Reason);
     }
 
+    /// <summary>
+    /// A side-task's command that leaves a process running after it ends is refused by the main tree's lock, named as it was
+    /// written: one the shell runs in the background - a lone <c>&amp;</c> takes its whole list, a pipe's, an and-or's, a
+    /// group's, a loop's and a subshell's with it, and a script a shell runs is read the same - and one a program keeps
+    /// apart. A step's agent, which holds no such lock, is refused none of it.
+    /// </summary>
+    [Theory]
+    [InlineData("make &", "make")]
+    [InlineData("npm run codegen > gen.log 2>&1 &", "npm run codegen >gen.log")]
+    [InlineData("make && make test &", "make")]
+    [InlineData("make | tee build.log &", "make")]
+    [InlineData("(make; make test) &", "make")]
+    [InlineData("{ make; make test; } &", "make")]
+    [InlineData("while true; do make; done &", "true")]
+    [InlineData("make & echo started", "make")]
+    [InlineData("echo started; make &", "make")]
+    [InlineData("bash -c 'make &'", "bash -c make &")]
+    [InlineData("nohup make", "nohup make")]
+    [InlineData("setsid make", "setsid make")]
+    [InlineData("disown -a", "disown -a")]
+    [InlineData("start notepad", "start notepad")]
+    [InlineData("cmd /c start notepad", "cmd /c start notepad")]
+    [InlineData("pwsh -c 'Start-Process notepad'", "pwsh -c Start-Process notepad")]
+    public void ASideTasksCommandThatLeavesAProcessBehind_IsRefusedByTheMainTreesLock(string command, string named)
+    {
+        var (side, _, _) = Policy();
+
+        Assert.Equal(MainTreeWriteLock.LeftBehind(named), side.Run(command));
+        Assert.Equal(AgentPolicyAnswer.Allow, StepPolicy().Run("make &"));
+    }
+
+    /// <summary>
+    /// An <c>&amp;</c> that runs nothing in the background refuses a side-task's command nothing: one that joins two
+    /// commands, one of a redirect's, one a pipe of both outputs spells, and one quoted or escaped.
+    /// </summary>
+    [Theory]
+    [InlineData("make && make test")]
+    [InlineData("make &> build.log")]
+    [InlineData("make &>> build.log")]
+    [InlineData("make >build.log 2>&1")]
+    [InlineData("make >&2")]
+    [InlineData("make |& tee build.log")]
+    [InlineData("echo 'a & b'")]
+    [InlineData("echo \"a & b\"")]
+    [InlineData("echo a\\&b")]
+    public void AnAmpersandThatRunsNothingInTheBackground_RefusesASideTasksCommandNothing(string command)
+    {
+        var (side, _, _) = Policy();
+
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+    }
+
     /// <summary>The root actions stay refused to the side-task's agent as to every agent's, wherever they stand.</summary>
     [Fact]
     public void TheRootActionsStayRefused()

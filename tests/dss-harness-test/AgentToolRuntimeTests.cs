@@ -1947,6 +1947,92 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
+    /// A side-task's write whose take of the main tree's lock fails - the lock cannot be opened - is refused with the lock's
+    /// own words, recorded as every denial is, and nothing is written; the run goes on, its next call served.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksWriteWhoseTakeOfTheTreesLockFails_IsRefusedWithTheLocksWords_AndTheRunGoesOn()
+    {
+        var failing = true;
+        var runtime = Open(
+            capabilities: [AgentCapability.Read, AgentCapability.Write],
+            sideTask: true,
+            treeLock: (main, token) => failing
+                ? Task.FromException<DssHarness.Core.Platform.MachineWideHold?>(new DssHarness.Core.Results.HarnessException(DssHarness.Core.Results.HarnessExit.Refused, "The lock 'x' belongs to another user on this machine."))
+                : DssHarness.Core.Orchestration.MainTreeWriteLock.HoldAsync(main, token));
+        var said = DssHarness.Core.Orchestration.MainTreeWriteLock.Refusal(new InvalidOperationException("The lock 'x' belongs to another user on this machine.")).Reason;
+
+        var refused = await Call(runtime, AgentTools.CreateFile, ("path", "w.txt"), ("content", "written\n"));
+
+        Assert.Equal((false, said), (refused.Ok, refused.Text));
+        Assert.False(File.Exists(Path.Combine(_worktree, "w.txt")));
+        Assert.Equal(1, runtime.Tally.Denials);
+
+        var denied = Assert.Single(_events.All.OfType<PermissionDenied>());
+        Assert.Equal((AgentTools.CreateFile, AgentTools.CreateFile, DssHarness.Core.Orchestration.MainTreeWriteLock.Rule, said), (denied.Tool, denied.Subject, denied.Rule, denied.Reason));
+        Assert.Equal(
+            "the main tree's lock, which a side-task's write or command holds for its duration, could not be taken: The lock 'x' belongs to another user on this machine",
+            said);
+
+        failing = false;
+        var written = await Call(runtime, AgentTools.CreateFile, ("path", "w.txt"), ("content", "written\n"));
+
+        Assert.True(written.Ok, written.Text);
+        Assert.Equal("written\n", Read("w.txt"));
+    }
+
+    /// <summary>
+    /// A side-task's <c>run_command</c> that leaves a process running after it ends - a script that runs one in the
+    /// background, a program that keeps what it starts apart - is refused by the side-task's policy before anything starts,
+    /// as on Claude Code: the session a contained command ends does not reach what left it.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksRunCommandThatLeavesAProcessBehind_IsRefused_NothingStarted()
+    {
+        var processes = new Uncontaining();
+        var runtime = Open(sideTask: true, processes: processes);
+
+        var backgrounded = await Call(runtime, AgentTools.RunCommand, ("program", "sh"), ("args", new[] { "-c", "make &" }));
+        var detached = await Call(runtime, AgentTools.RunCommand, ("program", "setsid"), ("args", new[] { "make" }));
+
+        Assert.Equal((false, DssHarness.Core.Orchestration.MainTreeWriteLock.LeftBehind("sh -c make &").Reason), (backgrounded.Ok, backgrounded.Text));
+        Assert.Equal((false, DssHarness.Core.Orchestration.MainTreeWriteLock.LeftBehind("setsid make").Reason), (detached.Ok, detached.Text));
+        Assert.Empty(processes.Started);
+        Assert.Equal(2, runtime.Tally.Denials);
+
+        var ran = await Call(runtime, AgentTools.RunCommand, ("program", "sh"), ("args", new[] { "-c", "make && make test > test.log 2>&1" }));
+
+        Assert.True(ran.Ok, ran.Text);
+        Assert.Single(processes.Started);
+    }
+
+    /// <summary>
+    /// What stands alone in its turn and what holds a side-task's lock are two questions: a graph <c>wholeFile</c> stands
+    /// alone - the narrowed reads beside it are answered by what it lifts, so they run before or after it as the model
+    /// ordered them - and holds no lock, for it writes nothing; an <c>edit</c> of the graph's and every tool that writes or
+    /// runs do both; the graph's other reads and the runtime's own do neither.
+    /// </summary>
+    [Fact]
+    public async Task AWholeFile_StandsAloneInItsTurn_HoldingNoLock_WhileAnEditDoesBoth()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", BigFile));
+        var runtime = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree)), []);
+
+        var calls = new[]
+        {
+            Request("w1", AgentGraphSupport.ToolName, ("op", "wholeFile"), ("path", "src/Big.cs"), ("reason", "the move needs it whole")),
+            Request("e1", AgentGraphSupport.ToolName, ("op", "edit"), ("symbol", "Twice"), ("hash", "#aac0401c"), ("text", "x")),
+            Request("f1", AgentGraphSupport.ToolName, ("op", "find"), ("query", "Total")),
+            Request("c1", AgentTools.CreateFile, ("path", "n.txt"), ("content", "x")),
+            Request("v1", AgentTools.ViewFile, ("path", "src/Big.cs")),
+        };
+
+        Assert.Equal(
+            [(true, false), (true, true), (false, false), (true, true), (false, false)],
+            calls.Select(call => (runtime.Alone(call), runtime.Locks(call))));
+    }
+
+    /// <summary>
     /// A side-task's command holds the main tree's lock while it runs, as its write does, and lets it go at its end: the
     /// command finds the lock held, and the tree's lock is free once the call has answered.
     /// </summary>
@@ -2202,7 +2288,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
         DssHarness.Core.Agents.Isolation.LaunchIsolation? isolation = null,
         bool sideTask = false,
         Func<string?>? liveRun = null,
-        AgentGraphSupport? graph = null)
+        AgentGraphSupport? graph = null,
+        Func<string, CancellationToken, Task<DssHarness.Core.Platform.MachineWideHold?>>? treeLock = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -2224,7 +2311,10 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, endpoint ?? new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var files = fileSystem ?? _harness.FileSystem;
         var search = webSearch is null ? null : Search(fetch, clock ?? TimeProvider.System);
-        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), clock ?? TimeProvider.System, search: search);
+        var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(processes ?? _harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), clock ?? TimeProvider.System, search: search)
+        {
+            TreeLock = treeLock ?? DssHarness.Core.Orchestration.MainTreeWriteLock.HoldAsync,
+        };
         var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire(), Isolation = isolation?.Processes, Graph = graph }, _events, native);
 
         _opened.Add(fetch);
