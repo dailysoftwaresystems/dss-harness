@@ -9648,9 +9648,12 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The sentence a prompt's placeholder is filled with where it names a step that left no output in this run -
-    /// skipped, or failed and passed over - as part 03 rules: the agent is told what it does not have, in one sentence
-    /// naming the step and why it left nothing. Null where the name is spelled nothing: a name no declared step answers,
-    /// or a member of a step that did leave an output, keeps the failure a template's read of nothing is.
+    /// skipped, or failed and passed over (<see cref="FlowNoOutput"/>): the agent is told what it does not have, in one
+    /// sentence naming the step as the placeholder spells it - its members left out, and <c>previous.</c> before it where
+    /// it reads the iteration before - and why it left nothing; in a loop's first iteration, a <c>previous</c> read says
+    /// there is none before it, never reading the iteration it is in. Null where the name is spelled nothing: a name no
+    /// declared step answers, or a member of a step that did leave an output, keeps the failure a template's read of
+    /// nothing is.
     /// </summary>
     /// <param name="name">The placeholder's name, as the prompt spells it.</param>
     /// <param name="reader">The instance whose prompt is filled, whose scope the name is read in.</param>
@@ -9661,42 +9664,36 @@ public sealed class FlowCoordinator
             return null;
         }
 
-        var keysFrom = path.Root == "previous" ? 0 : -1;
+        var previous = path.Root == "previous";
+        var keysFrom = previous ? 0 : -1;
         var leading = path.Steps.Skip(keysFrom + 1).TakeWhile(step => step.IsKey).Select(step => step.Key!).ToList();
 
-        if (keysFrom >= 0 && !path.Steps[keysFrom].IsKey)
+        if (previous && !path.Steps[keysFrom].IsKey)
         {
             return null;
         }
 
-        IReadOnlyList<string> names = keysFrom < 0 ? [path.Root, .. leading] : [path.Steps[keysFrom].Key!, .. leading];
+        IReadOnlyList<string> names = previous ? [path.Steps[keysFrom].Key!, .. leading] : [path.Root, .. leading];
         var scope = reader.DeclaredScope!;
-        var at = keysFrom < 0 ? scope : PreviousOf(scope) ?? scope;
 
         if (FlowScope.Read(names, _definition, scope.GroupPath.Length == 0 ? null : scope.GroupPath, out _) is not { } located)
         {
             return null;
         }
 
-        var instance = Locate(located.Step.Path, at);
+        var step = $"{(previous ? "previous." : string.Empty)}{string.Join(".", names.Take(names.Count - located.After.Count))}";
+
+        if (previous && PreviousOf(scope) is null)
+        {
+            return FlowNoOutput.Sentence(step, FlowNoOutput.NoIterationBefore);
+        }
+
+        var instance = Locate(located.Step.Path, previous ? PreviousOf(scope)! : scope);
 
         return instance is null || instance.Output is null || instance.PassedOver
-            ? $"(step '{string.Join(".", keysFrom < 0 ? names : names.Skip(1))}' left no output: {WhyNoOutputOf(instance)})"
+            ? FlowNoOutput.Sentence(step, FlowNoOutput.Why(instance))
             : null;
     }
-
-    /// <summary>Why a step that left no output left none, as the sentence for it says: not run, skipped, stopped, or failed.</summary>
-    private static string WhyNoOutputOf(FlowInstance? instance)
-        => instance is null ? "it has not run"
-            : instance.State switch
-            {
-                FlowInstanceState.Skipped => $"skipped: {instance.SkippedBecause ?? "its when read false"}",
-                FlowInstanceState.Failed when instance.PassedOver => $"it failed and was passed over: {instance.Error ?? "it failed"}",
-                FlowInstanceState.Failed => $"it failed: {instance.Error ?? "it failed"}",
-                FlowInstanceState.Stopped => "it was stopped by a pause before it ended",
-                FlowInstanceState.NotRun => $"the run never reached it: {instance.NotRunBecause ?? "its when read false"}",
-                _ => "it has not ended",
-            };
 
     /// <summary>The value an instance's name yields: its output alone, or its output's members beside the engine's facts of it. A step whose failure the run passed over is read as Missing - its output, not its facts, which stay what they were.</summary>
     private FlowValue ValueOf(FlowInstance? instance, bool whole)
@@ -9812,7 +9809,8 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>The scope before this one in its repeat's iterations, as <c>previous</c> reads it.</summary>
-    private Scope? PreviousOf(Scope scope)    {
+    private Scope? PreviousOf(Scope scope)
+    {
         for (var at = scope; at is not null; at = at.Parent)
         {
             if (at.Iteration is { } iteration && at.LoopOf is { } loop)

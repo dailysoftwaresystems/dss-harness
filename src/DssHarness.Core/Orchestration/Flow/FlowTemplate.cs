@@ -183,11 +183,11 @@ public static class FlowTemplate
         => FillAroundSkills(template, read, spell: null, out problem);
 
     /// <summary>
-    /// Fills <paramref name="template"/> as the overload beside it does, with one case spelled rather than refused: a
-    /// placeholder that reads nothing where <paramref name="spell"/> says what it names - a step that left no output in
-    /// this run, as a prompt's placeholder is filled for its agent, so the agent is told what it does not
-    /// have - fills with the sentence <paramref name="spell"/> gives it. A name that reads nothing and is spelled
-    /// nothing says why, in <paramref name="problem"/>, and fills nothing.
+    /// Fills <paramref name="template"/> as the overload beside it does, with one case spelled rather than refused or
+    /// filled as null: a placeholder that reads nothing, or null, where <paramref name="spell"/> says what it names - a
+    /// step that left no output in this run, as a prompt's placeholder is filled for its agent, so the agent is told what
+    /// it does not have - fills with the sentence <paramref name="spell"/> gives it. A name that reads nothing and is
+    /// spelled nothing says why, in <paramref name="problem"/>, and fills nothing.
     /// </summary>
     /// <param name="template">The template, as the definition spells it.</param>
     /// <param name="read">Reads one path of a name, as the run's expressions read it.</param>
@@ -246,18 +246,19 @@ public static class FlowTemplate
             {
                 var value = FlowExpression.Parse(name).Evaluate(read);
 
-                if (value.IsMissing)
+                // A step that left no output reads nothing through a member of it, and null whole - a skipped step's
+                // output is none: either way it is spelled where spell says what it names, and only a read of nothing it
+                // does not spell is refused; a null it does not spell - a member an output holds as null - is filled as one.
+                if ((value.IsMissing || value.IsNull) && spell?.Invoke(name) is { } sentence)
                 {
-                    var sentence = spell?.Invoke(name);
-
-                    if (sentence is null)
-                    {
-                        problem = $"'{{{name}}}' reads nothing";
-                        return null;
-                    }
-
                     filled.Append(sentence);
                     continue;
+                }
+
+                if (value.IsMissing)
+                {
+                    problem = $"'{{{name}}}' reads nothing";
+                    return null;
                 }
 
                 filled.Append(value.AsTemplateText());

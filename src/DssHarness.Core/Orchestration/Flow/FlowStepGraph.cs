@@ -543,30 +543,18 @@ public sealed class FlowStepGraph
     }
 
     /// <summary>
-    /// The sentence for a step that left no output, as a prompt's placeholder is filled with it: the graphify
-    /// step that was to make the run's graph, and why it left nothing - it has not run, it was skipped, or it failed.
+    /// The sentence for a step that left no output (<see cref="FlowNoOutput"/>), as a prompt's placeholder is filled with
+    /// it: the graphify step that was to make the run's graph, and why it left nothing, by the state its newest visit's
+    /// record stands in.
     /// </summary>
     private static string MissingOutputOf(OrchestrationStore store, OrchestratorLayout layout, WorkflowDefinition definition, string instance)
     {
         var declared = FlowScope.Declared(definition).Where(one => one.Step.Type == "graphify-codebase").ToList();
         var newest = declared.Count > 0 ? NewestOf(store, layout, record => declared.Any(one => one.Path == record.Step)) : null;
         var named = newest?.Step ?? declared.FirstOrDefault().Step?.Name ?? "graphify-codebase";
-        var why = newest is null ? "it has not run" : WhyOf(newest);
 
-        return $"(step '{named}' left no output: {why})";
+        return FlowNoOutput.Sentence(named, FlowNoOutput.Why(newest));
     }
-
-    /// <summary>Why a step that left no output left none, as the sentence for it says: skipped, or failed.</summary>
-    private static string WhyOf(FlowStepRecord record)
-        => record.State switch
-        {
-            nameof(FlowInstanceState.Skipped) => $"skipped: {record.SkippedBecause ?? "its when read false"}",
-            nameof(FlowInstanceState.Failed) when string.Equals(record.Failure, FlowStepRecord.NameOf(FlowFailure.PassedOver), StringComparison.Ordinal) => $"it failed and was passed over: {record.Error ?? "it failed"}",
-            nameof(FlowInstanceState.Failed) => $"it failed: {record.Error ?? "it failed"}",
-            nameof(FlowInstanceState.Stopped) => "it was stopped by a pause before it ended",
-            nameof(FlowInstanceState.NotRun) => $"the run never reached it: {record.NotRunBecause ?? "its when read false"}",
-            _ => $"it ended {record.State.ToLowerInvariant()}",
-        };
 
     /// <summary>
     /// Whether the step at <paramref name="path"/> has a graph to be given: a <c>graphify-codebase</c> step upstream of it
