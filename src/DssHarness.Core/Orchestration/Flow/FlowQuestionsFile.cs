@@ -98,6 +98,11 @@ public sealed record FlowRefusedAnswer(
 /// <param name="Did">What the engine did with it; null where the answer has not been applied yet.</param>
 /// <param name="ReplacedAt">When a later answer replaced it, where one did; null while it stands.</param>
 /// <param name="Update">The id of the plan update that changed this answer, where one did; null for every answer a person gave as its first.</param>
+/// <param name="Order">
+/// Where the answer stands among every answer the run recorded, from 1, in the order it recorded them: what tells two
+/// answers given in one second apart, which their times - kept to the second - cannot. Null where the record does not
+/// say, which orders it before every answer that does.
+/// </param>
 public sealed record FlowAnswerRecord(
     string Answer,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
@@ -105,7 +110,8 @@ public sealed record FlowAnswerRecord(
     FlowAnswerBy? By = null,
     string? Did = null,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? ReplacedAt = null,
-    string? Update = null);
+    string? Update = null,
+    int? Order = null);
 
 /// <summary>
 /// One question a run raised, as <c>questions.json</c> holds it: its id, kind and state, who raised it, the problem
@@ -312,8 +318,10 @@ public static class FlowAnswerRules
 
     /// <summary>
     /// The last set a person answered: the question whose newest answer by a person is the newest of all the run's,
-    /// answered and standing - the one set a changed answer may change. An answer the configuration or the run's input
-    /// gave is no set, and is never counted. Null where no person has answered the run.
+    /// answered and standing - the one set a changed answer may change. Two answers given in one second, which their
+    /// times kept to the second cannot tell apart, are told apart by the order the run recorded them in
+    /// (<see cref="FlowAnswerRecord.Order"/>). An answer the configuration or the run's input gave is no set, and is
+    /// never counted. Null where no person has answered the run.
     /// </summary>
     /// <param name="questions">Every question the run raised, with every answer each was given.</param>
     public static FlowQuestionEntry? LastSetAnswered(IEnumerable<FlowQuestionEntry> questions)
@@ -321,16 +329,18 @@ public static class FlowAnswerRules
         ArgumentNullException.ThrowIfNull(questions);
 
         FlowQuestionEntry? last = null;
-        DateTimeOffset? newest = null;
+        (DateTimeOffset At, int Order)? newest = null;
 
         foreach (var entry in questions.Where(entry => entry.State == "answered"))
         {
             foreach (var answer in entry.Answers.Where(answer => answer.By?.Who == "person"))
             {
-                if (newest is null || answer.At > newest)
+                var given = (answer.At, answer.Order ?? 0);
+
+                if (newest is not { } standing || given.CompareTo(standing) > 0)
                 {
                     last = entry;
-                    newest = answer.At;
+                    newest = given;
                 }
             }
         }

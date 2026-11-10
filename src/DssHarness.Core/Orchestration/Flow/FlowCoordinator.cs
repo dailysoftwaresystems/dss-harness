@@ -2794,7 +2794,7 @@ public sealed class FlowCoordinator
         if (!set.Given.Any(given => given.Update == update.Id)
             && set.Given.LastOrDefault(given => given.ReplacedAt is null && given.Answer == update.FromAnswer) is { } standing)
         {
-            set.Change(standing, update.ToAnswer!, update.Text, update.Through, update.TakenAt, update.Id, update.Inbox);
+            set.Change(standing, update.ToAnswer!, update.Text, update.Through, update.TakenAt, update.Id, update.Inbox, NextAnswerOrder());
             WriteQuestions();
             changedNow = true;
         }
@@ -2830,6 +2830,12 @@ public sealed class FlowCoordinator
             }
         }
     }
+
+    /// <summary>
+    /// Where the next answer the run records stands among all it recorded (<see cref="FlowAnswerEntry.Order"/>): one past
+    /// every answer its questions hold, for no answer is ever taken out of a question's record - a replaced one is kept.
+    /// </summary>
+    private int NextAnswerOrder() => _questions.Sum(asked => asked.Given.Count) + 1;
 
     /// <summary>The last set a person answered (<see cref="FlowAnswerRules.LastSetAnswered"/>), as this engine holds the run's questions.</summary>
     private FlowQuestion? LastAnsweredByAPerson()
@@ -2941,7 +2947,7 @@ public sealed class FlowCoordinator
     private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null, string? input = null)
     {
         var did = asked.Kind == "runBudget" ? answer == "more" ? "each amount is allowed once again" : "the run ends stopped" : null;
-        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did, Input: input, Inbox: inbox));
+        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did, Input: input, Inbox: inbox, Order: NextAnswerOrder()));
         asked.State = "answered";
 
         if (answer == "abort")

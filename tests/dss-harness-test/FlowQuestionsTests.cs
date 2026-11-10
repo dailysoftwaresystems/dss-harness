@@ -470,6 +470,65 @@ public sealed class FlowQuestionsTests
         Assert.False(coordinator.Instances.ContainsKey("after"));
     }
 
+    /// <summary>
+    /// Two sets a person answered in one second - which their times, kept to the second, cannot tell apart - are told
+    /// apart by the order the run recorded them in: the last set answered is the one recorded last, wherever the file
+    /// holds it.
+    /// </summary>
+    [Fact]
+    public void TheLastSetAnswered_InOneSecond_IsTheOneRecordedLast()
+    {
+        var second = new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero);
+
+        FlowQuestionEntry Answered(string id, int order)
+            => new(id, "answered", "pause", second, [], [new("go", "goes on"), new("stay", "stays")], [new FlowAnswerRecord("go", second, By: new FlowAnswerBy("person"), Order: order)]);
+
+        Assert.Equal("q2", FlowAnswerRules.LastSetAnswered([Answered("q1", 1), Answered("q2", 2)])!.Id);
+        Assert.Equal("q1", FlowAnswerRules.LastSetAnswered([Answered("q1", 2), Answered("q2", 1)])!.Id);
+    }
+
+    /// <summary>
+    /// The engine numbers every answer it records in the order it records them, and its record keeps the number: two
+    /// questions open at once, answered in one instant, leave as the last set the one answered last - in the engine, and
+    /// read back from <c>questions.json</c> as the command reads it.
+    /// </summary>
+    [Fact]
+    public async Task AnswersRecordedInOneInstant_AreNumberedInTheOrderTaken_AndTheLastSetIsTheOneAnsweredLast()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: pause
+                question: the first?
+                options: [go, stay]
+              - name: second
+                type: pause
+                question: the second?
+                options: [go, stay]
+            """);
+        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new ManualClock());
+
+        await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var first = coordinator.OpenQuestions.Single(question => question.Instance == "first");
+        var second = coordinator.OpenQuestions.Single(question => question.Instance == "second");
+
+        // The first raised is answered first, the second last: file order and answer order agree, and only the order
+        // the answers were recorded in can say which is last, for both carry the one instant.
+        Assert.Equal(["q1", "q2"], coordinator.Questions.Select(question => question.Id));
+        Assert.True(coordinator.TryAnswer(first.Id, "go", out _));
+        Assert.True(coordinator.TryAnswer(second.Id, "stay", out _));
+
+        var entries = coordinator.Questions.Select(question => question.ToEntry()).ToList();
+        var file = new FlowQuestionsFile(1, "r1", DateTimeOffset.UnixEpoch, entries);
+        var read = JsonSerializer.Deserialize<FlowQuestionsFile>(JsonSerializer.Serialize(file, JsonStateFile.Options), JsonStateFile.Options)!;
+
+        Assert.Equal([1, 2], entries.Select(entry => Assert.Single(entry.Answers).Order));
+        Assert.Equal(second.Id, FlowAnswerRules.LastSetAnswered(entries)!.Id);
+        Assert.Equal(second.Id, FlowAnswerRules.LastSetAnswered(read.Questions)!.Id);
+    }
+
     /// <summary>A pause step answered with no text holds an empty text, as the plan says: a prompt that reads it reads nothing, never "null".</summary>
     [Fact]
     public async Task APauseAnsweredWithNoText_HoldsAnEmptyText()

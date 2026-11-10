@@ -264,20 +264,9 @@ public sealed class ImplementationFlowTests
     private static FlowQuestionsFile Questions(Kit kit)
         => kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf()) ?? throw new InvalidOperationException("the run holds no questions file");
 
-    /// <summary>The last set a person answered, as the run's questions file reads it - the one a changed answer names.</summary>
+    /// <summary>The last set a person answered, as the run's questions file reads it - the one a changed answer names, by the rule the command reads it by.</summary>
     private static string? NewestPersonAnswer(Kit kit)
-        => Questions(kit).Questions
-            .SelectMany(question => question.Answers.Where(answer => answer.By?.Who == "person").Select(answer => (question.Id, answer.At)))
-            .OrderByDescending(answer => answer.At)
-            .Select(answer => (string?)answer.Id)
-            .FirstOrDefault();
-
-    /// <summary>When the last answer a person gave was recorded, as the run's questions file reads it.</summary>
-    private static DateTimeOffset NewestPersonAnswerAt(Kit kit)
-        => Questions(kit).Questions
-            .SelectMany(question => question.Answers.Where(answer => answer.By?.Who == "person").Select(answer => answer.At))
-            .DefaultIfEmpty()
-            .Max();
+        => FlowAnswerRules.LastSetAnswered(Questions(kit).Questions)?.Id;
 
     /// <summary>The run's events, whole, read as a diagnostic that shares the file with the engine writing it.</summary>
     private static string Events(Kit kit)
@@ -3936,17 +3925,12 @@ public sealed class ImplementationFlowTests
         Assert.Contains("(item-agent)", planned, StringComparison.Ordinal);
         Assert.Contains("(implement)", planned, StringComparison.Ordinal);
 
-        // The plan is approved again: the change's settle, in the planning it made. The run's records keep times to
-        // the second, and the last set a person answered is the newest by them: the approval waits for a later
-        // second than the change, so what it records is the last beyond any tie.
+        // The plan is approved again: the change's settle, in the planning it made - recorded after the change, and the
+        // last set a person answered however close in time the two are, for the run numbers its answers.
         var settle = await WhenOpenAsync(
             kit,
             question => question.ProblemShown?.Happened?.Contains("adds the ledger as a second", StringComparison.Ordinal) == true,
             () => $"{Shown(kit)}");
-
-        await WhenAsync(
-            () => DateTimeOffset.UtcNow - NewestPersonAnswerAt(kit) > TimeSpan.FromSeconds(1),
-            () => "the clock never moved past the change");
 
         _ = await AnswerOneAsync(kit, settle.Id, "approve");
 
@@ -4270,10 +4254,6 @@ public sealed class ImplementationFlowTests
             kit,
             question => question.ProblemShown?.Happened?.Contains("adds the ledger as a second", StringComparison.Ordinal) == true,
             () => $"{Shown(kit)}");
-
-        await WhenAsync(
-            () => DateTimeOffset.UtcNow - NewestPersonAnswerAt(kit) > TimeSpan.FromSeconds(1),
-            () => "the clock never moved past the change");
 
         _ = await AnswerOneAsync(kit, settle.Id, "approve");
 
