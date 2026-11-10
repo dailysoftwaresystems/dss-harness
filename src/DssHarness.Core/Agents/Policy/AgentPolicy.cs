@@ -2900,7 +2900,7 @@ public sealed partial class AgentPolicy
     {
         if (group is RunRules.Credentials)
         {
-            return CredentialPrintingCommands.FirstOrDefault(printing => Meets(printing, reading, everyExpansion: true) == wanted) is not { } printing ? null
+            return CredentialPrintingCommands.FirstOrDefault(printing => Meets(printing, reading, everyExpansion: true).Match == wanted) is not { } printing ? null
                 : wanted is AgentRuleMatch.Yes
                     ? new AgentPolicyAnswer.Denied(
                         $"Run({printing})",
@@ -2923,10 +2923,13 @@ public sealed partial class AgentPolicy
 
         if (rules.FirstOrDefault(each => each.Rule.Match(reading.Words, comparison, reading.Quoted) == wanted) is not { Rule: { } rule } met)
         {
-            // git's other commands, in the forms that write what its state-writing verbs do, wherever the option stands.
-            return group is RunRules.Worktree && _ground.WorktreeRules && GitStateForms.FirstOrDefault(form => Meets(form, reading, everyExpansion: false) == wanted) is { } form
+            // git's other commands, in the forms that write what its state-writing verbs do, wherever the option stands - a
+            // form the command meets without an expansion the shell splits named first, so the refusal says quoting lets it
+            // through only where quoting would.
+            return group is RunRules.Worktree && _ground.WorktreeRules
+                && GitStateForms.Select(form => (Form: form, Met: Meets(form, reading, everyExpansion: false))).Where(each => each.Met.Match == wanted).OrderBy(each => each.Met.Split).FirstOrDefault() is { Form: { } form } state
                 ? wanted is AgentRuleMatch.Expanded
-                    ? MayBe($"Run({form})", AgentPolicySource.Builtin, whole)
+                    ? MayBe($"Run({form})", AgentPolicySource.Builtin, whole) is var maybe && state.Met.Split ? maybe with { Reason = $"{maybe.Reason}; {QuoteTheExpansion}" } : maybe
                     : new AgentPolicyAnswer.Denied($"Run({form})", AgentPolicySource.Builtin, $"'{whole}' is denied by Run({form}), a worktree rule of this tool")
                 : null;
         }
@@ -2950,9 +2953,10 @@ public sealed partial class AgentPolicy
     /// </summary>
     private AgentPolicyAnswer.Denied? LiveRunHold(RuleReading reading, AgentRuleMatch wanted, string whole, StringComparison comparison)
     {
-        if (_ground is not { SideTask: true, LiveRun: { } liveRun }
-            || !(_liveRunHeldRules.Any(rule => rule.Match(reading.Words, comparison, reading.Quoted) == wanted)
-                || GitStateForms.Any(form => Meets(form, reading, everyExpansion: false) == wanted)))
+        var held = _liveRunHeldRules.Any(rule => rule.Match(reading.Words, comparison, reading.Quoted) == wanted);
+        var forms = GitStateForms.Select(form => Meets(form, reading, everyExpansion: false)).Where(met => met.Match == wanted).ToList();
+
+        if (_ground is not { SideTask: true, LiveRun: { } liveRun } || !(held || forms.Count > 0))
         {
             return null;
         }
@@ -2970,7 +2974,8 @@ public sealed partial class AgentPolicy
             AgentPolicySource.Builtin,
             wanted is AgentRuleMatch.Yes && !open.Contains(AgentRuleMatch.Expanded)
                 ? $"run '{run}' is working over this tree, and '{whole}' writes the git state it works over - its HEAD, index, refs, stash, configuration or worktrees; ask again when it ends, or pause it yourself"
-                : $"run '{run}' is working over this tree, and '{whole}' may write the git state it works over: a word of it is one the shell expands, which this does not read; ask again when it ends, or pause it yourself");
+                : $"run '{run}' is working over this tree, and '{whole}' may write the git state it works over: a word of it is one the shell expands, which this does not read; "
+                    + (!held && forms.All(met => met.Split) ? $"{QuoteTheExpansion}; " : string.Empty) + "ask again when it ends, or pause it yourself");
     }
 
     /// <summary>The rule a refusal of a command held while a run works over the tree names (<see cref="LiveRunHeld"/>).</summary>
@@ -2985,10 +2990,11 @@ public sealed partial class AgentPolicy
     /// git takes one - and a short one by any cluster of short options that holds its letter (<c>-at</c> holds
     /// <c>-t</c>). Where no word is a word of the entry's but a word the shell expands may give it, the command may be the
     /// entry: for <paramref name="everyExpansion"/>, any word the shell expands among the command's words after its
-    /// command; otherwise only one whose expansion may begin the entry's word - one that begins its word, quoted or not
-    /// (<c>$OPT</c>, <c>"$O"</c>), or follows a start the entry's word may have (<c>-f$X</c>, <c>--upd$X</c>) - never one
-    /// inside a word that begins with what no word of the entry's begins with (<c>--depth=$n</c>,
-    /// <c>refs/heads/$b:refs/remotes/o/$b</c>, <c>refs/heads/*</c>).
+    /// command; otherwise only one whose expansion may give the entry's word - one that begins its word, quoted or not
+    /// (<c>$OPT</c>, <c>"$O"</c>), one that follows a start the entry's word may have (<c>-f$X</c>, <c>--upd$X</c>), and one
+    /// the shell may split into words of their own (<see cref="MaySplit"/>: <c>--depth=$n</c> holding <c>"1 -u"</c>) - never
+    /// a quoted one inside a word that begins with what no word of the entry's begins with (<c>--depth="$n"</c>,
+    /// <c>"refs/heads/$b:refs/remotes/o/$b"</c>), nor a pattern whose every match begins so (<c>refs/heads/*</c>).
     /// </summary>
     /// <param name="entry">The entry: its program, its command, then the words that make it what it is.</param>
     /// <param name="reading">The command as its rules read it, each word with how it stands to the shell.</param>
@@ -2998,16 +3004,21 @@ public sealed partial class AgentPolicy
     /// is split by the shell where its value holds a blank (<c>--hostname=$H</c> holding <c>" --show-token"</c>), and cmd
     /// reads a percent's value before it reads a quote - a credential printed is the one refusal no reading of where an
     /// expansion stands may narrow; not so for the forms of git's commands that write its state
-    /// (<see cref="GitStateForms"/>), where the narrower reading keeps a fetch of a depth or a refspec a variable names open.
+    /// (<see cref="GitStateForms"/>), where the narrower reading keeps a fetch of a depth or a refspec a quoted variable
+    /// names open.
     /// </param>
-    private static AgentRuleMatch Meets(string entry, RuleReading reading, bool everyExpansion)
+    /// <returns>
+    /// How the reading meets the entry, and whether it may be the entry only by an expansion the shell splits - so quoting
+    /// that expansion would let it through, which its refusal says (<see cref="QuoteTheExpansion"/>).
+    /// </returns>
+    private static (AgentRuleMatch Match, bool Split) Meets(string entry, RuleReading reading, bool everyExpansion)
     {
         var named = entry.Split(' ');
         var words = reading.Words;
 
         if (words.Count < 2 || !CommandAnalysis.Name(words[0]).Equals(named[0], StringComparison.OrdinalIgnoreCase))
         {
-            return AgentRuleMatch.No;
+            return (AgentRuleMatch.No, false);
         }
 
         bool Expands(int at) => CommandAnalysis.Expansion(words[at], reading.QuotedAt(at)) is not null;
@@ -3015,17 +3026,17 @@ public sealed partial class AgentPolicy
         // A command word the shell expands may be any words at all, the entry's whole among them.
         if (Expands(1))
         {
-            return AgentRuleMatch.Expanded;
+            return (AgentRuleMatch.Expanded, false);
         }
 
         if (!(named[1].EndsWith('*')
             ? words[1].Length >= named[1].Length && words[1].StartsWith(named[1][..^1], StringComparison.OrdinalIgnoreCase)
             : words[1].Equals(named[1], StringComparison.OrdinalIgnoreCase)))
         {
-            return AgentRuleMatch.No;
+            return (AgentRuleMatch.No, false);
         }
 
-        var expanded = false;
+        var (expanded, split) = (false, true);
         var after = Enumerable.Range(2, words.Count - 2).ToList();
 
         var git = named[0] == "git";
@@ -3037,21 +3048,71 @@ public sealed partial class AgentPolicy
                 continue;
             }
 
-            if (!after.Any(at => everyExpansion ? Expands(at) : MayGiveWord(words[at], reading.QuotedAt(at), wanted, git)))
+            var begun = everyExpansion ? after.Any(Expands) : after.Any(at => MayGiveWord(words[at], reading.QuotedAt(at), wanted, git));
+
+            if (!begun && (everyExpansion || !after.Any(at => MaySplit(words[at], reading.QuotedAt(at)))))
             {
-                return AgentRuleMatch.No;
+                return (AgentRuleMatch.No, false);
             }
 
-            expanded = true;
+            (expanded, split) = (true, split && !begun);
         }
 
-        return expanded ? AgentRuleMatch.Expanded : AgentRuleMatch.Yes;
+        return expanded ? (AgentRuleMatch.Expanded, split) : (AgentRuleMatch.Yes, false);
     }
 
     /// <summary>
-    /// Whether the shell's expansion of <paramref name="word"/> may give a word that is <paramref name="wanted"/>
+    /// What a refusal says where a command may be one of <see cref="GitStateForms"/> only by an expansion the shell splits
+    /// into words of their own: quoting it lets the command through.
+    /// </summary>
+    public const string QuoteTheExpansion = "an unquoted expansion may be split into a word of its own - quoted (\"$x\"), inside a word that begins otherwise, it is let through";
+
+    /// <summary>
+    /// Whether the shell may split an expansion in <paramref name="word"/> into words of their own, any of which may be an
+    /// option: a variable or a substitution that stands unquoted; every positional parameter (<c>"$@"</c>,
+    /// <c>"${a[@]}"</c>), which is a word for each even quoted; and cmd's percent and delayed names, which cmd reads before it
+    /// reads a quote. A pattern or a brace is no such expansion: each word it gives begins with what stands before it in
+    /// its word, so its start alone decides it (<see cref="MayGiveWord"/>). Each expansion is found as
+    /// <see cref="CommandAnalysis.Expansion"/> reads it, the one reader of what the shell expands.
+    /// </summary>
+    /// <param name="word">The word, its quotes read as the shell reads them.</param>
+    /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
+    private static bool MaySplit(string word, string? quoted)
+    {
+        string? Expands(int from, int to) => CommandAnalysis.Expansion(word[from..to], quoted?[from..to]);
+
+        for (var from = 0; from < word.Length;)
+        {
+            // The next expansion: the shortest stretch from here that expands ends in it, the longest end of that stretch
+            // that still expands begins it.
+            if (Enumerable.Range(from + 1, word.Length - from).FirstOrDefault(to => Expands(from, to) is not null) is not (> 0 and var end))
+            {
+                return false;
+            }
+
+            var start = Enumerable.Range(from, end - from).Last(at => Expands(at, end) is not null);
+            var open = quoted is null || quoted[start] == WordQuoting.Open;
+            var positional = word[start] == '$' && start + 1 < word.Length
+                && (word[start + 1] == '@' || (word[start + 1] == '{' && word.IndexOf("[@]", start, StringComparison.Ordinal) > start));
+
+            if (Expands(start, end) is "a variable" or "a substitution" && (open || positional || word[start] is '%' or '!'))
+            {
+                return true;
+            }
+
+            from = end;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the shell's expansion of <paramref name="word"/> may give it as a word that is <paramref name="wanted"/>
     /// (<see cref="MeetsWord"/>): where the word expands at all, the text before its first expansion is a start a word
-    /// that is <paramref name="wanted"/> may have - none, where the expansion begins the word. Where the first expansion
+    /// that is <paramref name="wanted"/> may have - none, where the expansion begins the word. Every word an expansion that
+    /// is not split gives begins with that text - a quoted variable's, and every match of a pattern, which begins with what
+    /// stands before it, so <c>refs/heads/*</c> matches no <c>-u</c> while <c>*</c> may match a file of that name; one the
+    /// shell splits may give a word of its own wherever it stands (<see cref="MaySplit"/>). Where the first expansion
     /// begins is read of what <see cref="CommandAnalysis.Expansion"/> reads, the one reader of what the shell expands: the
     /// shortest start of the word that expands ends in that expansion, and the longest end of that start that still
     /// expands begins it.

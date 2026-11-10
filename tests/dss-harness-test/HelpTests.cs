@@ -835,9 +835,10 @@ public sealed partial class HelpTests
         Assert.Contains(
             $"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}) and the forms of its other commands that write the same "
                 + $"({string.Join(", ", AgentPolicy.GitStateForms)}, the option met wherever it stands among the command's words, by any cluster that holds "
-                + "its letter or any start of its name git takes, and a word the shell expands held as one that may be it only where its expansion may begin it - "
-                + "a word it begins, quoted or not, or one after a start the option's own may have (-f$X) - never inside a word that begins otherwise "
-                + $"(--depth=$n, refs/heads/$b:refs/remotes/o/$b)) are refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", AgentPolicy.GhStateCommands)}; "
+                + "its letter or any start of its name git takes, and a word the shell expands held as one that may be it where its expansion may give it - "
+                + "a word it begins, quoted or not, one after a start the option's own may have (-f$X), or one the shell splits into words of their own where it "
+                + "stands unquoted (--depth=$n), the refusal saying that quoting it lets it through - never a quoted one inside a word that begins otherwise "
+                + $"(--depth=\"$n\", \"refs/heads/$b:refs/remotes/o/$b\"), nor a pattern whose every match begins so (refs/heads/*)) are refused, and so are the gh commands that run them or write gh's own configuration ({string.Join(", ", AgentPolicy.GhStateCommands)}; "
                 + "a command gh names by an alias of its own, pr co for pr checkout among them, read as the command it names, and "
                 + "where gh reads its configuration from - GH_CONFIG_DIR, XDG_CONFIG_HOME, AppData, HOME - set for a command the gh config set it is) - reading git",
             prose,

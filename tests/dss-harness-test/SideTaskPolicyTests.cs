@@ -216,13 +216,24 @@ public sealed class SideTaskPolicyTests
                 (refused.Rule, refused.Reason));
         }
 
+        // An expansion the shell may split into a word of its own, inside a word of a fetch that begins otherwise: held, and
+        // said how quoting it lets it through.
+        foreach (var command in new[] { "git fetch --depth=$n origin", "git fetch origin refs/heads/$b:refs/remotes/origin/$b" })
+        {
+            var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command));
+
+            Assert.Equal(
+                (AgentPolicy.LiveRunRule, $"run '{run}' is working over this tree, and '{command}' may write the git state it works over: a word of it is one the shell expands, which this does not read; an unquoted expansion may be split into a word of its own - quoted (\"$x\"), inside a word that begins otherwise, it is let through; ask again when it ends, or pause it yourself"),
+                (refused.Rule, refused.Reason));
+        }
+
         // The git that writes none of it, and the forms of the verbs that do that only read - a listing mode wherever it
         // stands among the words, an option's value read as one - stay open.
         foreach (var command in new[]
         {
             "git status", "git log -1", "git diff HEAD", "git -C . status", "git rev-parse --abbrev-ref HEAD",
             "git fetch", "git fetch origin", "git fetch --all --prune", "git fetch origin main:refs/remotes/origin/main",
-            "git fetch --depth=$n origin", "git fetch origin refs/heads/$b:refs/remotes/origin/$b", "git fetch origin refs/heads/*:refs/remotes/o/*",
+            "git fetch --depth=\"$n\" origin", "git fetch origin \"refs/heads/$b:refs/remotes/origin/$b\"", "git fetch origin refs/heads/*:refs/remotes/o/*",
             "git branch", "git branch -a", "git branch -vv", "git branch -av", "git branch --show-current", "git branch --list 'feat*'",
             "git branch -l", "git branch -l 'feat*'", "git --no-pager branch", "git branch --contains abc", "git branch --merged",
             "git branch --no-merged main", "git branch -a --contains abc", "git branch -r --merged main", "git branch --points-at HEAD",
@@ -275,9 +286,10 @@ public sealed class SideTaskPolicyTests
         Assert.Contains($"gh's that write git's state ({string.Join(", ", AgentPolicy.GhStateCommands)}, each whole)", help, StringComparison.Ordinal);
         Assert.Contains(
             $"the forms of git's other commands that write the same ({string.Join(", ", AgentPolicy.GitStateForms)}, the option met wherever it stands among the command's words, "
-                + "by any cluster that holds its letter or any start of its name git takes, and a word the shell expands held as one that may be it only where its "
-                + "expansion may begin it - a word it begins, quoted or not, or one after a start the option's own may have (-f$X) - never inside a word that "
-                + "begins otherwise (--depth=$n, refs/heads/$b:refs/remotes/o/$b))",
+                + "by any cluster that holds its letter or any start of its name git takes, and a word the shell expands held as one that may be it where its "
+                + "expansion may give it - a word it begins, quoted or not, one after a start the option's own may have (-f$X), or one the shell splits into "
+                + "words of their own where it stands unquoted (--depth=$n), the refusal saying that quoting it lets it through - never a quoted one inside a "
+                + "word that begins otherwise (--depth=\"$n\", \"refs/heads/$b:refs/remotes/o/$b\"), nor a pattern whose every match begins so (refs/heads/*))",
             help,
             StringComparison.Ordinal);
         Assert.Contains($"Their forms that only read stay open: {string.Join(", ", AgentPolicy.LiveRunOpen)} (a trailing * any words after the form)", help, StringComparison.Ordinal);

@@ -2438,9 +2438,11 @@ public static class HelpTopics
     /// </summary>
     private const string GitStateFormsMet =
         "the option met wherever it stands among the command's words, by any cluster that holds its letter or any start "
-        + "of its name git takes, and a word the shell expands held as one that may be it only where its expansion may "
-        + "begin it - a word it begins, quoted or not, or one after a start the option's own may have (-f$X) - never "
-        + "inside a word that begins otherwise (--depth=$n, refs/heads/$b:refs/remotes/o/$b)";
+        + "of its name git takes, and a word the shell expands held as one that may be it where its expansion may give "
+        + "it - a word it begins, quoted or not, one after a start the option's own may have (-f$X), or one the shell "
+        + "splits into words of their own where it stands unquoted (--depth=$n), the refusal saying that quoting it "
+        + "lets it through - never a quoted one inside a word that begins otherwise (--depth=\"$n\", "
+        + "\"refs/heads/$b:refs/remotes/o/$b\"), nor a pattern whose every match begins so (refs/heads/*)";
 
     /// <summary>
     /// What a side-task's agent is held off while a run works over the tree, said from the lists the policy holds it by

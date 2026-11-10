@@ -1450,7 +1450,9 @@ While a run's owner is live
 refused, with the run's name, every command that writes the git state the run works over (`AgentPolicy.LiveRunHeld`:
 git's state-writing verbs, the verbs that write its index and gh's that write git's state, each whole, and beside them
 `AgentPolicy.GitStateForms`, a fetch's `--update-head-ok` wherever it stands, an expansion held as one that may be it
-only where it may begin it) - met as the worktree rules meet a command,
+where it may give it - beginning its word, after a start the option may have, or unquoted, which the shell may split -
+and the refusal of one only an unquoted expansion makes so saying that quoting it lets it through,
+`AgentPolicy.QuoteTheExpansion`) - met as the worktree rules meet a command,
 by every reading `CommandAnalysis.ForRules` gives it and with a verb the shell expands held as one that may be any, their
 forms that only read open: those a verb decides as patterns (`AgentPolicy.LiveRunOpen`), and git branch, tag, config,
 symbolic-ref, reflog and notes in a mode that only reads, read as git reads their options wherever they stand
@@ -2103,9 +2105,13 @@ file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a
 (`$(printf ...)`), and what a process apart from the agent's tree does. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the forms of its other
 commands that write the same (`AgentPolicy.GitStateForms`, each option met wherever it stands, by `AgentPolicy.Meets`: a
-word the shell expands held as one that may be the option only where its expansion may begin it - a word it begins,
-quoted or not, or one after a start the option's own may have - never inside a word that begins otherwise, as
-`--depth=$n` or a refspec a variable names), the `gh` commands that run them
+word the shell expands held as one that may be the option where its expansion may give it - a word it begins, quoted
+or not, one after a start the option's own may have, or one the shell may split into words of their own where it stands
+unquoted (`AgentPolicy.MaySplit`: a variable or a substitution in the open, every positional parameter, cmd's percent and
+delayed names), the refusal of one only such a split makes so saying that quoting it lets it through
+(`AgentPolicy.QuoteTheExpansion`) - never a quoted one inside a word that begins otherwise, as `--depth="$n"` or a quoted
+refspec a variable names, nor a pattern, whose every match begins with what stands before it, as `refs/heads/*`), the
+`gh` commands that run them
 or write gh's own configuration (`AgentPolicy.GhStateCommands`; gh's own aliases read as the commands they name,
 `CommandAnalysis.GhAliases`, and a place gh reads its configuration from set for a command read as `gh config set`),
 and the merges
