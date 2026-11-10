@@ -1437,7 +1437,9 @@ way; a deletion lets the hold go before its transcripts, its evidence and its wo
 what it recorded, never by the tree after; from the command line there is no ledger and nothing is recorded. The one
 limit is a fold that dies inside its own hold, part way through its write: the next attempt reads what it left from the
 tree, under the lock as well, and marks it so, for a side-task's write made between the death and that read cannot be
-told from the fold's.
+told from the fold's. Every intent the ledger writes says that its verb records its write (`FlowFoldEntry.RecordsWrite`);
+an intent left unsettled that does not say so - an earlier release's, whose verb recorded nothing of its write and may
+have written all of it - is read from the tree in the same way, never settled as found.
 On Claude Code the lock is taken off the launch's loop for the call whose permission waits on it, with a token
 of its own that an ask withdrawn, the call's result or its turn's end cancels, and the permission is answered on the
 loop - a take that ends for a call no longer waiting is let go at once and nothing sent, an ask of a call already held
@@ -3200,8 +3202,10 @@ failed with what it recorded (each path as found where it never began to write),
 An apply stopped - which writes nothing once its measure is done, every write after it uncancelled - is settled stopped
 with each path as found, the tree unread; one that threw otherwise, and whatever a crash left unsettled, which the next
 attempt settles first, are settled interrupted (`SettleInterruptedAsync`): by what the fold recorded, where it was
-written; as found, where it never began to write; and only for a fold that died inside its own hold, part way through
-its write - which recorded that it began and nothing after - from the tree read under its lock, marked `readFromTree`:
+written; as found, where its verb records its write (`recordsWrite`) and never began one; and only where the tree alone
+can tell (`FlowFoldEntry.WrittenUnrecorded`) - a fold that died inside its own hold, part way through its write, which
+recorded that it began and nothing after, or an intent an earlier release left, which does not say `recordsWrite`, its
+verb having recorded nothing of its write - from the tree read under its lock, marked `readFromTree`:
 the one stated limit, for a side-task's write made between that death and the read cannot be told from the fold's. No caller holding that lock calls it. The
 step's `fold.json` takes what the apply answered before the ledger's settle, and an apply that threw goes on with its own
 exception, its fold left for the next attempt where reading the tree fails too or a stop ends the wait for the lock. `CommitStepRunner` commits the folds upstream of it

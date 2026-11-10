@@ -1806,7 +1806,9 @@ verb and, before the fold lets go of the main tree's lock it wrote under, what i
 it let go is never taken for the fold's, whatever comes after: the verb's answer, a throw, a crash, a stop. The one limit
 is a fold that dies inside its own hold, part way through its write: the next attempt reads what it left from the tree,
 under that lock, and marks it `readFromTree`, for a side-task's write made between the death and that read cannot be
-told from the fold's - and, of `others`, work on each other open agent of the run in turn; and `commit`, which commits
+told from the fold's (an intent an earlier release left unsettled, which does not say `recordsWrite` - its verb recorded
+nothing of its write, so it may have written all of it - is read so too) - and, of `others`, work on each other open
+agent of the run in turn; and `commit`, which commits
 the folds upstream of it and no other work - each path they changed that no commit of the run took, held to what
 its fold left there (a path edited or restored since, a path the index marks assume-unchanged or skip-worktree, the
 main checkout off the branch the run started on, or a fold upstream whose intent nobody settled, fails it, and nothing

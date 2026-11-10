@@ -5010,6 +5010,11 @@ public sealed partial class HelpTests
                 + $"from the tree, under that lock, and marks it {JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowFoldEntry.ReadFromTree))}",
             workflows,
             StringComparison.Ordinal);
+        Assert.Contains(
+            $"an intent an earlier release left unsettled, which does not say {JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowFoldEntry.RecordsWrite))} - "
+                + "its verb recorded nothing of its write - is read so too",
+            workflows,
+            StringComparison.Ordinal);
         Assert.Null(typeof(RefreshAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
         Assert.Null(typeof(RebaseAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
         Assert.NotNull(typeof(DeleteAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));

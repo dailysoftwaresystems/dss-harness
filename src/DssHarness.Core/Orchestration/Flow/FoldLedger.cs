@@ -50,7 +50,8 @@ public sealed record FoldIntent(FoldLedger Ledger, OrchestratorLayout Layout, st
 /// a side-task writes once the fold lets go is recorded as the fold's, whether the verb's answer, a throw or a crash comes
 /// after; then what became of it once the verb answered. A crash or a throw that leaves an entry unsettled is settled by
 /// the step - from what the verb recorded, where it did; as found, where it never began to write; and only for a crash
-/// part way through the write itself, from the tree, read under that lock and marked so. And a commit's staged set,
+/// part way through the write itself, or an intent an earlier release wrote, whose verb recorded nothing of its write,
+/// from the tree, read under that lock and marked so. And a commit's staged set,
 /// written before its first <c>git add</c> and marked committed - with each fold path it took - or unstaged after, or
 /// left staged with the commit made of it where that commit was not the set's alone.
 /// </summary>
@@ -61,7 +62,8 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
 {
     /// <summary>
     /// Appends the intent of one fold: every path <paramref name="planned"/> writes, merges, removes, and every registry
-    /// file its rows change, each with the digest the main tree holds there now - written before the verb is called.
+    /// file its rows change, each with the digest the main tree holds there now - written before the verb is called, and
+    /// saying that its verb records its own write (<see cref="FlowFoldEntry.RecordsWrite"/>).
     /// </summary>
     /// <param name="layout">The run's orchestrator.</param>
     /// <param name="main">The main tree's root.</param>
@@ -97,7 +99,7 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
             Folds =
             [
                 .. ledger.Folds,
-                new FlowFoldEntry(FlowFoldEntry.IdOf(ledger.Folds.Count + 1), instance, attempt, type, agent, FlowFoldEntry.Intended, clock.GetUtcNow(), paths, planned.Rows),
+                new FlowFoldEntry(FlowFoldEntry.IdOf(ledger.Folds.Count + 1), instance, attempt, type, agent, FlowFoldEntry.Intended, clock.GetUtcNow(), paths, planned.Rows, RecordsWrite: true),
             ],
         });
 
@@ -158,19 +160,19 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
     /// <param name="exitCode">The code the verb answered with; 21 for a verb stopped before its write.</param>
     /// <returns>The entry as it was settled.</returns>
     /// <exception cref="HarnessException">
-    /// The ledger holds no such fold unsettled, or its verb answered with its write begun and not recorded, or went through
-    /// without beginning one: each the engine's fault (<see cref="HarnessExit.InternalError"/>), the entry left for the
-    /// step's next attempt to settle.
+    /// The ledger holds no such fold unsettled, or none whose verb records its write, or its verb answered with its write
+    /// begun and not recorded, or went through without beginning one: each the engine's fault
+    /// (<see cref="HarnessExit.InternalError"/>), the entry left for the step's next attempt to settle.
     /// </exception>
     public FlowFoldEntry Settle(OrchestratorLayout layout, string id, int exitCode)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        var entry = store.ReadFolds(layout)?.Of(id) is { State: FlowFoldEntry.Intended or FlowFoldEntry.Written } found
+        var entry = store.ReadFolds(layout)?.Of(id) is { State: FlowFoldEntry.Intended or FlowFoldEntry.Written, RecordsWrite: true } found
             ? found
             : throw new HarnessException(
                 HarnessExit.InternalError,
-                $"the run's ledger of its folds holds no fold '{id}' whose verb answered with its write recorded or never begun: what it wrote cannot be told, and the step's next attempt settles it");
+                $"the run's ledger of its folds holds no fold '{id}' whose verb records its write and answered with it recorded or never begun: what it wrote cannot be told, and the step's next attempt settles it");
         var wrote = entry.State == FlowFoldEntry.Written;
 
         if (!wrote && exitCode == HarnessExit.Success)
@@ -195,9 +197,11 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
     /// <summary>
     /// Settles, as interrupted, every fold of <paramref name="instance"/> a crash or a throw out of its verb left unsettled:
     /// what the step reads before it folds anything again. One whose verb recorded what it left is settled by that, the
-    /// tree unread, whatever a side-task wrote since; an intent whose verb never began to write, as it found each path; and
-    /// only one cut off part way through its write - which recorded that it began and nothing after - is read from the main
-    /// tree, under the main tree's lock, so never a file a side-task's write or command is part way through, and marked so
+    /// tree unread, whatever a side-task wrote since; an intent whose verb records its write and never began one, as it
+    /// found each path; and only what the tree alone can tell (<see cref="FlowFoldEntry.WrittenUnrecorded"/>) - a fold cut
+    /// off part way through its write, which recorded that it began and nothing after, or an intent an earlier release
+    /// wrote, whose verb recorded nothing of its write and may have written all of it - is read from the main tree, under
+    /// the main tree's lock, so never a file a side-task's write or command is part way through, and marked so
     /// (<see cref="FlowFoldEntry.ReadFromTree"/>): what a side-task wrote between the crash and the read cannot be told from
     /// the fold's. The lock is taken only for such a read; its callers hold none, and nothing it calls takes one.
     /// </summary>
@@ -216,7 +220,7 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
             .ToList();
         var settled = new List<FlowFoldEntry>();
 
-        using var tree = left.Any(entry => entry.State == FlowFoldEntry.Writing)
+        using var tree = left.Any(entry => entry.WrittenUnrecorded)
             ? await MainTreeWriteLock.HoldAsync(main, cancellationToken).ConfigureAwait(false) ?? throw new OperationCanceledException(cancellationToken)
             : null;
 
@@ -224,12 +228,10 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
         {
             var interrupted = entry with { State = FlowFoldEntry.Interrupted, SettledAt = clock.GetUtcNow() };
 
-            settled.Add(entry.State switch
-            {
-                FlowFoldEntry.Written => interrupted,
-                FlowFoldEntry.Intended => interrupted with { Paths = Found(entry.Paths) },
-                _ => interrupted with { Paths = await HeldAsync(main, entry.Paths).ConfigureAwait(false), ReadFromTree = true },
-            });
+            settled.Add(
+                entry.State == FlowFoldEntry.Written ? interrupted
+                : entry.WrittenUnrecorded ? interrupted with { Paths = await HeldAsync(main, entry.Paths).ConfigureAwait(false), ReadFromTree = true }
+                : interrupted with { Paths = Found(entry.Paths) });
             Replace(layout, settled[^1]);
         }
 
@@ -560,9 +562,9 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
     /// <summary>The entry <paramref name="id"/>, which must stand <paramref name="state"/>.</summary>
     /// <exception cref="HarnessException">It does not: the engine's fault (<see cref="HarnessExit.InternalError"/>).</exception>
     private FlowFoldEntry Of(OrchestratorLayout layout, string id, string state)
-        => store.ReadFolds(layout)?.Of(id) is { } entry && entry.State == state
+        => store.ReadFolds(layout)?.Of(id) is { RecordsWrite: true } entry && entry.State == state
             ? entry
-            : throw new HarnessException(HarnessExit.InternalError, $"the run's ledger of its folds holds no fold '{id}' standing {state}");
+            : throw new HarnessException(HarnessExit.InternalError, $"the run's ledger of its folds holds no fold '{id}' standing {state} whose verb records its write");
 
     /// <summary>That <paramref name="tree"/> is still held: what a fold's write records, it records under the lock it was made under.</summary>
     /// <exception cref="InvalidOperationException">It was let go.</exception>

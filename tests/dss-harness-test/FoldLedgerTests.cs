@@ -47,7 +47,8 @@ public sealed class FoldLedgerTests
         var entry = harness.OrchestrationStore.ReadFolds(layout)!.Of(first)!;
 
         Assert.Equal(("f1", "f2"), (first, second));
-        Assert.Equal(FlowFoldEntry.Intended, entry.State);
+        Assert.Equal((FlowFoldEntry.Intended, (bool?)true), (entry.State, entry.RecordsWrite));
+        Assert.Contains("\"recordsWrite\": true", File.ReadAllText(layout.FoldsFile), StringComparison.Ordinal);
         Assert.Null(entry.SettledAt);
         Assert.Equal(
             [("a.txt", "written"), ("new.txt", "written"), ("m.txt", "merged"), ("arms.txt", "merged"), ("gone.txt", "deleted"), (".plans/r.md", "registry")],
@@ -452,6 +453,71 @@ public sealed class FoldLedgerTests
     }
 
     /// <summary>
+    /// An intent a ledger of an earlier release holds says nothing of whether its verb records its write: that release's
+    /// verb recorded nothing of it, so an intent it left unsettled may have written all of it. The next attempt settles it
+    /// as a write cut off part way: read from the tree under the main tree's lock, waiting out a side-task that holds it,
+    /// and marked so - what it changed owed to the commit - never as it found each path; and no verb's answer of this
+    /// release settles it.
+    /// </summary>
+    [Fact]
+    public async Task AnIntentAnEarlierReleaseLeft_IsReadFromTheTreeUnderItsLock_NeverSettledAsFound()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "before\n");
+        var planned = new AgentPlanned([], [], [], [], null) { Written = ["a.txt", "new.txt"] };
+        var earlier = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
+        var answered = await ledger.IntendAsync(layout, temp.Path, "items[0].fold", 1, "fold", "a2", planned, Token);
+
+        // The ledger as the earlier release wrote it: each entry's members are that release's, none saying its verb records its write.
+        var written = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(layout.FoldsFile))!.AsObject();
+
+        foreach (var entry in written["folds"]!.AsArray().Select(fold => fold!.AsObject()))
+        {
+            _ = entry.Remove("recordsWrite");
+            Assert.Equal(["id", "instance", "attempt", "type", "agent", "state", "intendedAt", "paths", "rows", "settledAt"], entry.Select(member => member.Key));
+        }
+
+        File.WriteAllText(layout.FoldsFile, written.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+
+        // Its verb wrote all of it, then the crash came before it answered.
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "the earlier release's fold\n");
+        File.WriteAllText(Path.Combine(temp.Path, "new.txt"), "made\n");
+
+        Assert.Equal(HarnessExit.InternalError, Assert.Throws<HarnessException>(() => ledger.Settle(layout, answered, HarnessExit.Incomplete)).ExitCode);
+
+        using (var hold = await MainTreeWriteLock.HoldAsync(temp.Path, Token))
+        {
+            Assert.Equal(HarnessExit.InternalError, Assert.Throws<HarnessException>(() => ledger.Writing(layout, answered, hold!)).ExitCode);
+        }
+
+        var tree = MainTreeWriteLock.NameFor(temp.Path);
+        Task<IReadOnlyList<FlowFoldEntry>> settling;
+
+        using (var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task"))
+        {
+            Assert.NotNull(sideTask);
+
+            var waits = MachineWideHold.WaitBegins(tree);
+            settling = Task.Run(() => ledger.SettleInterruptedAsync(layout, temp.Path, "fold", Token));
+
+            // Bounded, so a settle that never waits fails here rather than holding the suite.
+            Assert.Same(waits, await Task.WhenAny(waits, settling).WaitAsync(TimeSpan.FromMinutes(2), Token));
+        }
+
+        var settled = Assert.Single(await settling.WaitAsync(TimeSpan.FromMinutes(2), Token));
+        var file = harness.OrchestrationStore.ReadFolds(layout)!;
+
+        Assert.Equal((earlier, FlowFoldEntry.Interrupted, (bool?)true), (settled.Id, file.Of(earlier)!.State, file.Of(earlier)!.ReadFromTree));
+        Assert.Equal(
+            [(FileContentHash.Of("the earlier release's fold\n"u8), (bool?)true), (FileContentHash.Of("made\n"u8), true)],
+            file.Of(earlier)!.Paths.Select(path => (path.Left, path.Changed)));
+        Assert.Equal(["a.txt", "new.txt"], FoldLedger.Owed(file, ["fold"]).Paths.Select(path => path.Path));
+        Assert.Equal(FlowFoldEntry.Intended, file.Of(answered)!.State);
+        Assert.Null(file.Problem());
+    }
+
+    /// <summary>
     /// A fold's write is recorded through the ledger by its verb under the main tree's lock it is made under - begun, then
     /// what it left - and a settle after the verb answered reads nothing of the tree, which a side-task's write that waited
     /// on that lock may have changed since: a fold whose write was recorded is settled by what it recorded, a refusal's code
@@ -600,7 +666,9 @@ public sealed class FoldLedgerTests
     /// The ledger is read strictly: ids f&lt;n&gt; in the order intended; settled exactly when it says what became of a
     /// fold, or what it left; what a path left said only once it was recorded, and whether it changed true to what it left;
     /// a path relative to the tree; a state, a type and a kind of path the engine has; an agent's name the agents' rule
-    /// holds; and a read from the tree said of an interrupted fold alone.
+    /// holds; a read from the tree said of an interrupted fold alone; and a write begun or recorded said only of a verb
+    /// that records its write, which an entry says by recordsWrite alone - an earlier release's entry, which leaves it out,
+    /// read as one whose verb records nothing of it.
     /// </summary>
     [Theory]
     [InlineData("misnumbered", "its fold 'f3' is out of order: ids are f<n>, in the order intended")]
@@ -622,13 +690,18 @@ public sealed class FoldLedgerTests
     [InlineData("graphedWriting", "its fold 'f1': it says the graph took what it changed where it changed nothing yet, or says it did not")]
     [InlineData("readFromTreeApplied", "its fold 'f1': it says what it left was read from the tree after a crash where it is no interrupted fold, or says it was not")]
     [InlineData("readFromTreeFalse", "its fold 'f1': it says what it left was read from the tree after a crash where it is no interrupted fold, or says it was not")]
+    [InlineData("recordsWriteFalse", "its fold 'f1': it says its verb does not record its write, which an entry says by leaving it out")]
+    [InlineData("writingUnstamped", "its fold 'f1': it stands writing, which only a verb that records its write writes, and does not say its verb does")]
+    [InlineData("writtenUnstamped", "its fold 'f1': it stands written, which only a verb that records its write writes, and does not say its verb does")]
     public void TheFoldLedger_IsStrict(string wrong, string problem)
     {
         var path = new FlowFoldPath("a.txt", "written", Digest, Left: null, Changed: true);
-        var entry = new FlowFoldEntry("f1", "fold", 1, "fold", "a1", "applied", At, [path], [], SettledAt: At);
+        var entry = new FlowFoldEntry("f1", "fold", 1, "fold", "a1", "applied", At, [path], [], SettledAt: At, RecordsWrite: true);
         var ledger = new FlowFoldLedgerFile(1, "r1", [entry]);
 
         Assert.Null(ledger.Problem());
+        Assert.Null((ledger with { Folds = [entry with { RecordsWrite = null }] }).Problem());
+        Assert.Null((ledger with { Folds = [entry with { State = FlowFoldEntry.Intended, SettledAt = null, Paths = [path with { Changed = null }], RecordsWrite = null }] }).Problem());
         Assert.Null((ledger with { Folds = [entry with { State = FlowFoldEntry.Written }] }).Problem());
         Assert.Null((ledger with { Folds = [entry with { State = FlowFoldEntry.Interrupted, ReadFromTree = true }] }).Problem());
         Assert.Null((ledger with { Folds = [entry with { State = FlowFoldEntry.Writing, SettledAt = null, Paths = [path with { Changed = null }] }] }).Problem());
@@ -654,6 +727,9 @@ public sealed class FoldLedgerTests
             "graphedWriting" => ledger with { Folds = [entry with { State = FlowFoldEntry.Writing, SettledAt = null, Paths = [path with { Changed = null }], Graphed = true }] },
             "readFromTreeApplied" => ledger with { Folds = [entry with { ReadFromTree = true }] },
             "readFromTreeFalse" => ledger with { Folds = [entry with { State = FlowFoldEntry.Interrupted, ReadFromTree = false }] },
+            "recordsWriteFalse" => ledger with { Folds = [entry with { RecordsWrite = false }] },
+            "writingUnstamped" => ledger with { Folds = [entry with { State = FlowFoldEntry.Writing, SettledAt = null, Paths = [path with { Changed = null }], RecordsWrite = null }] },
+            "writtenUnstamped" => ledger with { Folds = [entry with { State = FlowFoldEntry.Written, RecordsWrite = null }] },
             _ => throw new ArgumentOutOfRangeException(nameof(wrong), wrong, "no such case"),
         };
 
