@@ -5,8 +5,8 @@ namespace DssHarness.Core.Codebase;
 
 /// <summary>
 /// The repository map ("The repository map"): the tree at a glance, given at the head of a conversation's first message
-/// - a run's, made once from the base as it stands when its first graphed reason step is given its prompt and raised for
-/// the run's task, and a side-task's, made once from the base as it stands when the side-task opens - a cache every later
+/// - a run's, made once for each ground of reads its steps share from the base as it stands when the first graphed reason
+/// step of that ground is given its prompt, and raised for the run's task, and a side-task's, made once from the base as it stands when the side-task opens - a cache every later
 /// message reads as it is, while the pack and the tool say what the tree is now.
 /// </summary>
 public static class CodebaseRepositoryMap

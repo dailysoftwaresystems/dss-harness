@@ -1166,7 +1166,7 @@ public sealed partial class CodebaseGraphToolTests
             path =>!PathPatterns.Matches(never, path, tree.Harness.Platform.PathComparison) && (mayRead?.Invoke(path) ?? true),
             mayWrite ?? (_ => AgentPolicyAnswer.Allow),
             sync ? async (path, _) => new CodebaseGraphQueries((await tree.CheckAsync(null, null, path)).Read) : null,
-            near);
+            near is null ? null : () => near);
     }
 
     /// <summary>

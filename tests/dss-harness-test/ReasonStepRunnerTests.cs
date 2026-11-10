@@ -1755,6 +1755,128 @@ public sealed class ReasonStepRunnerTests
         => new(await graph.ReadOnlyAsync(layout, null, Token) ?? throw new Xunit.Sdk.XunitException("the run's graph did not read"));
 
     /// <summary>
+    /// Step <c>think</c>'s own stream as the engine stored it, for agent <c>a9</c>: one run of each launch - its session,
+    /// handed the stored conversation or begun afresh, then its first message - the last launch's conversation held under
+    /// the agent's sessions, for an answer to go on with.
+    /// </summary>
+    private static async Task StoredLaunchesAsync(OrchestrationKit kit, params (bool Handed, string FirstMessage)[] launches)
+    {
+        var directory = kit.Layout.InstanceDirectory("think", "a9");
+        Directory.CreateDirectory(directory);
+        var stream = StoredStream.Open(kit.Harness.FileSystem, directory, new Masking());
+        string? session = null;
+
+        foreach (var (handed, first) in launches)
+        {
+            session = handed && session is not null ? session : Guid.NewGuid().ToString("D");
+            await stream.EmitAsync(new RunStarted(1));
+            await stream.EmitAsync(new SessionStarted("claude-api", "claude-opus-5-5", "hash", [], [], HandedConversation: handed, Provider: "anthropic", SessionId: session));
+            await stream.EmitAsync(new MessageSent(first, AgentMessageKind.FirstPrompt));
+            await stream.EmitAsync(new TurnStarted(1));
+            await stream.EmitAsync(new AssistantMessage("done", []));
+            await stream.EmitAsync(new RunFinished(AgentRunStatus.Completed));
+        }
+
+        stream.Dispose();
+
+        var sessions = Path.Combine(kit.Layout.AgentDirectory("a9"), "sessions", session!);
+        Directory.CreateDirectory(sessions);
+        await File.WriteAllTextAsync(Path.Combine(sessions, "conversation.jsonl"), "[]\n", Token);
+    }
+
+    /// <summary>
+    /// An answer that goes on with a stored conversation is told what moved of what that conversation was told even where
+    /// its own pack holds nothing - its cap below the pack's first line: the changes are made against the pack as it was
+    /// made, never left out because the part a conversation of its own would be given is empty.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWhosePackHoldsNothing_IsStillToldWhatMovedOfWhatItsConversationHeld()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+        await kit.CreateReadingAgentAsync("a9");
+        var held = DssHarness.Core.Codebase.GraphLines.Of(Assert.IsType<DssHarness.Core.Codebase.GraphResolve.Found>((await CodebaseGraphQueriesOf(kit.Harness.CodebaseGraph, kit.Layout)).Resolve("Plan")).Card);
+        var launch = AgentRuns.Of(kit.Layout.InstanceDirectory("think", "a9"), kit.Main) with { UserPrompt = "the task" };
+        await StoredLaunchesAsync(kit, (false, AgentPromptParts.FirstMessage(launch with { Map = "the run's map", Codebase = held }, newConversation: true)));
+
+        // The tree moves under it: Plan shifts two lines down, and the graph is synced again.
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Planner.cs"), "namespace Demo;\n\npublic sealed class Planner\n{\n    // a line that moves what follows it\n    // and one more\n    public int Plan()\n    {\n        return 1;\n    }\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "moved", Token);
+        _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
+
+        var run = Graphing(kit, Graphed(think: "    graphPromptTokens: 60\n"), made: false) with { Answers = [new FlowAnswerGiven("q1", "answer", "yes", "ask", Attempt: 1)] };
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(run, Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.NotNull(asked.Conversation);
+        Assert.Equal(string.Empty, asked.Codebase);
+        Assert.NotNull(asked.CodebaseChanges);
+        Assert.StartsWith("1 declaration the conversation held: 1 moved or changed, 0 removed;", asked.CodebaseChanges, StringComparison.Ordinal);
+        Assert.True(asked.CodebaseChanges.Contains("src/Planner.cs:7-10", StringComparison.Ordinal), $"the delta:\n{asked.CodebaseChanges}");
+    }
+
+    /// <summary>
+    /// What a conversation was told of the codebase begins afresh with every conversation the step begins, whether or not
+    /// its first message holds a pack: an answer that goes on with a conversation begun with no pack - its pack held
+    /// nothing, the walk moved it to another provider - is told its own pack's nodes as new, never a delta of what an
+    /// earlier conversation was told.
+    /// </summary>
+    [Fact]
+    public async Task AConversationBegunWithNoPack_IsToldItsOwnPackAsNew_NeverADeltaOfAnEarlierOne()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+        await kit.CreateReadingAgentAsync("a9");
+        var held = DssHarness.Core.Codebase.GraphLines.Of(Assert.IsType<DssHarness.Core.Codebase.GraphResolve.Found>((await CodebaseGraphQueriesOf(kit.Harness.CodebaseGraph, kit.Layout)).Resolve("Plan")).Card);
+        var launch = AgentRuns.Of(kit.Layout.InstanceDirectory("think", "a9"), kit.Main) with { UserPrompt = "the task" };
+
+        // The first conversation was given the pack; a second began afresh with the map alone; the answer goes on with
+        // the second.
+        await StoredLaunchesAsync(
+            kit,
+            (false, AgentPromptParts.FirstMessage(launch with { Map = "the run's map", Codebase = held }, newConversation: true)),
+            (false, AgentPromptParts.FirstMessage(launch with { Map = "the run's map" }, newConversation: true)));
+
+        var run = Graphing(kit, Graphed(), made: false) with { Answers = [new FlowAnswerGiven("q1", "answer", "go on with Plan", "ask", Attempt: 1)] };
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(run, Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.NotNull(asked.CodebaseChanges);
+        Assert.Matches("^0 declarations the conversation held: 0 moved or changed, 0 removed; [1-9][0-9]* nodes? of this step's pack added\n", asked.CodebaseChanges);
+    }
+
+    /// <summary>
+    /// A working set that cannot be written - the disk refuses it - never fails a step that ended well: it is said, the
+    /// step's ending stands, and its figures are its own.
+    /// </summary>
+    [Fact]
+    public async Task AWorkingSetTheDiskRefuses_IsSaid_AndTheStepsEndingStands()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+
+        // A directory where the working set's file would be: the disk refuses the file at once.
+        Directory.CreateDirectory(Path.Combine(kit.Layout.InstanceDirectory("think", "a9"), OrchestratorLayout.StepWorkingSetFileName));
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed()), Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.NotNull(result.Graph);
+        Assert.Contains("the working set of 'think' was not written: ", kit.Harness.StandardError.ToString() + kit.Harness.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A workflow that asks for no map - <c>codebaseGraph.mapTokens: 0</c> - gives no step one, and none is made: the
     /// pack and the tool say what the tree is alone.
     /// </summary>

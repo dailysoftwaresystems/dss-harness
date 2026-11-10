@@ -30,6 +30,14 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </summary>
 public sealed class FlowStepGraph
 {
+    /// <summary>
+    /// How the run's repository maps are made and kept, as every help text that names them says it: one for each ground of
+    /// reads, from the base as it stands when the first step of that ground is given its prompt (<see cref="MapOfAsync"/>,
+    /// <see cref="OrchestrationStore.MapOnce"/>), at the file <see cref="OrchestratorLayout.GraphMapFileOf"/> names.
+    /// </summary>
+    public const string MapsKept = "made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept in "
+        + OrchestratorLayout.GraphMapFileName + " (map-<a digest of the read rules>.md for steps whose read rules narrow them)";
+
     /// <summary>Why a launch was given no pack, where its step asked for none.</summary>
     public const string NoPackAsked = "the step asked for no pack: its graphPromptTokens is 0";
 
@@ -39,25 +47,33 @@ public sealed class FlowStepGraph
     /// <summary>Why a launch was given no pack, where it began from the engine's compaction of the conversation.</summary>
     public const string NoPackCompacted = "the launch began from the engine's compaction record, which holds no map and no pack";
 
+    /// <summary>
+    /// Whether <paramref name="ex"/> is a record of the step's graph the disk would not keep or give back - a write or a
+    /// read it refused, a record that would not read back - which the step's graph says and never fails its step over.
+    /// </summary>
+    private static bool Unkept(Exception ex) => ex is IOException or UnauthorizedAccessException or InvalidOperationException;
+
     private readonly OrchestrationStore store;
     private readonly IHarnessOutput output;
     private readonly string lines;
     private readonly string instance;
     private readonly string? noPack;
+    private readonly ContextPack? made;
     private AgentGraphSupport? support;
     private CodebaseGraphQueries? view;
     private string section = string.Empty;
     private string? changes;
     private AgentCodebaseGiven? given;
 
-    private FlowStepGraph(string mode, string from, string viewName, int tokens, string? map, ContextPack? pack, string? missing, string? noPack, OrchestrationStore store, IHarnessOutput output, string lines, string instance)
+    private FlowStepGraph(string mode, string from, string viewName, int tokens, string? map, ContextPack? made, string? missing, string? noPack, OrchestrationStore store, IHarnessOutput output, string lines, string instance)
     {
         Mode = mode;
         From = from;
         View = viewName;
         Tokens = tokens;
         Map = map;
-        Pack = pack;
+        this.made = made;
+        Pack = made is { Text.Length: > 0 } ? made : null;
         Missing = missing;
         this.noPack = noPack;
         this.store = store;
@@ -194,7 +210,7 @@ public sealed class FlowStepGraph
         {
             var missing = MissingOutputOf(store, layout, place.Definition, run.Instance);
 
-            return new FlowStepGraph(mode, from, worktree?.Agent ?? CodebaseGraphService.BaseView, tokens, map: null, pack: null, missing, noPack: null, store, output, directory, run.Instance)
+            return new FlowStepGraph(mode, from, worktree?.Agent ?? CodebaseGraphService.BaseView, tokens, map: null, made: null, missing, noPack: null, store, output, directory, run.Instance)
             {
                 section = missing,
                 support = mode == "tools" ? new AgentGraphSupport(Tool: null) { Gone = missing } : null,
@@ -246,13 +262,12 @@ public sealed class FlowStepGraph
                     ChangesUnread = changesUnread,
                 })
             : null;
-        var given = pack is { Text.Length: > 0 } ? pack : null;
-
-        var made = new FlowStepGraph(mode, from, read.View, tokens, map, given, missing: null, tokens == 0 ? NoPackAsked : given is null ? NoPackHeld : null, store, output, directory, run.Instance)
+        var served = new FlowStepGraph(mode, from, read.View, tokens, map, pack, missing: null, tokens == 0 ? NoPackAsked : pack is not { Text.Length: > 0 } ? NoPackHeld : null, store, output, directory, run.Instance)
         {
-            section = given?.Text ?? string.Empty,
             view = queries,
         };
+
+        served.section = served.Pack?.Text ?? string.Empty;
 
         if (mode == "tools" && git is not null)
         {
@@ -266,9 +281,9 @@ public sealed class FlowStepGraph
                 path => Readable(path) && !PathPatterns.Matches(never, path, platform.PathComparison),
                 path => policy.Write(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar))),
                 async (path, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], token).ConfigureAwait(false)).Read),
-                near: given?.Near);
+                near: () => served.made?.Near);
 
-            made.support = new AgentGraphSupport(
+            served.support = new AgentGraphSupport(
                 tool,
                 line => store.AppendGraphStepLine(directory, line),
                 (written, token) => AfterWriteAsync(graph, request, run.Instance, platform.PathComparison, tool, written, token),
@@ -276,7 +291,7 @@ public sealed class FlowStepGraph
                 Narrow: narrowed);
         }
 
-        return made;
+        return served;
     }
 
     /// <summary>The step's use of the graph, its default resolved: <c>off</c>, <c>map</c> or <c>tools</c>.</summary>
@@ -303,7 +318,10 @@ public sealed class FlowStepGraph
     /// <summary>The map's estimated tokens; 0 where there is none.</summary>
     public int MapTokens => Map is null ? 0 : EstimatedTokens.Of(Map);
 
-    /// <summary>The pack the step was made; null where none was asked for, or it held nothing.</summary>
+    /// <summary>
+    /// The pack the step is given in a conversation of its own; null where none was asked for, or the pack made held
+    /// nothing - its first line past its cap.
+    /// </summary>
     public ContextPack? Pack { get; }
 
     /// <summary>Why no pack was given, where the run's graph was never built - the sentence for a step that left no output; null where it was.</summary>
@@ -321,13 +339,15 @@ public sealed class FlowStepGraph
     /// <summary>
     /// The changes the conversation the step goes on with is told of the codebase: the declarations its view changed
     /// since what that conversation was told of them - its pack and every delta after it - and the nodes of its own pack
-    /// the conversation was not given - in the one new user message, never a map or a pack again whole. Null where the step
-    /// was given no pack. Kept, so the line of the launch told them says what they cost.
+    /// the conversation was not given - in the one new user message, never a map or a pack again whole. Made against the pack
+    /// as it was made, so a pack that held nothing still tells the conversation what moved of what it was told; null only
+    /// where the step asked for no pack or its view was not read. Kept, so the line of the launch told them says what
+    /// they cost.
     /// </summary>
     /// <param name="told">The codebase parts the conversation holds, in the order it was given them: its pack, then each delta after it.</param>
     public string? ChangesSince(IReadOnlyList<string> told)
     {
-        changes = view is null || Pack is null ? null : CodebaseConversationChanges.Make(view, Pack, told, Tokens);
+        changes = view is null || made is null ? null : CodebaseConversationChanges.Make(view, made, told, Tokens);
         return changes;
     }
 
@@ -347,7 +367,7 @@ public sealed class FlowStepGraph
         {
             store.AppendGraphStepLine(lines, PromptLineOf(given));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException or InvalidOperationException)
+        catch (Exception ex) when (ex is HarnessException || Unkept(ex))
         {
             output.Warn("reason", $"the graph line of '{instance}'s launch was not written: {ex.Message.TrimEnd('.')}. The launch goes on.");
         }
@@ -408,6 +428,10 @@ public sealed class FlowStepGraph
         {
             // A record of the step's that does not read is refused elsewhere; its figures are gathered from what does.
         }
+        catch (Exception ex) when (Unkept(ex))
+        {
+            output.Warn("reason", $"the graph records of '{instance}' were not read: {ex.Message.TrimEnd('.')}. Its figures are gathered from what was.");
+        }
 
         // The view as it stands at the step's end, for the working set's nodes; where it cannot be read - or was never
         // built - the working set is made of no view, and every node it holds is gone.
@@ -420,7 +444,7 @@ public sealed class FlowStepGraph
                 end = new CodebaseGraphQueries(read);
             }
         }
-        catch (HarnessException)
+        catch (Exception ex) when (ex is HarnessException || Unkept(ex))
         {
         }
 
@@ -430,10 +454,11 @@ public sealed class FlowStepGraph
         {
             store.WriteWorkingSet(lines, working);
         }
-        catch (HarnessException)
+        catch (Exception ex) when (ex is HarnessException || Unkept(ex))
         {
-            // A working set that cannot be written says nothing of the step's ending: the pack of the steps after it is
-            // seeded from what is there.
+            // A working set that cannot be written says nothing of the step's ending: it is said, and the pack of the
+            // steps after it is seeded from what is there.
+            output.Warn("reason", $"the working set of '{instance}' was not written: {ex.Message.TrimEnd('.')}. The step's ending stands, and the packs of the steps after it are seeded from what is there.");
         }
 
         var calls = held.OfType<GraphCallLine>().ToList();

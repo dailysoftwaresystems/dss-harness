@@ -481,6 +481,47 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
+    /// One tool held for the whole chat - as Claude Code's one launch holds it - breaks <c>find</c>'s ties by the person's
+    /// last message, not the one the tool was made after: each message's pack moves what is nearest.
+    /// </summary>
+    [Fact]
+    public async Task OneToolForAWholeChat_BreaksFindsTiesByTheLastMessage()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "One", "Widget.cs"), "namespace One;\n\npublic sealed class Widget\n{\n}\n");
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Two", "Widget.cs"), "namespace Two;\n\npublic sealed class Widget\n{\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "code", Token);
+        var repository = new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main);
+        var graph = new SideTaskGraph(kit.Harness.CodebaseGraph, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.GitClient, kit.Harness.OrchestrationStore, TimeProvider.System, repository, SideTaskLayout.Of(repository, "t1"), Path.Combine(kit.Main, OrchestrationKit.Settings.Root));
+        await graph.OpenAsync(Token);
+
+        // The tool is made once, after the first message, and the chat goes on with it.
+        _ = graph.Front("look under One", first: true);
+        var tool = graph.Support(SideTaskPolicy.Ground(repository, new HarnessConfig { Worktrees = new WorktreeSettings() }, [], []))!.Tool!;
+
+        async Task<string> FirstWidgetAsync()
+        {
+            var found = await tool.RunAsync(new JsonObject { ["op"] = "find", ["query"] = "Widget", ["kind"] = "type" }, CodebaseGraphTool.Operations(write: true, narrow: false), Token);
+            var one = found.Text.IndexOf("| src/One/Widget.cs:", StringComparison.Ordinal);
+            var two = found.Text.IndexOf("| src/Two/Widget.cs:", StringComparison.Ordinal);
+
+            Assert.True(one >= 0 && two >= 0, $"find did not give both:\n{found.Text}");
+            return one < two ? "One" : "Two";
+        }
+
+        Assert.Equal("One", await FirstWidgetAsync());
+
+        _ = graph.Front("now look under Two", first: false);
+
+        Assert.Equal("Two", await FirstWidgetAsync());
+
+        _ = graph.Front("and back under One", first: false);
+
+        Assert.Equal("One", await FirstWidgetAsync());
+    }
+
+    /// <summary>
     /// A side-task given --no-graph has none of it: no graph under its records, no map and no pack at its message's
     /// head, no tool for its agent - the person's message as it was typed.
     /// </summary>

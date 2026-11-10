@@ -139,7 +139,11 @@ public sealed class SideTaskGraph
         return front + message;
     }
 
-    /// <summary>How near each node is to the work of the person's last message, as its pack said it; null before any.</summary>
+    /// <summary>
+    /// How near each node is to the work of the person's last message, as its pack said it, read by the tool at each
+    /// <c>find</c> - so a tool held for the whole chat, as Claude Code's one launch holds it, follows the last message as a
+    /// tool made for each turn does; null before any.
+    /// </summary>
     private GraphNearness? near;
 
     /// <summary>
@@ -184,6 +188,6 @@ public sealed class SideTaskGraph
             path => policy.Read(Full(path)).Refusal() is null && !PathPatterns.Matches(never, path, platform.PathComparison),
             path => policy.Write(Full(path)),
             async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read),
-            near);
+            () => near);
     }
 }

@@ -449,6 +449,14 @@ public sealed class CodebaseGraphQueryServiceTests
         Assert.Contains($"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand", topic, StringComparison.Ordinal);
         Assert.Contains($"It ends 0, {HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.", topic, StringComparison.Ordinal);
         Assert.Contains($"at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word", topic, StringComparison.Ordinal);
+
+        // The workflow key says the maps as the topic does: one for each ground of reads, each kept in its own file.
+        Assert.Contains(
+            string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"mapTokens the cap of each of the run's repository maps - made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept in map.md (map-<a digest of the read rules>.md for steps whose read rules narrow them) under the run's graph, and read as it is by every step of that ground after - from 0 to {DssHarness.Core.Codebase.CodebaseGraphShape.MostMapTokens:N0} tokens; 0 asks for no map; absent, {DssHarness.Core.Codebase.CodebaseGraphShape.DefaultMapTokens:N0}"),
+            topic,
+            StringComparison.Ordinal);
     }
 
     private static async Task<CodebaseGraphTree> InitialisedTreeAsync()

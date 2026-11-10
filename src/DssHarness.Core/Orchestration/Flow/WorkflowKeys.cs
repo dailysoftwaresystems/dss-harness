@@ -48,7 +48,7 @@ public static class WorkflowKeys
         new("languages", "the implementations used, by name - 'help codebase-graph' lists them; a file whose claimant is left out is only listed; absent, every one"),
         new("maxFileBytes", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the largest file read, from {Codebase.CodebaseGraphShape.LeastMaxFileBytes:N0} to {Codebase.CodebaseGraphShape.MostMaxFileBytes:N0}; a larger one is listed tooLarge; absent, {Codebase.CodebaseGraphShape.DefaultMaxFileBytes:N0}")),
         new("generated", $"what becomes of generated code: {Codebase.CodebaseGraphShape.GeneratedLow} (the default), its declarations kept, its file's entry naming why it is generated, or {Codebase.CodebaseGraphShape.GeneratedExclude}, the file listed and its declarations left out"),
-        new("mapTokens", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the cap of the run's repository map - made once from the base as it stands when the run's first graphed reason step is given its prompt, kept in graph/map.md and read as it is by every step after - from 0 to {Codebase.CodebaseGraphShape.MostMapTokens:N0} tokens; 0 asks for no map; absent, {Codebase.CodebaseGraphShape.DefaultMapTokens:N0}")),
+        new("mapTokens", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the cap of each of the run's repository maps - {FlowStepGraph.MapsKept} under the run's graph, and read as it is by every step of that ground after - from 0 to {Codebase.CodebaseGraphShape.MostMapTokens:N0} tokens; 0 asks for no map; absent, {Codebase.CodebaseGraphShape.DefaultMapTokens:N0}")),
     ];
 
     /// <summary>What the <c>recover</c> section takes.</summary>

@@ -147,7 +147,11 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// <param name="mayRead">Whether the step's policy lets a file be read, by its path relative to the tree: a node of a file it does not is left out, and counted.</param>
 /// <param name="mayWrite">The step's policy on writing a file, by its path relative to the tree; null where <c>edit</c> is not given.</param>
 /// <param name="reExtract">Checks a file again by its path relative to the tree and answers the view it leaves; null where nothing may be synced (the verb).</param>
-/// <param name="near">How near each node is to the step's own work, which breaks a tie in <c>find</c> (the step's context pack gives it); null where there is no step.</param>
+/// <param name="near">
+/// How near each node is to the work the tool serves, which breaks a tie in <c>find</c> - read at each <c>find</c>, so a tool
+/// held for a whole chat follows its last message (a step's or a message's context pack gives it); null where there is
+/// no work, or it says none.
+/// </param>
 public sealed class CodebaseGraphTool(
     CodebaseGraphQueries queries,
     AgentFiles files,
@@ -156,7 +160,7 @@ public sealed class CodebaseGraphTool(
     Func<string, bool> mayRead,
     Func<string, AgentPolicyAnswer>? mayWrite = null,
     Func<string, CancellationToken, Task<CodebaseGraphQueries>>? reExtract = null,
-    GraphNearness? near = null)
+    Func<GraphNearness?>? near = null)
 {
     /// <summary>The most characters an answer holds, cut at a whole line past it.</summary>
     public const int MostCharacters = 24 * 1024;
@@ -444,7 +448,7 @@ public sealed class CodebaseGraphTool(
         var query = Str(input, "query")!;
         var limit = Int(input, "limit") ?? FindLines;
         var offset = Int(input, "offset") ?? 0;
-        var matched = _queries.Find(query, Str(input, "kind"), Str(input, "path") is { } path ? Held(path) ?? path : null, int.MaxValue, 0, near).Cards;
+        var matched = _queries.Find(query, Str(input, "kind"), Str(input, "path") is { } path ? Held(path) ?? path : null, int.MaxValue, 0, near?.Invoke()).Cards;
         var (kept, left) = Readable(matched);
         var text = kept.Count == 0 ? "no node matched" : Paged([.. kept.Select(GraphLines.Of)], offset, limit);
         var hits = 0;

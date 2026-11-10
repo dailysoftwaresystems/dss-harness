@@ -952,25 +952,49 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The codebase parts the conversation the step's own stream holds was told, in order - its last pack, then each
-    /// delta after it - read from the stream's first messages as they were sent; empty where it was given none. A pack
-    /// begins what a conversation holds of the codebase afresh, so nothing before the last one counts.
+    /// The codebase parts the conversation the step's own stream last began holds, in order - the pack its first message
+    /// was given, then each delta a launch that went on with it was told - read from the stream's first messages as they
+    /// were sent; empty where it was given none. Every launch that begins a conversation of its own begins what a
+    /// conversation holds of the codebase afresh, whether or not its first message holds a pack - a pack that held
+    /// nothing, a graph not served, a compaction's record - so nothing an earlier conversation was told counts.
     /// </summary>
+    /// <remarks>
+    /// A first message goes on with the conversation only where the launch it begins said so: a session that was handed the
+    /// stored conversation, started since the first message before it. The API clients say their session before their
+    /// first message, and Claude Code, whose every launch begins a conversation of its own, after it.
+    /// </remarks>
     /// <param name="stream">The step's own events, every attempt's.</param>
     private static IReadOnlyList<string> CodebaseToldOf(IReadOnlyList<AgentEvent> stream)
     {
         var told = new List<string>();
+        var handed = false;
 
-        foreach (var sent in stream.OfType<MessageSent>().Where(sent => sent.Which == AgentMessageKind.FirstPrompt))
+        foreach (var happened in stream)
         {
-            if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseChangesTag) is { Length: > 0 } changes)
+            switch (happened)
             {
-                told.Add(changes);
-            }
-            else if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseTag) is { Length: > 0 } pack)
-            {
-                told.Clear();
-                told.Add(pack);
+                case SessionStarted started:
+                    handed = started.HandedConversation;
+                    break;
+
+                case MessageSent { Which: AgentMessageKind.FirstPrompt } sent when handed:
+                    if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseChangesTag) is { Length: > 0 } changes)
+                    {
+                        told.Add(changes);
+                    }
+
+                    handed = false;
+                    break;
+
+                case MessageSent { Which: AgentMessageKind.FirstPrompt } sent:
+                    told.Clear();
+
+                    if (AgentPromptParts.PartOf(sent.Text, AgentPromptParts.CodebaseTag) is { Length: > 0 } pack)
+                    {
+                        told.Add(pack);
+                    }
+
+                    break;
             }
         }
 
