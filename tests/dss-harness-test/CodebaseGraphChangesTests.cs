@@ -258,11 +258,11 @@ public sealed class CodebaseGraphChangesTests
         var run = FlowRunContext.Of("run", flow, startCommit: "start");
         var agent = new AgentRecord { Kind = AgentRecord.KindName, Name = "a", Orchestrator = "run", Model = "m", CreatedAt = DateTimeOffset.UnixEpoch, State = AgentStates.Live, Base = "agentbase" };
 
-        Assert.Equal("agentbase", FlowGraphSyncs.ChangesBase(agent, run));
-        Assert.Equal("start", FlowGraphSyncs.ChangesBase(agent with { Access = AgentRecord.AccessRead }, run));
-        Assert.Equal("start", FlowGraphSyncs.ChangesBase(null, run));
-        Assert.Null(FlowGraphSyncs.ChangesBase(agent with { Base = null }, run));
-        Assert.Null(FlowGraphSyncs.ChangesBase(null, FlowRunContext.Of("run", flow)));
+        Assert.Equal("agentbase", FlowGraphSyncs.ChangesBase(agent, run.StartCommit));
+        Assert.Equal("start", FlowGraphSyncs.ChangesBase(agent with { Access = AgentRecord.AccessRead }, run.StartCommit));
+        Assert.Equal("start", FlowGraphSyncs.ChangesBase(null, run.StartCommit));
+        Assert.Null(FlowGraphSyncs.ChangesBase(agent with { Base = null }, run.StartCommit));
+        Assert.Null(FlowGraphSyncs.ChangesBase(null, FlowRunContext.Of("run", flow).StartCommit));
     }
 
     private static FileExtract Extract(params (string Id, string Kind, int Start, int End, string? Parent, string Digest)[] nodes)

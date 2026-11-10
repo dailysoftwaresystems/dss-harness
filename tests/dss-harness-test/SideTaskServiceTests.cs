@@ -441,10 +441,43 @@ public sealed class SideTaskServiceTests
         var map = Assert.Single(Directory.EnumerateFiles(task, "map.md", SearchOption.AllDirectories));
 
         Assert.Contains("Greeter", File.ReadAllText(map), StringComparison.Ordinal);
-        Assert.StartsWith("<repository-map>", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
         Assert.Contains("<codebase>", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
         Assert.EndsWith("where does Greeter say hello", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
         Assert.NotNull(stored.Runs[0].Graph);
+
+        // Its parts are written by the one writer of a first message's parts, in their form, the map's first.
+        Assert.StartsWith(AgentPromptParts.MapPart(File.ReadAllText(map)) + $"<{AgentPromptParts.CodebaseTag}>{Environment.NewLine}", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A side-task's <c>find</c> breaks a tie by how near each node is to the work of the person's last message - its
+    /// pack, the files it names - so of two declarations that match alike, the one the message names comes first.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksFind_BreaksATieByNearnessToItsLastMessage()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "One", "Widget.cs"), "namespace One;\n\npublic sealed class Widget\n{\n}\n");
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Two", "Widget.cs"), "namespace Two;\n\npublic sealed class Widget\n{\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "code", Token);
+        var repository = new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main);
+        var graph = new SideTaskGraph(kit.Harness.CodebaseGraph, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.GitClient, kit.Harness.OrchestrationStore, TimeProvider.System, repository, SideTaskLayout.Of(repository, "t1"), Path.Combine(kit.Main, OrchestrationKit.Settings.Root));
+        await graph.OpenAsync(Token);
+        var view = new DssHarness.Core.Codebase.CodebaseGraphQueries((await kit.Harness.CodebaseGraph.ReadOnlyAsync(SideTaskLayout.Of(repository, "t1").AsGraph, null, Token))!);
+        var widgets = view.Find("Widget", "type", null, 10, 0).Cards.OrderBy(card => card.Id, StringComparer.Ordinal).ToList();
+
+        Assert.Equal(2, widgets.Count);
+
+        // The message names the namespace of the one the ids put last: its pack holds that one, and not the other.
+        var named = widgets[^1].Path;
+        _ = graph.Front($"look under {widgets[^1].Qualified.Split('.')[0]}", first: true);
+        var support = graph.Support!;
+        var found = await support.Tool!.RunAsync(new JsonObject { ["op"] = "find", ["query"] = "Widget", ["kind"] = "type" }, CodebaseGraphTool.Operations(write: true, narrow: false), Token);
+        var near = found.Text.IndexOf($"| {named}:", StringComparison.Ordinal);
+        var far = found.Text.IndexOf($"| {widgets[0].Path}:", StringComparison.Ordinal);
+
+        Assert.True(near >= 0 && far > near, $"the nearer declaration is not first:\n{found.Text}");
     }
 
     /// <summary>

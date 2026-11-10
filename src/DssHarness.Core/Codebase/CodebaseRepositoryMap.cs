@@ -21,7 +21,8 @@ public static class CodebaseRepositoryMap
     /// <param name="queries">The view, as the run's or the side-task's sync left it.</param>
     /// <param name="terms">The task the map is made for - a run's inputs and the issue it triages - or empty for none, as a side-task's is.</param>
     /// <param name="tokens">The map's cap in estimated tokens; 0 gives none.</param>
-    public static (string Text, JsonNode Meta) Make(CodebaseGraphQueries queries, string terms, int tokens)
+    /// <param name="readable">Whether the steps the map is given may read a file, by its path relative to the tree: a project or a declaration of a file they may not is never listed; null where they may read every one.</param>
+    public static (string Text, JsonNode Meta) Make(CodebaseGraphQueries queries, string terms, int tokens, Func<string, bool>? readable = null)
     {
         ArgumentNullException.ThrowIfNull(queries);
         ArgumentNullException.ThrowIfNull(terms);
@@ -39,10 +40,10 @@ public static class CodebaseRepositoryMap
         };
 
         var overview = queries.Overview();
-        lines.AddRange(overview.Projects.Select(project => $"{project.Qualified} ({GraphLines.Of(project)})"));
+        lines.AddRange(overview.Projects.Where(project => readable?.Invoke(project.Path) != false).Select(project => $"{project.Qualified} ({GraphLines.Of(project)})"));
         lines.AddRange(overview.Directories.Select(directory => $"{directory.Directory} {directory.Files.Count} files"));
 
-        var central = queries.Central(terms);
+        var central = queries.Central(terms).Where(card => readable?.Invoke(card.Path) != false).ToList();
 
         foreach (var card in central)
         {

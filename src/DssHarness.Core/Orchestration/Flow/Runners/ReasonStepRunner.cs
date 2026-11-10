@@ -125,7 +125,7 @@ public sealed class ReasonStepRunner(
         // going on, and names none of them. The definition, read as the definition's check reads it, is the one the step
         // works by everywhere: its system prompt sent as written, its capabilities, restrictions and writes on the
         // ground, its limits, and the level below the step's own for the model, the effort and the client.
-        var root = ResumeChain.Root(place.Definition, FlowInstanceId.PathOf(run.Instance), run.Step);
+        var root = ResumeChain.Root(place.Definition, run.DeclarationPath, run.Step);
         var definition = DefinitionOf(files, context.Layout, place.Definition.Name, root.Agent);
         var step = ReferenceEquals(root, run.Step) ? run.Step : run.Step with { Writes = root.Writes };
 
@@ -253,8 +253,9 @@ public sealed class ReasonStepRunner(
         filled = WithHandoff(run.Handoff, filled);
 
         // The step's serving of the run's codebase graph: its pack made from the filled prompt and given as the
-        // <codebase> part of its first message, the graph tool offered where its step says tools, its view the one the
-        // engine syncs at the step's start. A step whose mode is off is served nothing.
+        // <codebase> part of the first message of each launch that begins a conversation of its own, the graph tool
+        // offered where its step says tools, its view the one the engine syncs at the step's start. A step whose mode is
+        // off is served nothing, and one whose graph cannot be served goes on without it.
         var stepGraph = graphService is null
             ? null
             : await FlowStepGraph.OfAsync(
@@ -264,6 +265,7 @@ public sealed class ReasonStepRunner(
                 platform,
                 gitClient,
                 graphClock ?? clock,
+                harnessOutput,
                 run,
                 place,
                 context,
@@ -345,13 +347,16 @@ public sealed class ReasonStepRunner(
             Skills = skills,
             SessionId = conversation is null ? session : null,
 
-            // The step's codebase graph: a conversation this attempt goes on with is told what changed and no map; a
-            // conversation of its own is given the run's repository map ahead of its pack, and the graph tool offered
-            // with the operations and the narrowing of reads its step says.
-            Codebase = codebaseChanges is null ? stepGraph?.Section : null,
+            // The step's codebase graph, all of it carried: whether a launch's conversation is handed is decided entry by
+            // entry, so a launch that goes on with the stored conversation is told what changed and one that begins its own
+            // - another client's, another provider's - is given the map ahead of the pack (AgentPromptParts.CodebaseOf),
+            // each launch's line written as it is given its first message; the graph tool offered with the operations and
+            // the narrowing of reads its step says.
+            Codebase = stepGraph?.Section,
             CodebaseChanges = codebaseChanges,
-            Map = conversation is null ? stepGraph?.Map : null,
+            Map = stepGraph?.Map,
             Graph = stepGraph?.Support,
+            CodebaseGiven = stepGraph is null ? null : stepGraph.Given,
 
             // What the engine tells the attempt's agent while it works - a plan update's message into the
             // conversation, its handoff where one ends the step in order - and what a plan update that told this
@@ -386,7 +391,7 @@ public sealed class ReasonStepRunner(
 
             // The step's graph, where it was given one, ends with the step: its working set written beside its output,
             // the seeds of the packs of the steps after it, and its figures gathered for its record.
-            var graphUse = stepGraph?.Ended(graphService!, store, fileSystem, platform.PathComparison, layout, run.Instance, agent, cancellationToken);
+            var graphUse = stepGraph?.Ended(graphService!, fileSystem, platform.PathComparison, layout, cancellationToken);
 
             return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills, Graph = graphUse };
         }
@@ -691,9 +696,10 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The step's policy kept in its records (<see cref="OrchestratorLayout.PolicyFileName"/>): the ground as resolved - its
-    /// restrictions from every source at once - the web search it asks, and what it runs on, each entry of its order with
-    /// the key's name alone. The whole configuration's state as the step started under it, never a key's value.
+    /// The step's policy kept in its records (<see cref="OrchestratorLayout.PolicyFileName"/>), as the configuration stood
+    /// when the step started under it: the ground's restrictions from every source at once, each with where it stands,
+    /// and whether the worktree rules and the protected paths are on; the web search's sources and its results per
+    /// source; and what it runs on, each entry of its order with the key's name alone - never a key's value.
     /// </summary>
     /// <param name="fileSystem">The file system the records are written with.</param>
     /// <param name="layout">The run's layout.</param>

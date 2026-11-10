@@ -1105,11 +1105,12 @@ public static class WorkflowValidator
 
         /// <summary>
         /// V53 and V54 over a reason step's four graph keys: the graph a step asks is the run's own, made by a
-        /// graphify-codebase step upstream of it - or, in the recovery, ended before it - and a step that goes on with
-        /// another's work asks the graph that step's conversation holds, saying none of its own while it may say
-        /// <c>graphFrom</c> and <c>graphPromptTokens</c> for its own pack; each key only where it does something, the
-        /// pack's cap and seed only where a pack is given, the narrowing of reads only under the tool, and the tool only
-        /// where the step's agent reads.
+        /// graphify-codebase step upstream of it - or, in the recovery, declared (<see cref="GraphifyUpstream"/>) - and a
+        /// step that goes on with another's work asks the graph that step's conversation holds, its mode that step's,
+        /// saying none of its own while it may say <c>graphFrom</c> and <c>graphPromptTokens</c> for its own pack; each
+        /// key only where it does something, judged by the mode the run resolves - the pack's cap and seed only where a
+        /// pack is given, the narrowing of reads only under the tool, and the tool only where the step's agent reads -
+        /// and a seed that names a step one the step can see, never a step named like a seed's word.
         /// </summary>
         /// <param name="entry">The reason step.</param>
         /// <param name="where">The step's path, as its problems name it.</param>
@@ -1145,7 +1146,7 @@ public static class WorkflowValidator
                 _problems.Add($"{where} says graph: tools and its agent does not read; the graph tool is an agent's read turned to the graph, and an agent that cannot read is given the map alone");
             }
 
-            var pack = mode != "off" || (resumesAnother && ChainOf(entry).Any(link => GraphModeOf(link) != "off"));
+            var pack = mode != "off";
 
             if (step.GraphPromptTokens is not null && !pack)
             {
@@ -1158,7 +1159,16 @@ public static class WorkflowValidator
                 {
                     _problems.Add($"{where} says graphFrom and no pack is given it; where a pack starts from does nothing where a step asks no graph");
                 }
-                else if (!string.Equals(from, WorkflowStep.GraphFromChanges, StringComparison.Ordinal))
+                else if (WorkflowStep.GraphFromWords.Contains(from, StringComparer.Ordinal))
+                {
+                    // The word means the seed: a step named like it is never the one a graphFrom names, and is said so
+                    // where the name finds one, rather than seeding from the word in silence.
+                    if (Scope(entry, from) is { Step.Type: "reason" } named)
+                    {
+                        _problems.Add($"{where} says graphFrom: '{from}', which is the pack's own seed and names the reason step '{named.Path}' too; a step named {string.Join(" or ", WorkflowStep.GraphFromWords)} cannot seed a pack - rename it to seed from it");
+                    }
+                }
+                else
                 {
                     if (Scope(entry, from) is not { } seeded)
                     {
@@ -1175,41 +1185,31 @@ public static class WorkflowValidator
         }
 
         /// <summary>
-        /// The step's use of the run's graph with its default resolved, as <see cref="WorkflowStep.GraphOf"/> resolves
-        /// it, by the step's own agent and its own upstream graphify step.
+        /// The step's use of the run's graph with its default resolved, as the run resolves it (<see cref="WorkflowStep.GraphOf"/>):
+        /// by the <c>graph</c> of the step its chain of work began with (<see cref="ResumeChain.Root"/>, whose walk stops at
+        /// a ring) and that step's agent, with the step's own upstream graphify step - a step that goes on with another's
+        /// work asks the graph that step's conversation holds.
         /// </summary>
         /// <param name="entry">The reason step.</param>
         private string GraphModeOf(Entry entry)
-            => WorkflowStep.GraphOf(entry.Step, WorksAs(entry).Definition, GraphifyUpstream(entry));
+        {
+            var (root, definition) = WorksAs(entry);
+
+            return WorkflowStep.GraphOf(root, definition, GraphifyUpstream(entry));
+        }
 
         /// <summary>
         /// Whether a <c>graphify-codebase</c> step is upstream of <paramref name="entry"/> - a step its waits reach,
         /// through its own dependencies and those of every group around it (<see cref="FlowGraph.Waits"/>) - or, where
-        /// the step is the recovery's own, one is declared, for a graph made anywhere has ended by the time the
-        /// recovery runs.
+        /// the step is the recovery's own, one is declared. The run gives a step of the recovery a graph only where a
+        /// graphify step of the run has ended done before it starts, which no definition can say; one declared is the
+        /// check's approximation of that, the most the run could give.
         /// </summary>
         /// <param name="entry">The step.</param>
         private bool GraphifyUpstream(Entry entry)
             => InRecovery(entry)
                 ? _entries.Any(other => other.Step.Type == "graphify-codebase")
                 : _entries.Where(other => other.Step.Type == "graphify-codebase").Any(other => FlowGraph.Waits(_definition, entry.Path, other.Path));
-
-        /// <summary>
-        /// The chain of reason steps a step that goes on with another's work is part of, its root first and itself
-        /// last: every step whose <c>resume</c> the walk follows, each as the entry the definition declares.
-        /// </summary>
-        /// <param name="entry">A reason step that goes on with another's work.</param>
-        private IReadOnlyList<Entry> ChainOf(Entry entry)
-        {
-            var chain = new List<Entry>();
-
-            for (var walk = entry; walk is not null; walk = walk.Step.Resume is { } resumed && !string.Equals(resumed, walk.Step.Name, StringComparison.Ordinal) ? Scope(walk, resumed) : null)
-            {
-                chain.Insert(0, walk);
-            }
-
-            return chain;
-        }
 
         /// <summary>
         /// The keys <paramref name="step"/> names that a step going on with another's work takes from that step - its

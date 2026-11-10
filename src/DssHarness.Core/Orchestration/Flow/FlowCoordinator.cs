@@ -11057,7 +11057,8 @@ public sealed class FlowCoordinator
             WorkedFromOf(instance),
             instance.Telling is { } telling && telling.For(attempt) ? telling : null,
             PlanToldOf(instance),
-            BudgetLeftUsd: BudgetLeftUsd());
+            BudgetLeftUsd: BudgetLeftUsd(),
+            Path: instance.Path);
 
     /// <summary>
     /// The handoff the engine writes for <paramref name="instance"/>: its first line says <paramref name="why"/>, and

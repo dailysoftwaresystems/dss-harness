@@ -74,8 +74,8 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
     /// <inheritdoc/>
     /// <remarks>
     /// The run's repository map is its own block with the client's cache mark on it alone: tools, the system text and
-    /// the map are the same for every step of the run with these tools, so each after the first reads them from the
-    /// cache, while the pack and the task after the block are each step's own.
+    /// the map are the same for every step of the run with the same agent, these tools and the same ground of reads, so
+    /// each after the first reads them from the cache, while the pack and the task after the block are each step's own.
     /// </remarks>
     public string UserMessage(string map, string rest)
     {

@@ -572,16 +572,29 @@ public sealed record WorkflowStep
     public static readonly IReadOnlyList<string> GraphModes = ["off", "map", "tools"];
 
     /// <summary>
-    /// Where the step's context pack starts from: <see cref="GraphFromChanges"/>, or the reason step whose working set
-    /// seeds it in place of the work the run holds - a step that goes on with another's work may say it, for its pack
-    /// is its own.
+    /// Where the step's context pack starts from: <see cref="GraphFromTask"/> (the default), <see cref="GraphFromChanges"/>,
+    /// or the reason step - one of its own scope or one around it - whose working set seeds it in place of the work the run
+    /// holds. A step that goes on with another's work may say it, and its own is what shapes its pack, for its pack is its own.
     /// </summary>
     public string? GraphFrom { get; init; } = null;
+
+    /// <summary>The default value of <see cref="GraphFrom"/>: the pack starts from what the step's task names, and the working sets of the work the run holds for it.</summary>
+    public const string GraphFromTask = "task";
 
     /// <summary>The change-first value of <see cref="GraphFrom"/>: the pack starts from what the step's tree holds differently from its base.</summary>
     public const string GraphFromChanges = "changes";
 
-    /// <summary>The cap of the step's context pack, in estimated tokens, from 0 to <see cref="MostGraphPromptTokens"/>; absent, <see cref="DefaultGraphPromptTokens"/>.</summary>
+    /// <summary>
+    /// The words <see cref="GraphFrom"/> says a seed with, in the order the help lists them - every other value names a
+    /// reason step - read by the definition's check, the help and the serving alike: a step named one of them cannot be
+    /// named as a seed, for the word means the seed.
+    /// </summary>
+    public static readonly IReadOnlyList<string> GraphFromWords = [GraphFromTask, GraphFromChanges];
+
+    /// <summary>
+    /// The cap of the step's context pack, in estimated tokens, from 0 to <see cref="MostGraphPromptTokens"/> - 0 asks for
+    /// no pack; absent, <see cref="DefaultGraphPromptTokens"/>. A step that goes on with another's work may say its own.
+    /// </summary>
     public int? GraphPromptTokens { get; init; } = null;
 
     /// <summary>The cap of a step's context pack where neither the step nor anything else says one.</summary>
@@ -604,9 +617,12 @@ public sealed record WorkflowStep
     /// upstream and its agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is - an agent
     /// the definition does not name is read as one that reads, its file's own problems said where it is read.
     /// </summary>
-    /// <param name="step">The reason step.</param>
+    /// <param name="step">The reason step - for one that goes on with another's work, the step its chain began with, whose <c>graph</c> its conversation holds.</param>
     /// <param name="agent">The agent the step works as, where its definition was read.</param>
-    /// <param name="graphUpstream">Whether a graphify step is upstream of the step - or, in the recovery, has ended.</param>
+    /// <param name="graphUpstream">
+    /// Whether the step has a graph to be given: a graphify step upstream of it - or, for a step of the recovery, one of the
+    /// run that ended done before it, as the run stands; the definition's check, which has no run, asks whether one is declared.
+    /// </param>
     public static string GraphOf(WorkflowStep step, AgentDefinition? agent, bool graphUpstream)
         => step.Graph ?? (graphUpstream ? agent?.May.Contains("read") == false ? "map" : "tools" : "off");
 

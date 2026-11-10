@@ -98,7 +98,8 @@ public sealed class SideTaskGraph
 
     /// <summary>
     /// The person's message as the side-task's agent is given it: the repository map at its head where it is the first,
-    /// the context pack made from the message at the head of each.
+    /// the context pack made from the message at the head of each - each part written as every first message's parts are
+    /// (<see cref="AgentPromptParts.Part"/>) - and the pack's nearness kept for the tool's <c>find</c>, whose ties it breaks.
     /// </summary>
     /// <param name="message">The person's message, whole.</param>
     /// <param name="first">Whether it is the side-task's first.</param>
@@ -106,23 +107,27 @@ public sealed class SideTaskGraph
     {
         var front = string.Empty;
 
-        if (first && files.FileExists(map))
+        if (first && files.FileExists(map) && files.ReadAllText(map) is { Length: > 0 } kept)
         {
-            front += $"<repository-map>\n{files.ReadAllText(map)}\n</repository-map>\n\n";
+            front += AgentPromptParts.MapPart(kept);
         }
 
         if (queries is { } view)
         {
             var pack = CodebaseContextPack.Make(view, new ContextPackRequest(message, _ => true));
+            near = pack.Near;
 
             if (pack.Text.Length > 0)
             {
-                front += $"<codebase>\n{pack.Text}\n</codebase>\n\n";
+                front += AgentPromptParts.Part(AgentPromptParts.CodebaseTag, pack.Text);
             }
         }
 
         return front + message;
     }
+
+    /// <summary>How near each node is to the work of the person's last message, as its pack said it; null before any.</summary>
+    private GraphNearness? near;
 
     /// <summary>Syncs the graph by the path a write of the side-task's changed, its records kept whole.</summary>
     /// <param name="path">The path written, absolute.</param>
@@ -166,6 +171,7 @@ public sealed class SideTaskGraph
             ConfinedPaths.Within(files, platform, view.Tree),
             path => !PathPatterns.Matches(never, path, platform.PathComparison),
             _ => AgentPolicyAnswer.Allow,
-            async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read));
+            async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read),
+            near);
     }
 }

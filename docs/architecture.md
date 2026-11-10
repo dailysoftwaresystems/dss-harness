@@ -1615,8 +1615,9 @@ in two - a `build` step, which fails red and is taken by the recovery and built 
 beside the baseline's tests and the CI read (`onFailure: continue`, for a run goes on without a map);
 every reason step after it is served from the graph as its type of work needs, its steps saying the
 graph keys only where a type is served otherwise than by default (`graphFrom: changes` on the
-reviewers, the self-audit, the diagnosis and the steps that verify and fix; `graph: map` on the
-prioritiser and a review's scope; `graph: off` on the scribe's).
+reviewers, the self-audit, the diagnosis and the steps that verify and fix - a step that goes on with
+another's work starting its own pack where it says; `graph: map` on the prioritiser and a review's
+scope; `graph: off` on the scribe's).
 
 Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may
 say `timeoutMinutes` (`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole
@@ -3981,11 +3982,23 @@ its first line counts the lines the changes lead with, and with no base, its cha
 in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the run's start commit for the main
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
-A reason step that has a graph (`FlowStepGraph`, its `graph` `map` or `tools` with its default resolved) is given its
-pack as the `<codebase>` part at the head of its first user message (`AgentPromptParts.CodebaseTag`, before
-`<run-context>`) - or, where the run's graph was never built, the sentence for a step that left no output in its place -
-and the tool its `Near`. Its reads narrowed (`graphReads: narrow`, the default) deny, on the two API clients, a whole
-`view_file` of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
+A reason step that has a graph (`FlowStepGraph`, its `graph` `map` or `tools` with its default resolved - the mode
+the `graph` of the step its chain of work began with says, `ResumeChain.Root`, and for a step of the recovery a graph
+only where a graphify step of the run has ended done) is served through one request of its view
+(`FlowGraphSyncs.RequestOf`, the agent's worktree where it works in one - `FlowGraphSyncs.WorktreeOf` - so its changes,
+a check of a file the tool makes again and the view it is served are the worktree's, never the main checkout's). Its
+pack's own keys are its step's, the chain's root's where it says none, so a step that goes on with another's work
+starts its pack where it says; a `graphFrom` naming a step is found as the definition's check finds it
+(`FlowScope.Resolve` from the step's scope) and read from that step's instance in the step's own work item and
+iteration, never another's beside it. It is given its pack as the `<codebase>` part of the first user message of each
+launch that begins a conversation of its own, after the run's map (`AgentPromptParts.CodebaseTag`, before
+`<run-context>`; `AgentPromptParts.Part` the one writer of a part's form) - or, where the run's graph was never built,
+the sentence for a step that left no output in its place - and the tool its `Near`; a launch that goes on with a
+stored conversation is told the changes instead, the one decision `AgentPromptParts.CodebaseOf`'s, made as each
+launch's first message is written, so a fallback to another client or provider begins with the map and the pack. A
+graph that cannot be served - its records, its map, a line of it - is said, and the step goes on without it. Its reads
+narrowed (`graphReads: narrow`, the default) deny a whole `view_file` on the two API clients, and a whole `Read` on
+Claude Code, of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
 the refusal; a range, a search and a write pass; a file the graph is not sure of
 (`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its references `candidates`
 or unresolved) passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file for the
@@ -4013,11 +4026,14 @@ iterations after its innermost item), newest first, each that began, once; `Flow
 into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, edited where any set says so, none
 gone). A reason step that has a graph writes both files as it ends (`FlowStepGraph.Ended`: the working set made from
 the view at the step's end, its `graph.jsonl` and its stored stream) and its pack is given the seeds; its `graph.jsonl`
-holds its prompt's line first (`GraphPromptLine`: the pack's seeds, nodes, tokens and what was left out, or why none was
-given), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
+holds a line for each launch's first message, written as the message is and before any line of that launch's calls
+(`GraphPromptLine`: the map's tokens and the pack's seeds, nodes, tokens and what was left out, or the tokens of the
+changes a conversation gone on with was told in their place, or why no pack was given), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
 one for each escape of its narrowing and each whole read the narrowing refused (`GraphEscapeLine`, `GraphDeniedLine`),
-and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used, calls, served tokens,
-bodies, text hits, edits made and refused, whole-file reads counted from the stored stream, denied reads and escapes -
+and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used, `changesTokens` (the
+three its last launch was given), calls, served tokens, bodies, text hits, edits made and refused, whole-file reads
+counted from the stored stream on every client's form as the working set reads its calls
+(`CodebaseWorkingSet.WholeFileReads`), denied reads and escapes -
 are held in its `step.json` under `graph` and summed for the run's report (`FlowReports`).
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a

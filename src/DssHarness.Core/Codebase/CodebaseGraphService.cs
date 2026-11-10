@@ -1622,8 +1622,9 @@ public sealed class CodebaseGraphService(
         }
 
         /// <summary>
-        /// What the sync starts from: the run's own manifest; where it has none, the newest earlier run's that reads, whose
-        /// extracts are copied as they are reused; and why the graph is built again whole, where it is.
+        /// What the sync starts from: the run's own manifest; where it has none, the newest manifest that reads of the
+        /// repository's other runs and side-tasks, whose extracts are copied as they are reused; and why the graph is
+        /// built again whole, where it is.
         /// </summary>
         private (CodeGraphManifest? Manifest, OrchestratorLayout? From, string? Rebuilt, string? SeededFrom) Previous()
         {

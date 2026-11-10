@@ -5239,4 +5239,110 @@ public sealed class WorkflowValidatorTests
                 {{reason.Replace("prompt:", "graph: tools\n  dependsOn: [codebase]\n  prompt:")}}
                 """, files: path => path == "agents/thinker.md" ? "---\nname: thinker\ndescription: Writes.\ncapabilities: [write]\n---\nYou write." : null));
     }
+
+    /// <summary>
+    /// A ring of resumes - two steps each going on with the other's work - is refused, and the graph rules that walk a
+    /// step's chain of work walk it through its one owner (<see cref="ResumeChain.Root"/>), which stops at the ring: the
+    /// check answers, where a walk of its own would follow the ring for ever and take every byte the process has.
+    /// </summary>
+    [Fact]
+    public async Task ARingOfResumes_IsRefused_AndTheGraphRulesWalkItNoFurtherThanItsOwner()
+    {
+        var problems = await Task.Run(
+            () => WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: a
+                    type: reason
+                    resume: b
+                    graphPromptTokens: 100
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: b
+                    type: reason
+                    resume: a
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null),
+            TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                "step 'a' resumes 'b', which is declared after it; work cannot be gone on with before it is begun",
+                "step 'a' says graphPromptTokens and no pack is given it; the cap does nothing where a step asks no graph",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A step that goes on with another's work is judged by the graph the run gives it - the mode of the step its chain
+    /// began with - so a cap it says where that step says graph: off is a key that does nothing, refused as one.
+    /// </summary>
+    [Fact]
+    public void AResumingStepsGraphKeys_AreJudgedByTheModeOfTheStepItsChainBeganWith()
+    {
+        Assert.Equal(
+            ["step 'mend' says graphPromptTokens and no pack is given it; the cap does nothing where a step asks no graph"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: codebase
+                    type: graphify-codebase
+                  - name: implement
+                    type: reason
+                    agent: thinker
+                    graph: off
+                    dependsOn: [codebase]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: mend
+                    type: reason
+                    resume: implement
+                    graphPromptTokens: 500
+                    dependsOn: [implement]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null));
+    }
+
+    /// <summary>
+    /// graphFrom's own words - task, the default, and changes - are taken as the seeds they name, and are the same set the
+    /// help lists and the serving reads (<see cref="WorkflowStep.GraphFromWords"/>); a step named like one cannot be named
+    /// as a seed, for the word means the seed, and is refused saying so rather than seeding from the word in silence.
+    /// </summary>
+    [Fact]
+    public void GraphFromsOwnWords_AreSeeds_AndAStepNamedLikeOneIsRefusedAsASeed()
+    {
+        IReadOnlyList<string> Checked(string from, string named)
+            => WorkflowValidator.Validate(Parse($$"""
+                name: default
+                steps:
+                  - name: codebase
+                    type: graphify-codebase
+                  - name: {{named}}
+                    type: reason
+                    agent: thinker
+                    dependsOn: [codebase]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: look
+                    type: reason
+                    agent: thinker
+                    graphFrom: {{from}}
+                    dependsOn: [{{named}}]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null);
+
+        Assert.Equal(["task", "changes"], WorkflowStep.GraphFromWords);
+        Assert.Empty(Checked("task", "implement"));
+        Assert.Empty(Checked("changes", "implement"));
+        Assert.Empty(Checked("implement", "implement"));
+        Assert.Equal(
+            ["step 'look' says graphFrom: 'task', which is the pack's own seed and names the reason step 'task' too; a step named task or changes cannot seed a pack - rename it to seed from it"],
+            Checked("task", "task"));
+        Assert.Equal(
+            ["step 'look' says graphFrom: 'changes', which is the pack's own seed and names the reason step 'changes' too; a step named task or changes cannot seed a pack - rename it to seed from it"],
+            Checked("changes", "changes"));
+    }
 }

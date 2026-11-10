@@ -264,7 +264,7 @@ is enforced by tests that read the built command line itself. The
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
 .orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence
-.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it, and for a reason step the policy.json it started under - the agents' configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (its pack's line, each call of the graph tool, each escape of its narrowed reads) and its working-set.json, the seeds of the packs of the steps after it
+.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it, and for a reason step the policy.json it started under - the agents' configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a line for each launch's first message, each call of the graph tool, each escape of its narrowed reads) and its working-set.json, the seeds of the packs of the steps after it
 .orchestrators/<o>/agents/<agent>/sessions/<id>/ ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
 .orchestrators/<o>/.../<instance>/children/<session>.json ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once its starter has gone
@@ -1594,7 +1594,7 @@ clearing said in a notice; and three cache marks of the client's lifetime for
 `agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said) - on the system text,
 covering the tools and it, the same for every step of that agent with the same tools; on the run's
 repository map, the first block of the conversation's first user message, covering the tools, the
-system text and the map, the same for every such step of the run; and the top-level mark, which
+system text and the map, the same for every such step of the run that reads alike; and the top-level mark, which
 moves with the conversation's last block - so a step's second request on reads the map from the
 cache, and so does the first request of the run's next step of the same agent - and a budget needs
 the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
@@ -1636,8 +1636,8 @@ each answered by a tool message, in order; the tools as functions, their calls' 
 `high`, `xhigh`, `max`); and `max_tokens` - no sampling parameter or tool choice of the tool's own,
 which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own. A first
 message that holds the run's repository map holds it first, ahead of the step's context pack and its
-task - the same bytes for every step of the run, so the longest prefix the steps of an agent share
-begins with it. Z.AI caches what a request repeats by itself
+task - the same bytes for every step of the run that reads alike, so the longest prefix the steps of an
+agent share begins with it. Z.AI caches what a request repeats by itself
 and bills no write, so a budget needs the model's input, cached-input and output prices. Each
 answer's reasoning is stored with it and sent back; Z.AI leaves it out of what the model reads in
 later turns unless `agentClients.glm.preserveThinking` is true (false where nothing is said), which

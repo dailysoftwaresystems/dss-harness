@@ -462,7 +462,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         try
         {
             var resolved = Resolved(step, directory, mask, messages);
-            WroteUserMd(resolved, NewConversation(client, resolved));
+            WroteUserMd(step, resolved, NewConversation(client, resolved));
             var result = await InLaneAsync(client, resolved, pump, pump, compaction).ConfigureAwait(false);
 
             return (Holding(client, result, step, mask), null);
@@ -602,7 +602,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                             client.Capabilities.GoesOnWith == AgentConversationHandling.Handed,
                             launchSession);
 
-                        WroteUserMd(resolved, NewConversation(client, resolved));
+                        WroteUserMd(step, resolved, NewConversation(client, resolved));
                         var answered = await InLaneAsync(client, resolved, watching, pump, compaction).ConfigureAwait(false);
 
                         // An answer that does not hold together is no ending the engine could read, and no ending to
@@ -1361,13 +1361,23 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         JsonStateFile.Write(_fileSystem, Path.Combine(directory, ResultFileName), result);
     }
 
-    /// <summary>Writes the first user message as it is sent, masked, before the client is taken: the parts the attempt was given, held by the one owner of their order, or the compaction record whole where the run begins a compacted conversation.</summary>
+    /// <summary>
+    /// Writes the first user message as it is sent, masked, before the client is taken - the parts the launch was given,
+    /// held by the one owner of their order, or the compaction record whole where the run begins a compacted conversation
+    /// - and tells the step what of the codebase graph it holds (<see cref="AgentStepRequest.CodebaseGiven"/>): whether
+    /// the launch's conversation is handed is decided entry by entry, so what each launch was given is known here alone.
+    /// </summary>
+    /// <param name="step">The step, told what the launch was given.</param>
     /// <param name="run">The run the client is about to work.</param>
     /// <param name="newConversation">Whether the conversation the run begins is a new one.</param>
-    private void WroteUserMd(AgentRun run, bool newConversation)
-        => _fileSystem.WriteAllTextAtomic(
+    private void WroteUserMd(AgentStepRequest step, AgentRun run, bool newConversation)
+    {
+        _fileSystem.WriteAllTextAtomic(
             Path.Combine(StepDirectoryOf(run), OrchestratorLayout.StepUserFileName),
             run.Mask.Redact(run.Compaction is { Length: > 0 } compacted ? compacted : AgentPromptParts.FirstMessage(run, newConversation)));
+
+        step.CodebaseGiven?.Invoke(AgentPromptParts.CodebaseOf(run, newConversation));
+    }
 
     /// <summary>
     /// The continuation a run of the step carries: the record of a compaction carried before a task of its own

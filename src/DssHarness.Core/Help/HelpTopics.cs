@@ -3791,8 +3791,8 @@ public static class HelpTopics
             + "agentWebSearch the step's search names, each in its own part of the answer, by the harness's own search - "
             + "never a search engine's results page ('help web-search'). A step whose graph is tools - a graphify-codebase "
             + "step upstream of it, 'help workflows' - is offered the graph tool among these, under read, with the "
-            + "operations its agent's capabilities give, edit among them where it may write, and its context pack at the "
-            + "head of its first message; its graphReads narrow (the default) denies a whole view_file of a file the graph "
+            + "operations its agent's capabilities give, edit among them where it may write, and its context pack in its "
+            + "first message, after the run's map; its graphReads narrow (the default) denies a whole view_file of a file the graph "
             + $"parsed over {Agents.Runtime.CodebaseGraphTool.NarrowLines:N0} lines, saying the way to the graph instead - a range, a search and "
             + "a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's "
             + "wholeFile lifts the narrowing for one file for the rest of the step, an escape stated - each call, escape "
@@ -3890,7 +3890,7 @@ public static class HelpTopics
             + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} "
             + "where nothing is said) - on the system text, covering the tools and it, the same for every step of that "
             + "agent with the same tools; on the run's repository map, the first block of the conversation's first user "
-            + "message, covering the tools, the system text and the map, the same for every such step of the run; and the "
+            + "message, covering the tools, the system text and the map, the same for every such step of the run that reads alike; and the "
             + "top-level mark, which moves with the conversation's last block - so a step's second request on reads the "
             + "map from the cache, and so does the first request of the run's next step of the same agent - and a budget "
             + "needs the model's price of that cache's writes too: priceCacheWrite, or "
@@ -3949,7 +3949,7 @@ public static class HelpTopics
             + $"({string.Join(", ", efforts)}); and max_tokens - no sampling parameter or tool choice of the tool's own, which "
             + "requestExtras may add, and no tool of Z.AI's, for the web is the harness's own. A first message that holds "
             + "the run's repository map holds it first, ahead of the step's context pack and its task - the same bytes for "
-            + "every step of the run, so the longest prefix the steps of an agent share begins with it. Z.AI caches what a "
+            + "every step of the run that reads alike, so the longest prefix the steps of an agent share begins with it. Z.AI caches what a "
             + "request repeats by itself and bills "
             + "no write, so a budget needs the model's input, cached-input and output prices. Each answer's reasoning is "
             + "stored with it and sent back; Z.AI leaves it out of what the model reads in later turns unless "
@@ -5087,17 +5087,19 @@ public static class HelpTopics
             + "its name matches the run's task as find weighs a name's words - the share of the task's words its name holds "
             + "whole, each weighed by how often the task says it and how rare it is among the view's names, a name that "
             + $"holds them all raised as far as {Codebase.CodebaseGraphQueries.TaskRaise.ToString(CultureInfo.InvariantCulture)} more such files would raise it - no "
-            + $"declaration of a file that declares a test and nothing generated. It is made once, from the base as it stands when the run's first graphed reason step is given its prompt, kept in {OrchestratorLayout.GraphMapFileName} with what it was made from in "
-            + $"{OrchestratorLayout.GraphMapMetaFileName} under the run's graph, and never made again in the run, a resumed run included - the base moves as folds land and the map does not - cut at whole lines under "
-            + $"codebaseGraph.mapTokens ({Codebase.CodebaseGraphShape.DefaultMapTokens.ToString(CultureInfo.InvariantCulture)} by default; 0 gives no map). Every step that has a graph is given it as the <repository-map> part ahead of its "
-            + "context pack, the same bytes for every one of them, so a client that caches a prefix reads it from the "
-            + "cache ('help agent-clients' says where each client sets its marks). A step that goes on with a stored "
+            + $"declaration of a file that declares a test and nothing generated. It is made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept in {OrchestratorLayout.GraphMapFileName} (map-<a digest of the read rules>.md for steps whose read rules narrow them) with what it was made from in "
+            + $"{OrchestratorLayout.GraphMapMetaFileName} under the run's graph, made under its own lock so steps that start together keep one, and never made again in the run, a resumed run included - the base moves as folds land and the map does not - cut at whole lines under "
+            + $"codebaseGraph.mapTokens ({Codebase.CodebaseGraphShape.DefaultMapTokens.ToString(CultureInfo.InvariantCulture)} by default; 0 gives no map); one that cannot be made or read is said, and the step goes on without it. Every launch of a step that has a graph that begins a conversation of its own is given it as the <repository-map> part ahead of its "
+            + "context pack, the same bytes for every step that reads alike, so a client that caches a prefix reads it from the "
+            + "cache ('help agent-clients' says where each client sets its marks). A launch that goes on with a stored "
             + "conversation on the API clients is told, in its one new user message, <codebase-changes> instead: the "
             + "declarations its view changed since what that conversation was told of them - its pack and every delta after it - moved or changed with their new "
             + "range and hash, removed - and the nodes of its own pack the conversation was not given; never a map or a "
             + "pack again whole, for a conversation's prefix is never changed, and no earlier message, tool result, map or "
-            + "pack is ever sent changed. Claude Code, whose every launch begins a conversation of its own, is given the "
-            + "map and its own pack as every launch is.");
+            + "pack is ever sent changed. A launch the walk of the step's order moves to another client or provider begins a "
+            + "conversation of its own, and is given the map and its own pack, as Claude Code, whose every launch begins one, "
+            + "is. Each launch's first message is a line of the step's graph.jsonl - what of the graph it was given and what "
+            + "that cost, or why it was given no pack - and the step's figures are its last launch's.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -5832,8 +5834,8 @@ public static class HelpTopics
             "ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its "
             + $"{OrchestratorLayout.HandoffFileName} where one stopped it, and for a reason step the {OrchestratorLayout.PolicyFileName} it started under - the agents' "
             + "configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps "
-            + "that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (its "
-            + "pack's line, each call of the graph tool, each escape of its narrowed reads) and its working-set.json, the "
+            + "that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a "
+            + "line for each launch's first message, each call of the graph tool, each escape of its narrowed reads) and its working-set.json, the "
             + "seeds of the packs of the steps after it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),

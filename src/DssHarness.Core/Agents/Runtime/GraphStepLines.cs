@@ -4,9 +4,10 @@ namespace DssHarness.Core.Agents.Runtime;
 
 /// <summary>
 /// One line of a step's <c>graph.jsonl</c>, in its directory beside its stored stream: what the step's codebase graph was
-/// asked and gave, a line for each, appended whole as it happens. A call of the <c>graph</c> tool and an escape of its
-/// narrowing of reads are lines; a step that has a graph opens the file with the line of its prompt, the pack it was
-/// given or why none.
+/// asked and gave, a line for each, appended whole as it happens. A call of the <c>graph</c> tool, an escape of its
+/// narrowing of reads and a whole read it denied are lines; so is the first message of each launch of a step that has a
+/// graph - what of the graph that message was given, or why no pack - written as the message is, before any line of the
+/// launch's calls.
 /// </summary>
 /// <remarks>
 /// Read back by the options that refuse a member the type does not name and one it needs that the line leaves out
@@ -24,23 +25,30 @@ public abstract record GraphStepLine
 }
 
 /// <summary>
-/// The step's prompt, the first line of its <c>graph.jsonl</c>: what the map and the pack it was given cost - the map's
-/// tokens, the pack's seeds, nodes and tokens, and what was left out - or why no pack was given, where the run's graph
-/// was never built.
+/// The first message of one launch of the step, a line of its <c>graph.jsonl</c> written as the message is, before any
+/// line of the launch's calls: what of the graph that message was given and what it cost - the map's tokens, the pack's
+/// seeds, nodes and tokens and what was left out, or the tokens of the changes a conversation gone on with was told in
+/// their place - and why it was given no pack, where it was given none. Every launch writes one - an attempt's first, a
+/// retry's, a move to another entry's - so each says what that launch's conversation holds.
 /// </summary>
-/// <param name="MapTokens">The map's estimated tokens; 0 where none was given - the map is the run's, made once (part 08).</param>
+/// <param name="MapTokens">The map's estimated tokens; 0 where none was given.</param>
 /// <param name="Seeds">How many nodes the pack was seeded from.</param>
 /// <param name="Nodes">How many nodes the pack lists.</param>
 /// <param name="Tokens">The pack's estimated tokens.</param>
 /// <param name="LeftOut">How many of the pack's lines did not fit its cap.</param>
-/// <param name="Why">Why no pack was given, where none was - the sentence for a step that left no output; null where one was.</param>
-public sealed record GraphPromptLine(int MapTokens, int Seeds, int Nodes, int Tokens, int LeftOut, string? Why = null) : GraphStepLine
+/// <param name="Why">
+/// Why the launch was given no pack, where it was given none: the sentence for a graph the run never built, a step that
+/// asked for none, a conversation gone on with, a compaction's record; null where it was given one, or the changes in its place.
+/// </param>
+/// <param name="ChangesTokens">The estimated tokens of the changes of the codebase a conversation gone on with was told in the place of a map and a pack; 0 where it was told none.</param>
+public sealed record GraphPromptLine(int MapTokens, int Seeds, int Nodes, int Tokens, int LeftOut, string? Why = null, int ChangesTokens = 0) : GraphStepLine
 {
     /// <inheritdoc/>
     public override string? Problem()
-        => MapTokens < 0 || Seeds < 0 || Nodes < 0 || Tokens < 0 || LeftOut < 0 ? "a count is never below 0"
-            : Why is null && Nodes == 0 && Tokens == 0 && Seeds == 0 && MapTokens == 0 ? "a prompt line names a pack or why none was given"
-            : Why is not null && (Seeds > 0 || Nodes > 0 || Tokens > 0 || LeftOut > 0 || MapTokens > 0) ? "a prompt line that says why no pack was given names no pack"
+        => MapTokens < 0 || Seeds < 0 || Nodes < 0 || Tokens < 0 || LeftOut < 0 || ChangesTokens < 0 ? "a count is never below 0"
+            : Why is null && Tokens == 0 && ChangesTokens == 0 && MapTokens == 0 ? "a prompt line names what its launch was given of the graph, or why it was given no pack"
+            : Why is not null && (Seeds > 0 || Nodes > 0 || Tokens > 0 || LeftOut > 0 || ChangesTokens > 0) ? "a prompt line that says why no pack was given names no pack and no changes"
+            : ChangesTokens > 0 && (MapTokens > 0 || Tokens > 0) ? "a conversation told the changes of the codebase is given no map and no pack"
             : null;
 }
 

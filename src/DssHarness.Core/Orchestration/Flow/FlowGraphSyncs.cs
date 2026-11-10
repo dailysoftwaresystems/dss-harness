@@ -47,18 +47,56 @@ public sealed class FlowGraphSyncs(
     private const string ViewAgain = "the next sync of that view brings it up to date";
 
     /// <summary>
-    /// The commit a step's tree's work started from, which change-first compares the tree with (value 371): an agent's
-    /// worktree's base as its record says it - where its worktree was made, or where its last refresh or rebase brought it -
-    /// and for the main checkout, which an agent that reads and a step with no agent work in, the commit the run started
-    /// from. Null where neither is recorded: a worktree not made yet, a run started beside the tree's history.
+    /// The commit a step's tree's work started from, which change-first compares the tree with: an agent's worktree's base
+    /// as its record says it - where its worktree was made, or where its last refresh or rebase brought it - and for the
+    /// main checkout, which an agent that reads and a step with no agent work in, the commit the run started from. Null
+    /// where neither is recorded: a worktree not made yet, a run started beside the tree's history.
     /// </summary>
     /// <param name="agent">The record of the agent the step works in; null for a step with none.</param>
-    /// <param name="run">The run's context.</param>
-    public static string? ChangesBase(AgentRecord? agent, FlowRunContext run)
-    {
-        ArgumentNullException.ThrowIfNull(run);
+    /// <param name="startCommit">The commit the run started from, as its records keep it; null where they name none.</param>
+    public static string? ChangesBase(AgentRecord? agent, string? startCommit)
+        => agent is { Reads: false } ? agent.Base : startCommit;
 
-        return agent is { Reads: false } ? agent.Base : run.StartCommit;
+    /// <summary>
+    /// The request a sync or a read of the run's graph is made with, the one place it is built: the run's own graph in the
+    /// shape its workflow says, the configured worktrees root, and - where the view is an agent's worktree
+    /// (<see cref="WorktreeOf"/>) - that worktree, so every call of the graph service made through it acts on the tree the
+    /// view is of and never on the main checkout in its place.
+    /// </summary>
+    /// <param name="context">The repository's context.</param>
+    /// <param name="place">The run's place, whose workflow says the graph's shape.</param>
+    /// <param name="why">What asked for it, as the graph's sync log says it.</param>
+    /// <param name="worktree">The agent's worktree whose view is asked; null for the base.</param>
+    /// <param name="rebuild">Whether every file of the tree is extracted again, no extract reused.</param>
+    public static CodebaseGraphSync RequestOf(HarnessContext context, FlowRunPlace place, string why, CodebaseGraphWorktree? worktree = null, bool rebuild = false)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(place);
+
+        return new CodebaseGraphSync(
+            context.Layout,
+            OrchestratorLayout.Of(context.Layout, place.Run),
+            place.Definition.CodebaseGraph?.Shape ?? CodebaseGraphShape.Default,
+            context.Config.Worktrees.Root,
+            rebuild,
+            why)
+        {
+            Worktree = worktree,
+        };
+    }
+
+    /// <summary>
+    /// The worktree whose view <paramref name="agent"/>'s steps are served and synced: its own, where its record names one;
+    /// null for an agent that reads - whose view is the base - and for one whose worktree its record does not place.
+    /// </summary>
+    /// <param name="agent">The agent's name.</param>
+    /// <param name="record">The agent's record.</param>
+    /// <param name="layout">The repository's layout, which places the worktree under the worktrees root.</param>
+    public static CodebaseGraphWorktree? WorktreeOf(string agent, AgentRecord record, HarnessLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        return record.Reads ? null : record.WorktreePath(layout) is { } worktree ? new CodebaseGraphWorktree(agent, worktree) : null;
     }
 
     /// <summary>
@@ -277,7 +315,7 @@ public sealed class FlowGraphSyncs(
 
         await DropGoneAsync(run, place, layout, cancellationToken).ConfigureAwait(false);
 
-        var request = new CodebaseGraphSync(context.Layout, layout, place.Definition.CodebaseGraph?.Shape ?? CodebaseGraphShape.Default, context.Config.Worktrees.Root, Rebuild: false, why);
+        var request = RequestOf(context, place, why);
 
         // The view it is asked of: the agent's until its record says it reads, and the base's then.
         var view = agent ?? CodebaseGraphService.BaseView;
@@ -289,8 +327,8 @@ public sealed class FlowGraphSyncs(
                 // An agent that reads has no worktree: it reads the main tree, and its view is the base.
                 switch (store.ReadAgent(layout, agent))
                 {
-                    case { State: AgentStates.Live } record when record.WorktreePath(context.Layout) is { } worktree:
-                        request = request with { Worktree = new CodebaseGraphWorktree(agent, worktree) };
+                    case { State: AgentStates.Live } record when WorktreeOf(agent, record, context.Layout) is { } worktree:
+                        request = request with { Worktree = worktree };
                         break;
 
                     case { State: AgentStates.Live, Reads: true }:

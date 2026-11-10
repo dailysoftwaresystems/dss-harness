@@ -47,7 +47,7 @@ public sealed class GraphifyCodebaseRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.Refused, refusal);
         }
 
-        var request = new CodebaseGraphSync(context.Layout, layout, place.Definition.CodebaseGraph?.Shape ?? CodebaseGraphShape.Default, context.Config.Worktrees.Root, run.Step.Rebuild == true, run.Instance);
+        var request = FlowGraphSyncs.RequestOf(context, place, run.Instance, rebuild: run.Step.Rebuild == true);
 
         if (run.Step.In is { } named)
         {
@@ -60,8 +60,8 @@ public sealed class GraphifyCodebaseRunner(
 
             switch (store.ReadAgent(layout, agent))
             {
-                case { State: AgentStates.Live } record when record.WorktreePath(context.Layout) is { } worktree:
-                    request = request with { Worktree = new CodebaseGraphWorktree(agent, worktree) };
+                case { State: AgentStates.Live } record when FlowGraphSyncs.WorktreeOf(agent, record, context.Layout) is { } worktree:
+                    request = request with { Worktree = worktree };
                     break;
 
                 case { State: AgentStates.Live, Reads: true }:

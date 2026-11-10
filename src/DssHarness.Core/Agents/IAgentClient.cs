@@ -531,27 +531,37 @@ public sealed record AgentStepRequest(
     public AgentGraphSupport? Graph { get; init; }
 
     /// <summary>
-    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part at the head of its first user message
-    /// (<see cref="AgentPromptParts"/>): a reason step's context pack, or the sentence for a graph the run never built;
-    /// null where the run was given none.
+    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of the first user message of each launch that begins a
+    /// conversation of its own, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason
+    /// step's context pack, or the sentence for a graph the run never built; null where the run was given none.
     /// </summary>
     public string? Codebase { get; init; }
 
     /// <summary>
-    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of its
-    /// first user message (<see cref="AgentPromptParts"/>): the run's own, made once from the base as it stood when the
-    /// run's first graphed reason step was given its prompt - the same bytes for every step of the run, so a client that
-    /// caches a prefix reads it from the cache; null where the run was given none.
+    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of the
+    /// first user message of each launch that begins a conversation of its own (<see cref="AgentPromptParts"/>): the run's
+    /// own, made once for each ground of reads its steps share, from the base as it stood when the first graphed reason
+    /// step of that ground was given its prompt - the same bytes for every step that reads alike, so a client that caches
+    /// a prefix reads it from the cache; null where the run was given none.
     /// </summary>
     public string? Map { get; init; }
 
     /// <summary>
     /// The changes of the codebase a stored conversation the run goes on with is told, the
-    /// <c>&lt;codebase-changes&gt;</c> part of its one new user message in the place of a pack - the declarations its
-    /// view changed since what that conversation was told of them - its pack and every delta after it - and the nodes of
-    /// its own pack the conversation was not given; null where the run was given none, and the run's own pack sent as every new conversation's is.
+    /// <c>&lt;codebase-changes&gt;</c> part of its one new user message in the place of a map and a pack - the declarations
+    /// its view changed since what that conversation was told of them - its pack and every delta after it - and the nodes
+    /// of its own pack the conversation was not given; null where there are none to tell. A launch whose entry is handed no
+    /// conversation - another client's, another provider's - begins its own, and is given <see cref="Map"/> and
+    /// <see cref="Codebase"/> in their place: the one decision is <see cref="AgentPromptParts.CodebaseOf(AgentRun, bool)"/>'s.
     /// </summary>
     public string? CodebaseChanges { get; init; }
+
+    /// <summary>
+    /// Told, as each launch's first message is written and before its client is taken, what of the codebase graph that
+    /// message holds (<see cref="AgentPromptParts.CodebaseOf(AgentRun, bool)"/>), so what a launch was given is recorded
+    /// as it was given; null where nothing is told.
+    /// </summary>
+    public Action<AgentCodebaseGiven>? CodebaseGiven { get; init; }
 
     /// <summary>
     /// The operating system's isolation the launch's agent runs under - the mechanism and what it denies each command, or
@@ -779,23 +789,24 @@ public sealed record AgentRun(
     public AgentGraphSupport? Graph { get; init; }
 
     /// <summary>
-    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part at the head of its first user message
-    /// (<see cref="AgentPromptParts"/>): a reason step's context pack, or the sentence for a graph the run never built;
-    /// null where the run was given none.
+    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of its first user message where the conversation is a
+    /// new one, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason step's context pack,
+    /// or the sentence for a graph the run never built; null where the run was given none.
     /// </summary>
     public string? Codebase { get; init; }
 
     /// <summary>
     /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of its
-    /// first user message (<see cref="AgentPromptParts"/>): the run's own, made once - the same bytes for every step of
-    /// the run, so a client that caches a prefix reads it from the cache; null where the run was given none.
+    /// first user message where the conversation is a new one (<see cref="AgentPromptParts"/>): the run's own, made once for
+    /// each ground of reads - the same bytes for every step that reads alike, so a client that caches a prefix reads it
+    /// from the cache; null where the run was given none.
     /// </summary>
     public string? Map { get; init; }
 
     /// <summary>
     /// The changes of the codebase a stored conversation the run goes on with is told, the
-    /// <c>&lt;codebase-changes&gt;</c> part of its one new user message in the place of a pack; null where the run was
-    /// given none.
+    /// <c>&lt;codebase-changes&gt;</c> part of its one new user message in the place of a map and a pack, where the
+    /// conversation is handed; null where there are none to tell.
     /// </summary>
     public string? CodebaseChanges { get; init; }
 
