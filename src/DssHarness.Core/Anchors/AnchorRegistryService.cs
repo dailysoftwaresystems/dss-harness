@@ -44,6 +44,18 @@ public interface IAnchorRegistryService : IUseCase
     /// nothing, a closed row whose Trigger may not say what its writer meant.
     /// </summary>
     Task<IReadOnlyList<AnchorFinding>> LintAsync(string startDirectory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// One cell's text for a row to be written or changed, from whichever of its two options gave it: the inline value, or
+    /// the file its <c>--&lt;cell&gt;-file</c> names, read here as UTF-8 and nothing else (<see cref="AnchorCellInputs"/>);
+    /// <see langword="null"/> where neither was given, which every change reads as "leave this cell alone".
+    /// </summary>
+    /// <param name="input">The two options for one cell, as they were given.</param>
+    /// <exception cref="HarnessException">
+    /// Both options were given, or the file named is not there, cannot be read, is not UTF-8, or opens with a byte-order
+    /// mark (<see cref="HarnessExit.UsageError"/>).
+    /// </exception>
+    string? CellText(AnchorCellInput input);
 }
 
 /// <inheritdoc cref="IAnchorRegistryService"/>
@@ -479,6 +491,8 @@ public sealed class AnchorRegistryService(
             .Where(entry => !filter.OnlyOpen || !entry.Row.IsClosed)
             .Where(entry => !filter.OnlyClosed || entry.Row.IsClosed)];
     }
+
+    public string? CellText(AnchorCellInput input) => AnchorCellInputs.Resolve(_fileSystem, input);
 
     public async Task<IReadOnlyList<AnchorFinding>> LintAsync(string startDirectory, CancellationToken cancellationToken = default)
     {

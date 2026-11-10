@@ -1,5 +1,6 @@
 using DssHarness.Core.Application.Hosting;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Sync;
 
@@ -96,14 +97,94 @@ public sealed class SyncServeHandlerTests
         var short_ = await Assert.ThrowsAsync<HarnessException>(
             () => handler.ServeAsync(SyncServe.Read, [root], token));
 
-        Assert.Equal(HarnessExit.UsageError, short_.ExitCode);
-        Assert.Contains("needs 2 argument(s); it was given 1", short_.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            (HarnessExit.UsageError, $"sync operation '{SyncServe.Read}' needs 2 argument(s); it was given 1."),
+            (short_.ExitCode, short_.Message));
 
         var unknown = await Assert.ThrowsAsync<HarnessException>(
             () => handler.ServeAsync("everything", [root], token));
 
-        Assert.Equal(HarnessExit.UsageError, unknown.ExitCode);
-        Assert.Contains("'everything' is not a sync operation this build serves", unknown.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            (HarnessExit.UsageError, "'everything' is not a sync operation this build serves."),
+            (unknown.ExitCode, unknown.Message));
+    }
+
+    /// <summary>
+    /// An empty operation is one this build does not serve, refused by name as a usage error - the two ends are
+    /// different builds - and never taken for a defect of this tool.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task AnEmptyOperation_IsRefusedByName(string operation)
+    {
+        using var temp = new TempDirectory();
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Handler().ServeAsync(operation, [temp.Combine("copy")], TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            (HarnessExit.UsageError, $"'{operation}' is not a sync operation this build serves."),
+            (refusal.ExitCode, refusal.Message));
+    }
+
+    /// <summary>
+    /// An operation given no copy to act on, and a history taken with no commit to take, are each refused naming what is
+    /// missing: the two ends are different builds.
+    /// </summary>
+    [Fact]
+    public async Task AnOperationGivenNoCopy_OrAHistoryTakenWithNoCommit_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var handler = Handler();
+
+        var copyless = await Assert.ThrowsAsync<HarnessException>(() => handler.ServeAsync(SyncServe.Read, [], token));
+
+        Assert.Equal(
+            (HarnessExit.UsageError, $"sync operation '{SyncServe.Read}' was given no copy to act on. The two ends are different builds."),
+            (copyless.ExitCode, copyless.Message));
+
+        var commitless = await Assert.ThrowsAsync<HarnessException>(
+            () => handler.ServeAsync(SyncServe.TakeHistory, [temp.Combine("copy"), SyncServe.Nothing, SyncServe.Nothing], token));
+
+        Assert.Equal(
+            (HarnessExit.UsageError, $"sync operation '{SyncServe.TakeHistory}' was given no commit to take. The two ends are different builds."),
+            (commitless.ExitCode, commitless.Message));
+    }
+
+    /// <summary>
+    /// What the isolation hides on this host no pull out of the copy reaches, as the host serves it: a file a link in the
+    /// copy leads into a hidden place is refused naming that place, and so is a listing of a directory the link leads
+    /// into - a credential slot or a Claude Code directory is never carried back through a link a leg's work left.
+    /// </summary>
+    [Fact]
+    public async Task APullOrAListingALinkLeadsIntoAHiddenPlace_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        using var hidden = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var place = hidden.Path;
+        var root = temp.Combine("copy");
+        var handler = new SyncServeHandler(
+            SyncKit.Transport(new HarnessFactory()),
+            new TestIsolation { HiddenPlaces = [new IsolatedPath(place, Directory: true)] });
+
+        await File.WriteAllTextAsync(Path.Combine(place, "key.txt"), "secret", token);
+        await handler.ServeAsync(SyncServe.Create, [root], token);
+        TestLinks.DirectoryLink(Path.Combine(root, "out"), place);
+
+        var pulled = await Assert.ThrowsAsync<HarnessException>(() => handler.ServeAsync(SyncServe.Pull, [root, "out/key.txt"], token));
+
+        Assert.Equal(
+            (HarnessExit.CommandFailed, $"'out/key.txt' leads to '{Path.Combine(place, "key.txt")}' from '{root}', inside '{place}', which the isolation hides from every command and no pull reaches; nothing was read from it."),
+            (pulled.ExitCode, pulled.Message));
+
+        var listed = await Assert.ThrowsAsync<HarnessException>(() => handler.ServeAsync(SyncServe.List, [root, "out"], token));
+
+        Assert.Equal(
+            (HarnessExit.CommandFailed, $"'out/' leads to '{place}' from '{root}', inside '{place}', which the isolation hides from every command and no pull reaches; nothing was read from it."),
+            (listed.ExitCode, listed.Message));
     }
 
     /// <summary>

@@ -286,8 +286,10 @@ public static partial class HarnessConfigValidator
 
         RequireRelativePaths(anchors.CitationRoots, "anchors.citationRoots", problems);
 
-        // A pass word is matched as a word, so one that is only punctuation or whitespace can match nothing a person
-        // wrote; and each is matched alone, so two differing only in case are one word reported twice.
+        // A pass word is trimmed and matched, ignoring case, where no letter or digit runs into it from before and a run
+        // id follows it: one empty or only whitespace would be no word at all, and the run ids a row names would each read
+        // as a pass stated - so it is refused, while one of punctuation or symbols, a check mark say, is a word a row may
+        // state a pass with. And each is matched alone, so two differing only in case would report one citation twice.
         if (anchors.PassWords.Count == 0)
         {
             problems.Add("anchors.passWords names none; leave it out to check for the word 'passed', or name the words a row states a pass with");

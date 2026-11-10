@@ -192,7 +192,7 @@ public sealed class MutationService(
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
         var arms = request.SelfTest
             ? SelfTestArms(request.ArmNames)
-            : await _listings.ReadAsync(context, request.ArmNames, cancellationToken).ConfigureAwait(false);
+            : await _listings.ReadAsync(context, request.ArmNames, CommandName, cancellationToken).ConfigureAwait(false);
         var legs = LegSelection.Resolve(context.Config, request.LegNames).Legs;
 
         RequireSweepable(context.Config, legs, request.SelfTest);
@@ -374,7 +374,7 @@ public sealed class MutationService(
     /// <param name="cancellationToken">Stops the reading.</param>
     /// <param name="sweeps">Whether the arms must be sweepable as a sweep needs them, which a listing does not.</param>
     internal Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, CancellationToken cancellationToken, bool sweeps = true)
-        => _listings.ReadAsync(context, armNames, cancellationToken, sweeps);
+        => _listings.ReadAsync(context, armNames, CommandName, cancellationToken, sweeps);
 
     /// <summary>
     /// Lists, without sweeping, each selected arm's last verdict on each selected leg its S row names, and whether anything
@@ -396,7 +396,7 @@ public sealed class MutationService(
         ArgumentNullException.ThrowIfNull(request);
 
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
-        var read = await _listings.ReadListingAsync(context, request.ArmNames, request.LegNames, cancellationToken).ConfigureAwait(false);
+        var read = await _listings.ReadListingAsync(context, request.ArmNames, request.LegNames, CommandName, cancellationToken).ConfigureAwait(false);
         var listing = read.Listing;
         var listed = listing.Legs;
         var registry = listing.Registry;

@@ -36,6 +36,7 @@ public sealed class ArmListingReader(
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="armNames">What <c>--arms</c> was given, or <see langword="null"/> for every arm.</param>
     /// <param name="legNames">What <c>--legs</c> was given, or <see langword="null"/> for every declared leg.</param>
+    /// <param name="command">The command reading it, as a refusal names it.</param>
     /// <param name="cancellationToken">Stops the reading.</param>
     /// <exception cref="HarnessException">
     /// As <c>check-mutations --list</c> refuses: the registry or a text it cites cannot be read whole, a scope names no
@@ -45,12 +46,13 @@ public sealed class ArmListingReader(
         HarnessContext context,
         IReadOnlyList<string>? armNames,
         IReadOnlyList<string>? legNames,
+        string command,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(context);
 
         var config = context.Config;
-        var arms = await ReadAsync(context, armNames, cancellationToken, sweeps: false).ConfigureAwait(false);
+        var arms = await ReadAsync(context, armNames, command, cancellationToken, sweeps: false).ConfigureAwait(false);
         var legs = LegSelection.Resolve(config, legNames).Legs;
         var unsweepable = MutationService.Unsweepable(config, legs);
         var record = new ArmVerdictRecord(_fileSystem, context.Layout);
@@ -101,6 +103,11 @@ public sealed class ArmListingReader(
     /// Reads and verifies the registry <paramref name="context"/>'s configuration names, with every text it cites, and
     /// selects the arms <paramref name="armNames"/> names.
     /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="armNames">What <c>--arms</c> was given, or <see langword="null"/> for every arm.</param>
+    /// <param name="command">The command reading it, as the refusal of a registry left unset names it.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    /// <param name="sweeps">Whether what is read is to be swept, rather than listed or checked: a sweep needs more of it.</param>
     /// <exception cref="HarnessException">
     /// No registry is configured, it or a text it cites cannot be read whole, it or a text it cites is one a sync
     /// withholds from every copy of the tree - by the configuration's rules or by git's - a scope names no leg, or a
@@ -109,9 +116,10 @@ public sealed class ArmListingReader(
     /// <c>--arms</c> names an arm it does not declare (<see cref="HarnessExit.UsageError"/>); or git could not be asked
     /// what it ignores in the tree (<see cref="HarnessExit.CommandFailed"/>), which no sync of it could be made without.
     /// </exception>
-    internal async Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, CancellationToken cancellationToken, bool sweeps = true)
+    internal async Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, string command, CancellationToken cancellationToken, bool sweeps = true)
     {
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
         var settings = context.Config.Mutations;
         var root = context.Layout.RepositoryRoot;
@@ -122,7 +130,7 @@ public sealed class ArmListingReader(
                 HarnessExit.ConfigInvalid,
                 settings.Registry is { } configured
                     ? $"mutations.registry names '{configured}', which is not a file in '{root}'."
-                    : $"{MutationService.CommandName} has no arms registry to sweep: set mutations.registry to the registry's path, relative to the repository root.");
+                    : $"{command} has no arms registry to {(sweeps ? "sweep" : "read")}: set mutations.registry to the registry's path, relative to the repository root.");
         }
 
         var registry = settings.Registry!;

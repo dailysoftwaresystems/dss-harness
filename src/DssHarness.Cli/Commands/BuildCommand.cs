@@ -10,11 +10,7 @@ internal static class BuildCommand
 {
     internal const string Name = BuildService.CommandName;
 
-    private static readonly Option<string[]> LegsOption = new("--legs")
-    {
-        Description = "Only these legs or leg sets: --legs a,b or --legs a b. Without it, every declared leg.",
-        AllowMultipleArgumentsPerToken = true,
-    };
+    private static readonly Option<string[]> LegsOption = LegSelectionOption.Create();
 
     private static readonly Option<bool> JsonOption = new("--json")
     {

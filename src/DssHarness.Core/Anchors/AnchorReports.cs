@@ -143,15 +143,22 @@ public static class AnchorReports
 
         if (report.Passed)
         {
+            // Said only of the arms a selected leg judged: one none of them judges is noted above, never counted as held.
+            var unjudged = report.NamedArms.Count - report.JudgedArms.Count;
+
             return CommandOutcome.Ok(
-                $"{ReportText.Counted(report.Rows, "row")} across both registries; every arm a done row names is unmoved here with a recorded passed") with
+                $"{ReportText.Counted(report.Rows, "row")} across both registries; "
+                + (unjudged == 0
+                    ? "every arm a done row names is unmoved here with a recorded passed"
+                    : $"every arm a done row names that a selected leg judges is unmoved here with a recorded passed, and {ReportText.Counted(unjudged, "arm")} none of them judges")) with
             {
                 Data = data,
                 Quiet = json,
             };
         }
 
-        var problems = report.Findings.Count(finding => finding.Severity != AnchorFindingSeverity.Note);
+        // The claims that fail the check, counted as Passed counts them: a warning or a note fails nothing.
+        var problems = report.Findings.Count(finding => finding.Severity == AnchorFindingSeverity.Fatal);
 
         return CommandOutcome.Failed(AnchorExit.Findings, $"{ReportText.Counted(problems, "claim")} about mutation arms that does not hold") with { Data = data };
     }

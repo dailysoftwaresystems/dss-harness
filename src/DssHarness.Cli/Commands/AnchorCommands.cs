@@ -1,6 +1,5 @@
 using System.CommandLine;
 using DssHarness.Core.Anchors;
-using DssHarness.Core.FileSystem;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Cli.Commands;
@@ -35,9 +34,8 @@ internal static class AnchorCellArguments
 
         var given = arguments.GetResult(inline) is { Implicit: false } ? arguments.GetValue(inline) : null;
 
-        return AnchorCellInputs.Resolve(
-            context.Get<IFileSystem>(),
-            new AnchorCellInput(cell, inline.Name, file.Name, given, arguments.GetValue(file)));
+        return context.Get<IAnchorRegistryService>()
+            .CellText(new AnchorCellInput(cell, inline.Name, file.Name, given, arguments.GetValue(file)));
     }
 
     /// <summary>The cell's text, refusing when neither option gave one.</summary>
@@ -470,12 +468,9 @@ internal static class CheckAnchorBalanceCommand
 /// <summary>Wires <c>DssHarness check-anchor-arms</c>.</summary>
 internal static class CheckAnchorArmsCommand
 {
-    internal const string Name = "check-anchor-arms";
+    internal const string Name = AnchorArmsService.CommandName;
 
-    private static readonly Option<string[]> LegsOption = new("--legs")
-    {
-        Description = "Only these legs or leg sets, judged as check-mutations --list judges them: --legs a,b or --legs a b. Without it, every declared leg.",
-    };
+    private static readonly Option<string[]> LegsOption = LegSelectionOption.Create("Only these legs or leg sets, judged as check-mutations --list judges them");
 
     private static readonly Option<bool> JsonOption = new("--json")
     {

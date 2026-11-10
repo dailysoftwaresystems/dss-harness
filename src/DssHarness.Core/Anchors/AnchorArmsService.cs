@@ -17,12 +17,17 @@ public interface IAnchorArmsService : IUseCase
     /// Reads both anchor registries and the arms registry the configuration names, and checks every row's claims about
     /// mutation arms: an arm a done row names must be unmoved with a recorded passed on each leg its S row names, a pass
     /// word followed by a run id must be spelled as history, and a backticked arm id no A row holds - that one did, in
-    /// git history - is reported. Reads no host, takes no lock and writes nothing, as <c>check-mutations --list</c>
-    /// reads none.
+    /// git history - is reported. Reads no host and writes nothing, as <c>check-mutations --list</c> reads none; the one
+    /// lock it takes is the anchor registries' own, held while it reads both, as every reader of both takes it.
     /// </summary>
     /// <param name="startDirectory">Where the command was typed.</param>
     /// <param name="legNames">What <c>--legs</c> was given, or <see langword="null"/> for every declared leg.</param>
     /// <param name="cancellationToken">Stops the reading.</param>
+    /// <exception cref="HarnessException">
+    /// The arms registry is refused as a listing refuses it (<see cref="HarnessExit.ConfigInvalid"/>), <c>--legs</c> names
+    /// no leg (<see cref="HarnessExit.UsageError"/>), or the anchor registries' lock is held past its wait
+    /// (<see cref="HarnessExit.Refused"/>) or cannot be opened (<see cref="HarnessExit.HostUnavailable"/>).
+    /// </exception>
     Task<AnchorArmsReport> CheckAsync(string startDirectory, IReadOnlyList<string>? legNames, CancellationToken cancellationToken = default);
 }
 
@@ -31,11 +36,13 @@ public interface IAnchorArmsService : IUseCase
 /// A row names an arm by a backticked token equal to an A row's id, ignoring case as the arms registry compares ids. A
 /// done row's named arms are judged exactly as <c>check-mutations --list</c> judges an arm on a leg - by the one
 /// reading both share - so a close always rests on bytes that were judged, and what the check says of an arm is said as
-/// the listing words it: pending, with its first reason, or unmoved here, which is never to say it holds. A pass word
-/// followed by a run id is a citation of one sweep's judgement, true only of the bytes that run read; it belongs in
-/// history, spelled by a form the configuration names, and is reported wherever it is not. A backticked id no A row
-/// holds is recognized as an arm only where some commit's registry declared it, so an id that never was one is left
-/// alone.
+/// the listing words it: pending, with its first reason, or unmoved here, which is never to say it holds. An arm no
+/// selected leg judges is said to be, never passed over: noted where <c>--legs</c> left out the legs that judge it, and
+/// a finding where no leg is declared, for then nothing ever could. A pass word followed by a run id is a citation of
+/// one sweep's judgement, true only of the bytes that run read; it belongs in history, spelled by a form the
+/// configuration names, and is reported wherever it is not. A backticked id no A row holds is recognized as an arm only
+/// where some commit's registry declared it - read at the path the registry had then, its renames followed - so an id
+/// that never was one is left alone.
 /// </remarks>
 public sealed partial class AnchorArmsService(
     IHarnessContextLoader contextLoader,
@@ -45,8 +52,17 @@ public sealed partial class AnchorArmsService(
     IGitClient gitClient,
     IFileSystem fileSystem) : IAnchorArmsService
 {
+    /// <summary>The command this use case is the body of, as a refusal names it.</summary>
+    public const string CommandName = "check-anchor-arms";
+
     /// <summary>How many commits of the arms registry's history are read for the ids an A row once declared.</summary>
     public const int HistoryCommits = 512;
+
+    /// <summary>
+    /// A commit as a row spells it in history: its hex, abbreviated to git's seven characters or whole - forty for a
+    /// SHA-1 repository, sixty-four for a SHA-256 one - in either case.
+    /// </summary>
+    private const string CommitText = "[0-9a-fA-F]{7,64}";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IAnchorRegistryLocator _locator = locator;
@@ -55,8 +71,8 @@ public sealed partial class AnchorArmsService(
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;
 
-    /// <summary>The arm ids a row may name in a cell: a backticked token of the characters an arm's id takes.</summary>
-    [GeneratedRegex(@"`([A-Za-z0-9_-]+)`", RegexOptions.CultureInvariant)]
+    /// <summary>The arm ids a row may name in a cell: a backticked token of the characters an arm's id takes, as the registry's own rule spells them.</summary>
+    [GeneratedRegex("`(" + MutationRegistryParser.IdCharacterClass + "+)`", RegexOptions.CultureInvariant)]
     private static partial Regex NamedIds();
 
     /// <summary>A run id as a citation's tail could spell it, wider than a run id, for <see cref="RunId.TryParse"/> to judge.</summary>
@@ -72,14 +88,14 @@ public sealed partial class AnchorArmsService(
 
         // The arms registry read and verified as a listing reads it, with every leg's listing and each arm's scopes:
         // the one reading, so what this check says of an arm on a leg is what --list says of it.
-        var read = await _listings.ReadListingAsync(context, armNames: null, legNames, cancellationToken).ConfigureAwait(false);
+        var read = await _listings.ReadListingAsync(context, armNames: null, legNames, CommandName, cancellationToken).ConfigureAwait(false);
         var listing = read.Listing;
 
         var findings = new List<AnchorFinding>();
         var documents = new List<(AnchorRegistryDocument Document, AnchorRegistry Registry)>();
         var rows = 0;
 
-        // Both anchor registries read as one moment, as every reader of both reads them.
+        // Both anchor registries read as one moment, under their lock, as every reader of both reads them.
         foreach (var (registry, text) in _registryLock.ReadTogether(registries, _fileSystem))
         {
             if (text is null)
@@ -108,6 +124,7 @@ public sealed partial class AnchorArmsService(
         // The arms a done row names must be unmoved with a recorded passed on each leg its S row names, every selected
         // leg where it names none - judged nowhere else, as a listing judges no leg it did not select.
         var named = new SortedSet<string>(StringComparer.Ordinal);
+        var judged = new SortedSet<string>(StringComparer.Ordinal);
 
         foreach (var row in done.Document?.Rows ?? [])
         {
@@ -115,9 +132,23 @@ public sealed partial class AnchorArmsService(
             {
                 named.Add(arm.Id);
 
-                var judged = read.Arms.Scopes.TryGetValue(arm.Id, out var scoped) ? [.. scoped] : selected;
+                // Judged on no selected leg, the arm's close rests on nothing this check read, and is never passed over
+                // as though it held: noted where --legs left out the legs that judge it, for another run of the check
+                // judges it there, and a finding where no leg is declared at all, for then nothing ever could.
+                if (ArmSelection.DrivenNowhere(selected, [arm], read.Arms.Scopes).Count > 0)
+                {
+                    var said = $"anchor '{row.Id}' names arm '{arm.Id}', which is judged on none of the selected legs: "
+                        + (arm.Scope is { } scope ? $"its S row, line {scope.Line}, names {string.Join(", ", scope.Legs)}" : "no leg is declared");
 
-                foreach (var leg in judged.Where(leg => listing.Legs.Any(listed => string.Equals(listed.Leg, leg, StringComparison.OrdinalIgnoreCase))))
+                    findings.Add(context.Config.Legs.Count == 0 ? done.Registry.Fatal(row, said) : done.Registry.Note(row, said));
+                    continue;
+                }
+
+                judged.Add(arm.Id);
+
+                var legs = read.Arms.Scopes.TryGetValue(arm.Id, out var scoped) ? [.. scoped] : selected;
+
+                foreach (var leg in legs.Where(leg => listing.Legs.Any(listed => string.Equals(listed.Leg, leg, StringComparison.OrdinalIgnoreCase))))
                 {
                     var onLeg = listing.Legs
                         .Single(listed => string.Equals(listed.Leg, leg, StringComparison.OrdinalIgnoreCase))
@@ -163,16 +194,16 @@ public sealed partial class AnchorArmsService(
         // an arm is any other backticked thing a row may cite.
         var retired = await RetiredIdsAsync(context, current, cancellationToken).ConfigureAwait(false);
 
-        if (retired.Note is { } note)
-        {
-            findings.Add(note);
-        }
+        findings.AddRange(retired.Notes);
 
         foreach (var (document, registry) in documents)
         {
             foreach (var row in document.Rows)
             {
-                foreach (var token in IdsNamedBy(row).Where(token => current.Find(token) is null && retired.Ids.Contains(token)))
+                // Once a row: an id cited twice in it, in whichever case, is one claim the row makes.
+                foreach (var token in IdsNamedBy(row)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Where(token => current.Find(token) is null && retired.Ids.Contains(token)))
                 {
                     findings.Add(registry.Fatal(
                         row,
@@ -189,6 +220,7 @@ public sealed partial class AnchorArmsService(
             rows,
             done.Document?.Rows.Count ?? 0,
             [.. named],
+            [.. judged],
             [.. findings.OrderBy(finding => finding.File, StringComparer.Ordinal).ThenBy(finding => finding.LineNumber)]);
     }
 
@@ -260,7 +292,7 @@ public sealed partial class AnchorArmsService(
             }
 
             pattern.Append(Regex.Escape(form[at..next]));
-            pattern.Append(next == commit ? "[0-9a-fA-F]{7,40}" : RunIdText().ToString());
+            pattern.Append(next == commit ? CommitText : RunIdText().ToString());
             at = next + (next == commit ? "{commit}".Length : "{run}".Length);
         }
 
@@ -270,48 +302,92 @@ public sealed partial class AnchorArmsService(
     }
 
     /// <summary>
-    /// Every id an A row of the arms registry ever declared in git history and no A row holds now, with the note a cut
-    /// history deserves: it can only say what it read.
+    /// Every id an A row of the arms registry ever declared in git history and no A row holds now, with the notes a
+    /// history read in part deserves - cut, shallow, or holding a version that could not be read: it can only say what it
+    /// read.
     /// </summary>
-    private async Task<(HashSet<string> Ids, AnchorFinding? Note)> RetiredIdsAsync(HarnessContext context, MutationRegistry current, CancellationToken cancellationToken)
+    /// <remarks>
+    /// The history is read where the registry was: at its path now, back to the commit that gave it that path, and from
+    /// that commit's parent at the path it had before, rename by rename - so an id an A row declared before the registry
+    /// moved is one it declared. Every version is read by one git process, as the one reading of a registry's bytes reads
+    /// it (<see cref="RegistryText.TryRead"/>): a byte order mark at its start is no part of its first row.
+    /// </remarks>
+    private async Task<(HashSet<string> Ids, IReadOnlyList<AnchorFinding> Notes)> RetiredIdsAsync(HarnessContext context, MutationRegistry current, CancellationToken cancellationToken)
     {
         var root = context.Layout.RepositoryRoot;
         var named = context.Config.Mutations.Registry!;
         var registry = AnchorRegistryLocator.Normalize(named);
-        var history = await _gitClient.ListHeldInHistoryAsync(root, "HEAD", [registry], HistoryCommits, cancellationToken).ConfigureAwait(false);
-        var held = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var renames = await _gitClient.ListRenamesAsync(root, "HEAD", registry, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<(string Tip, string Path)> spans = [("HEAD", registry), .. renames.Select(rename => (rename.Parent, rename.From))];
 
-        foreach (var version in history.Held.GetValueOrDefault(registry) ?? [])
+        var versions = new List<(GitHeldAt Version, string Path)>();
+        var left = HistoryCommits;
+        var cut = false;
+
+        foreach (var (tip, path) in spans)
         {
-            var text = await _gitClient.ReadFileAtCommitAsync(root, version.Commit, registry, cancellationToken).ConfigureAwait(false);
-
-            foreach (var id in MutationRegistryParser.ArmIdsOf(text ?? string.Empty))
+            if (left == 0)
             {
-                held.Add(id);
+                // The budget is spent, and the registry had another name before: that history is more than was read.
+                cut = true;
+                break;
+            }
+
+            var history = await _gitClient.ListHeldInHistoryAsync(root, tip, [path], left, cancellationToken).ConfigureAwait(false);
+
+            versions.AddRange((history.Held.GetValueOrDefault(path) ?? []).Select(version => (version, path)));
+            left -= history.Commits;
+
+            if (history.Cut)
+            {
+                cut = true;
+                break;
             }
         }
 
-        var retired = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var blobs = await _gitClient.ReadBlobsAsync(root, [.. versions.Select(held => held.Version.Blob)], cancellationToken).ConfigureAwait(false);
+        var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var notes = new List<AnchorFinding>();
 
-        foreach (var id in held.Where(id => current.Find(id) is null))
+        for (var index = 0; index < versions.Count; index++)
         {
-            retired.Add(id);
+            var (version, path) = versions[index];
+
+            if (blobs[index] is not { } bytes)
+            {
+                notes.Add(Note($"'{path}' as {version.Commit} holds it could not be read by git: an id only it declared is not known"));
+                continue;
+            }
+
+            if (!RegistryText.TryRead(bytes, out var text, out var unread, out var line))
+            {
+                notes.Add(Note(
+                    (line is { } number ? $"line {number} of '{path}' as {version.Commit} holds it " : $"'{path}' as {version.Commit} holds it ")
+                    + $"{unread}: an id only it declared is not known"));
+                continue;
+            }
+
+            foreach (var id in MutationRegistryParser.ArmIdsOf(text.Text))
+            {
+                declared.Add(id);
+            }
         }
 
         var shallow = await _gitClient.IsShallowAsync(root, cancellationToken).ConfigureAwait(false) == true;
 
-        return (retired, history.Cut || shallow
-            ? new AnchorFinding(
-                named,
-                0,
-                AnchorFindingSeverity.Note,
-                (history.Cut, shallow) switch
-                {
-                    (true, true) => $"more commits changed '{named}' than were read, and this clone's history is shallow: an id no A row holds may have been declared before either cut",
-                    (true, false) => $"more commits changed '{named}' than were read: an id no A row holds may have been declared before that cut",
-                    _ => $"this clone's history is shallow, so commits before where it was cut name no version of '{named}': an id no A row holds may have been declared before the cut",
-                })
-            : null);
+        if (cut || shallow)
+        {
+            notes.Add(Note((cut, shallow) switch
+            {
+                (true, true) => $"more commits changed '{named}' than were read, and this clone's history is shallow: an id no A row holds may have been declared before either cut",
+                (true, false) => $"more commits changed '{named}' than were read: an id no A row holds may have been declared before that cut",
+                _ => $"this clone's history is shallow, so commits before where it was cut name no version of '{named}': an id no A row holds may have been declared before the cut",
+            }));
+        }
+
+        return (new HashSet<string>(declared.Where(id => current.Find(id) is null), StringComparer.OrdinalIgnoreCase), notes);
+
+        AnchorFinding Note(string message) => new(named, 0, AnchorFindingSeverity.Note, message);
     }
 }
 
@@ -322,7 +398,11 @@ public sealed partial class AnchorArmsService(
 /// <param name="Rows">The rows read across both registries.</param>
 /// <param name="DoneRows">The rows read of the done registry.</param>
 /// <param name="NamedArms">The distinct arms the done rows name, in id order.</param>
-/// <param name="Findings">Every finding, fatal where a row's claim about an arm does not hold; notes fail nothing.</param>
+/// <param name="JudgedArms">
+/// The arms of <paramref name="NamedArms"/> a selected leg judges, in id order: those the check held to the record. Each
+/// other is noted, or is a finding where no leg is declared.
+/// </param>
+/// <param name="Findings">Every finding, fatal where a row's claim about an arm does not hold; notes and warnings fail nothing.</param>
 public sealed record AnchorArmsReport(
     string ArmsRegistry,
     string MutationRecord,
@@ -330,6 +410,7 @@ public sealed record AnchorArmsReport(
     int Rows,
     int DoneRows,
     IReadOnlyList<string> NamedArms,
+    IReadOnlyList<string> JudgedArms,
     IReadOnlyList<AnchorFinding> Findings)
 {
     /// <summary>Whether every row's claims about mutation arms held: no finding is fatal.</summary>

@@ -8,11 +8,7 @@ internal static class SyncCommand
 {
     internal const string Name = SyncService.CommandName;
 
-    private static readonly Option<string[]> LegsOption = new("--legs")
-    {
-        Description = "Only the hosts these legs or leg sets run on: --legs a,b or --legs a b. Without it, every host a declared leg needs.",
-        AllowMultipleArgumentsPerToken = true,
-    };
+    private static readonly Option<string[]> LegsOption = LegSelectionOption.Create("Only the hosts these legs or leg sets run on", "every host a declared leg needs");
 
     private static readonly Option<bool> DryRunOption = new("--dry-run")
     {

@@ -15,11 +15,7 @@ internal static class RunCommand
         Description = "The predefined runner to run, as predefinedRunners names it.",
     };
 
-    private static readonly Option<string[]> LegsOption = new("--legs")
-    {
-        Description = "Only these legs or leg sets: --legs a,b or --legs a b. Without it, the legs the runner declares.",
-        AllowMultipleArgumentsPerToken = true,
-    };
+    private static readonly Option<string[]> LegsOption = LegSelectionOption.Create(without: "the legs the runner declares");
 
     private static readonly Option<bool> JsonOption = new("--json")
     {

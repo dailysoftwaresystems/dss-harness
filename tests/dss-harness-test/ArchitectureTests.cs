@@ -1,7 +1,7 @@
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
-using System.Text.RegularExpressions;
 using DssHarness.Core.Application;
 
 namespace DssHarness.Tests;
@@ -15,15 +15,15 @@ public sealed class ArchitectureTests
 {
     /// <summary>
     /// Every Core type the command line references is in the application layer, its help, its output or its
-    /// results - or is reached from a public member of a use case, read from the metadata and never listed by
-    /// hand: a request, a result, and what they are made of - or is one of the few reviewed below, each with the
-    /// reason it stays where it is.
+    /// results - or is reached from an operation of a use case, read from the metadata and never listed by hand: a
+    /// request, a result, and what they are made of - or is one of the few reviewed below, each with the reason it
+    /// stays where it is.
     /// </summary>
     [Fact]
     public void TheCommandLine_ReferencesTheCoreOnlyThroughItsUseCasesItsOutputAndItsResults()
     {
         var referenced = CoreTypesTheCommandLineReferences();
-        var allowed = TypesReachedFromTheUseCases();
+        var allowed = Reached.Value;
         var offenders = new List<string>();
 
         foreach (var type in referenced)
@@ -58,6 +58,29 @@ public sealed class ArchitectureTests
     }
 
     /// <summary>
+    /// None of the platform's seams - the file system, the program runner, git, the host platform, the loader of a
+    /// repository's context - is ever a type a front end may reach: no operation of a use case takes or answers one, no
+    /// reviewed entry stands for one, and none is in a namespace a front end reaches whole. A front end that resolved
+    /// one would do a use case's work itself, outside every use case.
+    /// </summary>
+    [Fact]
+    public void TheUseCases_ReachNoneOfThePlatformsSeams()
+    {
+        string[] seams =
+        [
+            Name(typeof(DssHarness.Core.FileSystem.IFileSystem)),
+            Name(typeof(DssHarness.Core.Processes.IProcessRunner)),
+            Name(typeof(DssHarness.Core.Git.IGitClient)),
+            Name(typeof(DssHarness.Core.Platform.IHostPlatform)),
+            Name(typeof(DssHarness.Core.Repository.IHarnessContextLoader)),
+        ];
+
+        Assert.DoesNotContain(seams, Reached.Value.Contains);
+        Assert.DoesNotContain(seams, Reviewed.ContainsKey);
+        Assert.DoesNotContain(seams, seam => AllowedNamespaces.Any(prefix => seam.StartsWith(prefix, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
     /// No container is built in the command line, the hidden commands' included: the composition root lives in
     /// Core, and a front end resolves a use case without knowing how its services are held together.
     /// </summary>
@@ -80,43 +103,62 @@ public sealed class ArchitectureTests
 
     /// <summary>
     /// Nothing in Core outside <c>Application\</c>, <c>Composition\</c> and <c>Help\</c> reaches into those
-    /// layers: none names the composition root or the help, and none takes a type of the application layer that
-    /// a use case does not hand it - only the layer's contracts (its use cases, their requests and results) are
-    /// shared below it, so the layer's own machinery (its sessions, its scopes, its pipeline) can move without
-    /// the machinery under it following.
+    /// layers: none takes a type of the composition root or the help, and none takes a type of the application layer
+    /// that is not one of its contracts - its use cases with their requests and results, and the few points it is open
+    /// to below it, each reviewed with its reason - so the layer's own machinery (its sessions, its scopes, its
+    /// pipeline) can move without the machinery under it following. Read from the assembly, never from the source's
+    /// text: every type each type below the layers names in its bases, its members' signatures, its locals and the
+    /// instructions of its bodies, however its source spells the name - whole, relative to its namespace, or through a
+    /// generic.
     /// </summary>
     [Fact]
     public void TheCoreOutsideItsApplicationLayer_NeverReachesIntoIt()
     {
-        var root = Path.Combine(Prose.RepositoryRoot(), "src", "DssHarness.Core");
-        var machinery = NamesTheApplicationLayerOwns;
-        var reaching = new List<string>();
+        var core = typeof(IUseCase).Assembly;
+        var below = core.GetTypes().Where(type => !InsideItsOwnLayers(type)).ToList();
+        var reaching = new SortedSet<string>(StringComparer.Ordinal);
 
-        foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+        foreach (var type in below)
         {
-            var text = File.ReadAllText(file);
-
-            if (IsInsideItsOwnLayers(Path.GetRelativePath(root, file)))
+            foreach (var named in TypesNamedBy(type).Where(named => named.Assembly == core))
             {
-                continue;
-            }
-
-            foreach (var layer in new[] { "DssHarness.Core.Composition", "DssHarness.Core.Help" })
-            {
-                if (text.Contains(layer, StringComparison.Ordinal))
+                if (named.Namespace is { } space && (Under(space, Composition) || Under(space, Help)))
                 {
-                    reaching.Add($"{Path.GetFileName(file)} names {layer}");
+                    reaching.Add($"{Name(type)} takes '{Name(named)}', of {space}");
                 }
-            }
-
-            foreach (var name in machinery.Where(name => Regex.IsMatch(text, $"(?<![\\w.]){Regex.Escape(name)}\\b")))
-            {
-                reaching.Add($"{Path.GetFileName(file)} takes '{name}', the application layer's own");
+                else if (named.Namespace is { } layer && Under(layer, Application)
+                    && !Reached.Value.Contains(Name(named)) && !OpenBelow.ContainsKey(Name(named)))
+                {
+                    reaching.Add($"{Name(type)} takes '{Name(named)}', the application layer's own");
+                }
             }
         }
 
         Assert.Empty(reaching);
+
+        // Each point the layer is open to is an interface of the layer that a service below it implements: one nothing
+        // below implements any more comes off the list rather than staying open.
+        foreach (var (point, reason) in OpenBelow)
+        {
+            var open = core.GetTypes().SingleOrDefault(type => Name(type) == point);
+
+            if (open is not { IsInterface: true, Namespace: { } space } || !Under(space, Application)
+                || !below.Any(type => type.GetInterfaces().Contains(open)))
+            {
+                Assert.Fail($"'{point}' is open below the application layer as \"{reason}\" but nothing below it implements it; take it off the list.");
+            }
+        }
     }
+
+    /// <summary>
+    /// The points the application layer is open to below it, each with its reason: an interface of the layer that a
+    /// service below it implements, for the layer's machinery to call what the service did - the one way the layer
+    /// below may name a type of the layer that no use case hands it.
+    /// </summary>
+    private static readonly Dictionary<string, string> OpenBelow = new(StringComparer.Ordinal)
+    {
+        ["DssHarness.Core.Application.IDocumentFacts"] = "what an operation did that every document it answers with says, which the service that did it fills and the session writes",
+    };
 
     /// <summary>
     /// Each command file stays within a budget a person reads whole, the two that declare several commands'
@@ -180,6 +222,21 @@ public sealed class ArchitectureTests
             "the layer below shares the layer's contracts but never its machinery",
             architecture,
             StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words(
+                $"None of the platform's seams (`{nameof(DssHarness.Core.FileSystem.IFileSystem)}`, `{nameof(DssHarness.Core.Processes.IProcessRunner)}`, "
+                + $"`{nameof(DssHarness.Core.Git.IGitClient)}`, `{nameof(DssHarness.Core.Platform.IHostPlatform)}`, "
+                + $"`{nameof(DssHarness.Core.Repository.IHarnessContextLoader)}`) is ever among them"),
+            Prose.Words(architecture),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words("That is read from the core's own metadata, not its source's text"),
+            Prose.Words(architecture),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words($"the few points it is open to below it, each reviewed with its reason - the facts every document of an operation says (`{nameof(DssHarness.Core.Application.IDocumentFacts)}`)"),
+            Prose.Words(architecture),
+            StringComparison.Ordinal);
         Assert.Contains("The command line builds no container", architecture, StringComparison.Ordinal);
         Assert.Contains(
             "no command's wiring outgrows 220 lines but the two files that declare several commands' options",
@@ -222,8 +279,6 @@ public sealed class ArchitectureTests
 
         // The anchor commands' option names, kept where Core's own refusal sentences say them.
         ["DssHarness.Core.Anchors.AnchorCellNames"] = "the cells' names and the option that selects them all, which Core's own sentences name",
-        ["DssHarness.Core.Anchors.AnchorCellInput"] = "one cell as the command line gave it, carrying its two options' own names for the refusal that names them",
-        ["DssHarness.Core.Anchors.AnchorCellInputs"] = "resolves a cell's text from the option that gave it, where the command line reads it",
 
         // The run and its origins: named by every command that reports one.
         ["DssHarness.Core.Repository.CommandOrigin"] = "how a command line came to run, which the host agent's own serving of one sets",
@@ -270,55 +325,214 @@ public sealed class ArchitectureTests
         ["DssHarness.Core.Codebase.GraphRelations"] = "the graph's own edge names, which the option that follows one lists as its values",
     };
 
+    /// <summary>The application layer's namespace, its use cases and their machinery.</summary>
+    private const string Application = "DssHarness.Core.Application";
+
+    /// <summary>The composition root's namespace.</summary>
+    private const string Composition = "DssHarness.Core.Composition";
+
+    /// <summary>The help's namespace.</summary>
+    private const string Help = "DssHarness.Core.Help";
+
+    /// <summary>The types the use cases reach, computed once for every test that asks.</summary>
+    private static readonly Lazy<HashSet<string>> Reached = new(TypesReachedFromTheUseCases);
+
+    /// <summary>Every opcode by its value, for reading a method's instructions.</summary>
+    private static readonly Dictionary<short, OpCode> OpCodesByValue = typeof(OpCodes)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Select(field => (OpCode)field.GetValue(null)!)
+        .ToDictionary(code => code.Value);
+
+    /// <summary>Whether <paramref name="space"/> is <paramref name="layer"/> or a namespace inside it.</summary>
+    private static bool Under(string space, string layer)
+        => string.Equals(space, layer, StringComparison.Ordinal) || space.StartsWith(layer + ".", StringComparison.Ordinal);
+
+    /// <summary>Whether a type of Core is inside the application layer, its composition or its help, nested types by their outermost.</summary>
+    private static bool InsideItsOwnLayers(Type type)
+        => type.Namespace is { } space && (Under(space, Application) || Under(space, Composition) || Under(space, Help));
+
     /// <summary>
-    /// The names the application layer owns, spelled nowhere else in Core: its own machinery - what no use case
-    /// hands to the layer below it (a session, a scope, a document kind, a pipeline event), every type of the
-    /// layer a public member of a use case does not reach. Computed, never listed by hand, so a type that becomes
-    /// a contract stops being machinery by itself.
+    /// Every type <paramref name="type"/> names: its bases and interfaces, its generic parameters' constraints, the
+    /// signatures of its fields, properties, events, methods and constructors, and in each body its locals, the
+    /// exceptions it catches and every type, method and field its instructions name - with their signatures - each
+    /// taken apart into what it is made of: an array's element, a generic's definition and arguments.
     /// </summary>
-    private static IReadOnlyList<string> NamesTheApplicationLayerOwns
+    private static HashSet<Type> TypesNamedBy(Type type)
     {
-        get
+        const BindingFlags Everything = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+        var named = new HashSet<Type>();
+
+        if (type.BaseType is { } baseType)
         {
-            var core = typeof(IUseCase).Assembly;
-            var reached = TypesReachedFromTheUseCases();
-            var owned = new Dictionary<string, bool>(StringComparer.Ordinal);
+            Take(baseType);
+        }
 
-            foreach (var type in core.GetTypes())
+        foreach (var implemented in type.GetInterfaces())
+        {
+            Take(implemented);
+        }
+
+        foreach (var parameter in type.IsGenericTypeDefinition ? type.GetGenericArguments() : [])
+        {
+            foreach (var constraint in parameter.GetGenericParameterConstraints())
             {
-                if ((type.Namespace ?? string.Empty).StartsWith("DssHarness.Core.Application", StringComparison.Ordinal))
-                {
-                    // A name the layer shares says nothing on its own; a name only it spells, for a type no use
-                    // case reaches, is its machinery.
-                    owned[type.Name] = (!owned.TryGetValue(type.Name, out var ownedAlready) || ownedAlready)
-                        && !reached.Contains(Name(type));
-                    continue;
-                }
+                Take(constraint);
+            }
+        }
 
-                // Everything the rest of Core spells itself - its types, its members, the contracts it implements -
-                // is shared vocabulary, never the layer's own machinery.
-                owned[type.Name] = false;
+        foreach (var field in type.GetFields(Everything))
+        {
+            Take(field.FieldType);
+        }
 
-                foreach (var member in type.GetMembers())
-                {
-                    owned[member.Name] = false;
-                }
+        foreach (var property in type.GetProperties(Everything))
+        {
+            Take(property.PropertyType);
+        }
 
-                foreach (var implemented in type.GetInterfaces())
+        foreach (var raised in type.GetEvents(Everything))
+        {
+            Take(raised.EventHandlerType!);
+        }
+
+        foreach (var method in type.GetMethods(Everything).Cast<MethodBase>().Concat(type.GetConstructors(Everything)))
+        {
+            Signature(method);
+
+            foreach (var parameter in method.IsGenericMethodDefinition ? method.GetGenericArguments() : [])
+            {
+                foreach (var constraint in parameter.GetGenericParameterConstraints())
                 {
-                    owned[implemented.Name] = false;
+                    Take(constraint);
                 }
             }
 
-            return [.. owned.Where(entry => entry.Value).Select(entry => entry.Key)];
+            if (method.GetMethodBody() is not { } body)
+            {
+                continue;
+            }
+
+            foreach (var local in body.LocalVariables)
+            {
+                Take(local.LocalType);
+            }
+
+            foreach (var clause in body.ExceptionHandlingClauses.Where(clause => clause.Flags == ExceptionHandlingClauseOptions.Clause))
+            {
+                Take(clause.CatchType!);
+            }
+
+            var typeArguments = type.IsGenericTypeDefinition ? type.GetGenericArguments() : null;
+            var methodArguments = method.IsGenericMethodDefinition ? method.GetGenericArguments() : null;
+
+            foreach (var token in TokensIn(body.GetILAsByteArray() ?? []))
+            {
+                switch (type.Module.ResolveMember(token, typeArguments, methodArguments))
+                {
+                    case Type referenced:
+                        Take(referenced);
+                        break;
+
+                    case MethodBase called:
+                        Take(called.DeclaringType!);
+                        Signature(called);
+
+                        foreach (var argument in called.IsGenericMethod ? called.GetGenericArguments() : [])
+                        {
+                            Take(argument);
+                        }
+
+                        break;
+
+                    case FieldInfo field:
+                        Take(field.DeclaringType!);
+                        Take(field.FieldType);
+                        break;
+                }
+            }
+        }
+
+        return named;
+
+        void Signature(MethodBase method)
+        {
+            if (method is MethodInfo returning)
+            {
+                Take(returning.ReturnType);
+            }
+
+            foreach (var parameter in method.GetParameters())
+            {
+                Take(parameter.ParameterType);
+            }
+        }
+
+        void Take(Type taken)
+        {
+            if (taken.HasElementType)
+            {
+                Take(taken.GetElementType()!);
+            }
+            else if (taken.IsGenericParameter)
+            {
+                return;
+            }
+            else if (taken.IsConstructedGenericType)
+            {
+                Take(taken.GetGenericTypeDefinition());
+
+                foreach (var argument in taken.GetGenericArguments())
+                {
+                    Take(argument);
+                }
+            }
+            else
+            {
+                named.Add(taken);
+            }
         }
     }
 
-    /// <summary>Whether a file of Core is inside the application layer, its composition and its help.</summary>
-    private static bool IsInsideItsOwnLayers(string relativePath)
-        => relativePath.StartsWith("Application", StringComparison.Ordinal)
-            || relativePath.StartsWith("Composition", StringComparison.Ordinal)
-            || relativePath.StartsWith("Help", StringComparison.Ordinal);
+    /// <summary>The metadata tokens an IL body's instructions carry for a type, a method or a field, in order.</summary>
+    private static IEnumerable<int> TokensIn(byte[] il)
+    {
+        var at = 0;
+
+        while (at < il.Length)
+        {
+            var code = OpCodesByValue[il[at] == 0xFE ? unchecked((short)(0xFE00 | il[at + 1])) : il[at]];
+
+            at += code.Size;
+
+            switch (code.OperandType)
+            {
+                case OperandType.InlineField or OperandType.InlineMethod or OperandType.InlineTok or OperandType.InlineType:
+                    yield return BitConverter.ToInt32(il, at);
+                    at += 4;
+                    break;
+
+                case OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar:
+                    at += 1;
+                    break;
+
+                case OperandType.InlineVar:
+                    at += 2;
+                    break;
+
+                case OperandType.InlineBrTarget or OperandType.InlineI or OperandType.InlineSig or OperandType.InlineString or OperandType.ShortInlineR:
+                    at += 4;
+                    break;
+
+                case OperandType.InlineI8 or OperandType.InlineR:
+                    at += 8;
+                    break;
+
+                case OperandType.InlineSwitch:
+                    at += 4 + (4 * BitConverter.ToInt32(il, at));
+                    break;
+            }
+        }
+    }
 
     /// <summary>
     /// Every type of Core the command line's own assembly references, read from its metadata: each type its
@@ -388,21 +602,30 @@ public sealed class ArchitectureTests
     }
 
     /// <summary>
-    /// The types a public member of a use case reaches, read from the assemblies themselves and never listed by
-    /// hand: each use case's requests and results, and everything they are made of - their members' types, the
-    /// types those reach in turn, their bases, their interfaces and their nested types.
+    /// The types a front end may reach through the use cases, read from the assemblies themselves and never listed by
+    /// hand: each use case - an interface deriving <see cref="IUseCase"/>, or a class marked as one with no such
+    /// interface of its own - and the marker they share; the requests and results of each instance operation a use case
+    /// declares; and from those only what data is made of - each type's public instance properties and fields, its bases
+    /// and interfaces, a delegate's signature, and an array's element or a generic's arguments. A static helper beside a
+    /// use case is no operation of it, a method of a request or a result is no part of what it is made of, and a
+    /// constructor's parameters are a record's own properties already and a service's dependencies otherwise - a service
+    /// a request carries is handed over made, never made by a front end - so none of them widens what a front end may
+    /// reach.
     /// </summary>
     private static HashSet<string> TypesReachedFromTheUseCases()
     {
+        const BindingFlags Declared = BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly;
         var core = typeof(IUseCase).Assembly;
-        var reached = new HashSet<string>(StringComparer.Ordinal);
+        var reached = new HashSet<string>(StringComparer.Ordinal) { Name(typeof(IUseCase)) };
         var frontier = new Queue<Type>();
 
-        foreach (var type in core.GetTypes())
+        foreach (var useCase in core.GetTypes().Where(IsUseCase))
         {
-            if (typeof(IUseCase).IsAssignableFrom(type) && type != typeof(IUseCase))
+            reached.Add(Name(useCase));
+
+            foreach (var operation in useCase.GetMethods(Declared))
             {
-                Enqueue(type);
+                Signature(operation);
             }
         }
 
@@ -410,37 +633,14 @@ public sealed class ArchitectureTests
         {
             var type = frontier.Dequeue();
 
-            foreach (var member in type.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+            foreach (var property in type.GetProperties(Declared))
             {
-                switch (member)
-                {
-                    case MethodInfo method:
-                        Add(method.ReturnType);
-
-                        foreach (var parameter in method.GetParameters())
-                        {
-                            Add(parameter.ParameterType);
-                        }
-
-                        break;
-
-                    case PropertyInfo property:
-                        Add(property.PropertyType);
-                        break;
-
-                    case FieldInfo field:
-                        Add(field.FieldType);
-                        break;
-
-                    case EventInfo raised:
-                        Add(raised.EventHandlerType!);
-                        break;
-                }
+                Add(property.PropertyType);
             }
 
-            foreach (var nested in type.GetNestedTypes(BindingFlags.Public))
+            foreach (var field in type.GetFields(Declared))
             {
-                Enqueue(nested);
+                Add(field.FieldType);
             }
 
             if (type.BaseType is { } baseType)
@@ -452,9 +652,27 @@ public sealed class ArchitectureTests
             {
                 Add(implemented);
             }
+
+            if (typeof(Delegate).IsAssignableFrom(type) && type.GetMethod("Invoke") is { } invoke)
+            {
+                Signature(invoke);
+            }
         }
 
         return reached;
+
+        void Signature(MethodBase method)
+        {
+            if (method is MethodInfo returning)
+            {
+                Add(returning.ReturnType);
+            }
+
+            foreach (var parameter in method.GetParameters())
+            {
+                Add(parameter.ParameterType);
+            }
+        }
 
         void Enqueue(Type type)
         {
@@ -466,9 +684,14 @@ public sealed class ArchitectureTests
 
         void Add(Type type)
         {
-            if (type.IsArray || type.IsByRef || type.IsPointer)
+            if (type.HasElementType)
             {
                 Add(type.GetElementType()!);
+                return;
+            }
+
+            if (type.IsGenericParameter)
+            {
                 return;
             }
 
@@ -486,6 +709,15 @@ public sealed class ArchitectureTests
             Enqueue(type);
         }
     }
+
+    /// <summary>
+    /// Whether a type of Core is a use case a front end resolves: an interface deriving <see cref="IUseCase"/>, or a class
+    /// marked as one that implements no such interface - where it does, the interface is the use case.
+    /// </summary>
+    private static bool IsUseCase(Type type)
+        => type != typeof(IUseCase)
+            && typeof(IUseCase).IsAssignableFrom(type)
+            && (type.IsInterface || !type.GetInterfaces().Any(implemented => implemented != typeof(IUseCase) && typeof(IUseCase).IsAssignableFrom(implemented)));
 
     /// <summary>A type's full name as the metadata spells it, nested types apart with <c>/</c>.</summary>
     private static string Name(Type type)

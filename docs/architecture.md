@@ -45,20 +45,32 @@ still, and held by tests rather than discipline (`ArchitectureTests`, which read
 command line's own assembly metadata): every Core type the command line references is in
 the application layer (`Application\`: the use cases, their requests and results, the
 session and pipeline every command shares), its help (`Help\`), its output (`Output\`) or
-its results (`Results\`); or is reached from a public member of a use case - a request, a
-result, and everything they are made of, computed from the assemblies themselves and never
+its results (`Results\`); or is reached from an operation of a use case - a request, a
+result, and everything they are made of: their properties and fields, their bases, and the
+elements and arguments of their collections and generics, never a static helper beside a use
+case or a method of what it hands over - computed from the assemblies themselves and never
 listed by hand; or is one of a few reviewed types, each with its reason on the list: a name
 Core's own sentences or wire say (a command's name, an option's, a cell's), the console's
 own pieces (a password prompt, a side-task's terminal, a run session's counted
 interrupts), the renderers of the reports the use cases answer, the composition root every
 front end calls once, and the hidden process commands the program runs for itself. A
 reviewed entry nothing references any more, or one a use case reaches, is taken off the
-list - the test demands both. The services a command only calls are marked as the use cases
+list - the test demands both. None of the platform's seams (`IFileSystem`, `IProcessRunner`,
+`IGitClient`, `IHostPlatform`, `IHarnessContextLoader`) is ever among them, so a front end
+never reads a file or runs a program itself: a `--<cell>-file` is read by the anchors' use
+case. The services a command only calls are marked as the use cases
 they are (`: IUseCase`) where they live, from verify-git's to the checks', so their requests
 and their reports are contracts a front end may read. Nothing in Core outside
 `Application\`, `Composition\` and `Help\` reaches into them: the layer below shares the
 layer's contracts but never its machinery - its sessions, its scopes, its document kinds,
-its pipeline. The command line builds no container: the registrations are the core's own
+its pipeline. That is read from the core's own metadata, not its source's text: every type a
+type below the layers names in its signatures, its locals and its bodies' instructions, however
+its source spells it. The layer's contracts are its use cases with their requests and results,
+and the few points it is open to below it, each reviewed with its reason - the facts every
+document of an operation says (`IDocumentFacts`), which the service that did them fills. The
+one scan of the core for a contract's implementations (`CoreImplementations<T>`) is the
+core's own, at its root, so the registries below the layer that read it never reach into the
+composition root that registers what it finds. The command line builds no container: the registrations are the core's own
 (`ServiceRegistration.AddDssHarness`), so a front end other than the command line builds the
 same services; the core builds each operation's provider (`ServiceRegistration.Host`), and
 the command line supplies only how a password is asked at its terminal (`ConsoleHost`). And
@@ -4158,41 +4170,52 @@ reads as. Every problem is reported at once.
 ### The arms
 
 `check-anchor-arms` holds what anchor rows say about mutation arms to the mutation record. It
-reads no host, takes no lock and writes nothing, as `check-mutations --list` reads none: both
-anchor registries through the read-together read, and the arms registry `mutations.registry`
-names through the one reading a listing is made of (the registry and its texts verified as a
-sweep verifies them, every selected leg listed, each arm's scopes beside them), so that what it
-says of an arm on a leg is what `--list` says of it, from one owner.
+reads no host and writes nothing, as `check-mutations --list` reads none, and the one lock it
+takes is the anchor registries' own, held while it reads both, as every reader of both takes it -
+so another process holding them past the wait refuses it, as it refuses any reader of them. It
+reads both anchor registries through the read-together read, and the arms registry
+`mutations.registry` names through the one reading a listing is made of (the registry and its
+texts verified as a sweep verifies them, every selected leg listed, each arm's scopes beside
+them), so that what it says of an arm on a leg is what `--list` says of it, from one owner.
 
 A row names an arm by a backticked token equal to an A row's id, ignoring case as the arms
-registry compares ids. An arm a done row names must be unmoved here with a recorded passed on
-each leg its S row names - every selected leg where it names none, `--legs` selecting as
-`--list` selects - so a close always rests on bytes that were judged. Anything else is a
-finding that fails the check, worded as the listing words its first reason: a leg that cannot
-be swept makes every arm on it pending, its refusal the reason. "Unmoved here" is never
-"holds", and the listing's closing note is said here too.
+registry compares ids, the token made of the characters the arms registry's own rule admits in
+an id. An arm a done row names must be unmoved here with a recorded passed on each leg its S
+row names - every selected leg where it names none, `--legs` selecting as `--list` selects - so
+a close always rests on bytes that were judged. Anything else is a finding that fails the check,
+worded as the listing words its first reason: a leg that cannot be swept makes every arm on it
+pending, its refusal the reason. An arm no selected leg judges is said, never passed over as
+held: where `--legs` left out every leg its S row names, a note names them, for the check run
+on those legs judges it; where no leg is declared at all, nothing ever could, and it is a
+finding. "Unmoved here" is never "holds", the line a passing check ends on speaks only of the
+arms a selected leg judged, and the listing's closing note is said here too. An open row's
+arms are not judged: only a done row claims its work is closed.
 
 A pass word followed by only whitespace and brackets or punctuation and then a run id - the
 words are `anchors.passWords`, `passed` where the configuration names none, matched ignoring
 case - is a citation of one sweep's judgement, true only of the bytes that run read and stale
 the first time what it judged moves. It is a finding wherever its whole span does not sit
 inside one matching a form of `anchors.historyForms`, whose `{commit}` and `{run}` placeholders
-stand for a commit's hex and a run id: history is where a row may state a pass, and the forms
-say what its history looks like. A citation is judged in every row of both registries, a done
-row's no less than a pending one's.
+stand for a commit's hex - seven characters to a whole SHA-1 or SHA-256 id - and a run id:
+history is where a row may state a pass, and the forms say what its history looks like. A
+citation is judged in every row of both registries, a done row's no less than a pending one's.
 
 A backticked id no A row holds is reported only where git history shows an A row declared it
-once - the newest 512 commits that changed the registry, each version read for its ids - so one
-renamed or retired is a finding while an id that never was an arm is left alone, whatever else
-a row may cite in backticks. Where more commits changed the registry than were read, or the
-clone is shallow, that is noted rather than failed, for an id may have been declared before
-either cut and no change can repair the history; the note fails nothing, as the balance notes a
-registry malformed at the base.
+once - the newest 512 commits that changed the registry, each version read for its ids, all of
+them by one git process, at the path the registry had then: the history is followed back across
+each rename of the registry, so an id declared before it moved is one it declared - so one
+renamed or retired is a finding, once a row however often the row cites it, while an id that
+never was an arm is left alone, whatever else a row may cite in backticks. Where more commits
+changed the registry than were read, or the clone is shallow, that is noted rather than failed,
+for an id may have been declared before either cut and no change can repair the history; so is
+a version that cannot be read as the registry is read, for an id only it declared is not known.
+A note fails nothing, as the balance notes a registry malformed at the base.
 
 Exit codes and `--json` follow the balance: a finding exits 1 in the anchor commands' own
-range, every exit answers in the command's own document, and an early one - a directory that is
-not there, a usage error, an arms registry a listing refuses - answers with the same document
-reading nothing.
+range, and the line a failing check ends on counts only the findings that fail it; every exit
+answers in the command's own document, and an early one - a directory that is not there, a
+usage error, an arms registry a listing refuses (exit 12, naming `check-anchor-arms` where
+`mutations.registry` is unset) - answers with the same document reading nothing.
 
 ### Citations
 

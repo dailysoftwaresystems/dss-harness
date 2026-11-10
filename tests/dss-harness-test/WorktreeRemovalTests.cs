@@ -1291,6 +1291,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<GitPathHistory> ListHeldInHistoryAsync(string directory, string tip, IReadOnlyList<string> paths, int most, CancellationToken cancellationToken = default)
         => Call(() => inner.ListHeldInHistoryAsync(directory, tip, paths, most, Token(cancellationToken)));
 
+    public Task<IReadOnlyList<GitRename>> ListRenamesAsync(string directory, string tip, string path, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListRenamesAsync(directory, tip, path, Token(cancellationToken)));
+
     public Task<IReadOnlyList<string>> ListStagedIdsAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
         => Call(() => inner.ListStagedIdsAsync(directory, paths, Token(cancellationToken)));
 

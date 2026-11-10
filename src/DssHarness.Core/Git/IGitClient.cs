@@ -143,6 +143,24 @@ public interface IGitClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Every rename of the file at <paramref name="path"/> in the history of <paramref name="tip"/>, newest first: the
+    /// file followed back across each, as <c>git log --follow</c> follows one file, so the path it had before a rename is
+    /// where its older history is read. A path-limited walk (<see cref="ListHeldInHistoryAsync"/>) stops where the file was
+    /// renamed, for the name it had then is outside the path; a rename to or from a name that is not UTF-8 ends the list,
+    /// since the history before it cannot be asked for by name.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="tip">The commit whose history is read, or a name of it.</param>
+    /// <param name="path">The file's path at <paramref name="tip"/>, from the repository's root, with forward separators, read literally.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not walk the history, or answered in a shape this build cannot read.</exception>
+    Task<IReadOnlyList<GitRename>> ListRenamesAsync(
+        string directory,
+        string tip,
+        string path,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The blob each of <paramref name="paths"/> would be stored as at its own path in the work tree at
     /// <paramref name="directory"/>, in the same order: the one <c>git add</c> would record for its bytes as they stand -
     /// read through the clean filters and the line-ending rules of that path, its line endings kept where the work tree's

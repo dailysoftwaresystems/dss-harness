@@ -38,19 +38,28 @@ public sealed class SyncServeHandler(ISyncTransport transport, IAgentIsolation i
     private readonly IAgentIsolation _isolation = isolation;
 
     /// <summary>Serves <paramref name="operation"/> on the copy its first argument names.</summary>
-    /// <param name="operation">The operation to perform on this host's copy.</param>
+    /// <param name="operation">
+    /// The operation to perform on this host's copy. One this build does not serve - an empty one among them - is
+    /// refused by name as a usage error, for it means the two ends are different builds.
+    /// </param>
     /// <param name="arguments">
-    /// The operation's arguments, after the copy's root: the copy's root, then whatever the operation takes, each
-    /// value an argument of its own.
+    /// The operation's arguments: the copy's root first, then whatever the operation takes, each value an argument of
+    /// its own.
     /// </param>
     /// <param name="cancellationToken">Stops the operation.</param>
     /// <returns>What the machine asking reads: an answer line and the lines that follow it, or none at all.</returns>
+    /// <exception cref="HarnessException">
+    /// The operation is not one this build serves, or was given no copy or fewer arguments than it takes
+    /// (<see cref="HarnessExit.UsageError"/>); or the operation itself failed, as the transport says.
+    /// </exception>
     public async Task<SyncServeAnswer> ServeAsync(
         string operation,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(operation);
+        // Never an argument exception: an operation this build does not serve, an empty one too, is the switch's own
+        // refusal below, named as the two ends being different builds rather than taken for a defect of this tool.
+        ArgumentNullException.ThrowIfNull(operation);
         ArgumentNullException.ThrowIfNull(arguments);
 
         if (arguments.Count == 0)

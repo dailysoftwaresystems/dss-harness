@@ -4155,16 +4155,18 @@ public static class HelpTopics
         builder.AppendLine("a done row names must be unmoved here with a recorded passed on each leg its S row");
         builder.AppendLine("names - every selected leg where it names none, --legs selecting as --list selects -");
         builder.AppendLine("and a pending one is reported with the listing's own reason, a leg that cannot be");
-        builder.AppendLine("swept among them. A pass word followed by only whitespace and brackets or");
+        builder.AppendLine("swept among them. An arm none of the selected legs judges is noted, naming the legs");
+        builder.AppendLine("its S row names, and is a finding where no leg is declared. An open row's arms are");
+        builder.AppendLine("not judged. A pass word followed by only whitespace and brackets or");
         builder.AppendLine($"punctuation and then a run id - the words are anchors.passWords, '{AnchorSettings.DefaultPassWord}' where it names");
         builder.AppendLine("none - is a citation of one sweep's judgement, true only of the bytes that run read:");
         builder.AppendLine("it is reported wherever it does not sit inside a span matching a form of");
         builder.AppendLine("anchors.historyForms, whose {commit} and {run} placeholders stand for a commit and a");
         builder.AppendLine("run id. A backticked id no A row holds is reported where git history shows an A row");
-        builder.AppendLine("declared it once - renamed, or retired; where more commits changed the registry than");
-        builder.AppendLine("were read, or the clone is shallow, that is noted, for an id may have been declared");
-        builder.AppendLine("before either cut. 'Unmoved here' is not 'holds': the listing's closing note is said");
-        builder.AppendLine("here too.");
+        builder.AppendLine("declared it once - renamed, or retired - the history read at the path the registry had");
+        builder.AppendLine("then, across each of its renames; where more commits changed the registry than were");
+        builder.AppendLine("read, or the clone is shallow, that is noted, for an id may have been declared before");
+        builder.AppendLine("either cut. 'Unmoved here' is not 'holds': the listing's closing note is said here too.");
         builder.AppendLine();
         builder.AppendLine("Every change holds a machine-wide lock on its two registries. A change that cannot");
         builder.AppendLine($"take it within {NamedMutexAnchorRegistryLock.DefaultTimeout.TotalSeconds:0} seconds writes nothing and exits {HarnessExit.Refused}. A read takes it");
@@ -4178,9 +4180,11 @@ public static class HelpTopics
         builder.AppendLine("       a citation resolves to no row or is cut, or a row's claim about a mutation arm");
         builder.AppendLine("       does not hold");
         builder.AppendLine($"  {HarnessExit.UsageError,3}  a value is not valid (an id, a priority, a status, an empty trigger, a");
-        builder.AppendLine("       cell it would store cut), options that cannot be combined, or set-anchor with nothing");
-        builder.AppendLine("       to change");
+        builder.AppendLine("       cell it would store cut), options that cannot be combined, set-anchor with nothing");
+        builder.AppendLine("       to change, or a --legs of check-anchor-arms naming no leg or leg set");
         builder.AppendLine($"  {HarnessExit.NotInitialized,3}  a registry is missing; run '{ToolPackage.Command} init'");
+        builder.AppendLine($"  {HarnessExit.ConfigInvalid,3}  for check-anchor-arms, mutations.registry is unset or names no file, or");
+        builder.AppendLine("       the arms registry it names is refused as check-mutations --list refuses it");
         builder.AppendLine($"  {HarnessExit.Refused,3}  refused: the id exists, there is no such anchor, an id has two rows,");
         builder.AppendLine("       a value newly cites a row no registry holds,");
         builder.AppendLine("       the registry is ignored by git, the lock is held or belongs to another user,");
@@ -4190,11 +4194,12 @@ public static class HelpTopics
         builder.AppendLine($"  {HarnessExit.HostUnavailable,3}  the machine-wide lock on the registries could not be opened");
         builder.AppendLine($"  {HarnessExit.CommandFailed,3}  a registry is malformed, is a directory or cannot be read, the base");
         builder.AppendLine("       names no commit or shares no history with HEAD, a shallow clone's history may stop");
-        builder.AppendLine("       before where the two part, git lists a file it cannot read, or the directories at");
-        builder.AppendLine("       the top of the tree cannot be listed");
+        builder.AppendLine("       before where the two part, git lists a file it cannot read, the directories at");
+        builder.AppendLine("       the top of the tree cannot be listed, or git cannot say what check-anchor-arms asks");
+        builder.AppendLine("       of the tree and the arms registry's history");
         builder.AppendLine();
-        builder.AppendLine("read-anchors --lint and check-anchor-balance report a missing or malformed registry");
-        builder.AppendLine($"as one of their findings instead, so for them it exits {AnchorExit.Findings}.");
+        builder.AppendLine("read-anchors --lint, check-anchor-balance and check-anchor-arms report a missing or");
+        builder.AppendLine($"malformed registry as one of their findings instead, so for them it exits {AnchorExit.Findings}.");
 
         return builder.ToString();
     }
@@ -5813,8 +5818,7 @@ public static class HelpTopics
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
-            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included, with a reason "
-            + "step's graph.jsonl and working-set.json where it has a codebase graph"),
+            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/.../<instance>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}",
             "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
             + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what "
