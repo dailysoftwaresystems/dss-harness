@@ -1801,21 +1801,21 @@ public sealed class AgentToolRuntimeTests : IDisposable
     {
         var runtime = Open(capabilities: [AgentCapability.Read, AgentCapability.Write], sideTask: true);
 
-        using var engine = DssHarness.Core.Platform.MachineWideMutex.TryHold(
-            DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(_worktree),
-            "a test as the engine");
+        var tree = DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(_worktree);
+
+        using var engine = DssHarness.Core.Platform.MachineWideMutex.TryHold(tree, "a test as the engine");
 
         Assert.NotNull(engine);
 
+        var waits = DssHarness.Core.Platform.MachineWideHold.WaitBegins(tree);
         var writing = Task.Run(() => Call(runtime, AgentTools.CreateFile, ("path", "w.txt"), ("content", "written\n")));
 
-        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(3); DateTime.UtcNow < till; )
-        {
-            Assert.False(File.Exists(Path.Combine(_worktree, "w.txt")), "the side-task wrote while the engine held the main tree's lock");
-            await Task.Delay(50, Token);
-        }
+        // Let go only once the write waits for the lock: it waited then, and wrote nothing meanwhile.
+        await waits.WaitAsync(Token);
+        Assert.False(writing.IsCompleted, "the side-task's write answered while the engine held the main tree's lock");
+        Assert.False(File.Exists(Path.Combine(_worktree, "w.txt")), "the side-task wrote while the engine held the main tree's lock");
 
-        engine!.Dispose();
+        engine.Dispose();
 
         var result = await writing;
 

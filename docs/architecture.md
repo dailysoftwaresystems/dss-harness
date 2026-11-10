@@ -1417,10 +1417,13 @@ sorted as any hand-over sorts what the main tree holds, asked what of the agent'
 (`InTheWayOfHanding`), and measured in the agent's worktree; `ApplyAsync` hands it last, after every write of the main
 tree, through the one loop every hand-over takes - deletions, then files, each asked first to be what was weighed - and
 `FoldedAsync` records it through the ledger. Every write the engine makes in the main tree - a fold's apply, a
-deletion's, a refresh's and a rebase's apply, a commit step's staging and commit - takes the main tree's lock
-(`MainTreeWriteLock`, a `MachineWideMutex` named for the tree's path), which a side-task's writes and commands take
-for their duration too: each side waits the other out, for a long command holds the folds back for as long as it runs,
-and the step's output says how long it waited and for what. While a run's owner is live
+deletion's, a refresh's and a rebase's apply, a commit step - takes the main tree's lock (`MainTreeWriteLock`, a
+`MachineWideMutex` named for the tree's path) once, before the measure its write is held to, and keeps that one hold to
+its last write - a commit step from its first read of the main tree's git through its commit's own check - which a
+side-task's writes and commands take for their duration too: each side waits the other out, for a long command holds
+the folds back for as long as it runs, so nothing the engine weighed is changed under it before it writes, and the
+step's output says how long it waited and for what (`MainTreeWriteLock.WaitedFor`). The command's or the step's own
+stop ends the engine's wait, nothing weighed or written. While a run's owner is live
 (`.orchestrators/<run>.owner.json`, asked at each call through `AgentPolicyGround.LiveRun`), a side-task's agent is
 refused the git verbs that move HEAD, the index or the stash (`AgentPolicy.HeadMovingGitVerbs`) with the run's name -
 a run that starts while the chat is open is held to from its first step, and one that ends releases it - and the run's
@@ -3135,8 +3138,9 @@ branch the run started on (`FlowRunPlace.OffItsBranch`, over `FlowRunContext.Bra
 and the pull request apply), every fold upstream settled (`FoldOwed.Unsettled`), an empty index, each path's digest and
 no path to stage the index marks assume-unchanged or skip-worktree checked before anything is
 staged; the staged set written to the ledger (`FlowCommitEntry`) before `IGitPublisher` stages it by explicit path and
-commits once under the main tree's lock (`MainTreeWriteLock`, shared with a side-task's writes and commands, the
-step's output saying what it waited out for it), then held over the commit the branch named before it: its parents, as its own object names them
+commits once - all of it, from the branch read and a set an attempt before left settled to the commit's own check, under
+one hold of the main tree's lock (`MainTreeWriteLock`, shared with a side-task's writes and commands, so what is staged
+is what the checks weighed; the step's stop ends the wait, and its output says what it waited out for it), then held over the commit the branch named before it: its parents, as its own object names them
 (`IGitClient.ParentsOfAsync`, `git cat-file commit`, which no graft or shallow boundary stands in for), that commit
 alone - a hook could move the branch to a commit of its own, standing on one that carries anything - and what it
 changes against that commit the set alone; one that stands elsewhere, took more, or left a path of the set out, is

@@ -381,7 +381,7 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
                         Agent = agent,
                         Target = run.Target,
                     })
-                    : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: applied.Facts is { } facts ? WaitedFor(facts.Waited, OutputOf(facts)) : null);
+                    : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: applied.Facts is { } facts ? MainTreeWriteLock.WaitedFor(facts.Waited, OutputOf(facts)) : null);
             }
 
             // Refused under its hold for what it was not refused for a moment before - its trees moved between the two -
@@ -398,29 +398,6 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
     /// <summary>Whether <paramref name="planned"/> writes anything into the main tree, or applies a row.</summary>
     private static bool Writes(AgentPlanned planned)
         => planned.Written.Count + planned.Deleted.Count + planned.Merged.Count + planned.Registries.Count + planned.Rows.Count > 0 || planned.ArmRegistry is not null;
-
-    /// <summary>
-    /// What the step's record says of its apply's wait for the main tree's lock, held by a side-task's write or command:
-    /// how many seconds, and what it waited for, where it waited - the output the step's own kind did not build one of
-    /// gains this member alone.
-    /// </summary>
-    /// <param name="waited">How long the apply waited; nothing said where it did not wait.</param>
-    /// <param name="output">The output the step's own kind built; null where it built none.</param>
-    protected static JsonObject? WaitedFor(TimeSpan waited, JsonObject? output)
-    {
-        if (waited <= TimeSpan.Zero)
-        {
-            return output;
-        }
-
-        (output ??= new JsonObject())["waited"] = new JsonObject
-        {
-            ["seconds"] = Math.Round(waited.TotalSeconds, 1),
-            ["for"] = MainTreeWriteLock.WaitedOutOn,
-        };
-
-        return output;
-    }
 
     /// <summary>The patterns of the step's <c>within</c> where it folds - none where it does not, or names none - or why one is no pattern.</summary>
     private static (IReadOnlyList<string>? Patterns, string? Problem) WithinOf(FoldCall call, bool folds)
@@ -626,7 +603,7 @@ public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, I
         }
 
         await graph.AfterDeleteAsync(call.Run, call.Place, context, cancellationToken).ConfigureAwait(false);
-        return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: record.Applied is { } applied ? WaitedFor(applied.Waited, FoldOutputOf(applied.Folded)) : null);
+        return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: record.Applied is { } applied ? MainTreeWriteLock.WaitedFor(applied.Waited, FoldOutputOf(applied.Folded)) : null);
     }
 
     private static bool Discards(FoldCall call) => call.Run.Step.DiscardUncommitted is true;

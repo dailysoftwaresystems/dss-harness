@@ -4,6 +4,7 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
 using NSubstitute;
 
@@ -783,7 +784,7 @@ public sealed class FoldStepTests
     /// <summary>
     /// A fold takes the main tree's lock, as every engine write to the main tree does, waiting out a side-task's write or
     /// command that holds it: nothing reaches the tree while the other side's hold stands, and once it lets go the fold
-    /// goes on and its step's output says how long it waited and for what.
+    /// goes on and its step's output says how long it waited and for what, beside what it folded.
     /// </summary>
     [Fact]
     public async Task AFold_WaitsOutASideTasksHoldOfTheMainTree_AndItsOutputSaysWhatItWaitedFor()
@@ -792,35 +793,207 @@ public sealed class FoldStepTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync(Agent);
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var tree = MainTreeWriteLock.NameFor(kit.Main);
 
-        using var sideTask = DssHarness.Core.Platform.MachineWideMutex.TryHold(
-            DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(kit.Main),
-            "a test as a side-task");
+        using var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task");
 
         Assert.NotNull(sideTask);
 
+        var waits = MachineWideHold.WaitBegins(tree);
         var folding = Task.Run(() => Runner(kit).RunAsync(Run(kit, Fold()), Token));
 
-        // The whole suite's load can hold the fold's own measure back for a while before it reaches the tree's lock:
-        // the window outlasts that, and the fold must not complete while the side-task's hold stands.
-        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(20); DateTime.UtcNow < till; )
-        {
-            Assert.False(folding.IsCompleted, "the fold completed while a side-task held the main tree's lock");
-            Assert.NotEqual("two\nagent edit\n", File.Exists(Path.Combine(kit.Main, "b.txt")) ? File.ReadAllText(Path.Combine(kit.Main, "b.txt")) : null);
-            await Task.Delay(50, Token);
-        }
+        // Let go only once the fold waits for the lock: it waited then, and nothing of it reached the tree meanwhile.
+        await waits.WaitAsync(Token);
+        Assert.False(folding.IsCompleted, "the fold completed while a side-task held the main tree's lock");
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
 
-        sideTask!.Dispose();
+        sideTask.Dispose();
 
         var folded = await folding;
 
         Assert.True(folded.Passed, folded.Error);
-        Assert.True(folded.Output!["waited"]!["seconds"]!.GetValue<double>() >= 0.1, folded.Output.ToJsonString());
-        Assert.Equal(
-            DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOn,
-            folded.Output["waited"]!["for"]!.GetValue<string>());
-        Assert.True(File.Exists(Path.Combine(kit.Main, "b.txt")));
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.Equal(MainTreeWriteLock.WaitedOutOn, WaitedOf(folded)["for"]!.GetValue<string>());
+
+        // Beside the wait, the fold's own output, as a fold that waited for nothing answers it.
+        var output = folded.Output!.AsObject();
+        output.Remove(MainTreeWriteLock.WaitedMember);
+        Assert.Equal("""{"written":["b.txt"],"deleted":[],"registries":[],"rows":[]}""", output.ToJsonString());
     }
+
+    /// <summary>
+    /// A fold weighs the main tree under the lock it writes it under: a side-task's write made while the fold waited for
+    /// the lock is weighed - here a change of the very file the fold would write, which the agent changed too - and never
+    /// met part way through the fold's writes, so the fold asks of it rather than stopping with half of itself written, and
+    /// the side-task's write stands.
+    /// </summary>
+    [Fact]
+    public async Task AFold_WeighsUnderTheTreesLock_WhatASideTaskWroteWhileItWaited()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var tree = MainTreeWriteLock.NameFor(kit.Main);
+        using var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task");
+
+        Assert.NotNull(sideTask);
+
+        var waits = MachineWideHold.WaitBegins(tree);
+        var folding = Task.Run(() => Runner(kit).RunAsync(Run(kit, Fold()), Token));
+
+        await waits.WaitAsync(Token);
+
+        // The side-task's write, made under its hold while the fold's apply waits for the lock.
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nthe side-task's edit\n");
+        sideTask.Dispose();
+
+        var folded = await folding;
+
+        Assert.False(folded.Passed);
+        Assert.Equal("foldConflicts", FlowQuestions.FoldQuestionOf(folded.DryRun!)!.Kind);
+        Assert.Equal(["b.txt"], folded.DryRun!.Conflicting);
+        Assert.Equal("two\nthe side-task's edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>
+    /// A refresh's apply takes the main tree's lock and weighs the main tree again under it: nothing is handed while a
+    /// side-task's hold stands, and what the side-task wrote meanwhile is weighed with the rest and handed - never left out
+    /// for having moved after the dry run weighed the tree - its output saying what it waited out.
+    /// </summary>
+    [Fact]
+    public async Task ARefresh_WaitsOutASideTasksHold_AndHandsWhatTheMainTreeHoldsOnceItLetsGo()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nby hand\n");
+        var tree = MainTreeWriteLock.NameFor(kit.Main);
+        using var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task");
+
+        Assert.NotNull(sideTask);
+
+        var waits = MachineWideHold.WaitBegins(tree);
+        var refreshing = Task.Run(() => Refreshing(kit).RunAsync(Run(kit, Refresh("a.txt", "b.txt")), Token));
+
+        await waits.WaitAsync(Token);
+        Assert.False(refreshing.IsCompleted, "the refresh completed while a side-task held the main tree's lock");
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+
+        // The side-task's write, made under its hold while the refresh's apply waits for the lock.
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nby the side-task\n");
+        sideTask.Dispose();
+
+        var refreshed = await refreshing;
+
+        Assert.True(refreshed.Passed, refreshed.Error);
+        Assert.Equal(("one\nby hand\n", "two\nby the side-task\n"), (OrchestrationKit.Read(worktree, "a.txt"), OrchestrationKit.Read(worktree, "b.txt")));
+        Assert.Equal([MainTreeWriteLock.WaitedMember], refreshed.Output!.AsObject().Select(member => member.Key));
+        Assert.Equal(MainTreeWriteLock.WaitedOutOn, WaitedOf(refreshed)["for"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A rebase's apply takes the main tree's lock - what it keeps alive in the main checkout and settles there are the main
+    /// tree's git's own: nothing of the move is made while a side-task's hold stands, and once it lets go the base moves,
+    /// the step's output saying what it waited out.
+    /// </summary>
+    [Fact]
+    public async Task ARebase_WaitsOutASideTasksHold_AndMovesTheBaseOnceItLetsGo()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        var based = kit.Record(Agent).Base;
+        OrchestrationKit.Write(kit.Main, "c.txt", "three\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a file the agent's base lacks", Token);
+        var head = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
+        var tree = MainTreeWriteLock.NameFor(kit.Main);
+
+        using var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task");
+
+        Assert.NotNull(sideTask);
+
+        var waits = MachineWideHold.WaitBegins(tree);
+        var rebasing = Task.Run(() => Rebasing(kit).RunAsync(Run(kit, Rebase()), Token));
+
+        await waits.WaitAsync(Token);
+        Assert.False(rebasing.IsCompleted, "the rebase completed while a side-task held the main tree's lock");
+        Assert.Equal((based, null), (kit.Record(Agent).Base, kit.Record(Agent).Moving));
+        Assert.False(File.Exists(Path.Combine(worktree, "c.txt")));
+
+        sideTask.Dispose();
+
+        var rebased = await rebasing;
+
+        Assert.True(rebased.Passed, rebased.Error);
+        Assert.Equal(head, kit.Record(Agent).Base);
+        Assert.Equal("three\n", OrchestrationKit.Read(worktree, "c.txt"));
+        Assert.Equal(MainTreeWriteLock.WaitedOutOn, WaitedOf(rebased)["for"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A fold family step waiting for the main tree's lock - a fold, a deletion that folds, a refresh, a rebase - is ended
+    /// by its own stop, as a run's pause or stop ends it: the wait is let go, nothing of the apply is weighed or written,
+    /// and the agent stands as it stood.
+    /// </summary>
+    [Theory]
+    [InlineData("fold")]
+    [InlineData("delete-agent")]
+    [InlineData("refresh")]
+    [InlineData("rebase")]
+    public async Task AFoldFamilyStepWaitingForTheTreesLock_IsEndedByItsStop_NothingWritten(string type)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        var based = kit.Record(Agent).Base;
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nby hand\n");
+
+        if (type == "rebase")
+        {
+            OrchestrationKit.Write(kit.Main, "c.txt", "three\n");
+            await kit.Harness.CommitAllAsync(kit.Main, "a file the agent's base lacks", Token);
+        }
+
+        var (runner, step) = type switch
+        {
+            "fold" => ((IFlowStepTypeRunner)Runner(kit), Fold()),
+            "delete-agent" => (Deleting(kit), Delete()),
+            "refresh" => (Refreshing(kit), Refresh("a.txt")),
+            _ => (Rebasing(kit), Rebase()),
+        };
+        var tree = MainTreeWriteLock.NameFor(kit.Main);
+
+        using var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task");
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+
+        Assert.NotNull(sideTask);
+
+        var waits = MachineWideHold.WaitBegins(tree);
+        var running = Task.Run(() => runner.RunAsync(Run(kit, step), stop.Token));
+
+        await waits.WaitAsync(Token);
+        await stop.CancelAsync();
+
+        // Bounded, so a wait the stop does not end fails here rather than holding the suite.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromMinutes(2), Token));
+
+        Assert.Equal(("one\nby hand\n", "two\n"), (OrchestrationKit.Read(kit.Main, "a.txt"), OrchestrationKit.Read(kit.Main, "b.txt")));
+        Assert.Equal(("one\n", "two\nagent edit\n"), (OrchestrationKit.Read(worktree, "a.txt"), OrchestrationKit.Read(worktree, "b.txt")));
+        Assert.Equal((AgentStates.Live, based, null), (kit.Record(Agent).State, kit.Record(Agent).Base, kit.Record(Agent).Moving));
+        Assert.False(File.Exists(Path.Combine(worktree, "c.txt")));
+    }
+
+    /// <summary>The <c>waited</c> member of a step's output: what it waited out for the main tree's lock, and how long.</summary>
+    private static JsonObject WaitedOf(FlowStepResult ended) => ended.Output![MainTreeWriteLock.WaitedMember]!.AsObject();
+
+    private static WorkflowStep Refresh(params string[] paths) => new() { Name = "refresh", Type = "refresh", Of = "made", Paths = new FlowList([.. paths], null) };
+
+    private static WorkflowStep Rebase() => new() { Name = "rebase", Type = "rebase", Of = "made" };
+
+    private static RebaseStepRunner Rebasing(OrchestrationKit kit)
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, kit.Harness.GraphSyncs);
 
     private static WorkflowStep Fold() => new() { Name = "fold", Type = "fold", Of = "made" };
 

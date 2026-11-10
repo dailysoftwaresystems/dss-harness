@@ -215,9 +215,10 @@ public sealed class AgentRefreshMergeTests
         var (kit, worktree) = await BothChangedAsync(temp);
         var copy = Path.Combine(worktree, Both);
 
-        // Its fifth reading is the one that asks, before the merge is written, whether it is what was weighed.
+        // A refresh reads it four times as it weighs it - once, and again under its holds and the tree's lock - so its
+        // ninth reading is the one that asks, before the merge is written, whether it is what was weighed.
         var agents = kit.Harness.Agents(
-            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 5, () => File.WriteAllText(copy, "the session's edit\n")),
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 9, () => File.WriteAllText(copy, "the session's edit\n")),
             kit.Harness.AnchorRegistryService);
 
         var stopped = await agents.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RefreshRequest { Paths = ["src"], Merge = [Both] }, apply: true, Token);

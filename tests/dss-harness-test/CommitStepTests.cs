@@ -4,6 +4,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Schemas;
@@ -935,6 +936,161 @@ public sealed class CommitStepTests
     }
 
     private static WorkflowStep Step() => new() { Name = "commit", Type = "commit", Message = "checkpoint" };
+
+    /// <summary>
+    /// A commit takes the main tree's lock before its first read of the main tree's git, waiting out a side-task's write or
+    /// command that holds it: nothing is staged or committed while the other side's hold stands, and once it lets go the
+    /// commit is made and the step's output says what it waited out, beside what it committed.
+    /// </summary>
+    [Fact]
+    public async Task ACommit_WaitsOutASideTasksHoldOfTheMainTree_AndItsOutputSaysWhatItWaitedFor()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var before = await HeadAsync(kit);
+        var tree = MainTreeWriteLock.NameFor(kit.Main);
+
+        using var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task");
+
+        Assert.NotNull(sideTask);
+
+        var waits = MachineWideHold.WaitBegins(tree);
+        var committing = Task.Run(() => Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token));
+
+        // Let go only once the commit waits for the lock: it waited then, and nothing of it reached the index meanwhile.
+        await waits.WaitAsync(Token);
+        Assert.False(committing.IsCompleted, "the commit completed while a side-task held the main tree's lock");
+        Assert.Equal(before, await HeadAsync(kit));
+        Assert.Equal([" M a.txt"], await StatusAsync(kit));
+        Assert.Empty(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits);
+
+        sideTask.Dispose();
+
+        var ended = await committing;
+
+        Assert.True(ended.Passed, ended.Error);
+
+        var head = await HeadAsync(kit);
+        var output = ended.Output!.AsObject();
+
+        Assert.Equal(MainTreeWriteLock.WaitedOutOn, output[MainTreeWriteLock.WaitedMember]!["for"]!.GetValue<string>());
+
+        // Beside the wait, the commit's own output, as a commit that waited for nothing answers it.
+        output.Remove(MainTreeWriteLock.WaitedMember);
+        Assert.Equal($$$"""{"committed":true,"sha":"{{{head}}}","paths":["a.txt"],"ignored":[],"isolation":{"mode":"required","none":"the test asked none"}}""", output.ToJsonString());
+    }
+
+    /// <summary>
+    /// What a commit weighs - each path's digest and its marks - it weighs under the one hold of the main tree's lock it
+    /// stages and commits under: a side-task that would edit a folded file between the commit's weighing and its staging
+    /// finds the tree held, as every side-task write takes the lock, so its edit is never committed as the fold's.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksEditBetweenWhatACommitWeighedAndWhatItStages_FindsTheTreeHeld_NeverCommittedAsTheFolds()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var tree = MainTreeWriteLock.NameFor(kit.Main);
+        var heldWhenAsked = new List<bool>();
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            // The commit asks whether it signs with an ssh key once every path is weighed, before anything is staged: the
+            // moment a side-task's write would slip in. The side-task writes only under the tree's lock, as it does for real.
+            BeforeRun = arguments =>
+            {
+                if (arguments is ["config", "--type=bool", "--get", "commit.gpgsign"])
+                {
+                    using var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task");
+                    heldWhenAsked.Add(sideTask is null);
+
+                    if (sideTask is not null)
+                    {
+                        OrchestrationKit.Write(kit.Main, "a.txt", "the side-task's edit\n");
+                    }
+                }
+            },
+        };
+
+        var ended = await Runner(kit, git).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.True(ended.Passed, ended.Error);
+        Assert.Equal([true], heldWhenAsked);
+        Assert.Equal("folded\n", (await kit.Harness.RunGitAsync(kit.Main, ["show", "HEAD:a.txt"], Token)).StandardOutput);
+        Assert.Empty(await StatusAsync(kit));
+    }
+
+    /// <summary>
+    /// A set an attempt before left staged is settled under the commit's one hold of the main tree's lock - what a settle
+    /// unstages is the main tree's index - so nothing of it is unstaged while a side-task holds the lock, and once it lets go
+    /// the set is settled and staged again whole, the step's output saying what it waited out.
+    /// </summary>
+    [Fact]
+    public async Task ASetLeftStaged_IsSettledUnderTheTreesLock_NothingUnstagedWhileASideTaskHoldsIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var fold = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var head = await HeadAsync(kit);
+        var left = Ledger(kit).Staging(kit.Layout, "commit", 1, head, [new FlowCommitPath("a.txt", FileContentHash.Of("folded\n"u8))], [fold]);
+        await kit.GitAsync(kit.Main, "add", "--", "a.txt");
+        var tree = MainTreeWriteLock.NameFor(kit.Main);
+
+        using var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task");
+
+        Assert.NotNull(sideTask);
+
+        var waits = MachineWideHold.WaitBegins(tree);
+        var committing = Task.Run(() => Runner(kit).RunAsync(Run(kit, Step(), "fold", attempt: 2), Token));
+
+        await waits.WaitAsync(Token);
+        Assert.Equal(["M  a.txt"], await StatusAsync(kit));
+        Assert.Equal([(left, FlowCommitEntry.Staged)], kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits.Select(commit => (commit.Id, commit.State)));
+
+        sideTask.Dispose();
+
+        var ended = await committing;
+
+        Assert.True(ended.Passed, ended.Error);
+        Assert.NotEqual(head, await HeadAsync(kit));
+        Assert.Equal(
+            [(left, FlowCommitEntry.Unstaged), ("c2", FlowCommitEntry.Committed)],
+            kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits.Select(commit => (commit.Id, commit.State)));
+        Assert.Equal(MainTreeWriteLock.WaitedOutOn, ended.Output![MainTreeWriteLock.WaitedMember]!["for"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A commit waiting for the main tree's lock is ended by its own stop, as a run's pause or stop ends it: the wait is
+    /// let go, and nothing was read into the ledger, staged or committed.
+    /// </summary>
+    [Fact]
+    public async Task ACommitWaitingForTheTreesLock_IsEndedByItsStop_NothingStaged()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var before = await HeadAsync(kit);
+        var tree = MainTreeWriteLock.NameFor(kit.Main);
+
+        using var sideTask = MachineWideMutex.TryHold(tree, "a test as a side-task");
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+
+        Assert.NotNull(sideTask);
+
+        var waits = MachineWideHold.WaitBegins(tree);
+        var committing = Task.Run(() => Runner(kit).RunAsync(Run(kit, Step(), "fold"), stop.Token));
+
+        await waits.WaitAsync(Token);
+        await stop.CancelAsync();
+
+        // Bounded, so a wait the stop does not end fails here rather than holding the suite.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => committing.WaitAsync(TimeSpan.FromMinutes(2), Token));
+
+        Assert.Equal(before, await HeadAsync(kit));
+        Assert.Equal([" M a.txt"], await StatusAsync(kit));
+        Assert.Empty(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits);
+    }
 
     /// <summary>
     /// Each git command a commit runs - its staging and its commit - is given the step's time limit where it says one, and

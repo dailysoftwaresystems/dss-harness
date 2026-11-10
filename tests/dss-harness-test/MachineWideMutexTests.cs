@@ -250,43 +250,61 @@ public sealed class MachineWideMutexTests
     }
 
     /// <summary>
-    /// A waiting take waits for the mutex and says how long it waited, taking it where its holder let it go before the
-    /// wait's whole window passed - the caller awaiting the hold, so the thread that waits is the hold's own.
+    /// A waiting take waits for the mutex and says it waited, taking it where its holder let it go before the wait's whole
+    /// window passed - the caller awaiting the hold, so the thread that waits is the hold's own; a take whose first look
+    /// found it free says it waited not at all.
     /// </summary>
     [Fact]
-    public async Task AWaitingTake_WaitsForTheMutex_AndSaysHowLongItWaited()
+    public async Task AWaitingTake_WaitsForTheMutex_AndSaysItWaited()
     {
         var name = Name();
         using var held = MachineWideMutex.TryHold(name, "a test's subject");
 
         Assert.NotNull(held);
-        Assert.True(held.Waited < TimeSpan.FromMilliseconds(50), $"waited {held.Waited}");
+        Assert.Equal(TimeSpan.Zero, held.Waited);
 
-        var waiting = MachineWideMutex.HoldAsync(name, "a test's subject", TimeSpan.FromSeconds(30), CancellationToken.None);
+        var began = MachineWideHold.WaitBegins(name);
+        var waiting = MachineWideMutex.HoldAsync(name, "a test's subject", Timeout.InfiniteTimeSpan, TestContext.Current.CancellationToken);
 
-        await Task.Delay(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
+        // Let go only once the take met the hold and waits: it has waited then, however loaded the machine is.
+        await began.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.False(waiting.IsCompleted, "the take answered while the mutex was held");
 
         held.Dispose();
 
         using var taken = await waiting;
 
         Assert.NotNull(taken);
-        Assert.True(taken.Waited >= TimeSpan.FromMilliseconds(200), $"waited {taken.Waited}");
+        Assert.True(taken.Waited > TimeSpan.Zero, $"waited {taken.Waited}");
     }
 
-    /// <summary>A waiting take whose window passes without the mutex answers null, and one a token ends answers null: neither holds what it did not take.</summary>
+    /// <summary>
+    /// A waiting take whose window passes without the mutex answers null, and one a token ends while it waits answers null:
+    /// neither holds what it did not take, so the mutex is free the moment its one holder lets it go.
+    /// </summary>
     [Fact]
-    public async Task AWaitingTake_ItsWindowPassedOrItsTokenEnded_AnswersNull()
+    public async Task AWaitingTake_ItsWindowPassedOrItsTokenEnded_AnswersNull_HoldingNothing()
     {
         var name = Name();
         using var held = MachineWideMutex.TryHold(name, "a test's subject");
 
         Assert.NotNull(held);
-        Assert.Null(await MachineWideMutex.HoldAsync(name, "a test's subject", TimeSpan.FromMilliseconds(200), CancellationToken.None));
+        Assert.Null(await MachineWideMutex.HoldAsync(name, "a test's subject", TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken));
 
-        using var ended = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        using var ended = new CancellationTokenSource();
+        var began = MachineWideHold.WaitBegins(name);
+        var waiting = MachineWideMutex.HoldAsync(name, "a test's subject", Timeout.InfiniteTimeSpan, ended.Token);
 
-        Assert.Null(await MachineWideMutex.HoldAsync(name, "a test's subject", Timeout.InfiniteTimeSpan, ended.Token));
+        await began.WaitAsync(TestContext.Current.CancellationToken);
+        await ended.CancelAsync();
+
+        Assert.Null(await waiting);
+
+        held.Dispose();
+
+        using var next = MachineWideMutex.TryHold(name, "a test's subject");
+
+        Assert.NotNull(next);
     }
 
     private static string Name()
