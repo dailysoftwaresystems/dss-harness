@@ -179,9 +179,10 @@ public sealed class LegSetUpsTests
 
     /// <summary>
     /// A set-up's line is refused where what it reads cannot be held to no tree: a whole path that holds a tree, which a
-    /// program handed it may walk; a word its shell expands into a place before it runs - a substitution, a variable - but a
-    /// home at its start; a move to a directory that is no whole path; a relative path read where a move to a whole one took
-    /// it; a line the reader cannot read whole; and a directory to run from that is itself in a tree.
+    /// program handed it may walk; a word its shell expands into a place before it runs - a substitution, a variable, the
+    /// directory stack's tilde - but a home at its start, and never a tilde a program reads out of its word or one quoted
+    /// away; a move to a directory that is no whole path; a relative path read where a move to a whole one took it; a line
+    /// the reader cannot read whole; and a directory to run from that is itself in a tree.
     /// </summary>
     [Fact]
     public void ALine_IsRefused_WhereWhatItReadsCannotBeHeldToNoTree()
@@ -211,8 +212,13 @@ public sealed class LegSetUpsTests
         Assert.Equal(
             "could not be read whole: '$X' names the program it runs by a variable, which this does not read",
             Refusal("sh", "-c", "$X up"));
+        Assert.Equal(
+            "could not be read whole: '~1/compose.yml' names a directory of the stack pushd keeps, which this does not know",
+            Refusal("sh", "-c", "docker compose -f ~1/compose.yml up -d"));
         Assert.Null(Refusal("sh", "-c", "docker compose -f ~/setups/compose.yml up -d"));
         Assert.Null(Refusal("sh", "-c", $"cd '{beside}' && docker compose up -d"));
+        Assert.Null(Refusal("git", "log", "@~1"));
+        Assert.Null(Refusal("sh", "-c", "git log @~1 && git commit --fixup=@~1 && cat '~1'"));
 
         var inTree = new SetUpConfinement([tree], Path.Combine(tree, "outside"), new HarnessFactory().FileSystem, new HomedPlatform(home.Path));
 

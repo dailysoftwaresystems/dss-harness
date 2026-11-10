@@ -1846,7 +1846,8 @@ braces' words, a `file://` address's path), each read as every value a variable 
 sets gives it (`AgentPolicy.Readings` over the string's `StringState`, `CommandAnalysis.Substituted`,
 at most `CommandAnalysis.MaxReadings`; `$PWD` and a leading `~+` as each place the command stands in and
 each value the string gives `PWD` (`StringState.ValuesOf`); a `~-` and the directory stack's `~N`, `~+N` and `~-N`
-as places it does not know (`AgentPolicy.HomeExpanded`), and each of them, `~+` with them, a variable wherever
+as places it does not know where the shell expands them, and as the text they spell where it does not - a value a
+program reads out of its word, a quoted word (`NamedPath.TildeExpands`, `AgentPolicy.HomeExpanded`) - and each of them, `~+` with them, a variable wherever
 `CommandAnalysis.Expansion` is asked - the program, a rule's word, `AgentPolicy.Meets` - for the string may give
 it any word; a `~` as each
 `HOME` the string, the command or a command that runs it sets; a variable the
@@ -1985,9 +1986,10 @@ with `-s`, cargo watch's `-s`), read as `sh -c`'s and as `cmd /c`'s, and the job
 `at` and `batch` take from a here-document or a here-string (`CommandAnalysis.ScriptsItRuns`), and a
 script file the string itself writes before it runs it, read as the text a here-document gave it
 (`AgentPolicy.WrittenScripts`: each file the string writes kept by the full path it reaches from each
-place its command stands, `StringState.Written`, a target the shell expands kept by its literal end,
+place its command stands, `StringState.Written`, a target the shell expands - a tilde whose variable
+the string set to a value it computes among them, `StringState.Unread` - kept by its literal end,
 a run word - a program's or a shell's, `source`'s or sed's script file - that file only where it
-reaches that path or that end), each by its own
+reaches that path or that end, and any such file where the shell expands the run word itself), each by its own
 shell's quoting - PowerShell by a reader of its own (`CommandAnalysis.PowerShellReader`), which
 follows pwsh's tokenizer and grammar and writes each statement on a line and each word whole and
 quoted for the shell reader, so the shell reads no syntax of its own into it: a command's words as

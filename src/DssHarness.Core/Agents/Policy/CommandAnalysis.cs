@@ -1740,12 +1740,12 @@ public static partial class CommandAnalysis
             return "a substitution";
         }
 
-        var classes = ClassesOf(word, quoted);
-
-        if (TildeVariable().Match(word) is { Success: true } tilde && classes[..tilde.Length].All(character => character == WordQuoting.Open))
+        if (VariableTilde(word, quoted) > 0)
         {
             return "a variable";
         }
+
+        var classes = ClassesOf(word, quoted);
 
         for (var at = 0; at < word.Length; at++)
         {
@@ -2259,6 +2259,18 @@ public static partial class CommandAnalysis
     /// </summary>
     [System.Text.RegularExpressions.GeneratedRegex(@"^~(?:[+-]?[0-9]+|[+-])(?=$|[/\\])")]
     private static partial System.Text.RegularExpressions.Regex TildeVariable();
+
+    /// <summary>
+    /// How long the tilde at <paramref name="word"/>'s start is that the shell takes from a variable's value
+    /// (<see cref="TildeVariable"/>), every character of it unquoted by <paramref name="quoted"/>; 0 where the word begins
+    /// with none: the one reading of where such a tilde ends, for <see cref="Expansion"/> and for whatever reads past it.
+    /// </summary>
+    /// <param name="word">The word, its quotes read as the shell reads them.</param>
+    /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
+    internal static int VariableTilde(string word, string? quoted)
+        => TildeVariable().Match(word) is { Success: true } tilde && ClassesOf(word, quoted)[..tilde.Length].All(character => character == WordQuoting.Open)
+            ? tilde.Length
+            : 0;
 
     /// <summary>
     /// The command line <c>env -S</c> (<c>--split-string</c>) takes, the pairs before it and the

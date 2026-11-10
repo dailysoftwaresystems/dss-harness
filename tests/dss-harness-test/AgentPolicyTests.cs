@@ -218,10 +218,24 @@ public sealed class AgentPolicyTests
                 Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
             }
 
-            // Where the shell stood before, and the directory stack, are places this does not know.
-            foreach (var command in new[] { "cat ~-/a.txt", "cat ~1/a.txt", "cat ~+1/a.txt", "cat ~-1/a.txt" })
+            // Where the shell stood before, and the directory stack, are places this does not know - at a word's start and
+            // in an assignment's value, where the shell expands them.
+            foreach (var command in new[] { "cat ~-/a.txt", "cat ~1/a.txt", "cat ~+1/a.txt", "cat ~-1/a.txt", "X=~1 cat a.txt", "export X=~-/a.txt" })
             {
                 Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+            }
+
+            // A tilde the shell does not expand - one a program reads out of its word, after an '@', an option's '=' or a
+            // short option, and one quoted away - is the text it spells: git's revision, a file of that name where the
+            // command stands.
+            foreach (var command in new[] { "git log @~1", "git show @~2", "git diff @~1", "git log -S~1", "cat '~1'", "cat \"~-/a.txt\"" })
+            {
+                Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+            }
+
+            foreach (var command in new[] { "git rebase -i @~3", "git reset --soft @~1", "git commit --fixup=@~1" })
+            {
+                Assert.True(ground.Policy(worktreeRules: false).Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(ground.Policy(worktreeRules: false).Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
             }
         }
     }

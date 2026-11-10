@@ -1826,8 +1826,8 @@ public sealed partial class AgentPolicy
                 // Each word, and the file each redirect names or the text it gives: a redirect is decided by its file, and a
                 // here-document's or here-string's text is none the shell expands braces in. A pattern is read where the
                 // shell expands it: a quoted star is a star - but where PowerShell, whose cmdlets expand their own, reads it.
-                foreach (var (word, braces, holds, pattern) in reading.Words.Select((word, at) => (word, true, !exempt.Contains(at), powerShell || CommandAnalysis.HasOpenPattern(word, reading.QuotedWord(at))))
-                    .Concat(reading.Redirects.Select(redirect => (redirect.Target, redirect.Operator != "<<<", true, true))))
+                foreach (var (word, quoted, braces, holds, pattern) in reading.Words.Select((word, at) => (word, (string?)reading.QuotedWord(at), true, !exempt.Contains(at), powerShell || CommandAnalysis.HasOpenPattern(word, reading.QuotedWord(at))))
+                    .Concat(reading.Redirects.Select(redirect => (redirect.Target, (string?)null, redirect.Operator != "<<<", true, true))))
                 {
                     // The sentence says the action it matched, in the one spelling the list holds, so a
                     // word named in either case is refused in the same words.
@@ -1839,19 +1839,20 @@ public sealed partial class AgentPolicy
                             $"'{action}' is a root action: no agent of this tool acts as root");
                     }
 
-                    if (Named(word, places, braces, dotNames, holds, pattern) is { } named)
+                    if (Named(word, quoted, places, braces, dotNames, holds, pattern) is { } named)
                     {
                         return named;
                     }
                 }
 
                 // A pathspec of a git command that reaches what git does not track is git's own pattern, quoted or not, its
-                // wildcards matching dot-names, read from the repository's root where its magic says so.
+                // wildcards matching dot-names, read from the repository's root where its magic says so: text git reads,
+                // whose tilde no shell expands.
                 foreach (var pathspec in CommandAnalysis.UntrackedPathspecs(reading.Words, environment))
                 {
                     var from = pathspec.Top ? GitRoots(places) : places;
 
-                    if (Named(pathspec.Path, from, braces: false, dotNames: true, holds: true, pattern: !pathspec.Literal) is { } named)
+                    if (Named(pathspec.Path, new string(WordQuoting.Literal, pathspec.Path.Length), from, braces: false, dotNames: true, holds: true, pattern: !pathspec.Literal) is { } named)
                     {
                         return named;
                     }
@@ -2063,7 +2064,8 @@ public sealed partial class AgentPolicy
 
         /// <summary>
         /// What follows the last expansion of the name of each file the string wrote content into that it named by what
-        /// the shell expands (<see cref="LiteralEnd"/>): the end every place that file may be shares.
+        /// the shell expands into a name this does not read (<see cref="Unread"/>, <see cref="LiteralEnd"/>): the end every
+        /// place that file may be shares.
         /// </summary>
         public List<string> UnreadEnds { get; } = [];
 
@@ -2086,7 +2088,8 @@ public sealed partial class AgentPolicy
         /// value it computes; and each file it writes content into - an output redirect's, tee's, a download's, sed's, a
         /// PowerShell content cmdlet's - in each of <paramref name="readings"/>, by every place <paramref name="wholes"/>
         /// says it may be, with the text a here-document or here-string gives cat or tee for it; or by the end its name
-        /// holds past the last expansion the shell makes of it, where it is named by one.
+        /// holds past the last expansion the shell makes of it, where it is named by one this does not read - a tilde of a
+        /// variable the string set to a value it computes among them (<see cref="Unread"/>).
         /// </summary>
         public void Record(AnalyzedCommand analyzed, IReadOnlyList<AnalyzedCommand> readings, int environment, IReadOnlyList<string> places, Func<string, IReadOnlyList<string>?> wholes)
         {
@@ -2139,7 +2142,7 @@ public sealed partial class AgentPolicy
 
                 foreach (var target in targets)
                 {
-                    if (CommandAnalysis.Expansion(target) is not null || wholes(target) is not { } spelled)
+                    if (Unread(target, quoted: null) || wholes(target) is not { } spelled)
                     {
                         UnreadEnds.Add(LiteralEnd(target));
                         continue;
@@ -2157,31 +2160,50 @@ public sealed partial class AgentPolicy
 
         /// <summary>
         /// Whether <paramref name="word"/> - spelled with <paramref name="quoted"/>, reaching <paramref name="wholes"/> -
-        /// may name a file the string wrote and named by what the shell expands, its name ending in
-        /// <paramref name="end"/> (<see cref="LiteralEnd"/>): a word the shell expands may name any file, and one that
-        /// reaches a place this cannot tell; else a word whose place ends in that end - its path, where the end holds a
-        /// separator, its name where not. An end that is empty is a name the shell gives whole, which no word this reads
-        /// is taken to be.
+        /// may name a file the string wrote that this cannot tell by its path: a word the shell expands into a name this
+        /// does not read (<see cref="Unread"/>) may name any file the string wrote, and one that reaches a place this cannot
+        /// tell; else a file named by what the shell expands where the word's place ends in that name's end
+        /// (<see cref="UnreadEnds"/>) - its path, where the end holds a separator, its name where not. An end that is empty
+        /// is a name the shell gives whole, which no word this reads is taken to be.
         /// </summary>
-        public static bool MayBeUnread(string word, string? quoted, IReadOnlyList<string>? wholes, string end)
+        public bool MayBeUnread(string word, string? quoted, IReadOnlyList<string>? wholes)
         {
-            if (wholes is null || CommandAnalysis.Expansion(word, quoted) is not null)
+            if (wholes is null || Unread(word, quoted))
             {
                 return true;
             }
 
-            return end.Length > 0 && wholes.Select(whole => whole.Replace('\\', '/'))
-                .Any(whole => (end.Contains('/', StringComparison.Ordinal) ? whole : whole[(whole.LastIndexOf('/') + 1)..]).EndsWith(end, StringComparison.OrdinalIgnoreCase));
+            return UnreadEnds.Any(end => end.Length > 0 && wholes.Select(whole => whole.Replace('\\', '/'))
+                .Any(whole => (end.Contains('/', StringComparison.Ordinal) ? whole : whole[(whole.LastIndexOf('/') + 1)..]).EndsWith(end, StringComparison.OrdinalIgnoreCase)));
         }
 
         /// <summary>
-        /// What follows the last expansion the shell makes of <paramref name="target"/> - a variable with its name, a
-        /// substitution, a pattern - its separators spelled '/': the end every file it may name shares. Past a <c>.</c>
-        /// or <c>..</c> segment, only what follows it, which the system walks to whole.
+        /// Whether the shell expands <paramref name="word"/>, spelled with <paramref name="quoted"/>, into a name this does
+        /// not read: by what it expands (<see cref="CommandAnalysis.Expansion"/>), or by a tilde at its start whose
+        /// variable the string set to a value it computes - <c>~</c> where it so set <c>HOME</c> - which the readings leave
+        /// as it is spelled (<see cref="UnreadTilde"/>).
         /// </summary>
-        private static string LiteralEnd(string target)
+        private bool Unread(string word, string? quoted) => CommandAnalysis.Expansion(word, quoted) is not null || UnreadTilde(word, quoted) > 0;
+
+        /// <summary>
+        /// How long the tilde at <paramref name="word"/>'s start is that the shell takes from a variable this does not
+        /// read - <c>~+</c>, <c>~-</c> and the stack's (<see cref="CommandAnalysis.VariableTilde"/>), and <c>~</c> where the
+        /// string set <c>HOME</c> to a value it computes - or 0 where none is.
+        /// </summary>
+        private int UnreadTilde(string word, string? quoted)
+            => CommandAnalysis.VariableTilde(word, quoted) is var variable and > 0 ? variable
+                : Unknown.Contains("HOME") && CommandAnalysis.TildeExpands(word, quoted) && (word == "~" || word.StartsWith("~/", StringComparison.Ordinal) || word.StartsWith(@"~\", StringComparison.Ordinal)) ? 1
+                : 0;
+
+        /// <summary>
+        /// What follows the last expansion the shell makes of <paramref name="target"/> - a variable with its name, a
+        /// substitution, a pattern, a tilde whose variable this does not read (<see cref="UnreadTilde"/>) - its separators
+        /// spelled '/': the end every file it may name shares. Past a <c>.</c> or <c>..</c> segment, only what follows it,
+        /// which the system walks to whole.
+        /// </summary>
+        private string LiteralEnd(string target)
         {
-            var last = target.LastIndexOfAny(['$', '%', ')', '}', '`', '*', '?', ']']);
+            var last = Math.Max(target.LastIndexOfAny(['$', '%', ')', '}', '`', '*', '?', ']']), UnreadTilde(target, quoted: null) - 1);
             var end = target[(last + 1)..];
 
             // A variable's name runs on past its dollar: a name's letters, digits and underscores, or one character.
@@ -2303,8 +2325,8 @@ public sealed partial class AgentPolicy
     /// the text a here-document or here-string gave it where one did: the program itself, or the script file a shell,
     /// <c>source</c>, PowerShell or sed reads (<see cref="CommandAnalysis.ScriptFilesOf"/>) - each where a program runs
     /// (<see cref="CommandAnalysis.RunsAt"/>) - by every place it may be (<paramref name="wholes"/>); or one that may be a
-    /// file the string named by what the shell expands (<see cref="StringState.MayBeUnread"/>), whose text this does not
-    /// know. Null where it runs none.
+    /// file the string wrote this cannot tell by its path (<see cref="StringState.MayBeUnread"/>) - named by what the shell
+    /// expands, or run by a word the shell expands - whose text this does not know. Null where it runs none.
     /// </summary>
     private static (string File, string? Text)? WrittenScripts(IReadOnlyList<AnalyzedCommand> readings, int environment, StringState state, Func<string, IReadOnlyList<string>?> wholes)
     {
@@ -2336,7 +2358,7 @@ public sealed partial class AgentPolicy
                         return (word, read ? state.Written[written] : null);
                     }
 
-                    if (state.UnreadEnds.Any(end => StringState.MayBeUnread(word, quoted, places, end)))
+                    if (state.MayBeUnread(word, quoted, places))
                     {
                         return (word, null);
                     }
@@ -3705,8 +3727,9 @@ public sealed partial class AgentPolicy
     /// path the word may name (<see cref="CommandAnalysis.PathsNamed"/>) - itself, a redirect's file or text among them,
     /// a value after an <c>=</c>, an <c>@</c> or a <c>&lt;</c>, a short option's glued value, a PowerShell parameter's
     /// after its <c>:</c>, each word of a script inside it, each word its braces spell where <paramref name="braces"/>
-    /// says the shell expands them, a file URL's path - a home expanded in each, and a pattern by every path it may
-    /// match (<paramref name="dotNames"/> saying whether it matches a dot-name). A directory that holds one is refused
+    /// says the shell expands them, a file URL's path - a home expanded in each, the shell's tildes of a variable only
+    /// where it expands them (<see cref="NamedPath.TildeExpands"/>), and a pattern by every path it may match
+    /// (<paramref name="dotNames"/> saying whether it matches a dot-name). A directory that holds one is refused
     /// where the word gives it whole and <paramref name="holds"/> says the command may read what it names, for a program
     /// handed a directory may walk it, the slot's files and all - an archiver, a copy, a search - but for what it holds
     /// through the agent's working directory, where it is that directory or one above it: every command over the tree
@@ -3714,6 +3737,10 @@ public sealed partial class AgentPolicy
     /// glued to a short option or a word of a script's text is refused only where it is a slot or a path in one.
     /// </summary>
     /// <param name="word">The word, or a redirect's file or text.</param>
+    /// <param name="quoted">
+    /// How each of the word's characters stands to the shell (<see cref="WordQuoting"/>), or null where its spelling was
+    /// not kept.
+    /// </param>
     /// <param name="places">Every directory the word may be read against.</param>
     /// <param name="braces">Whether the shell expands the word's braces.</param>
     /// <param name="dotNames">Whether the command's patterns match a dot-name (<see cref="PatternsMatchDotNames"/>).</param>
@@ -3724,9 +3751,9 @@ public sealed partial class AgentPolicy
     /// writes (<see cref="CommandAnalysis.WriteTargets"/>).
     /// </param>
     /// <param name="pattern">Whether the shell that reads the word expands its pattern: a quoted star is a star.</param>
-    private AgentPolicyAnswer.Denied? Named(string word, IReadOnlyList<string> places, bool braces, bool dotNames, bool holds, bool pattern)
+    private AgentPolicyAnswer.Denied? Named(string word, string? quoted, IReadOnlyList<string> places, bool braces, bool dotNames, bool holds, bool pattern)
     {
-        foreach (var (named, place) in CommandAnalysis.PathsNamed(word, braces)
+        foreach (var (named, place) in CommandAnalysis.PathsNamed(word, braces, quoted: quoted)
             .SelectMany(named => places.Distinct().Select(place => (named, place))))
         {
             IReadOnlyList<string> readings;
@@ -3736,7 +3763,7 @@ public sealed partial class AgentPolicy
 
             try
             {
-                readings = CommandSpelled(named.Path, place, globbed);
+                readings = CommandSpelled(named.Path, place, globbed, named.TildeExpands);
             }
             catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
             {
@@ -3908,9 +3935,15 @@ public sealed partial class AgentPolicy
     /// is read - is read as each name of a guarded place it could shorten as well
     /// (<see cref="WindowsNames.Lengthened"/>).
     /// </summary>
-    private IReadOnlyList<string> Spelled(string path, string directory)
+    /// <param name="path">The path, as a word of a command spells it.</param>
+    /// <param name="directory">Where it is read from.</param>
+    /// <param name="tildeExpands">
+    /// Whether the shell expands a tilde at the path's start (<see cref="NamedPath.TildeExpands"/>): false where a program
+    /// reads it out of its word or it is quoted, so its tilde of a variable is the text it spells.
+    /// </param>
+    private IReadOnlyList<string> Spelled(string path, string directory, bool tildeExpands = true)
     {
-        var text = HomeExpanded(path.Trim());
+        var text = HomeExpanded(path.Trim(), _platform.HomeDirectory, tildeExpands);
         IReadOnlyList<string> readings = OnWindows && DriveSpelled(text) is { } drive ? [drive, text] : [text];
 
         // A short name the system gave no long one - its path is not there yet - may be any guarded name it could shorten.
@@ -3930,9 +3963,9 @@ public sealed partial class AgentPolicy
     /// system walks it.
     /// </summary>
     /// <exception cref="NotSupportedException">The pattern spells more readings than <see cref="MaxDotReadings"/>, which this does not follow.</exception>
-    private IReadOnlyList<string> CommandSpelled(string path, string directory, bool pattern)
+    private IReadOnlyList<string> CommandSpelled(string path, string directory, bool pattern, bool tildeExpands = true)
     {
-        var spelled = Spelled(path, directory);
+        var spelled = Spelled(path, directory, tildeExpands);
 
         return pattern && spelled.Any(reading => reading.IndexOfAny(['*', '?', '[']) >= 0)
             ? [.. spelled.SelectMany(DotReadings).Distinct(StringComparer.OrdinalIgnoreCase)]
@@ -4099,7 +4132,10 @@ public sealed partial class AgentPolicy
     /// <c>$env:HOME</c>, <c>$USERPROFILE</c>, <c>${USERPROFILE}</c>, <c>$env:USERPROFILE</c> and <c>%USERPROFILE%</c> -
     /// and the shell's other tildes: <c>~+</c> where it stands, <c>~name</c> that user's home beside the user's own.
     /// </summary>
-    /// <exception cref="NotSupportedException">It begins with <c>~-</c>, where the shell stood before, which this does not know.</exception>
+    /// <exception cref="NotSupportedException">
+    /// It begins with <c>~-</c>, where the shell stood before, or with the directory stack's <c>~N</c>, <c>~+N</c> or
+    /// <c>~-N</c>, which this does not know.
+    /// </exception>
     private string HomeExpanded(string path) => HomeExpanded(path, _platform.HomeDirectory);
 
     /// <summary>
@@ -4111,11 +4147,17 @@ public sealed partial class AgentPolicy
     /// </summary>
     /// <param name="path">The path, as a word of a command spells it.</param>
     /// <param name="home">The user's home.</param>
+    /// <param name="tildeExpands">
+    /// Whether the shell expands a tilde at the path's start (<see cref="NamedPath.TildeExpands"/>): where it does not - a
+    /// value a program reads out of its word (<c>git log @~1</c>), a quoted word - its tilde of a variable, <c>~+</c>,
+    /// <c>~-</c> or the stack's, is the text it spells, read where the path is; a home is read as one still, as a program
+    /// that reads one itself reads it.
+    /// </param>
     /// <exception cref="NotSupportedException">
     /// It begins with <c>~-</c>, where the shell stood before, or with the directory stack's <c>~N</c>, <c>~+N</c> or
-    /// <c>~-N</c>, which this does not know.
+    /// <c>~-N</c>, which this does not know, and the shell expands it.
     /// </exception>
-    internal static string HomeExpanded(string path, string home)
+    internal static string HomeExpanded(string path, string home, bool tildeExpands = true)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(home);
@@ -4123,6 +4165,11 @@ public sealed partial class AgentPolicy
         if (path == "~" || path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith(@"~\", StringComparison.Ordinal))
         {
             return home + path[1..];
+        }
+
+        if (!tildeExpands && CommandAnalysis.VariableTilde(path, quoted: null) > 0)
+        {
+            return path;
         }
 
         // bash's ~+ is where the shell stands, the path after it read there - and every value the string gives PWD, read

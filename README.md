@@ -810,7 +810,9 @@ alike, and a PowerShell bareword's wildcards open as pwsh on Linux and macOS exp
 cmdlet's quoted ones too, which the cmdlet expands itself; a variable the string sets
 (`p=../..`) read in each later word with each value it gives it, up to 16
 readings, `$PWD` and a leading `~+` as each place the command stands in and each value the string
-gives `PWD`, a `~-` and the directory stack's `~N`, `~+N` and `~-N` as places it does not know - and
+gives `PWD`, a `~-` and the directory stack's `~N`, `~+N` and `~-N` as places it does not know where
+the shell expands them - a word's start, an assignment's value - and as the text they spell where it
+does not (`git log @~1`, `cat '~1'`) - and
 each, beside `~+`, a variable wherever a word the shell expands is read, the string able to give it
 any word - and a `~` as each `HOME` the string, the
 command or a command that runs it sets, while a variable it does not set and a
@@ -856,7 +858,9 @@ a configuration file `ssh -F` names (but none, `/dev/null`), whose settings may 
 long option that names none of env's or more than one, a script file the string writes and runs
 whose text no here-document gave - a file the string writes known by the path it reaches from each
 place its command stands, a run word that file only where it reaches that path or where a target the
-shell expands may be it, its literal end the word's (`make > "$LOG"; bash scripts/report.sh` runs) -
+shell expands may be it, its literal end the word's (`make > "$LOG"; bash scripts/report.sh` runs),
+and any such file where the shell expands the run word itself - a tilde whose variable the string set
+to a value it computes an expansion as a target and as a run word (`HOME=$(pwd)`, then `~/x.sh`) -
 a terminal session's
 program given what to run or type (`tmux`, `screen`, `zellij`, `byobu`), and `crontab`, `launchctl`
 or `systemctl` installing or starting a job, each running what it is given apart from the agent;
