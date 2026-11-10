@@ -4473,7 +4473,6 @@ public sealed class MutationLegRunnerTests
         }
     }
 
-    /// <summary>Runs the fixture's test binary as it would run: a case red for each mutation its source holds, and its diagnostic said with one.</summary>
     /// <summary>Each verdict a sweep hands it, in the order handed, and what the leg's line is to say of those not kept.</summary>
     private sealed class Kept : IArmRecordSink
     {
@@ -4499,6 +4498,7 @@ public sealed class MutationLegRunnerTests
         public void Verified(IReadOnlyDictionary<string, string> keys, RecordedRun by) => Verifications.Enqueue((keys, by));
     }
 
+    /// <summary>Runs the fixture's test binary as it would run: a case red for each mutation its source holds, and its diagnostic said with one.</summary>
     private sealed class Tests : IArmTestRunner
     {
         /// <summary>How long every run takes.</summary>

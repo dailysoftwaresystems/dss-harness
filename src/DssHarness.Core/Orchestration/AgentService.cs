@@ -3974,8 +3974,6 @@ public sealed class AgentService(
             ?? OrchestrationRules.NameProblem(agent)
             ?? OrchestrationRules.AgentNameProblem(orchestrator, agent);
 
-    /// <summary>What is wrong with paths given on the command line, asked of each as given, before anything tidies it.</summary>
-
     /// <summary>
     /// Whether <paramref name="exception"/> is one a step after a first write can meet and must answer, rather than let
     /// escape: the file system's, git's and the tool's own refusals, a record that does not read, and a configuration that

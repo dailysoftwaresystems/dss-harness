@@ -219,7 +219,6 @@ public sealed class ConfinedPathsTests : IDisposable
         Assert.False(paths.IsRoot(_outside));
     }
 
-    /// <summary>A file system that cannot follow the links of three paths: one a cycle, one it may not search, one too long.</summary>
     /// <summary>
     /// The place an open file stands at is held to the roots by each root's name as the system names one opened - a drive
     /// substituted for a root's directory among such names - and read back to the root's own spelling, a write only to a
@@ -252,6 +251,7 @@ public sealed class ConfinedPathsTests : IDisposable
             => Path.TrimEndingDirectorySeparator(path) == directory ? named : base.FinalPathOfDirectory(path);
     }
 
+    /// <summary>A file system that cannot follow the links of three paths: one a cycle, one it may not search, one too long.</summary>
     private sealed class Unfollowed(IFileSystem inner) : PassThroughFileSystem(inner)
     {
         public override string ResolveLinks(string path)

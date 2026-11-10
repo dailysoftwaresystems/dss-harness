@@ -1535,10 +1535,6 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
-    /// A program left waiting in a directory of the test's choosing, ended when it is disposed, however the test
-    /// ends: one left running would hold the test's directory after it.
-    /// </summary>
-    /// <summary>
     /// A file whose flush to the disk fails while <paramref name="fails"/> says so, as a full disk's does, and does nothing
     /// where <paramref name="flushes"/> says not, so that only what the write itself put in the file is there.
     /// </summary>
@@ -1561,6 +1557,10 @@ public sealed class PhysicalFileSystemTests
         }
     }
 
+    /// <summary>
+    /// A program left waiting in a directory of the test's choosing, ended when it is disposed, however the test
+    /// ends: one left running would hold the test's directory after it.
+    /// </summary>
     private sealed class Waiting : IDisposable
     {
         private readonly Process _process;

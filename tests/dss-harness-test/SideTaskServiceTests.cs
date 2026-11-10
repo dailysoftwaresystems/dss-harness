@@ -2320,10 +2320,6 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
-    /// A process table whose reading takes the person's interrupts - pressed as it is read - and waits, as a slow machine
-    /// does, until it is stopped or a while has passed.
-    /// </summary>
-    /// <summary>
     /// The machine's timers and the time that passes, its time of day held where it began: what a run computes from the
     /// time of day - how long a limit has left - is the same however long the machine takes to get there.
     /// </summary>
@@ -2334,6 +2330,10 @@ public sealed class SideTaskServiceTests
         public override DateTimeOffset GetUtcNow() => _at;
     }
 
+    /// <summary>
+    /// A process table whose reading takes the person's interrupts - pressed as it is read - and waits, as a slow machine
+    /// does, until it is stopped or a while has passed.
+    /// </summary>
     private sealed class PressingTable(SideTaskInterrupts interrupts, int presses) : IProcessTable
     {
         public bool Stopped { get; private set; }

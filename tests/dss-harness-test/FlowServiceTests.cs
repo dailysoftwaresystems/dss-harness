@@ -26,7 +26,6 @@ public sealed class FlowServiceTests
 {
     private const string Workflow = "flow";
 
-    /// <summary>Every bound a test of a session waits for: a session that hangs fails the test rather than the run's minutes.</summary>
     /// <summary>
     /// How long a test here waits for the engine - a step started, an answer taken, a session ended. Two roles in one
     /// bound: it must outlast the machine under the whole suite's load - the start path spawns git a dozen times and

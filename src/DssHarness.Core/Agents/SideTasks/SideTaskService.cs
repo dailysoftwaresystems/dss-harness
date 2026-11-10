@@ -670,7 +670,6 @@ public sealed class SideTaskService(
             .FirstOrDefault(other => new FlowRunOwner(_store, _identity, _clock).Live(other) is not null)
             ?.Name;
 
-    /// <summary>Says what a claim said of a dead owner's record reclaimed, where it said anything.</summary>
     /// <summary>
     /// What a side-task whose graph could not be opened says of it, once: that it runs without one, and why. Its graph's
     /// record says the same, as a prompt line that names why no pack is given; where even that cannot be written, the
@@ -694,6 +693,7 @@ public sealed class SideTaskService(
         return $"side-task '{layout.Name}' runs without its codebase graph, which could not be opened: {why}";
     }
 
+    /// <summary>Says what a claim said of a dead owner's record reclaimed, where it said anything.</summary>
     private void Said(string? reclaimed)
     {
         if (reclaimed is { Length: > 0 })

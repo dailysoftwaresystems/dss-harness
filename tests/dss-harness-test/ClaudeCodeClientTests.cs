@@ -4082,7 +4082,6 @@ public sealed class ClaudeCodeClientTests : IDisposable
         /// <summary>The tool's own environment, as the client is told it and the child inherits it.</summary>
         public Dictionary<string, string> Own { get; }
 
-        /// <summary>The clock the client runs on: the machine's, unless a test gives its bounds others.</summary>
         /// <summary>
         /// The clock the client is given: the bound a launch is given to end in by itself is never reached, so a launch the
         /// client should end at once and does not holds its test until the test's own bound, which fails it.

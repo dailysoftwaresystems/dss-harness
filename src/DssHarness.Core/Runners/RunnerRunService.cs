@@ -1439,7 +1439,6 @@ public sealed class RunnerRunService(
         return phase with { Env = environment };
     }
 
-    /// <summary>The steps a runner declares, and the predefined actions performed before they ran.</summary>
     /// <summary>
     /// The phase's result, with any output it declared and did not produce named on it.
     /// </summary>
@@ -1696,6 +1695,7 @@ public sealed class RunnerRunService(
     /// </remarks>
     private sealed record ActionScratch(string Root, string Build, string Artifacts);
 
+    /// <summary>The steps a runner declares, and the predefined actions performed before they ran.</summary>
     private sealed record RunnerSteps(
         IReadOnlyList<RunnerPhase> Phases,
         IReadOnlyList<string> PerformedActions,

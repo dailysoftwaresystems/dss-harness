@@ -1608,12 +1608,6 @@ public static partial class CommandAnalysis
         => new($"'{string.Join(' ', words)}' is a script nested past {Depth} levels of going into, which this does not read");
 
     /// <summary>
-    /// What expansion names the word, where the shell would make one before it runs it: a
-    /// substitution (<c>$(...)</c>, a backtick, kept as <c>$(...)</c>, <c>&lt;(...)</c>), a
-    /// variable (<c>$X</c>, cmd's <c>%X%</c>), a pattern (<c>*</c>, <c>?</c>, <c>[</c>) or a brace
-    /// (<c>{a,b}</c>, <c>{a..b}</c>); null where it names none.
-    /// </summary>
-    /// <summary>
     /// What the shell expands in <paramref name="word"/>, as a refusal names it - a substitution, a variable, a
     /// pattern or a brace - or <see langword="null"/> where it expands nothing: each character asked where it stands
     /// to the shell by <paramref name="quoted"/> (<see cref="WordQuoting"/>), so a quoted character is never read as
