@@ -29,6 +29,12 @@ public sealed class ImplementationFlowTests
     /// </summary>
     private static readonly TimeSpan Bound = TimeSpan.FromMinutes(20);
 
+    /// <summary>How often a wait of this class looks again at what it waits for, within <see cref="Bound"/>.</summary>
+    private static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>How long one answer is given to be taken before it is given again, within <see cref="Bound"/>.</summary>
+    private static readonly TimeSpan AnswerSlice = TimeSpan.FromSeconds(10);
+
     /// <summary>The engine's own looks, made quick.</summary>
     private static readonly FlowTimings Quick = new(TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30));
 
@@ -240,15 +246,16 @@ public sealed class ImplementationFlowTests
     /// </summary>
     private static async Task AnswerTakenAsync(Kit kit, string question, string answer, string? text = null)
     {
-        for (var tries = 0; tries < 10; tries++)
+        // Each answer is given its slice of the class's bound to be taken, and the bound is spent in slices.
+        for (var tries = 0; tries < Bound / AnswerSlice; tries++)
         {
             _ = await AnswerOneAsync(kit, question, answer, text);
 
             var taken = false;
 
-            for (var waited = 0; waited < 100 && !(taken = (kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())?.Open ?? []).All(one => one.Id != question)); waited++)
+            for (var waited = 0; waited < AnswerSlice / Poll && !(taken = (kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())?.Open ?? []).All(one => one.Id != question)); waited++)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(100), Token);
+                await Task.Delay(Poll, Token);
             }
 
             if (taken)
@@ -257,7 +264,7 @@ public sealed class ImplementationFlowTests
             }
         }
 
-        Assert.Fail($"the answer of '{question}' was never taken: {Shown(kit)}");
+        Assert.Fail($"the answer of '{question}' was never taken within {Bound}: {Shown(kit)}");
     }
 
     /// <summary>The run's questions, as the store holds them now.</summary>
@@ -1356,7 +1363,7 @@ public sealed class ImplementationFlowTests
             var refused = await Task.WhenAny(one, two).WaitAsync(Bound, Token);
             var running = refused == one ? two : one;
 
-            Assert.Equal(13, (await refused).ExitCode);
+            Assert.Equal(HarnessExit.Refused, (await refused).ExitCode);
             Assert.Contains("of this repository is unfinished", (await refused).Message, StringComparison.Ordinal);
             Assert.Equal(["r1"], [.. Directory.GetDirectories(Path.Combine(together.Path, ".orchestrators")).Select(Path.GetFileName)]);
 
@@ -1383,7 +1390,7 @@ public sealed class ImplementationFlowTests
 
             var taken = await kit.Service.RunAsync(kit.Tree.Path, WorkflowTemplates.ShippedWorkflowName, run: "r1", ["request=Ship it.", "preapproved=yes"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
-            Assert.Equal(13, taken.ExitCode);
+            Assert.Equal(HarnessExit.Refused, taken.ExitCode);
             Assert.Contains("run 'r1' exists", taken.Message, StringComparison.Ordinal);
             Assert.Contains("Nothing was changed", taken.Message, StringComparison.Ordinal);
 
@@ -1396,12 +1403,12 @@ public sealed class ImplementationFlowTests
 
             var refusedResume = await ResumeAsync(kit);
 
-            Assert.Equal(13, refusedResume.ExitCode);
+            Assert.Equal(HarnessExit.Refused, refusedResume.ExitCode);
             Assert.Contains("run 'r2' of this repository is unfinished (running; owned by a live engine)", refusedResume.Message, StringComparison.Ordinal);
 
             var refusedAnswer = await AnswerAsync(kit, "approve");
 
-            Assert.Equal(13, refusedAnswer.ExitCode);
+            Assert.Equal(HarnessExit.Refused, refusedAnswer.ExitCode);
             Assert.Contains("run 'r2' of this repository is unfinished", refusedAnswer.Message, StringComparison.Ordinal);
             Assert.Equal("open", Questions(kit).Of(approval.Id)!.State);
 
@@ -1416,7 +1423,7 @@ public sealed class ImplementationFlowTests
 
             var namedAgain = await AnswerOneAsync(kit, approval.Id, "approve");
 
-            Assert.Equal(13, namedAgain.ExitCode);
+            Assert.Equal(HarnessExit.Refused, namedAgain.ExitCode);
             Assert.Equal($"question '{approval.Id}' of run 'r1' is answered", namedAgain.Message);
         }
     }
@@ -1441,7 +1448,7 @@ public sealed class ImplementationFlowTests
 
             var failed = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
-            Assert.NotEqual(HarnessExit.Success, failed.ExitCode);
+            Assert.Equal(HarnessExit.CommandFailed, failed.ExitCode);
             var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
             var fold = flow.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
 
@@ -1474,7 +1481,7 @@ public sealed class ImplementationFlowTests
 
             var ended = await AnswerOneAsync(kit, failure.Id, "abort");
 
-            Assert.NotEqual(HarnessExit.Success, ended.ExitCode);
+            Assert.Equal(HarnessExit.Cancelled, ended.ExitCode);
             var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
             var fold = flow.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
 
@@ -1482,7 +1489,7 @@ public sealed class ImplementationFlowTests
 
             var resumed = await ResumeAsync(kit);
 
-            Assert.NotEqual(HarnessExit.Success, resumed.ExitCode);
+            Assert.Equal(HarnessExit.Refused, resumed.ExitCode);
             flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
             fold = flow.Steps.Single(step => step.Instance == "rounds#1.items[0].fold");
 
@@ -5129,12 +5136,12 @@ public sealed class ImplementationFlowTests
     {
         // The engine's own walk over clients a test scripts: every step's agent answered by its standard output, and
         // the implementer's launches by what the session under test scripts.
-        (Kit Kit, WalkingClient Claude, WalkingClient Glm) WalkingAsync(TempDirectory temp, Func<AgentRun, AgentRunResult> implement, string? keys = null, Func<string[], string[]>? edit = null)
+        async Task<(Kit Kit, WalkingClient Claude, WalkingClient Glm)> WalkingAsync(TempDirectory temp, Func<AgentRun, AgentRunResult> implement, string? keys = null, Func<string[], string[]>? edit = null)
         {
             WalkingClient? claude = null;
             WalkingClient? glm = null;
 
-            var kit = PrepareAsync(
+            var kit = await PrepareAsync(
                 temp,
                 keys: keys,
                 walking: harness =>
@@ -5158,11 +5165,11 @@ public sealed class ImplementationFlowTests
                     glm = new WalkingClient("glm", Answer);
 
                     return new AgentRunner([claude, glm], harness.FileSystem, harness.Platform, TimeProvider.System);
-                }).Result;
+                });
 
             if (edit is not null)
             {
-                EditWorkflowAsync(kit, edit).Wait(Token);
+                await EditWorkflowAsync(kit, edit);
             }
 
             return (kit, claude!, glm!);
@@ -5174,7 +5181,7 @@ public sealed class ImplementationFlowTests
         // A request the step's model declines: the step goes on with its fallback, and its record names both models.
         using (var declined = new TempDirectory())
         {
-            var (kit, claude, glm) = WalkingAsync(
+            var (kit, claude, glm) = await WalkingAsync(
                 declined,
                 run => run.Model == "claude-sonnet-5-5"
                     ? AgentEndings.Declined("output tokens", "the request asks for more than the model serves", new Masking())
@@ -5204,7 +5211,7 @@ public sealed class ImplementationFlowTests
         // Every model declining: the step fails, naming each, and the run asks the person.
         using (var refusing = new TempDirectory())
         {
-            var (kit, claude, glm) = WalkingAsync(
+            var (kit, claude, glm) = await WalkingAsync(
                 refusing,
                 run => AgentEndings.Declined("output tokens", "the request asks for more than the model serves", new Masking()),
                 edit: lines => [.. lines.Select(line => line.Trim() == "backoffSeconds: 30" ? line.Replace("backoffSeconds: 30", "backoffSeconds: 1") : line)]);
@@ -5239,7 +5246,7 @@ public sealed class ImplementationFlowTests
         // the record - and remembered, so the next step on that account starts on its fallback.
         using (var limited = new TempDirectory())
         {
-            var (kit, claude, glm) = WalkingAsync(
+            var (kit, claude, glm) = await WalkingAsync(
                 limited,
                 run => run.Model == "claude-sonnet-5-5"
                     ? AgentEndings.AtLimit("the provider", new AgentAccountLimit(BalanceSpent: true, Key: "ANTHROPIC_API_KEY"), "the balance is spent", new Masking())
@@ -5258,7 +5265,7 @@ public sealed class ImplementationFlowTests
         // A message written by a model nobody asked for: the step fails, naming both.
         using (var ghost = new TempDirectory())
         {
-            var (kit, claude, glm) = WalkingAsync(
+            var (kit, claude, glm) = await WalkingAsync(
                 ghost,
                 run => AgentEndings.WrongModel(run.Model!, "claude-fable-5-1", "its turn 1", new Masking()),
                 edit: lines => [.. lines.Select(line => line.Trim() == "backoffSeconds: 30" ? line.Replace("backoffSeconds: 30", "backoffSeconds: 1") : line)]);
@@ -5277,7 +5284,7 @@ public sealed class ImplementationFlowTests
         // A step that names a model outright: its provider, key and client are found from it, and it serves the step.
         using (var named = new TempDirectory())
         {
-            var (kit, claude, glm) = WalkingAsync(
+            var (kit, claude, glm) = await WalkingAsync(
                 named,
                 run => Completed(Implement()),
                 keys: "ZAI_API_KEY=sk-test-two\n",
@@ -5301,7 +5308,7 @@ public sealed class ImplementationFlowTests
         // provider and the variable; validate-workflow reports the same key and passes.
         using (var keyless = new TempDirectory())
         {
-            var (kit, claude, glm) = WalkingAsync(
+            var (kit, claude, glm) = await WalkingAsync(
                 keyless,
                 run => Completed(Implement()),
                 keys: "ANTHROPIC_API_KEY=sk-test-one\n",
@@ -5313,7 +5320,7 @@ public sealed class ImplementationFlowTests
 
             var refused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
-            Assert.NotEqual(HarnessExit.Success, refused.ExitCode);
+            Assert.Equal(FlowExit.Paused, refused.ExitCode);
 
             var failed = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Instance == "rounds#1.items[0].implement");
 
@@ -5612,15 +5619,15 @@ public sealed class ImplementationFlowTests
         }
     }
 
-    /// <summary>Waits, a little at a time, for <paramref name="done"/>, and fails the test when it never comes.</summary>
+    /// <summary>Waits, a little at a time, for <paramref name="done"/>, and fails the test when it does not come within <see cref="Bound"/>.</summary>
     private static async Task WhenAsync(Func<bool> done, Func<string>? said = null)
     {
-        for (var waited = 0; waited < 3000 && !done(); waited++)
+        for (var waited = 0; waited < Bound / Poll && !done(); waited++)
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(100), Token);
+            await Task.Delay(Poll, Token);
         }
 
-        Assert.True(done(), $"{said?.Invoke() ?? "what was waited for did not happen"} within five minutes");
+        Assert.True(done(), $"{said?.Invoke() ?? "what was waited for did not happen"} within {Bound}");
     }
 
     /// <summary>The scripted agents: every request kept, answering by the definition each step works as.</summary>
