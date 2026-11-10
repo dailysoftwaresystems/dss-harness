@@ -1664,6 +1664,10 @@ public static partial class CommandAnalysis
     /// short of the word - reads as wholly open: refused as an expansion rather than quietly passed. A cmd percent is
     /// live inside double quotes as out of them, for the shell never expands one and cmd reads the word past every
     /// quote the shell read; what cmd reads again of a batch argument is <see cref="Processes.BatchFiles"/>' own rule.
+    /// A tilde the shell takes from a variable's value at a word's start - <c>~+</c> PWD's, <c>~-</c> OLDPWD's, and
+    /// <c>~N</c>, <c>~+N</c> and <c>~-N</c> the directory stack's, every character of it unquoted and nothing but a
+    /// separator after it - is a variable, as <c>$PWD</c> is: the string may set the variable to any word at all. A home
+    /// (<c>~</c>, <c>~name</c>) is none, read where a path is.
     /// </summary>
     /// <param name="word">The word, its quotes read as the shell reads them.</param>
     /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
@@ -1677,6 +1681,11 @@ public static partial class CommandAnalysis
         }
 
         var classes = ClassesOf(word, quoted);
+
+        if (TildeVariable().Match(word) is { Success: true } tilde && classes[..tilde.Length].All(character => character == WordQuoting.Open))
+        {
+            return "a variable";
+        }
 
         for (var at = 0; at < word.Length; at++)
         {
@@ -2183,6 +2192,13 @@ public static partial class CommandAnalysis
     /// </summary>
     [System.Text.RegularExpressions.GeneratedRegex(@"![^!\r\n]+!")]
     private static partial System.Text.RegularExpressions.Regex DelayedVariable();
+
+    /// <summary>
+    /// A tilde the shell takes from a variable at a word's start, before a separator or the word's end: <c>~+</c> and
+    /// <c>~-</c>, and the directory stack's <c>~N</c>, <c>~+N</c> and <c>~-N</c>.
+    /// </summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^~(?:[+-]?[0-9]+|[+-])(?=$|[/\\])")]
+    private static partial System.Text.RegularExpressions.Regex TildeVariable();
 
     /// <summary>
     /// The command line <c>env -S</c> (<c>--split-string</c>) takes, the pairs before it and the

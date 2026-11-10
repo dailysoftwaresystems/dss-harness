@@ -135,6 +135,97 @@ public sealed class AgentPolicyTests
         Assert.Contains("is a credential slot of this tool", written.Reason, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A leading tilde the shell expands from a variable - <c>~+</c> PWD's, <c>~-</c> OLDPWD's, <c>~N</c>, <c>~+N</c> and
+    /// <c>~-N</c> the directory stack's - is a word the shell expands, whatever the string set the variable to: as an
+    /// option of a fetch, as git's verb, and as the program itself. Where a path is read, <c>~+</c> is where the shell
+    /// stands and every value the string gives PWD, as <c>$PWD</c> is; <c>~-</c> and the stack's are places this does not
+    /// know.
+    /// </summary>
+    [Fact]
+    public void ATildeTheShellExpandsFromAVariable_IsAnExpansion_AndAPathOfItIsReadAtTheVariablesValue()
+    {
+        foreach (var platform in new[] { PlatformId.Linux, PlatformId.Windows })
+        {
+            using var ground = Ground(platform);
+            var policy = ground.Policy();
+
+            foreach (var (command, whole, rule) in new[]
+            {
+                ("PWD=-u; git fetch origin ~+", "git fetch origin ~+", "Run(git fetch --update-head-ok)"),
+                ("PWD=push; git ~+ --force origin HEAD:main", "git ~+ --force origin HEAD:main", "Run(git commit *)"),
+            })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(rule, AgentPolicySource.Builtin, $"'{whole}' may be what {rule} denies: a word the rule reads is one the shell expands, which this does not read"),
+                    policy.Run(command));
+            }
+
+            // Where the shell stood before, and a directory of the stack pushd keeps, are no place this knows: the command is
+            // not decided, whatever the string set OLDPWD to.
+            foreach (var (command, tilde, what) in new[]
+            {
+                ("OLDPWD=-u; git fetch origin ~-", "~-", "where the shell stood before this command"),
+                ("git fetch origin ~1", "~1", "a directory of the stack pushd keeps"),
+                ("git fetch origin ~-2", "~-2", "a directory of the stack pushd keeps"),
+                ("git ~+0 --force origin HEAD:main", "~+0", "a directory of the stack pushd keeps"),
+            })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"this tool could not decide '{command}' ('{tilde}' names {what}, which this does not know): it denies what it cannot decide"),
+                    policy.Run(command));
+            }
+
+            // Worktree rules off, git's verb from a tilde may still be the credential's printing; and a program a tilde gives
+            // is one no rule reads.
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied("Run(git credential fill)", AgentPolicySource.Builtin, "'git ~+ fill' may be what Run(git credential fill) denies: a word the rule reads is one the shell expands, which this does not read"),
+                ground.Policy(worktreeRules: false).Run("PWD=credential; git ~+ fill"));
+            foreach (var (command, tilde) in new[] { ("PWD=gh; ~+ auth token", "~+"), ("~+2 auth token", "~+2") })
+            {
+                Assert.Equal(
+                    new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"this tool could not decide '{command}' ('{tilde}' names the program it runs by a variable, which this does not read): it denies what it cannot decide"),
+                    ground.Policy(worktreeRules: false).Run(command));
+            }
+
+            // A tilde quoted away, and one inside a word or before more of a name, is no variable the shell expands there.
+            foreach (var command in new[] { "git fetch origin '~+'", "git fetch origin x~+", "git fetch origin ~+x" })
+            {
+                Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+            }
+
+            // A path of ~+ is read where the shell stands and at each value the string gives PWD, as $PWD's is: a write there
+            // into git's own files is refused.
+            var git = ground.Worktree.Replace('\\', '/') + "/.git";
+
+            foreach (var (command, written) in new[]
+            {
+                ($"PWD='{git}'; echo x > ~+/config", "'echo x >~+/config' writes"),
+                ($"PWD='{git}'; echo x > $PWD/config", "'echo x >$PWD/config' writes"),
+                ($"export PWD='{git}'; cp a.txt ~+/config", "'cp a.txt ~+/config' writes"),
+            })
+            {
+                var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+
+                Assert.Equal(AgentPolicy.GitsOwnRule, denied.Rule);
+                Assert.StartsWith($"{written} '{git}/config'", denied.Reason, StringComparison.Ordinal);
+            }
+
+            var inside = ground.Worktree.Replace('\\', '/');
+
+            foreach (var command in new[] { "cat ~+/a.txt", "cd ~+/src && cat a.txt", "ls ~+", $"PWD='{inside}/src'; cat ~+/a.txt", $"PWD='{inside}'; cat $PWD/a.txt" })
+            {
+                Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(command));
+            }
+
+            // Where the shell stood before, and the directory stack, are places this does not know.
+            foreach (var command in new[] { "cat ~-/a.txt", "cat ~1/a.txt", "cat ~+1/a.txt", "cat ~-1/a.txt" })
+            {
+                Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+            }
+        }
+    }
+
     [Fact]
     public void NoCommandNamesASlotOrAClaudeCodeDirectory()
     {
@@ -2837,23 +2928,43 @@ public sealed class AgentPolicyTests
                 Assert.Equal((rule, $"'{command.Replace("\"", string.Empty, StringComparison.Ordinal)}' may be what {rule} denies: a word the rule reads is one the shell expands, which this does not read"), (expanded.Rule, expanded.Reason));
             }
 
-            // An expansion the shell splits into words of their own - one unquoted inside a word that begins otherwise, every
-            // positional parameter quoted or not, a cmd percent, which cmd reads before a quote - may give the option as a
-            // word of its own: said so, with what quoting it does.
+            // An expansion the shell splits into words of their own, unquoted inside a word that begins otherwise, may give the
+            // option as a word of its own: said so, with what quoting it does.
             foreach (var (command, whole) in new[]
             {
                 ("git fetch --depth=$n origin", "git fetch --depth=$n origin"),
                 ("git fetch origin refs/heads/$b:refs/remotes/o/$b", "git fetch origin refs/heads/$b:refs/remotes/o/$b"),
                 ("for b in a c; do git fetch origin refs/heads/$b:refs/remotes/origin/$b; done", "git fetch origin refs/heads/$b:refs/remotes/origin/$b"),
                 ("git fetch origin refs/heads/$(cat b):refs/remotes/o/x", "git fetch origin refs/heads/$(cat b):refs/remotes/o/x"),
-                ("git fetch --depth=\"$@\" origin", "git fetch --depth=$@ origin"),
-                ("git fetch --depth=\"%n%\" origin", "git fetch --depth=%n% origin"),
             })
             {
                 var split = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
 
                 Assert.Equal(
                     ("Run(git fetch --update-head-ok)", $"'{whole}' may be what Run(git fetch --update-head-ok) denies: a word the rule reads is one the shell expands, which this does not read; an unquoted expansion may be split into a word of its own - quoted (\"$x\"), inside a word that begins otherwise, it is let through"),
+                    (split.Rule, split.Reason));
+            }
+
+            // One the shell splits however it is quoted - every positional parameter, by any spelling of it, bash's and zsh's,
+            // an array's every element, a zsh flag group, and cmd's percent, which cmd reads before a quote - may give it too,
+            // and quoting it lets nothing through, so the refusal does not say it does.
+            foreach (var (command, whole) in new[]
+            {
+                ("git fetch --depth=\"$@\" origin", "git fetch --depth=$@ origin"),
+                ("git fetch --depth=\"%n%\" origin", "git fetch --depth=%n% origin"),
+                ("set -- rigin -u; git fetch \"o${@}\"", "git fetch o${@}"),
+                ("git fetch \"o${@:1}\"", "git fetch o${@:1}"),
+                ("git fetch \"o${@/x/y}\"", "git fetch o${@/x/y}"),
+                ("git fetch \"o${!a@}\"", "git fetch o${!a@}"),
+                ("git fetch \"o${a[@]}\"", "git fetch o${a[@]}"),
+                ("git fetch \"o$a[@]\"", "git fetch o$a[@]"),
+                ("git fetch \"o${(f)a}\"", "git fetch o${(f)a}"),
+            })
+            {
+                var split = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
+
+                Assert.Equal(
+                    ("Run(git fetch --update-head-ok)", $"'{whole}' may be what Run(git fetch --update-head-ok) denies: a word the rule reads is one the shell expands, which this does not read"),
                     (split.Rule, split.Reason));
             }
 

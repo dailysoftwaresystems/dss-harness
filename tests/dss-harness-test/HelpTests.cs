@@ -826,7 +826,7 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "a cmdlet's quoted ones too, which the cmdlet expands itself; a variable the string sets (p=../..) read in each later word with each "
-                + $"value it gives it, up to {CommandAnalysis.MaxReadings} readings, $PWD as each place the command stands in, and a ~ as each HOME "
+                + $"value it gives it, up to {CommandAnalysis.MaxReadings} readings, $PWD and a leading ~+ as each place the command stands in and each value the string gives PWD, a ~- and the directory stack's ~N, ~+N and ~-N as places it does not know - and each, beside ~+, a variable wherever a word the shell expands is read, the string able to give it any word - and a ~ as each HOME "
                 + "the string, the command or a command that runs it sets, while a variable it does not set and a substitution are read as the text "
                 + "they spell, for their value is the agent's environment's or a program's, which no word of the string gives;",
             prose,

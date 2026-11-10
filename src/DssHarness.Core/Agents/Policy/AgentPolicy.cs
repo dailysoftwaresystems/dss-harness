@@ -2070,9 +2070,15 @@ public sealed partial class AgentPolicy
         /// <summary>Whether a command of the string moved, so a <c>cd -</c> goes back to a place already reached.</summary>
         public bool Moved { get; set; }
 
-        /// <summary>The values <paramref name="name"/> may hold: the string's own, or for <c>PWD</c> every place the command may stand in; null where none is known.</summary>
+        /// <summary>
+        /// The values <paramref name="name"/> may hold: the string's own; for <c>PWD</c> every place the command may stand in
+        /// and every value the string gave it - a cd after the assignment sets it to the place, which is among them - and
+        /// none where it gave it one it computes; null where none is known.
+        /// </summary>
         public IReadOnlyList<string>? ValuesOf(string name, IReadOnlyList<string> places)
-            => name == "PWD" ? places : Values.TryGetValue(name, out var values) ? values : null;
+            => name == "PWD"
+                ? Unknown.Contains(name) ? null : [.. places.Concat(Values.TryGetValue(name, out var own) ? own : []).Distinct(StringComparer.Ordinal)]
+                : Values.TryGetValue(name, out var values) ? values : null;
 
         /// <summary>
         /// What <paramref name="analyzed"/> leaves for the commands after it: each variable it sets - assignments alone,
@@ -3049,13 +3055,15 @@ public sealed partial class AgentPolicy
             }
 
             var begun = everyExpansion ? after.Any(Expands) : after.Any(at => MayGiveWord(words[at], reading.QuotedAt(at), wanted, git));
+            var splits = begun || everyExpansion ? [] : after.Select(at => MaySplit(words[at], reading.QuotedAt(at))).Where(kind => kind is not Splitting.None).ToList();
 
-            if (!begun && (everyExpansion || !after.Any(at => MaySplit(words[at], reading.QuotedAt(at)))))
+            if (!begun && splits.Count == 0)
             {
                 return (AgentRuleMatch.No, false);
             }
 
-            (expanded, split) = (true, split && !begun);
+            // Quoting lets the command through only where every expansion that may give the word is one quoting keeps whole.
+            (expanded, split) = (true, split && !begun && splits.All(kind => kind is Splitting.Unquoted));
         }
 
         return expanded ? (AgentRuleMatch.Expanded, split) : (AgentRuleMatch.Yes, false);
@@ -3069,41 +3077,129 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// Whether the shell may split an expansion in <paramref name="word"/> into words of their own, any of which may be an
-    /// option: a variable or a substitution that stands unquoted; every positional parameter (<c>"$@"</c>,
-    /// <c>"${a[@]}"</c>), which is a word for each even quoted; and cmd's percent and delayed names, which cmd reads before it
-    /// reads a quote. A pattern or a brace is no such expansion: each word it gives begins with what stands before it in
-    /// its word, so its start alone decides it (<see cref="MayGiveWord"/>). Each expansion is found as
-    /// <see cref="CommandAnalysis.Expansion"/> reads it, the one reader of what the shell expands.
+    /// option, and whether quoting it would keep it whole: a variable or a substitution that stands unquoted, which quoting
+    /// keeps whole (<see cref="Splitting.Unquoted"/>); and, however it is quoted (<see cref="Splitting.Always"/>), every
+    /// positional parameter and every element of an array, by any spelling bash or zsh takes - <c>$@</c>, <c>${@...}</c>,
+    /// <c>${!name@}</c>, a <c>[@]</c> inside it, zsh's <c>$name[@]</c> and a <c>${(...)...}</c> flag group or its
+    /// <c>${=...}</c>, <c>${^...}</c> and <c>${~...}</c>, each read of the expansion's own text - and cmd's percent and
+    /// delayed names, which cmd reads before it reads a quote. A pattern or a brace is no such expansion: each word it gives
+    /// begins with what stands before it in its word, so its start alone decides it (<see cref="MayGiveWord"/>); nor is a
+    /// tilde, whose value the shell never splits. Each expansion is found as <see cref="CommandAnalysis.Expansion"/> reads
+    /// it, the one reader of what the shell expands.
     /// </summary>
     /// <param name="word">The word, its quotes read as the shell reads them.</param>
     /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
-    private static bool MaySplit(string word, string? quoted)
+    private static Splitting MaySplit(string word, string? quoted)
     {
         string? Expands(int from, int to) => CommandAnalysis.Expansion(word[from..to], quoted?[from..to]);
 
-        for (var from = 0; from < word.Length;)
+        // A tilde that begins the word is read whole and is never split (TildePrefix).
+        for (var from = TildePrefix(word); from < word.Length;)
         {
             // The next expansion: the shortest stretch from here that expands ends in it, the longest end of that stretch
             // that still expands begins it.
             if (Enumerable.Range(from + 1, word.Length - from).FirstOrDefault(to => Expands(from, to) is not null) is not (> 0 and var end))
             {
-                return false;
+                return Splitting.None;
             }
 
             var start = Enumerable.Range(from, end - from).Last(at => Expands(at, end) is not null);
-            var open = quoted is null || quoted[start] == WordQuoting.Open;
-            var positional = word[start] == '$' && start + 1 < word.Length
-                && (word[start + 1] == '@' || (word[start + 1] == '{' && word.IndexOf("[@]", start, StringComparison.Ordinal) > start));
 
-            if (Expands(start, end) is "a variable" or "a substitution" && (open || positional || word[start] is '%' or '!'))
+            if (Expands(start, end) is "a variable" or "a substitution" && word[start] != '~')
             {
-                return true;
+                if (word[start] is '%' or '!' || (word[start] == '$' && Positional(Referenced(word, start))))
+                {
+                    return Splitting.Always;
+                }
+
+                if (quoted is null || quoted[start] == WordQuoting.Open)
+                {
+                    return Splitting.Unquoted;
+                }
             }
 
             from = end;
         }
 
-        return false;
+        return Splitting.None;
+
+        // Every positional parameter and every element of an array, quoted or not, by bash's and zsh's spellings.
+        static bool Positional(string text)
+            => text == "$@" || text.StartsWith("${@", StringComparison.Ordinal) || text.Contains("[@]", StringComparison.Ordinal)
+                || (text.StartsWith("${!", StringComparison.Ordinal) && text.EndsWith("@}", StringComparison.Ordinal))
+                || text.StartsWith("${(", StringComparison.Ordinal) || text.StartsWith("${=", StringComparison.Ordinal)
+                || text.StartsWith("${^", StringComparison.Ordinal) || text.StartsWith("${~", StringComparison.Ordinal)
+                || text.StartsWith("$=", StringComparison.Ordinal) || text.StartsWith("$^", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// How long the tilde that begins <paramref name="word"/> is - to its first separator, as the shell reads its prefix -
+    /// or 0 where the word begins with none: read whole, for a shorter start of it would read <c>~+</c> inside
+    /// <c>~+x</c>, which the shell reads as no variable's.
+    /// </summary>
+    private static int TildePrefix(string word)
+        => !word.StartsWith('~') ? 0 : word.IndexOfAny(['/', '\\']) is var separator and >= 0 ? separator : word.Length;
+
+    /// <summary>How an expansion in a word may be split into words of their own (<see cref="MaySplit"/>).</summary>
+    private enum Splitting
+    {
+        /// <summary>None of the word's expansions is split.</summary>
+        None,
+
+        /// <summary>One is split where it stands unquoted, and quoting it keeps it whole.</summary>
+        Unquoted,
+
+        /// <summary>One is split however it is quoted.</summary>
+        Always,
+    }
+
+    /// <summary>
+    /// The text of the reference whose dollar stands at <paramref name="start"/> in <paramref name="word"/>: a braced one to
+    /// its closing brace, its braces nested within it counted; <c>$</c> and the special parameter after it; or a name with a
+    /// zsh subscript after it (<c>$name[@]</c>) - to the word's end where it is not closed.
+    /// </summary>
+    private static string Referenced(string word, int start)
+    {
+        if (start + 1 >= word.Length)
+        {
+            return word[start..];
+        }
+
+        if (word[start + 1] == '{')
+        {
+            var depth = 0;
+
+            for (var at = start + 1; at < word.Length; at++)
+            {
+                depth += word[at] switch { '{' => 1, '}' => -1, _ => 0 };
+
+                if (depth == 0)
+                {
+                    return word[start..(at + 1)];
+                }
+            }
+
+            return word[start..];
+        }
+
+        var end = start + 1;
+
+        if (!(char.IsAsciiLetterOrDigit(word[end]) || word[end] == '_'))
+        {
+            return word[start..(end + 1)];
+        }
+
+        while (end < word.Length && (char.IsAsciiLetterOrDigit(word[end]) || word[end] == '_'))
+        {
+            end++;
+        }
+
+        if (end < word.Length && word[end] == '[' && word.IndexOf(']', end) is > 0 and var close)
+        {
+            end = close + 1;
+        }
+
+        return word[start..end];
     }
 
     /// <summary>
@@ -3125,12 +3221,21 @@ public sealed partial class AgentPolicy
     {
         string? Expands(int from, int to) => CommandAnalysis.Expansion(word[from..to], quoted?[from..to]);
 
-        if (Enumerable.Range(1, word.Length).FirstOrDefault(to => Expands(0, to) is not null) is not (> 0 and var end))
+        // A tilde that begins the word is read whole (TildePrefix): one the shell takes from a variable begins the word,
+        // and the start of one it does not is the word's own text.
+        var tilde = TildePrefix(word);
+
+        if (tilde > 0 && Expands(0, tilde) is not null)
+        {
+            return true;
+        }
+
+        if (Enumerable.Range(tilde + 1, word.Length - tilde).FirstOrDefault(to => Expands(tilde, to) is not null) is not (> 0 and var end))
         {
             return false;
         }
 
-        var before = word[..Enumerable.Range(0, end).Last(from => Expands(from, end) is not null)];
+        var before = word[..Enumerable.Range(tilde, end - tilde).Last(from => Expands(from, end) is not null)];
 
         // A long option: the start of it, or of its name's start before a value glued after an '='; a short one: a dash
         // alone, or a cluster of short options; any other word: the start of it.
@@ -4035,8 +4140,8 @@ public sealed partial class AgentPolicy
     /// <summary>Whether <paramref name="character"/> separates a path on Windows, either way it is written.</summary>
     private static bool IsSeparator(char character) => character is '\\' or '/';
 
-    /// <summary>A tilde's prefix the shell expands, before a separator or the path's end: <c>~+</c>, <c>~-</c>, or <c>~name</c>.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^~(?<name>[+-]|[A-Za-z0-9._][A-Za-z0-9._-]*)(?=$|[/\\])")]
+    /// <summary>A tilde's prefix the shell expands, before a separator or the path's end: <c>~+</c>, <c>~-</c>, the directory stack's <c>~N</c>, <c>~+N</c> and <c>~-N</c>, or <c>~name</c>.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^~(?<name>[+-]?[0-9]+|[+-]|[A-Za-z0-9._][A-Za-z0-9._-]*)(?=$|[/\\])")]
     private static partial System.Text.RegularExpressions.Regex TildeName();
 
     /// <summary>
@@ -4056,7 +4161,10 @@ public sealed partial class AgentPolicy
     /// </summary>
     /// <param name="path">The path, as a word of a command spells it.</param>
     /// <param name="home">The user's home.</param>
-    /// <exception cref="NotSupportedException">It begins with <c>~-</c>, where the shell stood before, which this does not know.</exception>
+    /// <exception cref="NotSupportedException">
+    /// It begins with <c>~-</c>, where the shell stood before, or with the directory stack's <c>~N</c>, <c>~+N</c> or
+    /// <c>~-N</c>, which this does not know.
+    /// </exception>
     internal static string HomeExpanded(string path, string home)
     {
         ArgumentNullException.ThrowIfNull(path);
@@ -4067,8 +4175,10 @@ public sealed partial class AgentPolicy
             return home + path[1..];
         }
 
-        // bash's ~+ is where the shell stands, the path after it read there; its ~- is where the shell stood before, which
-        // this does not know; and ~name is that user's home, read beside the user's own, where homes stand together.
+        // bash's ~+ is where the shell stands, the path after it read there - and every value the string gives PWD, read
+        // beside it (CommandAnalysis.Substituted); its ~- is where the shell stood before, and ~N, ~+N and ~-N a directory of
+        // the stack pushd keeps, which this does not know; and ~name is that user's home, read beside the user's own, where
+        // homes stand together.
         if (TildeName().Match(path) is { Success: true } tilde)
         {
             var name = tilde.Groups["name"].Value;
@@ -4078,6 +4188,8 @@ public sealed partial class AgentPolicy
             {
                 "+" => rest.Length > 0 ? rest[1..] : ".",
                 "-" => throw new NotSupportedException($"'{path}' names where the shell stood before this command, which this does not know"),
+                _ when name.TrimStart('+', '-') is { Length: > 0 } stack && stack.All(char.IsAsciiDigit)
+                    => throw new NotSupportedException($"'{path}' names a directory of the stack pushd keeps, which this does not know"),
                 _ when Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(home)) is { } homes => Path.Join(homes, name) + rest,
                 _ => path,
             };

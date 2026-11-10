@@ -1842,7 +1842,11 @@ PowerShell parameter's `:`, a value glued to a short option, each with the `@` o
 curl, httpie or gh read a file taken off and a `-F` field's `;` fields cut, a script's words, its
 braces' words, a `file://` address's path), each read as every value a variable the command string
 sets gives it (`AgentPolicy.Readings` over the string's `StringState`, `CommandAnalysis.Substituted`,
-at most `CommandAnalysis.MaxReadings`; `$PWD` as each place the command stands in; a `~` as each
+at most `CommandAnalysis.MaxReadings`; `$PWD` and a leading `~+` as each place the command stands in and
+each value the string gives `PWD` (`StringState.ValuesOf`); a `~-` and the directory stack's `~N`, `~+N` and `~-N`
+as places it does not know (`AgentPolicy.HomeExpanded`), and each of them, `~+` with them, a variable wherever
+`CommandAnalysis.Expansion` is asked - the program, a rule's word, `AgentPolicy.Meets` - for the string may give
+it any word; a `~` as each
 `HOME` the string, the command or a command that runs it sets; a variable the
 string does not set and a substitution read as the text they spell, for their value is the agent's
 environment's or a program's, which no word of the string gives), and a pattern's segment that may
@@ -2125,7 +2129,9 @@ file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a
 commands that write the same (`AgentPolicy.GitStateForms`, each option met wherever it stands, by `AgentPolicy.Meets`: a
 word the shell expands held as one that may be the option where its expansion may give it - a word it begins, quoted
 or not, one after a start the option's own may have, or one the shell may split into words of their own where it stands
-unquoted (`AgentPolicy.MaySplit`: a variable or a substitution in the open, every positional parameter, cmd's percent and
+unquoted (`AgentPolicy.MaySplit`: a variable or a substitution in the open, every positional parameter and array
+element by any spelling bash or zsh takes - `$@`, `${@...}`, `${!name@}`, a `[@]`, zsh's `$name[@]` and flag groups -
+read of the expansion's own text, cmd's percent and
 delayed names), the refusal of one only such a split makes so saying that quoting it lets it through
 (`AgentPolicy.QuoteTheExpansion`) - never a quoted one inside a word that begins otherwise, as `--depth="$n"` or a quoted
 refspec a variable names, nor a pattern, whose every match begins with what stands before it, as `refs/heads/*`), the
