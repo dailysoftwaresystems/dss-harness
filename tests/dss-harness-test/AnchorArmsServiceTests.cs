@@ -469,6 +469,38 @@ public sealed class AnchorArmsServiceTests
     }
 
     /// <summary>
+    /// A registry opening with a UTF-8 byte order mark, as many editors save one, is read as UTF-8 is: the mark is no part
+    /// of its first row, so the registry is swept, listed and checked as one without it - its first row's arm selected,
+    /// listed and judged, never refused.
+    /// </summary>
+    [Fact]
+    public async Task ARegistryOpeningWithAByteOrderMark_IsSweptListedAndChecked()
+    {
+        using var temp = new TempDirectory();
+        var (harness, repository, service) = await PrepareAsync(temp, registry: "﻿" + Registry);
+        Assert.True(File.ReadAllBytes(temp.Combine("arms.md")).AsSpan().StartsWith(Encoding.UTF8.Preamble));
+        await PassedAsync(harness, repository, "native", "one");
+        await CloseAsync(harness, repository, One, "closed with `one`");
+        var context = await harness.ContextLoader.LoadAsync(repository, Token);
+
+        var swept = await new ArmListingReader(SyncKit.Service(harness), harness.FileSystem, harness.Platform)
+            .ReadAsync(context, null, MutationService.CommandName, Token);
+
+        Assert.Equal(["one"], swept.Selected.Select(arm => arm.Id));
+
+        var listed = await CliRunner.RunAsync(["check-mutations", "--list", "-C", repository], Token);
+
+        Assert.True(HarnessExit.Success == listed.ExitCode, listed.StandardError + listed.StandardOutput);
+        Assert.Contains("listing 1 arm(s) of 'arms.md' on 1 leg(s); nothing is swept and no host is asked", listed.StandardOutput + listed.StandardError, StringComparison.Ordinal);
+
+        var report = await service.CheckAsync(repository, null, Token);
+
+        Assert.True(report.Passed, string.Join(" | ", report.Findings.Select(finding => finding.Message)));
+        Assert.Equal(["one"], report.NamedArms);
+        Assert.Equal(["one"], report.JudgedArms);
+    }
+
+    /// <summary>
     /// An id declared and retired at the registry's former path on a line merged in that never moved it is one the
     /// registry declared: the history is read under every name the registry had in one walk of HEAD's whole history, down
     /// both sides of every merge - not from the rename's own parent alone, which never reached that line.

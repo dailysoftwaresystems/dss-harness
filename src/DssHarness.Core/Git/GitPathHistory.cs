@@ -14,9 +14,6 @@ public sealed record GitHeldAt(string Commit, string Blob);
 /// <param name="Cut">Whether more commits changed the paths than were read: an older version is then not among those listed.</param>
 public sealed record GitPathHistory(IReadOnlyDictionary<string, IReadOnlyList<GitHeldAt>> Held, int Commits, bool Cut);
 
-/// <summary>A commit that renamed a file, as git's rename detection finds it against the commit's first parent.</summary>
-/// <param name="Commit">The commit that renamed it.</param>
-/// <param name="Parent">The commit's first parent, which held the file at <paramref name="From"/>.</param>
-/// <param name="From">The path the file had before, from the repository's root.</param>
-/// <param name="To">The path the commit gave it.</param>
-public sealed record GitRename(string Commit, string Parent, string From, string To);
+/// <summary>A rename of a file, as git's rename detection finds it: the name the file had before it.</summary>
+/// <param name="From">The path the file had before the rename, from the repository's root.</param>
+public sealed record GitRename(string From);

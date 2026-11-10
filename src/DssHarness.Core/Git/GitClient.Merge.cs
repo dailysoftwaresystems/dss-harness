@@ -133,14 +133,14 @@ public sealed partial class GitClient
             throw new ArgumentException($"'{tip}' names no commit a history can be read from.", nameof(tip));
         }
 
-        // --follow is what walks one file across its renames, and only renames are listed: each commit's header, its id and
-        // its parents, then the one entry of the file followed - its status, the name it had and the name it was given.
-        // Colour, signatures and a configured relative diff are each turned off, for any would change what is read here.
+        // --follow is what walks one file across its renames, and only renames are listed: each commit's id, then the one
+        // entry of the file followed - its status, the name it had and the name it was given. Colour, signatures and a
+        // configured relative diff are each turned off, for any would change what is read here.
         var result = await RunForBytesAsync(
                 directory,
                 [
                     "--literal-pathspecs", "log", "--follow", "--find-renames", "--diff-filter=R", "--name-status", "-z",
-                    "--no-color", "--no-show-signature", "--no-relative", "--format=%H %P", tip, "--", path,
+                    "--no-color", "--no-show-signature", "--no-relative", "--format=%H", tip, "--", path,
                 ],
                 cancellationToken)
             .ConfigureAwait(false);
@@ -157,21 +157,22 @@ public sealed partial class GitClient
 
         for (var at = 0; at < records.Length; at += 4)
         {
-            var header = records[at].Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var from = GitName.FromBytes(records[at + 2]);
             var to = GitName.FromBytes(records[at + 3]);
 
-            if (header.Length < 2 || !records[at + 1].TrimStart('\n').StartsWith('R'))
+            if (records[at].Trim().Length == 0 || !records[at + 1].TrimStart('\n').StartsWith('R'))
             {
                 throw Unreadable();
             }
 
+            // A name that is not UTF-8, either side of the rename, cannot be asked for by name: the history before it ends
+            // the list.
             if (!from.IsUtf8 || !to.IsUtf8)
             {
                 break;
             }
 
-            renames.Add(new GitRename(header[0], header[1], from.Text, to.Text));
+            renames.Add(new GitRename(from.Text));
         }
 
         return renames;
