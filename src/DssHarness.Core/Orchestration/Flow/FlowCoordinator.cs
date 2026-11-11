@@ -6708,14 +6708,24 @@ public sealed class FlowCoordinator
         }
 
         // A triage already raised for an issue - a crash came between raising it and the reporter's record - is that
-        // issue's, each claimed once, so an issue reported twice is still triaged twice.
+        // issue's, each claimed once. An issue whose title a triage was raised for already, by any step, is not raised
+        // again either: each found issue is triaged once in a run, by the one line of it the engine holds - a repeat
+        // worded differently stays the triage's to merge, by the duplicate course it answers with.
         var raisedAlready = _created.Where(raised => ReferenceEquals(raised.RaisedBy, reported) && raised.Step.Name == triage).ToList();
+        var raisedTitles = new HashSet<string>(
+            _created.Where(raised => raised.Step.Name == triage && raised.Issue is { } raisedIssue).Select(raised => raised.Issue!.Title),
+            StringComparer.Ordinal);
 
         foreach (var issue in issues)
         {
             if (raisedAlready.FirstOrDefault(raised => raised.Issue == issue) is { } claimed)
             {
                 _ = raisedAlready.Remove(claimed);
+                continue;
+            }
+
+            if (!raisedTitles.Add(issue.Title))
+            {
                 continue;
             }
 

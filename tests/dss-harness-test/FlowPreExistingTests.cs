@@ -610,6 +610,59 @@ public sealed class FlowPreExistingTests
         Assert.Equal(new WorkflowPreExisting(1, 0, 1, 0), status.Progress.PreExisting);
     }
 
+    /// <summary>
+    /// An issue whose title a triage was raised for already - reported again by a later step, its words beside the
+    /// title different - raises nothing: each found issue is triaged once in a run, by the one line of it the engine
+    /// holds, and a repeat worded differently stays the triage's to merge by the duplicate course.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueTheRunAlreadyRaisedATriageFor_IsNotRaisedAgain()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: first
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: second
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var runner = new FakeRunner()
+            .On("first", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
+            .On("second", FlowStepResult.Ended(passed: true, HarnessExit.Success,
+                preExisting:
+                [
+                    new FlowPreExistingReport("a broken test", "worded differently", "src/Parser.cs", "saw it again", false),
+                    Issue("a stale document"),
+                ]))
+            .On("triage", run => Course("unproven", run.Issue!.Title));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // The re-reported issue raised no second triage; the new issue raised its one, and the run ends done.
+        Assert.Equal([("first", null), ("second", null), ("triage", "a broken test"), ("triage+2", "a stale document")], runner.Started);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(2, coordinator.Instances.Values.Count(instance => instance.Step.Name == "triage"));
+    }
+
     /// <summary>A triage answer that says no course the engine takes - none at all, or one it does not know - fails the triage step, and the issue vanishes nowhere unsaid.</summary>
     [Theory]
     [InlineData("""{"title": "a broken test"}""", "its answer says no course: it is one of fix, list, duplicate, unproven")]

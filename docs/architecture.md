@@ -1710,7 +1710,8 @@ cut to 4,000 characters, the cut said), `duplicate` (naming in `duplicates` the 
 repeats) or `unproven`; an answer whose course is none of the four, or whose issue to list does not
 read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
 step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
-one) and keeps the list; `issue` is read only by the
+one) - once for an issue, by its title, the one line of it the engine holds, so a repeat another step reports
+raises nothing - and keeps the list; `issue` is read only by the
 triage and the recovery, and `source` by them and by a handler.
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
