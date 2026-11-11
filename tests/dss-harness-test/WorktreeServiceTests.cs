@@ -193,9 +193,10 @@ public sealed class WorktreeServiceTests
     }
 
     /// <summary>
-    /// A machine that builds no leg grows no build directory, and nothing is added for one - but the
-    /// separator joining the worktree to what the reserve names still counts. The worktree fits one
-    /// character under the limit, and not at it: the limit counts the NUL that ends a path.
+    /// A machine that builds no leg grows no build directory, and neither the directory nor the
+    /// reserve that guesses at what builds below it is added: a run's start check counts the reserve
+    /// only for trees a build works in, and this check agrees. The worktree fits one character under
+    /// the limit, and not at it: the limit counts the NUL that ends a path.
     /// </summary>
     [Theory]
     [InlineData(1, true)]
@@ -212,8 +213,8 @@ public sealed class WorktreeServiceTests
 
         await harness.InitializeHarnessAsync(temp.Path, TestContext.Current.CancellationToken, new HarnessConfig
         {
-            // The worktree, one separator, a reserve of 5 and a margin of 2.
-            Worktrees = new WorktreeSettings { PathBudgetReserve = 5, PathBudgetMargin = 2, PathLimit = path.Length + 1 + 5 + 2 + slack },
+            // The worktree and a margin of 2 - the reserve of 5 names what builds below, and nothing does.
+            Worktrees = new WorktreeSettings { PathBudgetReserve = 5, PathBudgetMargin = 2, PathLimit = path.Length + 2 + slack },
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
             Legs = { ["elsewhere"] = new LegConfig { Os = other, Processor = "x86_64", Config = "debug" } },
         });

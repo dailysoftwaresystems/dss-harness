@@ -336,9 +336,14 @@ public sealed class WorktreeService(
                 $"'{ReportText.Printable(parent)}' is a worktree, and an orchestrator's agents' worktrees cannot be made inside one; delete it, or name the orchestrator otherwise."));
         }
 
+        // Where no leg builds on this machine, nothing below the worktree owes the build's room: a run's start and
+        // plan checks count the reserve only for trees a build works in, and the check that makes the worktree
+        // agrees with them - a repository whose legs all build elsewhere, or that has none, was refused as though a
+        // build directory were coming, and the run that had passed its start check failed on the worktree it needed.
+        var build = BuildDirectoryLength(context.Config);
         var budget = _pathBudget.Check(
             path,
-            BuildDirectoryLength(context.Config) + settings.PathBudgetReserve,
+            build + (build > 0 ? settings.PathBudgetReserve : 0),
             settings.PathBudgetMargin,
             settings.PathLimit);
 
