@@ -13,3 +13,7 @@ public sealed record GitHeldAt(string Commit, string Blob);
 /// <param name="Commits">How many commits were read.</param>
 /// <param name="Cut">Whether more commits changed the paths than were read: an older version is then not among those listed.</param>
 public sealed record GitPathHistory(IReadOnlyDictionary<string, IReadOnlyList<GitHeldAt>> Held, int Commits, bool Cut);
+
+/// <summary>A rename of a file, as git's rename detection finds it: the name the file had before it.</summary>
+/// <param name="From">The path the file had before the rename, from the repository's root.</param>
+public sealed record GitRename(string From);

@@ -141,9 +141,11 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
     /// <summary>
     /// The program the run's client starts, where its order holds the client that starts one (<c>claude-code</c>): made
     /// ready - installed and brought up to date where it must be - for a step of a run and for a side-task, and only
-    /// found, never changed, for the advisor and the reporter, which only read. Null where the order holds no such client,
-    /// or nothing here starts one; an answer that is not ready refuses the asker with its own words and code, saying what
-    /// to start again in the asker's own noun.
+    /// found, never changed, for the advisor and the reporter, which only read. The one owner of what a program that is
+    /// not ready does to a launch, for every asker alike: it refuses the asker - with the finder's own words and code,
+    /// saying what to start again in the asker's own noun - only where the entry that would serve first is on that
+    /// client; where only a later entry is, each entry on it is passed over when its turn comes, the finder's words as
+    /// why, and the launch goes on with the order's first entry.
     /// </summary>
     /// <param name="layout">The repository, whose slot may name the program.</param>
     /// <param name="providers">The configuration's providers and clients, resolved.</param>
@@ -151,7 +153,7 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
     /// <param name="asker">What needs the program - a run's step, advisor or reporter, or a side-task - as a refusal names it.</param>
     /// <param name="change">Whether a change may run: true for a step of a run and a side-task, false for the advisor and the reporter, which only read.</param>
     /// <param name="cancellationToken">Stops the asking.</param>
-    public async Task<ClaudeCodeAnswer?> ProgramAsync(
+    public async Task<LaunchProgram> ProgramAsync(
         HarnessLayout layout,
         AgentProviders providers,
         IReadOnlyList<AgentRunEntry> order,
@@ -163,15 +165,45 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
         ArgumentNullException.ThrowIfNull(order);
         ArgumentNullException.ThrowIfNull(asker);
 
-        if (updates is null || !order.Any(entry => string.Equals(entry.Client, ClaudeCodeClient.ClientName, StringComparison.Ordinal)))
+        if (updates is null || !order.Any(StartsTheProgram))
         {
-            return null;
+            return new LaunchProgram(order, null, null, null);
         }
 
         var client = providers.ClientOf(ClaudeCodeClient.ClientName);
-
-        return change
+        var answer = change
             ? await updates.ReadyAsync(layout, providers.Appointed(), client, asker, cancellationToken).ConfigureAwait(false)
             : await updates.FoundAsync(layout, providers.Appointed(), client, asker, cancellationToken).ConfigureAwait(false);
+
+        if (answer.Ready)
+        {
+            return new LaunchProgram(order, answer.Program, answer.Version, null);
+        }
+
+        // The entry that would serve first needs the program: the launch cannot start as it is asked to.
+        if (order.FirstOrDefault(entry => entry.Usable) is { } serving && StartsTheProgram(serving))
+        {
+            return new LaunchProgram(order, null, null, answer);
+        }
+
+        return new LaunchProgram(
+            [.. order.Select(entry => entry.Usable && StartsTheProgram(entry) ? entry with { Usable = false, WhyNot = answer.Message } : entry)],
+            null,
+            null,
+            null);
+
+        static bool StartsTheProgram(AgentRunEntry entry) => string.Equals(entry.Client, ClaudeCodeClient.ClientName, StringComparison.Ordinal);
     }
 }
+
+/// <summary>
+/// What a launch runs by once the program its client starts was asked for (<see cref="ReasonLaunch.ProgramAsync"/>): the
+/// order - each entry on the client that starts a program passed over with the finder's own words where that program is
+/// not ready and an earlier entry serves first - the program found ready with the version it answered, and the
+/// finder's answer that refuses the asker where the entry that would serve first needs a program that is not ready.
+/// </summary>
+/// <param name="Order">The order the launch runs by.</param>
+/// <param name="Program">The program the client starts, where one is ready; null where none is, or nothing here starts one.</param>
+/// <param name="Version">The version that program answered; null where none is ready.</param>
+/// <param name="Refusal">The finder's answer that refuses the asker - its own words, details and code; null where the launch goes on.</param>
+public sealed record LaunchProgram(IReadOnlyList<AgentRunEntry> Order, string? Program, string? Version, ClaudeCodeAnswer? Refusal);

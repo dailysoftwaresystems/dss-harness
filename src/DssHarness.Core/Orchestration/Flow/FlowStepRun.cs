@@ -157,7 +157,7 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// </param>
 /// <param name="Prompts">
 /// A reason step's <c>prompt</c> and <c>resumePrompt</c>, by key, each the text of the file it names filled with every
-/// name but a skill's (<see cref="FlowTemplate.FillAroundSkills"/>): its pieces as filled, each skill in its place, so its
+    /// name but a skill's (<see cref="FlowTemplate.FillAroundSkills(string, Func{FlowExpression.Path, FlowExpression.PathRead}, Func{string, string?}?, out string?)"/>): its pieces as filled, each skill in its place, so its
 /// runner hands each skill over and never reads filled text as a template again. Null for every other step, and for a
 /// run held in memory alone, which reads no files.
 /// </param>
@@ -165,6 +165,12 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// What is left of the run's budget in dollars before its reserve, as the attempt starts: a reason step's agent is held to
 /// it where it is less than its own bound, or where it names none (<see cref="FlowRunBudget.Bound"/>), so one long attempt
 /// cannot run through the reserve. Null where the run budgets no dollars.
+/// </param>
+/// <param name="Path">
+/// The declaration's path among the flow, as the engine holds the instance's (<see cref="FlowInstance.Path"/>): a visit of
+/// the recovery taken for a failure inside a group is declared at <c>recover.&lt;step&gt;</c> though its id nests in the
+/// failing scope, so its id's path is no declaration's. Null for a run made outside the engine, whose id names its
+/// declaration (<see cref="DeclarationPath"/>).
 /// </param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
@@ -187,7 +193,16 @@ public sealed record FlowStepRun(
     FlowTelling? Telling = null,
     string? PlanTold = null,
     IReadOnlyDictionary<string, IReadOnlyList<FlowTemplate.Piece>>? Prompts = null,
-    double? BudgetLeftUsd = null);
+    double? BudgetLeftUsd = null,
+    string? Path = null)
+{
+    /// <summary>
+    /// Where the step is declared among the flow, which every reading of its declaration - the work it goes on with, the
+    /// graphify steps upstream of it, a step a key of its names - starts from: <see cref="Path"/> as the engine gave it,
+    /// else the path its id spells.
+    /// </summary>
+    public string DeclarationPath => Path ?? FlowInstanceId.PathOf(Instance);
+}
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked
@@ -505,6 +520,14 @@ public sealed record FlowStepResult
     public IReadOnlyList<Agents.AgentSkill> Skills { get; init; } = [];
 
     /// <summary>
+    /// What the step's codebase graph gave and what it saved, as its <c>step.json</c> holds it: its mode, its view, what
+    /// the map and the pack - or the changes a conversation gone on with was told - its last launch was given cost, what
+    /// the tool served, and what the agent still read whole; null where the step was given no graph, or its agent never
+    /// started. Its working set is written beside its output where it has one.
+    /// </summary>
+    public JsonNode? Graph { get; init; }
+
+    /// <summary>
     /// Whether a stored conversation of this attempt can be handed to a client - which is where the answer
     /// <c>more</c> is offered, for more of the same conversation could not help elsewhere.
     /// </summary>
@@ -581,6 +604,7 @@ public sealed record FlowStepResult
 /// <param name="Bar">The repository's bar for a recommendation, read where the question was raised.</param>
 /// <param name="Place">Where the run works; null for a run held in memory alone.</param>
 /// <param name="BudgetLeftUsd">What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less than its own bound, or where it names none; null where the run budgets no dollars.</param>
+/// <param name="RunValues">The run as its own <c>run</c> root reads it, as the asking left it: its name, what it has checked and what it knows to be red among it; null where the asking was made from no run.</param>
 public sealed record FlowAdvisorCall(
     FlowAdvisor Advisor,
     string Run,
@@ -597,7 +621,8 @@ public sealed record FlowAdvisorCall(
     string? Record,
     string Bar,
     FlowRunPlace? Place = null,
-    double? BudgetLeftUsd = null);
+    double? BudgetLeftUsd = null,
+    System.Text.Json.Nodes.JsonObject? RunValues = null);
 
 /// <summary>
 /// The advice one question of the run's was given: the answer its advisor recommends with why and a text where the

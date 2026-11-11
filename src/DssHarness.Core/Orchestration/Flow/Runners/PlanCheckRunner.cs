@@ -36,24 +36,33 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         var checkedItems = items;
 
         // The items plan updates owe the round this check opens, where it opens one: they join its own as one list,
-        // checked together, and the group expands from what was checked. A work item is never added where the list
-        // already holds one of its name - the round's expression had yielded it from the plan as updated.
+        // checked together, and the group expands from what was checked. An owed work item replaces the one of its
+        // name the round's own list holds - that list was written before the update that owes this one, and what the
+        // update changed is the item it now owes - so the list holds one item of each name. The count of items a plan
+        // may have is the round's own list's alone, never the two together.
         List<JsonNode?>? owed = null;
+        var opening = false;
 
         if (read.TryGetValue("owed", out var owing) && !owing.IsMissing && owing.ToNode() is JsonArray owingList)
         {
-            owed = [.. owingList.Where(item => item is JsonObject
-                && !items.Any(other => FlowWorkItems.NameOf(other) is { } named && string.Equals(named, FlowWorkItems.NameOf(item), StringComparison.Ordinal)))];
+            owed = [.. owingList.Where(item => item is JsonObject && FlowWorkItems.NameOf(item) is not null)];
+            opening = true;
         }
 
-        if (owed is not null)
+        if (opening)
         {
             if (items.Count > PlanValidator.MostItems)
             {
                 problems.Add(PlanValidator.MostItemsProblem(items.Count));
             }
 
-            checkedItems = new JsonArray([.. items.Select(item => item?.DeepClone()), .. owed.Select(item => item?.DeepClone())]);
+            var owedNames = owed!.Select(FlowWorkItems.NameOf).OfType<string>().ToList();
+
+            checkedItems = new JsonArray(
+                [.. items
+                    .Where(item => FlowWorkItems.NameOf(item) is not { } named || !owedNames.Contains(named, StringComparer.Ordinal))
+                    .Select(item => item?.DeepClone()),
+                 .. owed!.Select(item => item?.DeepClone())]);
             problems.AddRange(validator.Check([.. checkedItems], context, place.Run, place.Definition, mostItems: false));
         }
         else

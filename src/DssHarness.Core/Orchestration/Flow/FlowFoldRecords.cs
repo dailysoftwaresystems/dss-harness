@@ -148,19 +148,38 @@ public sealed record FlowCommitPath(string Path, [property: JsonIgnore(Condition
 /// <param name="Type">The step's type: <c>fold</c> or <c>delete-agent</c>.</param>
 /// <param name="Agent">The agent whose work it folds.</param>
 /// <param name="State">
-/// What became of it: <c>intended</c> (written before the verb is called, and nothing after yet), <c>applied</c> (the verb
-/// went through), <c>stopped</c> (it wrote part of it and stopped, 21), <c>refused</c> (it refused, writing nothing: its
-/// trees moved, or a holder stood in the way), <c>failed</c> (it failed otherwise, after it may have written part of it)
-/// or <c>interrupted</c> (a crash cut it off after its intent, and the next attempt read what it left). Each but an intent
-/// and a refusal says what the main tree held at each path once it was settled.
+/// What became of it: <c>intended</c> (written before the verb is called, and nothing after yet), <c>writing</c> (the verb
+/// holds the main tree's lock and begins its write), <c>written</c> (its write is done, or threw part way, and what it left
+/// at each path is recorded under that lock, before it let it go; what the verb answered not yet), <c>applied</c> (the
+/// verb went through), <c>stopped</c> (it stopped, 21: part way, or - a stop of the step - before it wrote anything),
+/// <c>refused</c> (it refused, writing nothing: its trees moved, or a holder stood in the way), <c>failed</c> (it failed
+/// otherwise, after it may have written part of it) or <c>interrupted</c> (a crash, or a throw out of the verb, cut it off
+/// after its intent, settled by the step: with what it recorded it left, where it was written; as it found each path,
+/// where it never began to write; and read from the tree, under its lock, where it was cut off part way through its write,
+/// or is an intent whose verb records nothing of its write - <paramref name="ReadFromTree"/>). Each but an intent, a write
+/// begun and a refusal says what the main tree held at each path once it was settled.
 /// </param>
 /// <param name="IntendedAt">When its intent was written.</param>
 /// <param name="Paths">Every path it meant to write in the main tree, the registry files its rows change among them, in order.</param>
 /// <param name="Rows">The ids of the rows it meant to apply, in order.</param>
-/// <param name="SettledAt">When what became of it was written; null while it is intended.</param>
+/// <param name="SettledAt">When what it left, and then what became of it, was written; null while it is intended or writing.</param>
 /// <param name="Graphed">
 /// Whether the run's codebase graph took the paths it changed: true once the graph's base was synced by them; null until
 /// then - a sync of them that failed, was stopped or was cut off owes them still - and in a run with no graph.
+/// </param>
+/// <param name="ReadFromTree">
+/// True where a crash cut its verb off part way through its write, before it recorded what it left - or left an intent
+/// whose verb records nothing of its write (<paramref name="RecordsWrite"/>), which may have written all of it - so what
+/// it says it left was read from the main tree after, under the tree's lock: never a file part way through a side-task's
+/// write, but a side-task's write made between the crash and that read cannot be told from the fold's own - the one thing
+/// the ledger cannot say for certain. Null for every other entry.
+/// </param>
+/// <param name="RecordsWrite">
+/// True where its verb records its own write through the ledger, under the main tree's lock it writes under - that the
+/// write begins (<c>writing</c>), then what it left (<c>written</c>) - as every intent the ledger's writer makes says: so
+/// an intent of it that a crash leaves never began to write. Null in an entry an earlier release wrote, whose verb recorded
+/// nothing of its write, so an intent of it left unsettled may have written all of it, and is read from the tree as a write
+/// cut off part way is. Never false.
 /// </param>
 public sealed record FlowFoldEntry(
     string Id,
@@ -173,22 +192,46 @@ public sealed record FlowFoldEntry(
     IReadOnlyList<FlowFoldPath> Paths,
     IReadOnlyList<string> Rows,
     [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? SettledAt = null,
-    bool? Graphed = null)
+    bool? Graphed = null,
+    bool? ReadFromTree = null,
+    bool? RecordsWrite = null)
 {
     /// <summary>The state an entry is written in before its verb is called.</summary>
     public const string Intended = "intended";
 
-    /// <summary>The state of an entry whose verb wrote nothing.</summary>
+    /// <summary>The state the verb writes under the main tree's lock as it begins its write.</summary>
+    public const string Writing = "writing";
+
+    /// <summary>The state the verb writes under the main tree's lock once its write is done, or threw part way, with what it left.</summary>
+    public const string Written = "written";
+
+    /// <summary>The state of an entry whose verb refused, writing nothing.</summary>
     public const string Refused = "refused";
 
-    /// <summary>The state of an entry whose intent a crash left, settled by the next attempt.</summary>
+    /// <summary>The state of an entry a crash or a throw out of its verb left unsettled, settled by the step.</summary>
     public const string Interrupted = "interrupted";
 
     /// <summary>The state of an entry whose verb failed otherwise than by a refusal, after it may have written part of it.</summary>
     public const string Failed = "failed";
 
     /// <summary>The states an entry stands in.</summary>
-    public static readonly IReadOnlyList<string> States = [Intended, "applied", "stopped", Refused, Failed, Interrupted];
+    public static readonly IReadOnlyList<string> States = [Intended, Writing, Written, "applied", "stopped", Refused, Failed, Interrupted];
+
+    /// <summary>Whether what its verb wrote cannot be told from the ledger: it is intended, or its write began and recorded nothing yet.</summary>
+    [JsonIgnore]
+    public bool Unsettled => State is Intended or Writing;
+
+    /// <summary>Whether it says what it left at each path: neither unsettled nor refused.</summary>
+    [JsonIgnore]
+    public bool Settled => !Unsettled && State != Refused;
+
+    /// <summary>
+    /// Whether what its verb wrote, unsettled, is told by the main tree alone: a write begun that recorded nothing after,
+    /// or an intent whose verb records nothing of its write (<see cref="RecordsWrite"/>) - either may have written any of
+    /// it. An intent whose verb records its write never began to write, and is not.
+    /// </summary>
+    [JsonIgnore]
+    public bool WrittenUnrecorded => State == Writing || (State == Intended && RecordsWrite != true);
 
     /// <summary>The step types that fold through the ledger.</summary>
     public static readonly IReadOnlyList<string> Types = ["fold", "delete-agent"];
@@ -209,13 +252,16 @@ public sealed record FlowFoldEntry(
             : !Types.Contains(Type, StringComparer.Ordinal) ? $"'{Type}' is not a step that folds"
             : OrchestrationRules.NameProblem(Agent) is { } name ? $"its agent: {name}"
             : !States.Contains(State, StringComparer.Ordinal) ? $"'{State}' is not a state a fold stands in"
-            : (State == Intended) != (SettledAt is null) ? "it is settled exactly when it says what became of it"
+            : RecordsWrite == false ? "it says its verb does not record its write, which an entry says by leaving it out"
+            : State is Writing or Written && RecordsWrite != true ? $"it stands {State}, which only a verb that records its write writes, and does not say its verb does"
+            : Unsettled != (SettledAt is null) ? "it is settled exactly when it says what became of it"
             : Paths.FirstOrDefault(path => path.Problem() is not null) is { } wrong ? wrong.Problem()
             : Paths.GroupBy(path => path.Path, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"'{twice.Key}' is named twice"
-            : Paths.FirstOrDefault(path => (State is Intended or Refused) != (path.Changed is null)) is { } unread
-                ? $"'{unread.Path}' says what the fold left exactly where it {(State is Intended or Refused ? "wrote nothing yet" : "was settled")}"
+            : Paths.FirstOrDefault(path => Settled == (path.Changed is null)) is { } unread
+                ? $"'{unread.Path}' says what the fold left exactly where it {(Settled ? "was settled" : "recorded nothing of it")}"
             : Rows.Any(string.IsNullOrWhiteSpace) ? "a row it names is empty"
-            : Graphed is { } graphed && (!graphed || State is Intended or Refused) ? "it says the graph took what it changed where it changed nothing yet, or says it did not"
+            : Graphed is { } graphed && (!graphed || !Settled) ? "it says the graph took what it changed where it changed nothing yet, or says it did not"
+            : ReadFromTree is { } read && (!read || State != Interrupted) ? "it says what it left was read from the tree after a crash where it is no interrupted fold, or says it was not"
             : null;
 }
 
@@ -229,8 +275,12 @@ public sealed record FlowFoldEntry(
 /// <param name="Path">The path, relative to the tree and spelt with forward slashes.</param>
 /// <param name="What">What the fold does to it: <c>written</c>, <c>deleted</c>, <c>merged</c>, or <c>registry</c> for a registry file its rows change.</param>
 /// <param name="Before">The SHA-256 the main tree held there when the intent was written; null where it held no file.</param>
-/// <param name="Left">The SHA-256 it held once the fold was settled; null where it holds no file, and while nothing was read.</param>
-/// <param name="Changed">Whether what it left is not what it held before; null while nothing was read.</param>
+/// <param name="Left">
+/// The SHA-256 the fold left there - as its verb recorded it under the tree's lock it wrote under, before it let it go;
+/// as it held before where it wrote nothing; as the tree held it after a crash part way through its write - once that was
+/// settled; null where that is no file, and while it is intended or writing, and for a refusal.
+/// </param>
+/// <param name="Changed">Whether what it left is not what it held before; null while it is intended or writing, and for a refusal.</param>
 /// <param name="Committed">The id of the run's commit (<see cref="FlowCommitEntry"/>) that took what it left; null while none has.</param>
 /// <param name="Ignored">True where git ignores the path, so the run's commits leave it out; null otherwise.</param>
 public sealed record FlowFoldPath(
@@ -370,7 +420,8 @@ public sealed record FlowFoldGrant(string Kind, IReadOnlyList<string> Named, str
 /// <param name="Folded">What a fold wrote, removed, merged, handed and applied; null where it did none of it.</param>
 /// <param name="Planned">What its plan named, measured under its hold; null where none was measured.</param>
 /// <param name="Ledger">The id of the ledger entry it was recorded under; null for a refresh and a rebase.</param>
-public sealed record FlowFoldApplied(int ExitCode, string Summary, string? Standing = null, AgentFolded? Folded = null, AgentPlanned? Planned = null, string? Ledger = null)
+/// <param name="Waited">How long the apply waited for the main tree's lock, held by a side-task's write or command; zero where it did not wait.</param>
+ public sealed record FlowFoldApplied(int ExitCode, string Summary, string? Standing = null, AgentFolded? Folded = null, AgentPlanned? Planned = null, string? Ledger = null, TimeSpan Waited = default)
 {
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()

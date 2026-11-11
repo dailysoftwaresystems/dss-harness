@@ -428,6 +428,56 @@ public sealed class FlowRecoverTests
         Assert.Equal(FlowRunStatus.Done, end.Status);
     }
 
+    /// <summary>
+    /// A step of the recovery taken for a member's failure runs with an id nested in the failing scope, and is declared at
+    /// the recovery's own path: its runner is handed that path, which every reading of its declaration starts from - the id's
+    /// path names no declaration.
+    /// </summary>
+    [Fact]
+    public async Task ARecoveryStepTakenInsideAGroup_IsHandedItsDeclarationsPath()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: plan
+                type: orient
+              - name: items
+                forEach: plan.list
+                dependsOn: [plan]
+                onFailure: recover
+                steps:
+                  - name: work
+                    type: orient
+            """);
+        var handed = new List<(string Instance, string Declared)>();
+        var runner = new FakeRunner()
+            .On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"list": ["a"]}""")))
+            .On("work", (FlowStepRun run) =>
+            {
+                handed.Add((run.Instance, run.DeclarationPath));
+                return run.Instance == "items[0].work"
+                    ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                    : FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .On("mend", (FlowStepRun run) =>
+            {
+                handed.Add((run.Instance, run.DeclarationPath));
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal([("items[0].work", "items.work"), ("items[0].recover.mend", "recover.mend"), ("items[0].work+2", "items.work")], handed);
+    }
+
     /// <summary>A failure nothing decides, at the top level of a workflow that declares a recovery, pauses: a person is asked.</summary>
     [Fact]
     public async Task ATopLevelFailureNothingDecides_PausesWhereARecoveryIsDeclared()

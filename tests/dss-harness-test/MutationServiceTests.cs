@@ -1129,34 +1129,17 @@ public sealed class MutationServiceTests
         harness.WriteConfig(temp.Path, config);
 
         var arm = (await service.ReadAsync(context, ["charge"], token)).Selected[0];
-        string Held(string path) => FileContentHash.Of(File.ReadAllBytes(temp.Combine(path)));
         var table = new BuiltFromTable
         {
             Target = "fixture",
             Lines = "lines",
-            Files = new Dictionary<string, string>(StringComparer.Ordinal) { ["SRC/Fixture.cpp"] = Held("src/fixture.cpp") },
+            Files = new Dictionary<string, string>(StringComparer.Ordinal) { ["SRC/Fixture.cpp"] = FileContentHash.Of(File.ReadAllBytes(temp.Combine("src/fixture.cpp"))) },
             Fetched = new Dictionary<string, string>(StringComparer.Ordinal),
             Made = new Dictionary<string, FilesIn>(StringComparer.Ordinal),
             Outside = new Dictionary<string, FilesIn>(StringComparer.Ordinal),
         };
-        var on = new JudgedOn
-        {
-            Judge = ArmJudge.Revision,
-            Rows = JudgedOn.RowsOf(arm),
-            Texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, path => (string?)Held(path), StringComparer.Ordinal),
-            Sites = arm.Sites.ToDictionary(site => site.Site, site => (string?)Held(site.Site), StringComparer.Ordinal),
-            Built = new Dictionary<string, string>(StringComparer.Ordinal) { ["fixture"] = table.Digest() },
-            Compilers = [],
-            Settings = SweepSettings.Of(config, config.Legs["native"], config.Hosts.SettingsFor(HostId.Local)),
-            RunReads = new Dictionary<string, string>(StringComparer.Ordinal),
-            Host = HostId.Local.ToString(),
-        };
 
-        Assert.Null(new ArmVerdictRecord(harness.FileSystem, context.Layout).Merge(
-            "native",
-            "charge",
-            new RecordedVerdict { Verdict = "passed", Run = "20261012-145059-ba433418", At = DateTimeOffset.UnixEpoch, SweptIn = RepositoryTree.MainCheckout, Key = on.Key(), JudgedOn = on },
-            [table]));
+        RecordedPasses.Record(harness.FileSystem, context.Layout, config, temp.Path, "native", arm, tables: [table]);
 
         var listed = await service.ListAsync(new MutationRequest(temp.Path, null, ["charge"], Json: true, List: true), token);
 
@@ -1194,25 +1177,8 @@ public sealed class MutationServiceTests
         harness.WriteConfig(temp.Path, config);
 
         var arm = (await service.ReadAsync(context, ["charge"], token)).Selected[0];
-        string Held(string path) => FileContentHash.Of(File.ReadAllBytes(temp.Combine(path)));
-        var on = new JudgedOn
-        {
-            Judge = ArmJudge.Revision,
-            Rows = JudgedOn.RowsOf(arm),
-            Texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, path => (string?)Held(path), StringComparer.Ordinal),
-            Sites = arm.Sites.ToDictionary(site => site.Site, site => (string?)Held(site.Site), StringComparer.Ordinal),
-            Built = new Dictionary<string, string>(StringComparer.Ordinal),
-            Compilers = [],
-            Settings = SweepSettings.Of(config, config.Legs["native"], config.Hosts.SettingsFor(ubuntu)),
-            RunReads = new Dictionary<string, string>(StringComparer.Ordinal),
-            Host = ubuntu.ToString(),
-        };
 
-        Assert.Null(new ArmVerdictRecord(harness.FileSystem, context.Layout).Merge(
-            "native",
-            "charge",
-            new RecordedVerdict { Verdict = "passed", Run = "20261012-145059-ba433418", At = DateTimeOffset.UnixEpoch, SweptIn = RepositoryTree.MainCheckout, Key = on.Key(), JudgedOn = on },
-            []));
+        RecordedPasses.Record(harness.FileSystem, context.Layout, config, temp.Path, "native", arm, host: ubuntu);
 
         async Task<JsonElement> ListedAsync()
         {
@@ -2115,6 +2081,7 @@ public sealed class MutationServiceTests
             git ?? harness.GitClient,
             legRuns,
             reading ?? SyncKit.Service(harness, loader, git: git),
+            new ArmListingReader(reading ?? SyncKit.Service(harness, loader, git: git), files ?? harness.FileSystem, harness.Platform),
             SyncKit.Transport(harness),
             builds,
             processes,

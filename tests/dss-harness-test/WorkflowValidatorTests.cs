@@ -5119,4 +5119,230 @@ public sealed class WorkflowValidatorTests
                     outputs: schemas/think.json
                 """), hasCommitTemplate: false, files: null, search: search));
     }
+
+    /// <summary>
+    /// V53 and V54: the graph a reason step asks is the run's own, made by a graphify-codebase step upstream of it - or,
+    /// in the recovery, ended before it - and a step that goes on with another's work asks the graph that step's
+    /// conversation holds, saying none of its own while it may say graphFrom and graphPromptTokens for its own pack;
+    /// each key only where it does something, the tool only where its agent reads, the narrowing of reads only under it.
+    /// </summary>
+    [Fact]
+    public void AReasonStepsGraphKeys_AreHeldToTheGraphTheRunMakes_AndToWhatEachKeyDoes()
+    {
+        IReadOnlyList<string> Checked(string body, Func<string, string?>? files = null)
+            => WorkflowValidator.Validate(Parse($$"""
+                name: default
+                steps:
+                {{body}}
+                """), hasCommitTemplate: false, files: files);
+
+        var reason = """
+                - name: look
+                  type: reason
+                  agent: thinker
+                  prompt: prompts/think.md
+                  outputs: schemas/think.json
+                """;
+
+        // With no graph made upstream, no step asks one.
+        Assert.Equal(
+            ["step 'look' says graph: tools, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery, ended before it"],
+            Checked(reason.Replace("prompt:", "graph: tools\n  prompt:")));
+
+        // A graphify step upstream - however far - serves every step that waits for it, directly or through another.
+        Assert.Empty(Checked($$"""
+                - name: codebase
+                  type: graphify-codebase
+                - name: between
+                  type: reason
+                  agent: thinker
+                  dependsOn: [codebase]
+                  graph: map
+                  prompt: prompts/think.md
+                  outputs: schemas/think.json
+                {{reason.Replace("prompt:", "graph: tools\n  dependsOn: [between]\n  prompt:")}}
+                """));
+
+        // The recovery runs once the graph has ended: a graphify step declared anywhere serves it, and a step of the
+        // recovery may say graphPromptTokens and graphFrom for its own pack.
+        Assert.Empty(Checked($$"""
+                - name: codebase
+                  type: graphify-codebase
+                  onFailure: recover
+                {{reason}}
+                recover:
+                  onSuccess: failed-step
+                  onFailure: pause
+                  steps:
+                    - name: again
+                      type: reason
+                      agent: thinker
+                      graphPromptTokens: 4000
+                      graphFrom: changes
+                      prompt: prompts/think.md
+                      outputs: schemas/think.json
+                """));
+
+        // A step that goes on with another's work asks the graph that step's conversation holds.
+        Assert.Equal(
+            [
+                "step 'again' resumes 'look' and says graph; a step that goes on with another's work asks the graph that step's conversation holds, and may say graphFrom and graphPromptTokens for its own pack",
+                "step 'again' resumes 'look' and says graphReads; the narrowing of a step's reads is its conversation's own, begun where the step it goes on with began",
+            ],
+            Checked($$"""
+                - name: codebase
+                  type: graphify-codebase
+                {{reason.Replace("prompt:", "dependsOn: [codebase]\n  prompt:")}}
+                - name: again
+                  type: reason
+                  resume: look
+                  graph: tools
+                  graphReads: narrow
+                  dependsOn: [look]
+                  prompt: prompts/think.md
+                  outputs: schemas/think.json
+                """));
+
+        // The narrowing of reads holds only under the tool, and the cap and the seed only where a pack is given.
+        Assert.Equal(
+            ["step 'look' says graphReads and its graph is map; the narrowing of reads holds a step's whole-file reads to the graph only where it is given the tool (graph: tools)"],
+            Checked(reason.Replace("prompt:", "graph: map\n  graphReads: guide\n  dependsOn: [codebase]\n  prompt:")
+                .Insert(0, "- name: codebase\n  type: graphify-codebase\n")));
+        Assert.Equal(
+            ["step 'look' says graphPromptTokens and no pack is given it; the cap does nothing where a step asks no graph"],
+            Checked(reason.Replace("prompt:", "graph: off\n  graphPromptTokens: 2000\n  prompt:")));
+        Assert.Equal(
+            ["step 'look' says graphFrom and no pack is given it; where a pack starts from does nothing where a step asks no graph"],
+            Checked(reason.Replace("prompt:", "graph: off\n  graphFrom: changes\n  prompt:")));
+
+        // Where a pack is given, its seed names changes or a reason step.
+        Assert.Equal(
+            ["step 'look' says graphFrom: 'nowhere', which is no step an enclosing group declares"],
+            Checked(reason.Replace("prompt:", "graph: map\n  graphFrom: nowhere\n  dependsOn: [codebase]\n  prompt:")
+                .Insert(0, "- name: codebase\n  type: graphify-codebase\n")));
+        Assert.Equal(
+            ["step 'look' says graphFrom: 'built', which is a build step; a working set is what a reason step's own work leaves"],
+            Checked($$"""
+                - name: codebase
+                  type: graphify-codebase
+                - name: built
+                  type: build
+                {{reason.Replace("prompt:", "graph: map\n  graphFrom: built\n  dependsOn: [built, codebase]\n  prompt:")}}
+                """));
+
+        // The tool is an agent's read turned to the graph: an agent that cannot read is given the map alone.
+        Assert.Equal(
+            ["step 'look' says graph: tools and its agent does not read; the graph tool is an agent's read turned to the graph, and an agent that cannot read is given the map alone"],
+            Checked($$"""
+                - name: codebase
+                  type: graphify-codebase
+                {{reason.Replace("prompt:", "graph: tools\n  dependsOn: [codebase]\n  prompt:")}}
+                """, files: path => path == "agents/thinker.md" ? "---\nname: thinker\ndescription: Writes.\ncapabilities: [write]\n---\nYou write." : null));
+    }
+
+    /// <summary>
+    /// A ring of resumes - two steps each going on with the other's work - is refused, and the graph rules that walk a
+    /// step's chain of work walk it through its one owner (<see cref="ResumeChain.Root"/>), which stops at the ring: the
+    /// check answers, where a walk of its own would follow the ring for ever and take every byte the process has.
+    /// </summary>
+    [Fact]
+    public async Task ARingOfResumes_IsRefused_AndTheGraphRulesWalkItNoFurtherThanItsOwner()
+    {
+        var problems = await Task.Run(
+            () => WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: a
+                    type: reason
+                    resume: b
+                    graphPromptTokens: 100
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: b
+                    type: reason
+                    resume: a
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null),
+            TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                "step 'a' resumes 'b', which is declared after it; work cannot be gone on with before it is begun",
+                "step 'a' says graphPromptTokens and no pack is given it; the cap does nothing where a step asks no graph",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A step that goes on with another's work is judged by the graph the run gives it - the mode of the step its chain
+    /// began with - so a cap it says where that step says graph: off is a key that does nothing, refused as one.
+    /// </summary>
+    [Fact]
+    public void AResumingStepsGraphKeys_AreJudgedByTheModeOfTheStepItsChainBeganWith()
+    {
+        Assert.Equal(
+            ["step 'mend' says graphPromptTokens and no pack is given it; the cap does nothing where a step asks no graph"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: codebase
+                    type: graphify-codebase
+                  - name: implement
+                    type: reason
+                    agent: thinker
+                    graph: off
+                    dependsOn: [codebase]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: mend
+                    type: reason
+                    resume: implement
+                    graphPromptTokens: 500
+                    dependsOn: [implement]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null));
+    }
+
+    /// <summary>
+    /// graphFrom's own words - task, the default, and changes - are taken as the seeds they name, and are the same set the
+    /// help lists and the serving reads (<see cref="WorkflowStep.GraphFromWords"/>); a step named like one cannot be named
+    /// as a seed, for the word means the seed, and is refused saying so rather than seeding from the word in silence.
+    /// </summary>
+    [Fact]
+    public void GraphFromsOwnWords_AreSeeds_AndAStepNamedLikeOneIsRefusedAsASeed()
+    {
+        IReadOnlyList<string> Checked(string from, string named)
+            => WorkflowValidator.Validate(Parse($$"""
+                name: default
+                steps:
+                  - name: codebase
+                    type: graphify-codebase
+                  - name: {{named}}
+                    type: reason
+                    agent: thinker
+                    dependsOn: [codebase]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: look
+                    type: reason
+                    agent: thinker
+                    graphFrom: {{from}}
+                    dependsOn: [{{named}}]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null);
+
+        Assert.Equal(["task", "changes"], WorkflowStep.GraphFromWords);
+        Assert.Empty(Checked("task", "implement"));
+        Assert.Empty(Checked("changes", "implement"));
+        Assert.Empty(Checked("implement", "implement"));
+        Assert.Equal(
+            ["step 'look' says graphFrom: 'task', which is the pack's own seed and names the reason step 'task' too; a step named task or changes cannot seed a pack - rename it to seed from it"],
+            Checked("task", "task"));
+        Assert.Equal(
+            ["step 'look' says graphFrom: 'changes', which is the pack's own seed and names the reason step 'changes' too; a step named task or changes cannot seed a pack - rename it to seed from it"],
+            Checked("changes", "changes"));
+    }
 }

@@ -45,6 +45,13 @@ public static partial class MutationRegistryParser
     /// <summary>How the registry spells <see cref="RedKind.BuildRed"/>.</summary>
     public const string BuildRed = "BUILD-RED";
 
+    /// <summary>
+    /// The characters an arm's id is made of, as a regular expression's character class: the name its records are kept
+    /// under, so nothing a file name could not hold. The one spelling of the rule, which every reader that recognizes an
+    /// id - a registry's row, an anchor row's backticked token - is built from.
+    /// </summary>
+    public const string IdCharacterClass = "[A-Za-z0-9_-]";
+
     /// <summary>The fields each row this reads takes after its kind, as a problem names them.</summary>
     private static readonly IReadOnlyDictionary<string, string[]> Fields = new Dictionary<string, string[]>(StringComparer.Ordinal)
     {
@@ -103,6 +110,18 @@ public static partial class MutationRegistryParser
         => [.. RegistryText.Of(text).Lines.Select(line => line.Text)];
 
     /// <summary>
+    /// Every id an A row of <paramref name="text"/> declares, in the order declared, whatever else its rows hold or
+    /// refuse: the ids a history of the registry held, read by the same row rule that reads the registry now.
+    /// </summary>
+    /// <param name="text">The registry's text, at any commit it was held.</param>
+    public static IReadOnlyList<string> ArmIdsOf(string text)
+        => [.. Lines(text)
+            .Select(line => new RegistryLine(line))
+            .Where(line => line.Row?.Kind == "A")
+            .Select(line => line.Row!.Arm)
+            .OfType<string>()];
+
+    /// <summary>
     /// What is wrong with <paramref name="path"/> as a path a row names, or <see langword="null"/> where nothing is: a
     /// file relative to the repository root, spelled one way on every platform.
     /// </summary>
@@ -138,8 +157,8 @@ public static partial class MutationRegistryParser
             : null;
     }
 
-    /// <summary>An arm's id: the name its records are kept under, so nothing a file name could not hold.</summary>
-    [GeneratedRegex(@"\A[A-Za-z0-9_-]+\z", RegexOptions.CultureInvariant)]
+    /// <summary>An arm's id: one or more of <see cref="IdCharacterClass"/>, and nothing else.</summary>
+    [GeneratedRegex(@"\A" + IdCharacterClass + @"+\z", RegexOptions.CultureInvariant)]
     private static partial Regex IdCharacters();
 
     /// <summary>A path a row names.</summary>
@@ -317,7 +336,7 @@ public static partial class MutationRegistryParser
 
             if (!IdCharacters().IsMatch(id))
             {
-                Problems.Add($"line {line}: arm id '{id}' holds a character outside [A-Za-z0-9_-]");
+                Problems.Add($"line {line}: arm id '{id}' holds a character outside {IdCharacterClass}");
                 _refused.Add(id);
                 return;
             }

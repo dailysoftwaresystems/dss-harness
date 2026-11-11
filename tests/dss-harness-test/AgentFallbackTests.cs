@@ -987,6 +987,48 @@ public sealed class AgentFallbackTests : IDisposable
     }
 
     /// <summary>
+    /// A step that goes on with a stored conversation carries its map, its pack and the changes of the codebase together:
+    /// the launch handed the conversation is told the changes alone, and one the walk moves to another provider begins a
+    /// conversation of its own, given the map and the pack - never a delta against a conversation it never had. The step is
+    /// told what each launch's first message held, as it was written.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchTheWalkMovesToAnotherProvider_IsGivenTheMapAndThePack_NeverTheChanges()
+    {
+        var handed = new AgentSessionRef("api", "anthropic", "11111111-1111-1111-1111-111111111111");
+        var firsts = new List<string>();
+        var api = new Scripted("api")
+        {
+            Capabilities = new AgentClientCapabilities(
+                Streaming: true, Thinking: true, WritableWhileWorking: true, AgentConversationHandling.Handed, SchemaEnforcedOutput: false,
+                AgentToolsOwner.Harness, AgentToolsOwner.Harness, ReportsCost: false, ["low", "high"], ProviderType: "none", ToldModelBy: "the test"),
+            Script = (run, events, _) =>
+            {
+                firsts.Add(AgentPromptParts.FirstMessage(run, newConversation: run.Conversation is null));
+                return run.Provider == "anthropic" ? Refused(run, events, null, turns: 1) : Completed(run, events, run.Model!, turns: 1);
+            },
+        };
+        var given = new List<AgentCodebaseGiven>();
+        var runner = new AgentRunner([api], _harness.FileSystem, Elevation.User, TimeProvider.System);
+        var step = Step([Entry("claude-fable-5-1", "anthropic", "api"), Entry("glm-5.3", "zai", "api", key: null)]) with
+        {
+            Conversation = handed,
+            Map = "the run's map",
+            Codebase = "the step's pack",
+            CodebaseChanges = "what changed since",
+            CodebaseGiven = given.Add,
+        };
+
+        var result = await runner.RunAsync(step, events: null, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal([new AgentCodebaseGiven(Map: false, Codebase: false, Changes: true), new AgentCodebaseGiven(Map: true, Codebase: true, Changes: false)], given);
+        Assert.Equal("what changed since", AgentPromptParts.PartOf(firsts[0], AgentPromptParts.CodebaseChangesTag));
+        Assert.Null(AgentPromptParts.PartOf(firsts[0], AgentPromptParts.CodebaseTag));
+        Assert.Equal(("the run's map", "the step's pack", (string?)null), (AgentPromptParts.PartOf(firsts[1], AgentPromptParts.MapTag), AgentPromptParts.PartOf(firsts[1], AgentPromptParts.CodebaseTag), AgentPromptParts.PartOf(firsts[1], AgentPromptParts.CodebaseChangesTag)));
+    }
+
+    /// <summary>
     /// The order the slot gives - one model, two keys of its provider, each an entry of its own - is walked inside the
     /// client: a key the provider refuses moves the run to the same model's next key in the one conversation, the request
     /// sent again - never the refused key asked again, and never a move past the model.

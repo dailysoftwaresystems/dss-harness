@@ -16,7 +16,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     /// seconds is a queue this machine is feeding faster than it drains, and no bound this process picks empties it; the
     /// refusal is reported rather than outwaited at the cost of everything that waits on the write.
     /// </summary>
-    private const int ReplaceAttempts = 35;
+    internal const int ReplaceAttempts = 35;
 
     private readonly IFilePermissions _filePermissions = filePermissions;
 
@@ -635,32 +635,43 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     /// Checking whether the destination exists and then choosing between a replace and
     /// a move races: two writers can both see it absent, and the second move throws.
     /// One overwriting rename has no such window. Windows can still refuse the rename
-    /// for a moment while another process holds the destination, such as a concurrent
-    /// writer or a virus scanner, so a refusal is retried a bounded number of times
-    /// before it is reported.
+    /// for a moment while another process holds the destination or the file just written,
+    /// such as a concurrent writer or a virus scanner, so a refusal is retried a bounded
+    /// number of times before it is reported (<see cref="WaitedOut"/>): the one wait every
+    /// replace takes, which the rename itself never adds to.
     /// </remarks>
     private static void ReplaceWith(string source, string destination)
+        => ReplaceWith(source, destination, Replace, Thread.Sleep);
+
+    /// <summary>
+    /// <see cref="ReplaceWith(string, string)"/>, renaming through <paramref name="replace"/> and waiting between attempts
+    /// through <paramref name="wait"/> - a test's where they stand in for the rename and the clock.
+    /// </summary>
+    /// <param name="source">The file to put in place.</param>
+    /// <param name="destination">Where to put it.</param>
+    /// <param name="replace">Renames the one over the other once (<see cref="Replace"/>).</param>
+    /// <param name="wait">Waits the time it is given before the next attempt.</param>
+    internal static void ReplaceWith(string source, string destination, Action<string, string> replace, Action<TimeSpan> wait)
     {
+        ArgumentNullException.ThrowIfNull(replace);
+        ArgumentNullException.ThrowIfNull(wait);
+
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                Replace(source, destination);
+                replace(source, destination);
                 return;
             }
-            catch (IOException) when (attempt < ReplaceAttempts)
+            catch (Exception refused) when (WaitedOut(refused, destination, attempt))
             {
-                Thread.Sleep(ReplaceWait(attempt));
-            }
-            catch (UnauthorizedAccessException) when (attempt < ReplaceAttempts)
-            {
-                Thread.Sleep(ReplaceWait(attempt));
+                wait(ReplaceWait(attempt));
             }
         }
     }
 
     /// <summary>
-    /// <see cref="ReplaceWith"/> without blocking the thread between attempts, and stopping when
+    /// <see cref="ReplaceWith(string, string)"/> without blocking the thread between attempts, and stopping when
     /// the caller does.
     /// </summary>
     /// <remarks>
@@ -668,34 +679,62 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     /// while it waits. A tree sync writes thousands of files, and the parallel legs above it are sharing that pool:
     /// sleeping in it makes a transient lock on one file look like a stall in every other leg.
     /// </remarks>
-    private static async Task ReplaceWithAsync(string source, string destination, CancellationToken cancellationToken)
+    private static Task ReplaceWithAsync(string source, string destination, CancellationToken cancellationToken)
+        => ReplaceWithAsync(source, destination, Replace, Task.Delay, cancellationToken);
+
+    /// <summary>
+    /// <see cref="ReplaceWithAsync(string, string, CancellationToken)"/>, renaming through <paramref name="replace"/> and
+    /// waiting between attempts through <paramref name="wait"/> - a test's where they stand in for the rename and the clock.
+    /// </summary>
+    /// <param name="source">The file to put in place.</param>
+    /// <param name="destination">Where to put it.</param>
+    /// <param name="replace">Renames the one over the other once (<see cref="Replace"/>).</param>
+    /// <param name="wait">Waits the time it is given before the next attempt, stopping when the token does.</param>
+    /// <param name="cancellationToken">Stops it between attempts.</param>
+    internal static async Task ReplaceWithAsync(
+        string source,
+        string destination,
+        Action<string, string> replace,
+        Func<TimeSpan, CancellationToken, Task> wait,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(replace);
+        ArgumentNullException.ThrowIfNull(wait);
+
         for (var attempt = 1; ; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             try
             {
-                Replace(source, destination);
+                replace(source, destination);
                 return;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < ReplaceAttempts)
+            catch (Exception refused) when (WaitedOut(refused, destination, attempt))
             {
-                await Task.Delay(ReplaceWait(attempt), cancellationToken).ConfigureAwait(false);
+                await wait(ReplaceWait(attempt), cancellationToken).ConfigureAwait(false);
             }
         }
     }
 
+    /// <summary>
+    /// Whether a refused rename is tried again: an I/O refusal or an access denied - a holder of the file there or of the
+    /// file just written, gone in moments - before the bound, <see cref="ReplaceAttempts"/>; never where a directory stands
+    /// at the destination, which no wait moves, so the refusal is the caller's own at once.
+    /// </summary>
+    private static bool WaitedOut(Exception refused, string destination, int attempt)
+        => attempt < ReplaceAttempts && refused is IOException or UnauthorizedAccessException && !Directory.Exists(destination);
+
     /// <summary>The wait before the rename's next attempt: ten milliseconds more each time, a quarter second at most.</summary>
-    private static int ReplaceWait(int attempt) => Math.Min(10 * attempt, 250);
+    internal static TimeSpan ReplaceWait(int attempt) => TimeSpan.FromMilliseconds(Math.Min(10 * attempt, 250));
 
     /// <summary>
     /// Renames <paramref name="source"/> over <paramref name="destination"/> once: on Windows as POSIX does, so a file a
     /// reader holds open is replaced all the same and the reader goes on reading the old one, as on every other system -
     /// a record is streamed while it is read, and a writer may replace it meanwhile - and Windows' own way where the volume
-    /// cannot (<see cref="Win32Files.TryReplace(string, string)"/>).
+    /// cannot (<see cref="Win32Files.TryReplace(string, string)"/>). A refusal is raised at once; the wait is the caller's.
     /// </summary>
-    private static void Replace(string source, string destination)
+    internal static void Replace(string source, string destination)
     {
         if (OperatingSystem.IsWindows() && Win32Files.TryReplace(Path.GetFullPath(source), Path.GetFullPath(destination)))
         {

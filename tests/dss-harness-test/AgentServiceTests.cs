@@ -737,9 +737,10 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
         var copy = Path.Combine(worktree, "a.txt");
 
-        // Its fourth reading is the one that asks, before the copy, whether it is what was weighed: the session writes first.
+        // A refresh reads it three times as it weighs it - once, and again under its holds and the tree's lock - so its
+        // seventh reading is the one that asks, before the copy, whether it is what was weighed: the session writes first.
         var agents = kit.Harness.Agents(
-            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 4, () => File.WriteAllText(copy, "one\nthe session's edit\n")),
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 7, () => File.WriteAllText(copy, "one\nthe session's edit\n")),
             kit.Harness.AnchorRegistryService);
 
         var stopped = await agents.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
@@ -820,9 +821,10 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
         var copy = Path.Combine(worktree, "a.txt");
 
-        // Its fourth reading is the one that asks, before the copy, whether it is what was weighed: the session flips the bit first.
+        // A refresh reads it three times as it weighs it - once, and again under its holds and the tree's lock - so its
+        // seventh reading is the one that asks, before the copy, whether it is what was weighed: the session flips the bit first.
         var agents = kit.Harness.Agents(
-            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 4, () => kit.Harness.FilePermissions.SetExecutable(copy, executable: true)),
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 7, () => kit.Harness.FilePermissions.SetExecutable(copy, executable: true)),
             kit.Harness.AnchorRegistryService);
 
         var stopped = await agents.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
@@ -849,9 +851,10 @@ public sealed class AgentServiceTests
         File.Delete(Path.Combine(kit.Main, "b.txt"));
         var copy = Path.Combine(worktree, "b.txt");
 
-        // Its fourth reading is the one that asks, before the removal, whether it is what was weighed: the session writes first.
+        // A refresh reads it three times as it weighs it - once, and again under its holds and the tree's lock - so its
+        // seventh reading is the one that asks, before the removal, whether it is what was weighed: the session writes first.
         var agents = kit.Harness.Agents(
-            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 4, () => File.WriteAllText(copy, "two\nthe session's edit\n")),
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 7, () => File.WriteAllText(copy, "two\nthe session's edit\n")),
             kit.Harness.AnchorRegistryService);
 
         var stopped = await agents.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("b.txt"), apply: true, Token);
@@ -909,10 +912,11 @@ public sealed class AgentServiceTests
         File.Copy(Path.Combine(kit.Main, "z.txt"), Path.Combine(worktree, "z.txt"), overwrite: true);
         var alike = Path.Combine(worktree, "a.txt");
 
-        // The second reading of z.txt is the one that follows a.txt's measuring read: the session makes a.txt runnable in
+        // A refresh weighs once, and again under its holds and the tree's lock, reading z.txt twice each time: its fourth
+        // reading is the one that follows a.txt's measuring read under the lock - the session makes a.txt runnable in
         // between, after it was weighed and before the refresh records it.
         var agents = kit.Harness.Agents(
-            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "z.txt"), 2, () => kit.Harness.FilePermissions.SetExecutable(alike, executable: true)),
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "z.txt"), 4, () => kit.Harness.FilePermissions.SetExecutable(alike, executable: true)),
             kit.Harness.AnchorRegistryService);
 
         var applied = await agents.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);

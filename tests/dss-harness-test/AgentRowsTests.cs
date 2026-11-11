@@ -900,6 +900,8 @@ public sealed class AgentRowsTests
 
         public Task<IReadOnlyList<AnchorFinding>> LintAsync(string startDirectory, CancellationToken cancellationToken = default)
             => inner.LintAsync(startDirectory, cancellationToken);
+
+        public string? CellText(AnchorCellInput input) => inner.CellText(input);
     }
 
     /// <summary>The anchor service, except that a batch that would write fails, as a registry held by another program would.</summary>
@@ -922,6 +924,8 @@ public sealed class AgentRowsTests
 
         public Task<IReadOnlyList<AnchorFinding>> LintAsync(string startDirectory, CancellationToken cancellationToken = default)
             => inner.LintAsync(startDirectory, cancellationToken);
+
+        public string? CellText(AnchorCellInput input) => inner.CellText(input);
     }
 
     /// <summary>
@@ -956,5 +960,7 @@ public sealed class AgentRowsTests
 
         public Task<IReadOnlyList<AnchorFinding>> LintAsync(string startDirectory, CancellationToken cancellationToken = default)
             => inner.LintAsync(startDirectory, cancellationToken);
+
+        public string? CellText(AnchorCellInput input) => inner.CellText(input);
     }
 }

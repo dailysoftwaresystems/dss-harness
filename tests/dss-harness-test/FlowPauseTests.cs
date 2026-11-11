@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -214,26 +216,35 @@ public sealed class FlowPauseTests
     }
 
     /// <summary>
-    /// A run's records that keep nothing, but signal each change as the coordinator writes it - the run's own signal, on
-    /// its own thread - and, where the test asks, what each change says.
+    /// A run's records that keep nothing - or what <paramref name="inner"/> keeps, written first - but signal each change
+    /// as the coordinator writes it - the run's own signal, on its own thread - and, where the test asks, what each
+    /// change says.
     /// </summary>
-    private sealed class RecordsWatch(Action<FlowChangeKind, FlowSnapshot, string?, string?> written, Action<FlowChangeKind, string?>? said = null) : IFlowRecords
+    private sealed class RecordsWatch(Action<FlowChangeKind, FlowSnapshot, string?, string?> written, Action<FlowChangeKind, string?>? said = null, IFlowRecords? inner = null) : IFlowRecords
     {
         /// <inheritdoc/>
         public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
         {
+            inner?.Write(kind, snapshot, instance, from, to, attempt, detail);
             written(kind, snapshot, instance, to);
             said?.Invoke(kind, detail);
         }
 
         /// <inheritdoc/>
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
-        {
-        }
+            => inner?.Question(questions, refused);
 
         public void Updates(FlowUpdatesFile updates)
-        {
-        }
+            => inner?.Updates(updates);
+    }
+
+    /// <summary>The run's records, kept on disk in <paramref name="directory"/> as a session keeps them, on <paramref name="clock"/>.</summary>
+    private static (HarnessFactory Harness, OrchestratorLayout Layout, FlowRunRecords Records) Kept(string directory, WorkflowDefinition definition, TimeProvider clock)
+    {
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(directory, directory), "r1");
+
+        return (harness, layout, new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition), clock));
     }
 
     /// <summary>A safe pause writes every reason step in flight a handoff, leaves the machine steps to finish and be recorded, and starts nothing more.</summary>
@@ -876,6 +887,51 @@ public sealed class FlowPauseTests
         gate.Done();
     }
 
+    /// <summary>
+    /// A hard stop is recorded as it is applied: while a runner that does not hear it runs on and its drain waits - before
+    /// the clock has moved at all - the run's state on disk says Stopped, the step still running under it, and the
+    /// stop's own event is the last the run wrote.
+    /// </summary>
+    [Fact]
+    public async Task AHardStop_IsRecordedAsItIsApplied_TheRunsStateSayingStoppedWhileItsDrainWaits()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate", hearsTheStop: false);
+        var clock = new TimerClock();
+        using var temp = new TempDirectory();
+        var (harness, layout, records) = Kept(temp.Path, definition, clock);
+        using var disposed = records;
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestStop();
+
+        // The stop is applied - its drain's bound is armed - and nothing has moved the clock.
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        var (events, _) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+        Assert.Equal(nameof(FlowRunStatus.Stopped), flow.Status);
+        Assert.Equal(nameof(FlowInstanceState.Running), Assert.Single(flow.Steps).State);
+        Assert.Equal((FlowEvent.KindOf(FlowChangeKind.StopApplied), "stop"), (events[^1].Kind, events[^1].Detail));
+        Assert.False(session.IsCompleted);
+
+        clock.Advance(TimeSpan.FromSeconds(90));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        Assert.Equal(nameof(FlowInstanceState.Stopped), Assert.Single(harness.OrchestrationStore.ReadFlow(layout)!.Steps).State);
+        gate.Done();
+    }
+
     /// <summary>A session cancelled while a retry waits its turn ends cancelled - said as a cancellation - and never as a fault of the engine.</summary>
     [Fact]
     public async Task ASessionCancelledWhileARetryWaits_EndsCancelled()
@@ -1281,6 +1337,60 @@ public sealed class FlowPauseTests
         Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["gate"].State);
         Assert.Equal("interrupt", end.Pause!.Cause);
         Assert.True(end.Pause.All);
+    }
+
+    /// <summary>
+    /// A later pause request that says all is recorded as it is applied: while the build it stops runs on, not hearing
+    /// the stop, and its drain waits - before the clock has moved at all - the pause's record on disk says all, and the
+    /// run stands paused.
+    /// </summary>
+    [Fact]
+    public async Task ALaterPauseRequestThatSaysAll_IsRecordedAsItIsApplied_WhileTheBuildItStopsDrains()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate", hearsTheStop: false);
+        var clock = new TimerClock();
+        using var temp = new TempDirectory();
+        var (harness, layout, kept) = Kept(temp.Path, definition, clock);
+        using var disposed = kept;
+        var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch(
+            (kind, _, _, _) =>
+            {
+                if (kind == FlowChangeKind.PauseCompleted)
+                {
+                    complete.TrySetResult();
+                }
+            },
+            inner: kept);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("interrupt");
+        await complete.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command", all: true);
+
+        // The later request is applied - the build's drain's bound is armed - and nothing has moved the clock.
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+
+        Assert.Equal(nameof(FlowRunStatus.Paused), flow.Status);
+        Assert.Equal(("interrupt", true), (flow.Pause!.Cause, flow.Pause.All));
+        Assert.Equal(nameof(FlowInstanceState.Running), Assert.Single(flow.Steps).State);
+
+        clock.Advance(TimeSpan.FromSeconds(90));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        gate.Done();
     }
 
     /// <summary>A hard stop while the handoffs are being written cancels the turns and keeps no handoff.</summary>

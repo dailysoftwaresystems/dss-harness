@@ -493,6 +493,193 @@ public sealed class PhysicalFileSystemTests
         Assert.Equal(32, Assert.Throws<IOException>(() => Win32Files.TryReplace(source, destination, (_, _) => 32)).HResult);
     }
 
+    /// <summary>
+    /// A rename Windows refuses because the old file is held by a holder that shares no deletion - a scanner's brief look
+    /// at a file nobody here holds - is refused by the rename itself at once, raised as the runtime's own file calls raise
+    /// it: waiting it out is the write's own, the one bounded wait every replace takes.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void TryReplace_RefusesAHeldDestinationAtOnce_TheWaitBeingTheWritesOwn()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows renames through a handle's information.");
+
+        using var temp = new TempDirectory();
+        var source = temp.Combine("new.json");
+        var destination = temp.Combine("record.json");
+        File.WriteAllText(source, "new");
+        File.WriteAllText(destination, "old");
+
+        using (new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            Assert.Equal(SharingViolation, Assert.Throws<IOException>(() => Win32Files.TryReplace(source, destination)).HResult);
+        }
+
+        Assert.True(Win32Files.TryReplace(source, destination));
+        Assert.Equal("new", File.ReadAllText(destination));
+    }
+
+    /// <summary>
+    /// A rename refused while a file is held - the one at the destination, or the one just written where nothing stands
+    /// there yet - is tried again after a wait each time ten milliseconds longer, until it lands: synchronously and
+    /// awaited alike, the rename called once per attempt and nothing else waited.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task ARenameRefusedWhileAFileIsHeld_IsTriedAgain_UntilItLands(bool fileAtTheDestination, bool awaited)
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("record.json");
+
+        if (fileAtTheDestination)
+        {
+            File.WriteAllText(destination, "old");
+        }
+
+        var calls = 0;
+        var (refused, waits) = await RenamedAsync(temp.Combine("new.json"), destination, awaited, () =>
+        {
+            if (++calls <= 3)
+            {
+                throw new IOException("The process cannot access the file because it is being used by another process.", SharingViolation);
+            }
+        });
+
+        Assert.Null(refused);
+        Assert.Equal(4, calls);
+        Assert.Equal([TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(30)], waits);
+    }
+
+    /// <summary>
+    /// A rename refused by a holder that stays is tried the bound's number of times, waiting between each, and then its
+    /// last refusal is raised as it was: a holder this machine's queue keeps past the bound is reported, not outwaited.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARenameRefusedByAHolderThatStays_IsTriedTheBoundsNumberOfTimes_ThenRefused(bool awaited)
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("record.json");
+        File.WriteAllText(destination, "old");
+        var calls = 0;
+
+        var (refused, waits) = await RenamedAsync(temp.Combine("new.json"), destination, awaited, () =>
+        {
+            calls++;
+            throw new UnauthorizedAccessException($"Access to the path '{destination}' is denied.");
+        });
+
+        Assert.Equal($"Access to the path '{destination}' is denied.", Assert.IsType<UnauthorizedAccessException>(refused).Message);
+        Assert.Equal(PhysicalFileSystem.ReplaceAttempts, calls);
+        Assert.Equal([.. Enumerable.Range(1, PhysicalFileSystem.ReplaceAttempts - 1).Select(PhysicalFileSystem.ReplaceWait)], waits);
+    }
+
+    /// <summary>
+    /// A rename refused where a directory stands at the destination is refused at once, synchronously and awaited alike:
+    /// no wait moves a directory, so the refusal is the caller's own, and the rename is called once.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARenameRefusedWhereADirectoryStandsAtTheDestination_IsRefusedAtOnce(bool awaited)
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("record.json");
+        Directory.CreateDirectory(destination);
+        var calls = 0;
+
+        var (refused, waits) = await RenamedAsync(temp.Combine("new.json"), destination, awaited, () =>
+        {
+            calls++;
+            throw new UnauthorizedAccessException($"Access to the path '{destination}' is denied.");
+        });
+
+        Assert.IsType<UnauthorizedAccessException>(refused);
+        Assert.Equal(1, calls);
+        Assert.Empty(waits);
+    }
+
+    /// <summary>
+    /// On Windows, a write renamed over a file a holder shares no deletion with waits the holder out and lands - the real
+    /// rename refused while the holder stands, tried again once it lets go - and the reader that came after reads the new.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void AReplaceOverAFileAHolderSharesNoDeletionWith_WaitsItOut_AndLands()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to rename over a file held without its deletion shared.");
+
+        using var temp = new TempDirectory();
+        var source = temp.Combine("new.json");
+        var destination = temp.Combine("record.json");
+        File.WriteAllText(source, "new");
+        File.WriteAllText(destination, "old");
+        var holder = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var waits = new List<TimeSpan>();
+
+        try
+        {
+            // The holder lets go at the second wait: the rename was refused twice while it stood.
+            PhysicalFileSystem.ReplaceWith(source, destination, PhysicalFileSystem.Replace, wait =>
+            {
+                waits.Add(wait);
+
+                if (waits.Count == 2)
+                {
+                    holder.Dispose();
+                }
+            });
+        }
+        finally
+        {
+            holder.Dispose();
+        }
+
+        Assert.Equal([TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20)], waits);
+        Assert.False(File.Exists(source));
+        Assert.Equal("new", File.ReadAllText(destination));
+    }
+
+    /// <summary>
+    /// Renames through <paramref name="rename"/> as a replace does - synchronously, or awaited - every wait recorded and
+    /// none taken: what was refused at last, if anything was, and the waits asked for between the attempts.
+    /// </summary>
+    private static async Task<(Exception? Refused, List<TimeSpan> Waits)> RenamedAsync(string source, string destination, bool awaited, Action rename)
+    {
+        var waits = new List<TimeSpan>();
+
+        try
+        {
+            if (awaited)
+            {
+                await PhysicalFileSystem.ReplaceWithAsync(
+                    source,
+                    destination,
+                    (_, _) => rename(),
+                    (wait, _) =>
+                    {
+                        waits.Add(wait);
+                        return Task.CompletedTask;
+                    },
+                    TestContext.Current.CancellationToken);
+            }
+            else
+            {
+                PhysicalFileSystem.ReplaceWith(source, destination, (_, _) => rename(), waits.Add);
+            }
+        }
+        catch (Exception ex)
+        {
+            return (ex, waits);
+        }
+
+        return (null, waits);
+    }
+
     /// <summary>On Windows, an interruption stops the looking between one entry and the next, rather than after the walk.</summary>
     [Fact]
     public void FindHeld_StopsForAnInterruption()
@@ -1348,10 +1535,6 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
-    /// A program left waiting in a directory of the test's choosing, ended when it is disposed, however the test
-    /// ends: one left running would hold the test's directory after it.
-    /// </summary>
-    /// <summary>
     /// A file whose flush to the disk fails while <paramref name="fails"/> says so, as a full disk's does, and does nothing
     /// where <paramref name="flushes"/> says not, so that only what the write itself put in the file is there.
     /// </summary>
@@ -1374,6 +1557,10 @@ public sealed class PhysicalFileSystemTests
         }
     }
 
+    /// <summary>
+    /// A program left waiting in a directory of the test's choosing, ended when it is disposed, however the test
+    /// ends: one left running would hold the test's directory after it.
+    /// </summary>
     private sealed class Waiting : IDisposable
     {
         private readonly Process _process;

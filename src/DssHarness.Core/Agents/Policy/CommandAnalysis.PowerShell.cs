@@ -224,9 +224,14 @@ public static partial class CommandAnalysis
             }
         }
 
-        /// <summary>One statement: its pipelines, joined by <c>&amp;&amp;</c> and <c>||</c>, each a line; a job's <c>&amp;</c> after them.</summary>
+        /// <summary>
+        /// One statement: its pipelines, joined by <c>&amp;&amp;</c> and <c>||</c>, each a line; a job's <c>&amp;</c> after them
+        /// runs them all in the background, each line ended so.
+        /// </summary>
         private void Statement(List<string> lines, char close)
         {
+            var first = lines.Count;
+
             // A loop's label (:outer foreach ...) names the statement after it.
             if (At() == ':' && IsNameChar(At(1)))
             {
@@ -264,6 +269,11 @@ public static partial class CommandAnalysis
                 if (At() == '&')
                 {
                     _at++;
+
+                    for (var line = first; line < lines.Count; line++)
+                    {
+                        lines[line] += " &";
+                    }
                 }
 
                 return;
@@ -553,9 +563,17 @@ public static partial class CommandAnalysis
         /// </summary>
         private static bool NamesInvokeExpression(string word)
             => LiteralText(word) is { } text
-                && text.Replace('\\', '/').Split('/')[^1] is var name
-                && string.Concat(name.Select(character => IsDash(character) ? '-' : character)) is var dashed
+                && CommandName(text) is var dashed
                 && (dashed.Equals("iex", StringComparison.OrdinalIgnoreCase) || dashed.Equals("Invoke-Expression", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// The command a name gives as PowerShell resolves it: its last segment, as a module-qualified name ends
+        /// (<c>Microsoft.PowerShell.Management\Start-Process</c>), each of PowerShell's dashes a plain one.
+        /// </summary>
+        internal static string CommandName(string text) => Dashed(text.Replace('\\', '/').Split('/')[^1]);
+
+        /// <summary>A word with each of PowerShell's dashes a plain one, as PowerShell reads a parameter's.</summary>
+        internal static string Dashed(string word) => string.Concat(word.Select(character => IsDash(character) ? '-' : character));
 
         /// <summary>
         /// The text a word is, where it is literal text alone - one or more of <see cref="Literal"/>'s quoted runs,

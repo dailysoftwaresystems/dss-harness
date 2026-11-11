@@ -764,7 +764,12 @@ public sealed class CommandWordsPolicyTests
     /// A file the string writes is known by the path it reaches from where its command stands: a script run after it is
     /// the file only where the run word reaches that path, or where a target the shell expands may be it - its literal
     /// end the run word's - so a log written to a variable's path, or a script of the same name in another directory,
-    /// runs on both grounds, and the file it wrote does not.
+    /// runs on both grounds, and the file it wrote does not. A tilde whose variable this does not read - <c>~+</c> where
+    /// the string set PWD to a value it computes, <c>~</c> where it so set HOME - is such an expansion, as a target and as
+    /// a run word; a program the command runs - a runner's past its own options among them - or a script file the shell
+    /// expands may be any file the string wrote, another word a runner such as wsl or ssh is given none, though an end of
+    /// a file named by an expansion it may be, and the null device is none. A script a shell reads from its input is the
+    /// file it names.
     /// </summary>
     [Fact]
     public void AFileTheStringWrote_IsTheScriptItRunsOnlyWhereTheRunWordMayReachIt()
@@ -778,6 +783,11 @@ public sealed class CommandWordsPolicyTests
                 "make > \"$LOGFILE\"; bash scripts/report.sh", "npm test 2>&1 | tee \"$LOG\"; bash scripts/report.sh",
                 "dotnet test > \"$OUT/test.log\"; ./build/bin/app", "make > \"$TMPDIR/log\" 2>&1; ./check.sh",
                 "echo x > out/test.sh; bash scripts/test.sh", "printf x > \"$D/run.sh\"; bash scripts/build.sh",
+                "PWD=$(pwd); echo x > ~+/out/test.sh; bash scripts/test.sh",
+                "make 2>/dev/null; wsl -e bash -lc \"cd /mnt/c/src && make $TARGET\"", "scp f h:/tmp > /dev/null && ssh h \"cd /tmp && ./run $ARGS\"",
+                "make > build.log; wsl -e bash -lc \"cd /mnt/c/src && make $TARGET\"", "bash < scripts/test.sh", "echo x > out/test.sh; sh -s < scripts/test.sh",
+                "LOG=$(mktemp); make > \"$LOG\" 2>&1 || tail -50 \"$LOG\"; ssh build \"cd /srv && make $TARGET\"",
+                "make > \"$LOG\"; strace -f -o trace.txt ./build/bin/app \"$INPUT\"", "make > \"$LOG\"; taskset -c 0 ./build/bin/app $ARGS",
             })
             {
                 Assert.True(policy.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(policy.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
@@ -788,12 +798,60 @@ public sealed class CommandWordsPolicyTests
                 ("echo x > out/test.sh; bash out/test.sh", "bash out/test.sh", "out/test.sh"),
                 ("echo x > out/test.sh; bash ./out/../out/test.sh", "bash ./out/../out/test.sh", "./out/../out/test.sh"),
                 ("printf x > \"$D/run.sh\"; bash scripts/run.sh", "bash scripts/run.sh", "scripts/run.sh"),
+                ("PWD=$(pwd); echo 'gh auth token' > ~+/x.sh; bash x.sh", "bash x.sh", "x.sh"),
+                ("PWD=$(pwd); cat > ~+/x.sh <<'EOF'\ngh auth token\nEOF\nbash x.sh", "bash x.sh", "x.sh"),
+                ("PWD=$(pwd); echo x > ~+/out/test.sh; bash out/test.sh", "bash out/test.sh", "out/test.sh"),
+                ("echo 'gh auth token' > x.sh; bash < x.sh", "bash <x.sh", "x.sh"),
+                ("echo 'gh auth token' > x.sh; sh -s < x.sh", "sh -s <x.sh", "x.sh"),
+                ("echo 'gh auth token' > x.sh; source /dev/stdin < x.sh", "source /dev/stdin <x.sh", "x.sh"),
+                ("echo 'gh auth token' > x.sh; S=$(ls *.sh); taskset -c 0 ./$S", "taskset -c 0 ./$S", "./$S"),
+                ("echo 'gh auth token' > x.sh; stdbuf -oL ./*.sh", "stdbuf -oL ./*.sh", "./*.sh"),
+                ("echo 'gh auth token' > x.sh; ionice -c 3 stdbuf -o L nohup ./*.sh", "ionice -c 3 stdbuf -o L nohup ./*.sh", "./*.sh"),
             })
             {
                 Assert.Equal(
                     new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"this tool could not decide '{subject}' ('{word}' is a script file this command wrote before it runs it, whose text this does not read): it denies what it cannot decide"),
                     policy.Run(command));
             }
+
+            // A script the shell reads from its input is read as one it is named: the text a here-document gave it, and a
+            // file the string did not write as the one it names.
+            foreach (var (fed, named) in new[]
+            {
+                ("cat > x.sh <<'EOF'\ngh auth token\nEOF\nbash < x.sh", "cat > x.sh <<'EOF'\ngh auth token\nEOF\nbash x.sh"),
+                ("cat > x.sh <<'EOF'\nmake test\nEOF\nbash < x.sh", "cat > x.sh <<'EOF'\nmake test\nEOF\nbash x.sh"),
+                ("bash < scripts/test.sh", "bash scripts/test.sh"),
+            })
+            {
+                Assert.Equal(policy.Run(named), policy.Run(fed));
+            }
+
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("cat > x.sh <<'EOF'\ngh auth token\nEOF\nbash < x.sh"));
+            Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("cat > x.sh <<'EOF'\nmake test\nEOF\nbash < x.sh"));
+        }
+
+        // A worktree rule refuses HOME's setting itself, as git's configuration; without one, a ~ of the HOME the string
+        // computes is read as the expansion it is.
+        var side = tree.Side();
+
+        // The null device is no file the string writes: a run word after it may be no file of the string's.
+        foreach (var command in new[] { "HOME=$(pwd); make > ~/build.log; bash scripts/report.sh", "HOME=$(pwd); make 2>/dev/null; bash ~/scripts/report.sh" })
+        {
+            Assert.True(side.Run(command) == AgentPolicyAnswer.Allow, $"'{command}' was refused: {(side.Run(command) as AgentPolicyAnswer.Denied)?.Reason}");
+        }
+
+        foreach (var (command, subject, word) in new[]
+        {
+            ("HOME=$(pwd); echo 'gh auth token' > ~/x.sh; bash x.sh", "bash x.sh", "x.sh"),
+            ("HOME=$(pwd); echo 'gh auth token' > x.sh; bash ~/x.sh", "bash ~/x.sh", "~/x.sh"),
+            ("HOME=$(pwd); echo 'gh auth token' > x.sh; ~/x.sh", "~/x.sh", "~/x.sh"),
+            ("HOME=$(pwd); echo 'gh auth token' > x.sh; valgrind bash ~/x.sh", "valgrind bash ~/x.sh", "~/x.sh"),
+            ("HOME=$(pwd); echo 'gh auth token' > x.sh; chmod +x x.sh; stdbuf -oL ~/x.sh", "stdbuf -oL ~/x.sh", "~/x.sh"),
+        })
+        {
+            Assert.Equal(
+                new AgentPolicyAnswer.Denied(AgentPolicy.UndecidedRule, AgentPolicySource.Builtin, $"this tool could not decide '{subject}' ('{word}' is a script file this command wrote before it runs it, whose text this does not read): it denies what it cannot decide"),
+                side.Run(command));
         }
     }
 
@@ -1344,23 +1402,42 @@ public sealed class CommandWordsPolicyTests
     /// <summary>
     /// Every path a word names, each once and said whole or not: the word, the value after its <c>=</c> or a PowerShell
     /// parameter's <c>:</c>, each with curl's <c>@</c> or <c>&lt;</c> off and a <c>-F</c> field's <c>;</c> fields cut, a
-    /// short option's glued value, a message's words, the words its braces spell, a file URL's path.
+    /// short option's glued value, a message's words, the words its braces spell, a file URL's path - and whether the
+    /// shell expands a tilde at each one's start: the word's own, unquoted, its braces' words and an assignment's value
+    /// and list, never a value a program reads out of the word.
     /// </summary>
     [Fact]
     public void PathsNamed_IsEveryPathAWordMayName()
     {
-        Assert.Equal([new NamedPath("@k", true), new NamedPath("k", true)], CommandAnalysis.PathsNamed("@k"));
+        Assert.Equal([new NamedPath("@k", true, true), new NamedPath("k", true, false)], CommandAnalysis.PathsNamed("@k"));
         Assert.Equal(
-            [new NamedPath("f=@k;type=x", true), new NamedPath("@k;type=x", true), new NamedPath("k;type=x", true), new NamedPath("k", true)],
+            [new NamedPath("f=@k;type=x", true, true), new NamedPath("@k;type=x", true, true), new NamedPath("k;type=x", true, false), new NamedPath("k", true, false)],
             CommandAnalysis.PathsNamed("f=@k;type=x"));
-        Assert.Equal([new NamedPath("f=<k", true), new NamedPath("<k", true), new NamedPath("k", true)], CommandAnalysis.PathsNamed("f=<k"));
-        Assert.Equal([new NamedPath("-i./key", true), new NamedPath("./key", false)], CommandAnalysis.PathsNamed("-i./key"));
-        Assert.Equal([new NamedPath("-Path:a/b", true), new NamedPath("a/b", true), new NamedPath("ath:a/b", false)], CommandAnalysis.PathsNamed("-Path:a/b"));
-        Assert.Equal([new NamedPath("--file=x", true), new NamedPath("x", true)], CommandAnalysis.PathsNamed("--file=x"));
-        Assert.Equal([new NamedPath("a {b,c}", true), new NamedPath("a", false), new NamedPath("{b,c}", false), new NamedPath("a c", true), new NamedPath("a b", true)], CommandAnalysis.PathsNamed("a {b,c}"));
-        Assert.Equal([new NamedPath("{x,y}/k", true), new NamedPath("y/k", true), new NamedPath("x/k", true)], CommandAnalysis.PathsNamed("{x,y}/k"));
-        Assert.Equal([new NamedPath("{x,y}/k", true)], CommandAnalysis.PathsNamed("{x,y}/k", braces: false));
-        Assert.Equal([new NamedPath("file:///tmp/k", true), new NamedPath(new Uri("file:///tmp/k").LocalPath, true)], CommandAnalysis.PathsNamed("file:///tmp/k"));
+        Assert.Equal([new NamedPath("f=<k", true, true), new NamedPath("<k", true, true), new NamedPath("k", true, false)], CommandAnalysis.PathsNamed("f=<k"));
+        Assert.Equal([new NamedPath("-i./key", true, true), new NamedPath("./key", false, false)], CommandAnalysis.PathsNamed("-i./key"));
+        Assert.Equal([new NamedPath("-Path:a/b", true, true), new NamedPath("a/b", true, false), new NamedPath("ath:a/b", false, false)], CommandAnalysis.PathsNamed("-Path:a/b"));
+        Assert.Equal([new NamedPath("--file=x", true, true), new NamedPath("x", true, false)], CommandAnalysis.PathsNamed("--file=x"));
+        Assert.Equal(
+            [new NamedPath("a {b,c}", true, true), new NamedPath("a", false, false), new NamedPath("{b,c}", false, false), new NamedPath("a c", true, true), new NamedPath("a b", true, true)],
+            CommandAnalysis.PathsNamed("a {b,c}"));
+        Assert.Equal([new NamedPath("{x,y}/k", true, true), new NamedPath("y/k", true, true), new NamedPath("x/k", true, true)], CommandAnalysis.PathsNamed("{x,y}/k"));
+        Assert.Equal([new NamedPath("{x,y}/k", true, true)], CommandAnalysis.PathsNamed("{x,y}/k", braces: false));
+        Assert.Equal([new NamedPath("file:///tmp/k", true, true), new NamedPath(new Uri("file:///tmp/k").LocalPath, true, false)], CommandAnalysis.PathsNamed("file:///tmp/k"));
+
+        // git's revision after its '@', an option's value, a glued one and a quoted word are text; an assignment's value
+        // and each part of its list are the shell's, as a list's first part is wherever its path's start is.
+        Assert.Equal([new NamedPath("@~1", true, true), new NamedPath("~1", true, false)], CommandAnalysis.PathsNamed("@~1"));
+        Assert.Equal(
+            [new NamedPath("--fixup=@~1", true, true), new NamedPath("@~1", true, false), new NamedPath("~1", true, false)],
+            CommandAnalysis.PathsNamed("--fixup=@~1"));
+        Assert.Equal([new NamedPath("-S~1", true, true), new NamedPath("~1", false, false)], CommandAnalysis.PathsNamed("-S~1"));
+        Assert.Equal([new NamedPath("~1", true, false)], CommandAnalysis.PathsNamed("~1", quoted: "ll"));
+        Assert.Equal([new NamedPath("X=~1", true, true), new NamedPath("~1", true, true)], CommandAnalysis.PathsNamed("X=~1"));
+        Assert.Equal([new NamedPath("X=~1", true, true), new NamedPath("~1", true, false)], CommandAnalysis.PathsNamed("X=~1", quoted: "  ll"));
+        Assert.Equal(
+            [new NamedPath("P=a:~1", true, true), new NamedPath("a:~1", true, true), new NamedPath("P=a", true, true), new NamedPath("~1", true, true), new NamedPath("a", true, true)],
+            CommandAnalysis.PathsNamed("P=a:~1", lists: true));
+        Assert.Equal([new NamedPath("a:~1", true, true), new NamedPath("a", true, true), new NamedPath("~1", true, false)], CommandAnalysis.PathsNamed("a:~1", lists: true));
     }
 
     /// <summary>

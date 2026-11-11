@@ -32,7 +32,17 @@ public static class SideTaskPolicy
     /// <param name="config">The configuration, whose worktrees root and state paths are guarded.</param>
     /// <param name="claudeDirectories">Every Claude Code directory a client of the side-task uses, and the tool's own.</param>
     /// <param name="credentialPlaces">Every place the user keeps credentials in on this machine (<see cref="Isolation.UserCredentials.Of"/>).</param>
-    public static AgentPolicyGround Ground(HarnessLayout layout, HarnessConfig config, IReadOnlyList<string> claudeDirectories, IReadOnlyList<Isolation.HiddenPlace> credentialPlaces)
+    /// <param name="liveRun">
+    /// The name of the run whose owner is live over the tree, asked where the policy holds the agent off the git state
+    /// the run works over (<see cref="AgentPolicy.LiveRunHeld"/>); null where the tree tells of none. Checked at each
+    /// call, so a run that starts while the chat is open is held to from its first step, and one that ends releases it.
+    /// </param>
+    public static AgentPolicyGround Ground(
+        HarnessLayout layout,
+        HarnessConfig config,
+        IReadOnlyList<string> claudeDirectories,
+        IReadOnlyList<Isolation.HiddenPlace> credentialPlaces,
+        Func<string?>? liveRun = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(config);
@@ -58,7 +68,10 @@ public static class SideTaskPolicy
             WorktreeRules: false,
             ProtectedPaths: false,
             StateDirectories: HarnessLayout.StatePathsUnder(tree, config.Worktrees?.Root ?? WorktreeSettings.DefaultRoot),
-            SideTask: true);
+            SideTask: true)
+        {
+            LiveRun = liveRun,
+        };
     }
 
     /// <summary>

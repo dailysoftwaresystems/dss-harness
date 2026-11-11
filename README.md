@@ -84,7 +84,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `stop-orchestrator <run> [--now] [--json]` | Ask the engine running a run to stop where it stands, and wait 30 s; `--now` ends the engine's process - only on this machine, and only the process its owner names by its start |
 | `ask-orchestrator-status <run> [--json]` | The tool's own question of a run - what is happening now, what is done, what is left, what it waits for, and when it may finish - answered with the engine's facts (computed from the run's records, stamped with the moment they were read) and, where the workflow's `reporter` names one, its words: the facts first, then the model's, then what the answer cost - the person's, never the run's. Reads only: nothing of the run is written or locked but the command's own record under the run's `asks/`; where no model words the facts, they are still the answer, the command says why no model did, and it exits 0. `--json` gives the facts and the answer apart; an orchestrator that holds no run is answered with `list-orchestrator`'s facts of it, said to be such |
 | `ask-orchestrator <run> "<question>" [--json]` | A person's question about a run, answered from its records by the workflow's `reporter` over the engine's facts; reads only, as `ask-orchestrator-status` does. Refused where no model can answer: 12 where the workflow names no reporter or the reporter's own files do not read, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model failed, 21 where it could not be reached or its account is at its limit; neither command installs Claude Code or brings one up to date |
-| `run-side-task [--prompt <text> \| --prompt-file <path>] [--resume <task>] [--name <task>] [--model <code> \| --tier <tier>] [--client <client>] [--effort <level> \| --effort <code>=<level>]... [--json]` | An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept (root actions, every credential slot, Claude Code directory and place the user keeps credentials in - to its file tools, and to every word of its commands, a directory that holds one but the main tree it works in among them - git's own files, the tool's state, a git or `gh` command called by an alias or an extension, `run-side-task` itself where a word of a command or of a script the policy reads names it or a verb the shell expands may, which also refuses itself started under any agent - told by its mark and by the process tree, a process of this tool's among the ones that started it, parent by parent, a process that took a freed id never read as a parent, the tool's own runtime told by the file it runs where the table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by its name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is none; one detached from the agent's tree (`at`, a `tmux` server, a double fork) told by the mark alone, and a tree that could not be read refused saying why - and a command that sets the mark, takes it away, or may take it away or names it but as data), the tool's own verbs open to it as the person's are, but those that read a credential slot or write its state - a policy of what a command names, not a sandbox: a command over the whole main tree, `.` or no path, reaches the slots' files beneath it, and code an interpreter runs (`python -c`, `perl -e`, awk's `system`) or a process apart from the agent's tree does what no word the policy reads says, where the operating system's isolation beneath it (below) does not hide every slot from each command and keep it from git's code-running files and the tool's state; its `web_search` asks every configured source turned on and one more - `native`, the provider's own search: a request of the harness's own on the Claude API, asked with the model and key serving the side-task when the agent asks and through that key's gate as every request is, its cost counted then to that model and key and a failure of it - a gate held past the longest wait among them - one failed part saying why, Claude Code's own `WebSearch` kept in its tools, none on Z.AI. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn where it stands - on a client that stores its conversations what was said kept up to its last whole turn and what the cut request used kept as the turn's - and a second ending the chat as `/exit` does - a turn under way cut and its result read within 10 s, the lines the agent had not taken dropped, so what the turn used, cost and spent is kept, and a launch still waiting its turn at the gate, its wait said, never begun - each interrupt saying whether a turn of the agent's was under way to cut, or none was and nothing is cut - a first one while a launch waits at the gate among them, the launch begun once the wait passes - a move to a later model of its tier going on from the conversation so far - a one shot's turn and each message to a client that stores its conversations tried again 3 times on its model first, as a step's, a chat's launch held open never tried again but moved at its first failure, decline, limit, refused key or model that cannot be started - and where no turn runs, while it is set up or a model made ready, an interrupt stopping it, a one shot's first and a chat's second - a line ending in `\` going on to the next, `/exit`, `/model`, `/effort` (a level, `<code>=<level>`, or `default`) - a new model keeping only the levels that name it and the one for the rest, a launch at work giving way as the person leaving does and the lines it never took going on to the new one - `/records`, `/help` - or one message with `--prompt`/`--prompt-file`, answered once with the agent's final text (`--json` its one document, and a usage error without a prompt), Ctrl+C there cutting its turn - a Claude Code launch's at that turn's result, an API client's request left where it stands, what the provider had said it used counted and a cost it had said nothing of unknown - what it used kept, and ending it interrupted (130), a launch still waiting its turn at the gate or to be tried again never begun. Named by when it began - with its first words in one shot; a chat, named before its first message is typed, by the time alone - unless `--name` names it, a name another side-task holds refused (13) and that one's records named as its. `--resume` opens one again, going on with its stored conversation - or from the conversation so far where its model's client is handed none - on what the person last set it to run on, its tier with the tier's later models or the model named outright, unless `--model` or `--tier` names another; refused (13) where it names no side-task or another process holds it open, and `--name` beside it a usage error; what it spends is counted against its key. Exits 0 ended as asked - a chat 0 however the person leaves it once it has begun, 130 where interrupts stop it before it began, while it is set up or opened again - 10 usage (an effort a model does not take among them), 12 the configuration (in one shot an agent the configuration keeps from starting among it), 13 refused (a name taken, an unignored `.side-tasks`, started under an agent or its starting processes unread, an update of Claude Code refused, and in one shot a key missing or the tool running elevated), 14 a client that cannot start or, under `agentPolicy.isolation` `required`, a machine that cannot isolate the agent's commands, 21 the install of Claude Code timed out or could not reach the registry; in one shot besides, 20 the model failed past its retries and fallback, 21 cut short by the account's limit, a stall or the clock, 130 interrupted; the records under `.side-tasks/<task>/` are named on every exit - or said to be none where it stopped before any were written - and kept until a person removes them (`help side-tasks`) |
+| `run-side-task [--prompt <text> \| --prompt-file <path>] [--resume <task>] [--name <task>] [--model <code> \| --tier <tier>] [--client <client>] [--effort <level> \| --effort <code>=<level>]... [--json]` | An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept (root actions, every credential slot, Claude Code directory and place the user keeps credentials in - to its file tools, and to every word of its commands, a directory that holds one but the main tree it works in among them - git's own files, the tool's state, a git or `gh` command called by an alias or an extension, `run-side-task` itself where a word of a command or of a script the policy reads names it or a verb the shell expands may, which also refuses itself started under any agent - told by its mark and by the process tree, a process of this tool's among the ones that started it, parent by parent, a process that took a freed id never read as a parent, the tool's own runtime told by the file it runs where the table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by its name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is none; one detached from the agent's tree (`at`, a `tmux` server, a double fork) told by the mark alone, and a tree that could not be read refused saying why - and a command that sets the mark, takes it away, or may take it away or names it but as data), the tool's own verbs open to it as the person's are, but those that read a credential slot or write its state - a policy of what a command names, not a sandbox: a command over the whole main tree, `.` or no path, reaches the slots' files beneath it, and code an interpreter runs (`python -c`, `perl -e`, awk's `system`) or a process apart from the agent's tree does what no word the policy reads says, where the operating system's isolation beneath it (below) does not hide every slot from each command and keep it from git's code-running files and the tool's state; its `web_search` asks every configured source turned on and one more - `native`, the provider's own search: a request of the harness's own on the Claude API, asked with the model and key serving the side-task when the agent asks and through that key's gate as every request is, its cost counted then to that model and key and a failure of it - a gate held past the longest wait among them - one failed part saying why, Claude Code's own `WebSearch` kept in its tools, none on Z.AI. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn where it stands - on a client that stores its conversations what was said kept up to its last whole turn and what the cut request used kept as the turn's - and a second ending the chat as `/exit` does - a turn under way cut and its result read within 10 s, the lines the agent had not taken dropped, so what the turn used, cost and spent is kept, and a launch still waiting its turn at the gate, its wait said, never begun - each interrupt saying whether a turn of the agent's was under way to cut, or none was and nothing is cut - a first one while a launch waits at the gate among them, the launch begun once the wait passes - a move to a later model of its tier going on from the conversation so far - a one shot's turn and each message to a client that stores its conversations tried again 3 times on its model first, as a step's, a chat's launch held open never tried again but moved at its first failure, decline, limit, refused key or model that cannot be started - and where no turn runs, while it is set up or a model made ready, an interrupt stopping it, a one shot's first and a chat's second - a line ending in `\` going on to the next, `/exit`, `/model`, `/effort` (a level, `<code>=<level>`, or `default`) - a new model keeping only the levels that name it and the one for the rest, a launch at work giving way as the person leaving does and the lines it never took going on to the new one - `/records`, `/help` - or one message with `--prompt`/`--prompt-file`, answered once with the agent's final text (`--json` its one document, and a usage error without a prompt), Ctrl+C there cutting its turn - a Claude Code launch's at that turn's result, an API client's request left where it stands, what the provider had said it used counted and a cost it had said nothing of unknown - what it used kept, and ending it interrupted (130), a launch still waiting its turn at the gate or to be tried again never begun. Named by when it began - with its first words in one shot; a chat, named before its first message is typed, by the time alone - unless `--name` names it, a name another side-task holds refused (13) and that one's records named as its. `--resume` opens one again, going on with its stored conversation - or from the conversation so far where its model's client is handed none - on what the person last set it to run on, its tier with the tier's later models or the model named outright, unless `--model` or `--tier` names another; refused (13) where it names no side-task or another process holds it open, and `--name` beside it a usage error; what it spends is counted against its key. Exits 0 ended as asked - a chat 0 however the person leaves it once it has begun, 130 where interrupts stop it before it began, while it is set up or opened again - 10 usage (an effort a model does not take among them), 12 the configuration (in one shot an agent the configuration keeps from starting among it), 13 refused (a name taken, an unignored `.side-tasks`, started under an agent or its starting processes unread, an update of Claude Code refused, and in one shot a key missing or the tool running elevated), 14 a client that cannot start where the entry that would serve first is on it - a later entry on it passed over - or, under `agentPolicy.isolation` `required`, a machine that cannot isolate the agent's commands, 21 the install of Claude Code timed out or could not reach the registry; in one shot besides, 20 the model failed past its retries and fallback, 21 cut short by the account's limit, a stall or the clock, 130 interrupted; the records under `.side-tasks/<task>/` are named on every exit - or said to be none where it stopped before any were written - and kept until a person removes them (`help side-tasks`) |
 | `list-side-tasks [--json]` | The repository's side-tasks, newest first: each by its name, when it began and last spoke, its model, its turns and cost, and whether it is open now |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there, each step's schema one the engine reads (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
@@ -96,6 +96,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `read-anchor <id>...` | Show anchors in full |
 | `read-anchors` | List anchors, or check the registries with `--lint` |
 | `check-anchor-balance` | Fail a change that creates more anchors than its work closes |
+| `check-anchor-arms` | Hold anchor rows' claims about mutation arms to the mutation record |
 | `check-anchor-citations` | Check every anchor cited in the declared roots resolves to a row |
 | `fix-line-endings [--all \| --changed]` | Apply the line-ending policy `.gitattributes` declares; `--check` refuses instead |
 | `check-ci-legs` | Report each CI leg, separating a real failure from a budget overrun, by the job and step names `ci` declares (`help ci`) |
@@ -237,6 +238,13 @@ otherwise appears as compile errors in files the worktree never touched. It says
 long a name would fit instead. The name limit and both sides of the budget are set
 in `config.json`.
 
+**One seam to the behaviour.** The command line parses arguments, owns the console and
+reports the exit code; everything a command does lives in the Core library behind a use
+case - one interface per operation, its request and its report the contract - so the same
+behaviour is reachable from a terminal today and from a front end later, and the boundary
+is enforced by tests that read the built command line itself. The
+[architecture](docs/architecture.md) says the whole of it.
+
 ## Layout
 
 ```
@@ -256,7 +264,7 @@ in `config.json`.
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
 .orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence
-.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it
+.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it, and for a reason step the policy.json it started under - the agents' configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a line for each launch's first message, each call of the graph tool, each escape of its narrowed reads) and its working-set.json, the seeds of the packs of the steps after it
 .orchestrators/<o>/agents/<agent>/sessions/<id>/ ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
 .orchestrators/<o>/.../<instance>/children/<session>.json ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once its starter has gone
@@ -265,7 +273,7 @@ in `config.json`.
 .orchestrators/.web-index/<source>/          ignored; the harness's own index of a sitemap search source's site: its state, its pages and the pages it could not read, and its fill's record of each address it asked
 .orchestrators/key-spend.jsonl               ignored; what each key spent, by its name and never its value: a line for each key and model of each entry of a step's order or of a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where balanceKeyUsage chooses a key ('dssharness help agent-clients')
 .side-tasks/                                 contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout, and never sent to a host by sync ('dssharness help side-tasks')
-.side-tasks/<task>/                          ignored; one side-task: its task.json, stored stream, transcript, denials and web, and its conversation where its client stores one; <task>.owner.json beside it while a side-task holds it open
+.side-tasks/<task>/                          ignored; one side-task: its task.json, stored stream, transcript, denials and web, its conversation where its client stores one, and its own codebase graph (graph/, its map and each call of the graph tool) where it was given one; <task>.owner.json beside it while a side-task holds it open
 .mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by sync ('dssharness help mutations')
 .mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a host by sync
@@ -489,7 +497,14 @@ that fails again comes back by its own `onFailure`, until it passes or a person 
 failed agent is tried again (`retries`, waiting `backoffSeconds`, twice as long each time) and on
 each model of its fallback, quota or a provider that fails pauses the run where it can resume, and
 what still fails is asked (`onFailure: pause`). The implementation workflow says all of it on its steps, so a run of it
-ends done or asks only what it must.
+ends done or asks only what it must. It builds first: its baseline is split in two - a `build` step, which fails red
+and is taken by the recovery and built again - and the `test` step it was, which waits for the build - and the flow
+makes its codebase graph after that build, beside the baseline's tests and the CI read, passed over where it cannot be
+made. Every reason step after it is served from the graph as its type of work needs: the steps that read code for
+their task say nothing and are given the tool and their task's seeds by default, the reviewers, the self-audit, the
+diagnosis and the steps that verify and fix start their packs from their changes (`graphFrom: changes`), the
+prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the run's records, ask
+none of it (`dssharness help codebase-graph`).
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That
@@ -794,7 +809,12 @@ a glob - each word's quoting taken by where it stands, never lent to it by anoth
 alike, and a PowerShell bareword's wildcards open as pwsh on Linux and macOS expands them, a
 cmdlet's quoted ones too, which the cmdlet expands itself; a variable the string sets
 (`p=../..`) read in each later word with each value it gives it, up to 16
-readings, `$PWD` as each place the command stands in, and a `~` as each `HOME` the string, the
+readings, `$PWD` and a leading `~+` as each place the command stands in and each value the string
+gives `PWD`, a `~-` and the directory stack's `~N`, `~+N` and `~-N` as places it does not know where
+the shell expands them - a word's start, an assignment's value - and as the text they spell where it
+does not (`git log @~1`, `cat '~1'`) - and
+each, beside `~+`, a variable wherever a word the shell expands is read, the string able to give it
+any word - and a `~` as each `HOME` the string, the
 command or a command that runs it sets, while a variable it does not set and a
 substitution are read as the text they spell, for their value is the agent's environment's or a
 program's, which no word of the string gives; a `*`, a `?` or a bracket matches a name that begins
@@ -837,8 +857,14 @@ sed running what it reads or a script the shell fills in, `at` given its job by 
 a configuration file `ssh -F` names (but none, `/dev/null`), whose settings may run commands, an env
 long option that names none of env's or more than one, a script file the string writes and runs
 whose text no here-document gave - a file the string writes known by the path it reaches from each
-place its command stands, a run word that file only where it reaches that path or where a target the
-shell expands may be it, its literal end the word's (`make > "$LOG"; bash scripts/report.sh` runs) -
+place its command stands, a device it writes to (`/dev/null`, and `NUL` where cmd or PowerShell writes
+it on Windows) none, a run word - the program, the one a runner such as stdbuf or taskset runs past its
+own options, or a script file named or given as a shell's input (`bash < x.sh`) - that file only where it
+reaches that path or where a target the shell expands may be it, its literal end the word's
+(`make > "$LOG"; bash scripts/report.sh` runs), and any such file where the shell expands the program
+or the script file itself, never another word a runner is given (ssh's remote command, an argument) - a tilde whose variable
+the string set to a value it computes an expansion as a target and as a run word (`HOME=$(pwd)`, then
+`~/x.sh`) -
 a terminal session's
 program given what to run or type (`tmux`, `screen`, `zellij`, `byobu`), and `crontab`, `launchctl`
 or `systemctl` installing or starting a job, each running what it is given apart from the agent;
@@ -848,13 +874,18 @@ file `make`, `ninja` or `cmake` runs, what an archive or a patch holds, a path a
 (`$(printf ...)`), and what a process apart from the agent's tree does. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) keep an agent's worktree a thing the engine
 can measure: git's state-writing verbs (`AgentPolicy.GitStateVerbs`, listed by
-`help agent-clients`) - a git configured where it runs, by `-c` or `--config-env` of any key but
+`help agent-clients`) and the forms of git's other commands that write the same - a fetch's `--update-head-ok`,
+wherever it stands among its words (`AgentPolicy.GitStateForms`), a word the shell expands held as one that may be it
+where its expansion may give it (`git fetch $OPT`, `-f$X`, and an unquoted one the shell may split into a word of its own,
+`--depth=$n`, the refusal saying that quoting it lets it through), never a quoted one inside a word that begins
+otherwise (`--depth="$n"`, `"refs/heads/$b:refs/remotes/o/$b"`) nor a pattern whose every match begins so
+(`refs/heads/*`) - a git configured where it runs, by `-c` or `--config-env` of any key but
 the ones that only shape what git prints, by clone's own `-c` or `--config` and clone's and init's `--template`, or by
 its environment - a home it reads its global
 configuration from (`HOME`, `XDG_CONFIG_HOME`, Windows' `USERPROFILE`) among it - the `git config`
 it is and still the command it runs - the `gh` commands that run them or write gh's own configuration
 (`gh pr checkout`, `gh pr close`, `gh issue develop`, `gh repo set-default`, `gh repo fork`, `gh repo create`,
-`gh repo rename`, `gh auth setup-git`, `gh config set`; a command by one of gh's own aliases - `gh pr co` - read as
+`gh repo rename`, `gh auth setup-git`, `gh pr create`, `gh pr merge`, `gh repo sync`, `gh config set`; a command by one of gh's own aliases - `gh pr co` - read as
 the command it names, and `GH_CONFIG_DIR` or another place gh reads its configuration from, set for a command, the
 `gh config set` it is), and the `gh` commands that merge or start CI (`gh pr merge`, `gh pr update-branch`, `gh repo sync`,
 `gh workflow run`, `gh run rerun`, `gh pr create`, `gh release create`, `gh release edit`), the `gh api` endpoints and
@@ -1575,9 +1606,14 @@ request sends the model, the system prompt as one block, the tools - each stream
 is written - and the messages as the conversation stored them; adaptive thinking, its summary
 shown; the step's effort as `output_config.effort`; old tool uses cleared by the server as the
 context fills (`clear_tool_uses_20250919`, under the `context-management-2025-06-27` beta), each
-clearing said in a notice; and the system prompt and the conversation cached for
-`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said), so a budget needs the
-model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
+clearing said in a notice; and three cache marks of the client's lifetime for
+`agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said) - on the system text,
+covering the tools and it, the same for every step of that agent with the same tools; on the run's
+repository map, the first block of the conversation's first user message, covering the tools, the
+system text and the map, the same for every such step of the run that reads alike; and the top-level mark, which
+moves with the conversation's last block - so a step's second request on reads the map from the
+cache, and so does the first request of the run's next step of the same agent - and a budget needs
+the model's price of that cache's writes too: `priceCacheWrite`, or `priceCacheWrite1h` for an hour. A
 step with a fallback that can go on here sends the `fallback-credit-2026-07-01` beta, and a request
 the model declines moves the step to its next model of the same provider and client - the same
 request sent again with the model changed and the credit the API gave sent back as its
@@ -1614,7 +1650,10 @@ message as the conversation stored it - the engine's as a user message of text, 
 each answered by a tool message, in order; the tools as functions, their calls' arguments streamed
 (`tool_stream`); the model's thinking on, the step's effort as `reasoning_effort` (`low`, `medium`,
 `high`, `xhigh`, `max`); and `max_tokens` - no sampling parameter or tool choice of the tool's own,
-which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own. Z.AI caches what a request repeats by itself
+which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own. A first
+message that holds the run's repository map holds it first, ahead of the step's context pack and its
+task - the same bytes for every step of the run that reads alike, so the longest prefix the steps of an
+agent share begins with it. Z.AI caches what a request repeats by itself
 and bills no write, so a budget needs the model's input, cached-input and output prices. Each
 answer's reasoning is stored with it and sent back; Z.AI leaves it out of what the model reads in
 later turns unless `agentClients.glm.preserveThinking` is true (false where nothing is said), which
@@ -1774,8 +1813,14 @@ none appeared, some are still running, or one ended neither green nor red; and t
 `refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
 consent, a path outside a fold's `within`, conflicting merges - with what it is about, a fold and a deletion applying
 only what it named, write each path a fold means to write to the run's ledger of its folds (`folds.json`) before the
-verb and what it left after, and, of `others`, work on each other open agent of the run in turn; and `commit`, which
-commits the folds upstream of it and no other work - each path they changed that no commit of the run took, held to what
+verb and, before the fold lets go of the main tree's lock it wrote under, what it left - so a side-task's write made once
+it let go is never taken for the fold's, whatever comes after: the verb's answer, a throw, a crash, a stop. The one limit
+is a fold that dies inside its own hold, part way through its write: the next attempt reads what it left from the tree,
+under that lock, and marks it `readFromTree`, for a side-task's write made between the death and that read cannot be
+told from the fold's (an intent an earlier release left unsettled, which does not say `recordsWrite` - its verb recorded
+nothing of its write, so it may have written all of it - is read so too) - and, of `others`, work on each other open
+agent of the run in turn; and `commit`, which commits
+the folds upstream of it and no other work - each path they changed that no commit of the run took, held to what
 its fold left there (a path edited or restored since, a path the index marks assume-unchanged or skip-worktree, the
 main checkout off the branch the run started on, or a fold upstream whose intent nobody settled, fails it, and nothing
 is staged), on an empty index, by explicit path, with the configuration's `commit.template` filled or the step's own
@@ -1797,12 +1842,17 @@ on the repository the remote's address names, its body the workflow's file fille
 open one as it is (`created` false) so a step run again opens no second, and never one from a fork's branch of the same
 name; the run never merges it, and its end leaves each pull request, and each folded path git ignores, for a person. A check that finds red
 fails its step under `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it
-starts, and one that reads nothing fails the step (12). Every call of `gh` and every git command is started so it
+starts, and one that reads nothing fails the step (12) - a reason step's prompt alone is filled further: a placeholder in
+it naming a step the run left no output is filled with a sentence saying so and why, so the agent knows what it does not
+have. Every call of `gh` and every git command is started so it
 cannot ask, and each command a step runs on the forge or to publish - a read of CI, a commit's, a push, a pull
 request's - is ended after its step's `timeoutMinutes` where the step says one, else its own (5 minutes for `gh` and
 a push, 15 minutes for a commit's), and is not done (21). A step of any other type fails, saying no runner serves its type;
 the rest are the next thing the tool grows. A step that works in or on an agent
-waits for the create-agent step that makes it, and is not run where that step did not make it. Run
+waits for the create-agent step that makes it, and is not run where that step did not make it. The topic carries its
+worked examples besides - each printed as a whole workflow that holds as it is printed: a repair raised by a failed
+build that goes back to what failed, a check raised whenever a builder ends, issues found and fixed one by one under
+`maxOpenAgents: 1`, and a review loop that reworks what it finds until it finds nothing. Run
 `dssharness help workflows` for the whole of it.
 
 ## Anchors
@@ -1818,13 +1868,19 @@ dssharness set-anchor D-AUTH-TOKEN-REFRESH --status closed   # moves it to the d
 dssharness read-anchor D-AUTH-TOKEN-REFRESH
 dssharness read-anchors --open --band P0 P1
 dssharness check-anchor-balance --base main
+dssharness check-anchor-arms
 ```
 
 The Status cell (`🟠 OPEN`, `⏳ GATED`, `🔵 DISCLOSED`, `✅ CLOSED`) is the only verdict that
 decides whether a row is closed. Closing an anchor moves its row to the done registry, and
 `check-anchor-balance` fails a change that creates more anchors than its work closes. A row is
 one line, so a value's line breaks are stored as spaces: a value that would be stored with an
-id or a path cut in two is refused, and so is one that newly cites an id no row holds. Run
+id or a path cut in two is refused, and so is one that newly cites an id no row holds. A row
+names a mutation arm with a backticked id, and `check-anchor-arms` holds a done row's named
+arms to the mutation record - each must be unmoved with a recorded passed on the legs its S
+row names, a pass cited beside a run id must be spelled as history (`anchors.passWords`,
+`anchors.historyForms`), and a backticked id no A row holds any more is reported where git
+history shows it was declared once. Run
 `dssharness help anchors` for the rules.
 
 ## Building from source

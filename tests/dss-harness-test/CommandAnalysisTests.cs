@@ -9,6 +9,59 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class CommandAnalysisTests
 {
+    /// <summary>
+    /// The program a runner runs is the word past its own options, each with the value it takes, and past the words it
+    /// reads before the command - a wrapper's among them, through each in turn; a runner that runs none of its words on
+    /// this machine runs none - ssh's is its host's, wsl's without -e and watch's without -x are command lines read on
+    /// their own, flock's -c and runuser's without -u a shell's, and a process's settings by its id run nothing. cmd's
+    /// start may take its first word for a title. Every runner has its reading.
+    /// </summary>
+    [Fact]
+    public void ProgramsAt_IsTheCommandEachRunnerRunsPastItsOwnOptions()
+    {
+        (string Command, int[] Programs)[] rows =
+        [
+            ("make $TARGET", [0]), ("A=1 make", [1]),
+            ("setsid -f ./x", [0, 2]),
+            ("stdbuf -oL ./x", [0, 2]), ("stdbuf -o L ./x", [0, 3]), ("stdbuf --output=L ./x", [0, 2]),
+            ("ionice -c 3 -n7 ./x", [0, 4]), ("ionice -c3 -p 123", [0]),
+            ("chrt -b 0 ./x", [0, 3]), ("chrt -p 123", [0]),
+            ("taskset -c 0 ./x $A", [0, 3]), ("taskset 0x1 ./x", [0, 2]), ("taskset -p 0x1 123", [0]),
+            ("unshare -r -S 0 ./x", [0, 4]),
+            ("nsenter -t 1 -m ./x", [0, 4]),
+            ("prlimit --nofile=1024 ./x", [0, 2]), ("prlimit -p 123 --nofile=1024", [0]),
+            ("numactl --membind 0 ./x", [0, 3]), ("numactl -H", [0]),
+            ("cpulimit -l 50 -- ./x", [0, 4]), ("cpulimit -p 123 -l 50", [0]),
+            ("firejail --net=none ./x", [0, 2]),
+            ("flock -w 5 /tmp/l ./x", [0, 4]), ("flock /tmp/l -c make", [0]),
+            ("torsocks -P 9050 ./x", [0, 3]),
+            ("proxychains -f p.conf ./x", [0, 3]), ("proxychains4 -q ./x", [0, 2]),
+            ("faketime 2020-01-01 ./x", [0, 2]),
+            ("strace -f -o t.txt ./x $A", [0, 4]),
+            ("ltrace -o t.txt ./x", [0, 3]),
+            ("valgrind --tool=memcheck ./x", [0, 2]),
+            ("caffeinate -t 60 ./x", [0, 3]),
+            ("chroot /srv/root ./x", [0, 2]),
+            ("runuser -u bob -- ./x", [0, 4]), ("runuser bob -c make", [0]),
+            ("call x.bat 1", [0, 1]),
+            ("start /b /d c:/x prog.exe", [0, 4]), ("start title prog.exe", [0, 1, 2]),
+            ("dtach -c /tmp/s -z ./x", [0, 4]),
+            ("abduco -c name ./x", [0, 3]),
+            ("daemonize -p /tmp/p ./x", [0, 3]),
+            ("watch -n 1 -x ./x", [0, 4]), ("watch -n 1 ./x", [0]),
+            ("wsl -d u -e ./x", [0, 4]), ("wsl ./x", [0]),
+            ("ssh -p 22 host ./x", [0]),
+            ("stdbuf -oL nohup timeout 5 nice -n 3 ./x", [0, 2, 3, 5, 8]),
+        ];
+
+        foreach (var (command, programs) in rows)
+        {
+            Assert.True(programs.SequenceEqual(CommandAnalysis.ProgramsAt(command.Split(' ')).Order()), $"'{command}' runs {string.Join(", ", CommandAnalysis.ProgramsAt(command.Split(' ')).Order())}");
+        }
+
+        Assert.Empty(CommandAnalysis.CommandRunners.Except(rows.Select(row => row.Command.Split(' ')[0])));
+    }
+
     [Fact]
     public void ASeparatorSplitsAStringIntoCommands()
     {
@@ -19,6 +72,71 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["a"], ["b"]], Commands("a & b"));
         Assert.Equal([["a"], ["b"]], Commands("a\nb"));
         Assert.Equal([["a"], ["b"]], Commands("a\r\nb"));
+    }
+
+    /// <summary>
+    /// A lone <c>&amp;</c> runs the list it ends in the background - each command of it, its pipe, its and-or and the group
+    /// it closes with it - and nothing after it; a script a command in the background runs is in the background with it,
+    /// and an <c>&amp;</c> that joins, redirects or is quoted puts nothing there.
+    /// </summary>
+    [Fact]
+    public void ALoneAmpersand_RunsTheListItEndsInTheBackground()
+    {
+        static IReadOnlyList<(string, bool)> Read(string shell)
+            => [.. CommandAnalysis.Commands(shell).Select(command => (command.Words[0], command.Background))];
+
+        Assert.Equal([("a", true), ("b", true), ("c", true), ("d", false)], Read("a | b && c & d"));
+        Assert.Equal([("a", false), ("b", true), ("c", true)], Read("a; { b; c; } &"));
+        Assert.Equal([("a", false), ("b", true), ("c", false)], Read("a\nb &\nc"));
+        Assert.Equal([("make", true)], Read("sh -c 'make' &"));
+        Assert.Equal([("make", true), ("x", false)], Read("sh -c 'make &'; x"));
+        Assert.Equal([("a", false), ("b", false), ("echo", false)], Read("a && b &> log; echo 'x & y' 2>&1"));
+    }
+
+    /// <summary>
+    /// The shell's other ways to run a command in the background are read as a lone <c>&amp;</c> is: a <c>coproc</c>'s
+    /// command - a compound one after its name, whole - and a process substitution's body, <c>&lt;(...)</c> or
+    /// <c>&gt;(...)</c>, which the shell does not wait for. PowerShell's job <c>&amp;</c> runs every pipeline of its statement
+    /// so; cmd's lone <c>&amp;</c> runs the next command once the one before it ends, a redirect's <c>&amp;</c> staying one.
+    /// </summary>
+    [Fact]
+    public void ACoprocessAProcessSubstitutionAndAJob_RunInTheBackground_AndCmdsAmpersandRunsInTurn()
+    {
+        static IReadOnlyList<(string, bool)> Read(string shell)
+            => [.. CommandAnalysis.Commands(shell).Select(command => (command.Words[0], command.Background))];
+
+        Assert.Equal([("make", true), ("x", false)], Read("coproc make; x"));
+        Assert.Equal([("make", true), ("date", true), ("x", false)], Read("coproc gen { make; date; }; x"));
+        Assert.Equal([("make", true), ("x", false)], Read("coproc gen (make)\nx"));
+        Assert.Equal([("make", true), (":", true), ("x", false)], Read("coproc while make; do :; done; x"));
+        Assert.Equal([("gzip", true), ("tee", false)], Read("tee log > >(gzip)"));
+        Assert.Equal([("sort", true), ("sort", true), ("diff", false)], Read("diff <(sort a) <(sort b)"));
+        Assert.Equal([("make", true), ("make", true), ("x", false)], Read("pwsh -c 'make && make test &; x'"));
+        Assert.Equal([("make", false)], Read("pwsh -c 'make'"));
+        Assert.Equal([("a", false), ("b", false)], Read("cmd /c \"a & b\""));
+        Assert.Equal([("a", false), ("b", false)], Read("cmd /c \"a 2>&1 & b >&2\""));
+        Assert.Equal([("a", false), ("b", false)], Read("cmd /c \"a && b\""));
+        Assert.Equal([("a", true)], Read("cmd /c \"a\" &"));
+    }
+
+    /// <summary>
+    /// After <c>&amp;&amp;</c>, <c>||</c>, <c>|</c> and <c>|&amp;</c> the shell reads on past line ends, blank lines, comments
+    /// and the here-documents the line named to the command they join: that command is joined, or given the pipe's input,
+    /// as on one line. A line's end anywhere else separates.
+    /// </summary>
+    [Fact]
+    public void AnOperatorAtALinesEnd_JoinsTheCommandOnTheNextLine()
+    {
+        static IReadOnlyList<(string, string?, bool)> Read(string shell)
+            => [.. CommandAnalysis.Commands(shell).Select(command => (command.Words[0], command.Joined, command.InputGiven))];
+
+        Assert.Equal([("a", null, false), ("b", "&&", false)], Read("a &&\nb"));
+        Assert.Equal([("a", null, false), ("b", "||", false)], Read("a ||\n\n  # why\nb"));
+        Assert.Equal([("a", null, false), ("b", null, true)], Read("a |\nb"));
+        Assert.Equal([("a", null, false), ("b", null, true)], Read("a |& # both\nb"));
+        Assert.Equal([("cat", null, false), ("b", null, true)], Read("cat <<'EOF' |\nx\nEOF\nb"));
+        Assert.Equal([("a", null, false), ("b", null, false)], Read("a\nb"));
+        Assert.Equal("x", CommandAnalysis.Commands("cat <<'EOF' |\nx\nEOF\nb")[0].Redirects[0].Target);
     }
 
     [Fact]

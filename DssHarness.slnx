@@ -1,5 +1,8 @@
 <Solution>
   <Folder Name="/Solution Items/" />
+  <Folder Name="/Solution Items/Assets/">
+    <File Path="assets/logo.png" />
+  </Folder>
   <Folder Name="/Solution Items/Config/">
     <File Path=".gitattributes" />
     <File Path=".gitignore" />

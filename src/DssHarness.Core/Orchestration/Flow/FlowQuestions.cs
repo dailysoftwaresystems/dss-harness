@@ -80,7 +80,8 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
     /// <param name="moment">When the new answer was given to the tool.</param>
     /// <param name="update">The id of the plan update that changed it.</param>
     /// <param name="inbox">The id of the inbox entry the change was handed over under, where one was.</param>
-    internal void Change(FlowAnswerEntry standing, string answer, string? text, string? through, DateTimeOffset moment, string update, string? inbox)
+    /// <param name="order">Where the new answer stands among every answer the run recorded (<see cref="FlowAnswerEntry.Order"/>).</param>
+    internal void Change(FlowAnswerEntry standing, string answer, string? text, string? through, DateTimeOffset moment, string update, string? inbox, int order)
     {
         var at = _given.IndexOf(standing);
 
@@ -89,7 +90,7 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
             _given[at] = standing with { ReplacedAt = moment };
         }
 
-        _given.Add(new FlowAnswerEntry(answer, text, "person", Where: null, Through: through, At: moment, Did: $"changed by update {update}", ReplacedAt: null, Inbox: inbox, Update: update));
+        _given.Add(new FlowAnswerEntry(answer, text, "person", Where: null, Through: through, At: moment, Did: $"changed by update {update}", ReplacedAt: null, Inbox: inbox, Update: update, Order: order));
     }
 
     /// <summary>
@@ -112,7 +113,8 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
                 new FlowAnswerBy(entry.By, entry.Through, entry.Where, entry.Input, entry.Inbox),
                 entry.Did,
                 entry.ReplacedAt,
-                entry.Update))],
+                entry.Update,
+                entry.Order))],
             RaisedBy,
             new FlowQuestionProblem(Problem, Tried, Means),
             Recommendation,
@@ -158,7 +160,8 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
             answer.By?.Input,
             answer.ReplacedAt,
             answer.By?.Inbox,
-            answer.Update)));
+            answer.Update,
+            answer.Order)));
 
         return question;
     }
@@ -190,6 +193,7 @@ public sealed record FlowFoldQuestion(string Kind, IReadOnlyList<string> Named);
 /// <param name="ReplacedAt">When a later answer replaced it, where one did; null while it stands.</param>
 /// <param name="Inbox">The id of the <c>inbox.json</c> entry a person's answer was handed over under; null for every answer no inbox handed over.</param>
 /// <param name="Update">The id of the plan update that changed this answer, where one did; null for every answer a person gave as its first.</param>
+/// <param name="Order">Where the answer stands among every answer the run recorded, from 1, in the order it recorded them; null where its record does not say.</param>
 public sealed record FlowAnswerEntry(
     string Answer,
     string? Text,
@@ -201,7 +205,8 @@ public sealed record FlowAnswerEntry(
     string? Input = null,
     DateTimeOffset? ReplacedAt = null,
     string? Inbox = null,
-    string? Update = null);
+    string? Update = null,
+    int? Order = null);
 
 /// <summary>
 /// The question kinds' own rules, beside the coordinator that raises and answers them: which answers a kind offers a
@@ -249,7 +254,9 @@ public static class FlowQuestions
                 case "failure":
                     return step?.Skippable == true ? ["retry", "abort", "skip"] : ["retry", "abort"];
                 case "pause":
-                    return [.. (step?.Options ?? [])];
+                    // The step's own options, and abort with them: a first answer is always allowed to end the run
+                    // instead, as every question's is, so even a pause of one option holds two.
+                    return [.. (step?.Options ?? []).Where(option => option != "abort"), "abort"];
                 case "ask":
                     // An agent's questions are answered with a text or left to the agent, which goes on with what it
                     // recommended; abort is every question's.

@@ -848,193 +848,22 @@ public sealed class AgentService(
             return RefusedInDry(CommandOutcome.Refused($"{string.Join("; ", never.Select(named => named.Why))}. Nothing was copied."));
         }
 
-        RefreshPlan plan;
-
-        try
-        {
-            plan = await _fold.MeasureRefreshAsync(
-                main,
-                path,
-                record.Base!,
-                seed,
-                floor,
-                prefixes,
-                except,
-                stale,
-                policy,
-                Changes(context, layout, record.Name, keeping: apply),
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return !apply
-                ? Dry(json, context.Layout, RefreshCommand, CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied."), null, main, path)
-                : CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied.");
-        }
-
-        planned = met.Planned = PlannedOf(plan, policy);
-
-        var (moved, left, changed, inTheWay, alike) = (plan.Handed, plan.Left, plan.Changed, plan.InTheWay, plan.Alike);
-
-        // Never silent, and never a guess: a name that leaves nothing out is the typo it usually is.
-        if (except.Where(relative => !left.Contains(relative, StringComparer.Ordinal)).Order(StringComparer.Ordinal).ToList() is { Count: > 0 } stray)
-        {
-            return RefusedInDry(CommandOutcome.Refused(
-                $"{RefreshRequest.ExceptOption} {ReportText.Listed([.. stray.Select(relative => $"'{relative}'")])} names no path to refresh{under} that "
-                + $"{Lower(Agent(record))} changed, so it leaves nothing out: check its spelling. Nothing was copied."));
-        }
-
-        if (plan.StaleStray.Count > 0)
-        {
-            return RefusedInDry(CommandOutcome.Refused(
-                $"{RefreshRequest.StaleOption} {ReportText.Listed([.. plan.StaleStray.Select(relative => $"'{relative}'")])} names no path{under} whose copy in "
-                + "the agent is not the main tree's, so it hands nothing: check its spelling. Nothing was copied."));
-        }
-
-        if (plan.MergeStray.Count > 0)
-        {
-            return RefusedInDry(CommandOutcome.Refused(
-                $"{FoldAllowances.MergeOption} {ReportText.Listed([.. plan.MergeStray.Select(relative => $"'{relative}'")])} names no path{under} the refresh "
-                + "weighs, so it merges nothing: check its spelling. Nothing was copied."));
-        }
-
-        // Where the search stopped short of the main tree's whole history, a copy older than it reached is not found stale.
-        IReadOnlyList<string> bound = plan.Capped
-            ? [$"The last {ReportText.Counted(TwoChanges.MostCommits, "commit")} of the main tree that changed these paths were searched, and its history goes "
-                + "further back: a copy older than that is not found stale."]
-            : [];
-
-        if (plan.StaleRefused.Count > 0)
-        {
-            return plan.StaleRefused is [var one]
-                ? RefusedInDry(CommandOutcome.Refused($"{one} Nothing was copied.", bound))
-                : RefusedInDry(CommandOutcome.Refused(
-                    $"{ReportText.Counted(plan.StaleRefused.Count, "path")} named with {RefreshRequest.StaleOption} are not proved stale, each said below. Nothing was copied.",
-                    [.. plan.StaleRefused.Select(why => $"  {why}"), .. bound]));
-        }
-
-        if (changed.Count > 0)
-        {
-            var staleOnes = changed.Where(change => change.StaleAt is not null).Select(change => change.Path).ToList();
-            var mergeable = plan.Mergeable;
-
-            // What each option says of a path, said of those this refusal offers: one, or several, none a --force.
-            List<string> says = [$"{RefreshRequest.ExceptOption} says the path stays the agent's change, for its fold to weigh against what the main tree holds"];
-
-            if (staleOnes.Count > 0)
-            {
-                says.Add($"{RefreshRequest.StaleOption} says its copy is not the agent's work, and is taken only where the main tree's history holds those very bytes at that path");
-            }
-
-            if (mergeable.Count > 0)
-            {
-                says.Add($"{FoldAllowances.MergeOption} writes a clean three-way merge into its worktree as its change, and a clean textual merge proves nothing about the program");
-            }
-
-            var weighed = Weighed(changed.Count, mergeable, plan.Conflicting, [], rowsOtherwiseRefused: false);
-
-            return Weighs(CommandOutcome.Refused(
-                $"{Agent(record)} changed {changed.Count} of the path(s) to refresh - {ReportText.Listed([.. changed.Select(change => change.Path)])} - and "
-                + "refreshing would undo those changes. Nothing was copied.",
-                [
-                    .. changed.Select(change => new[] { change.StaleAt is { } commit ? StaleSaid(commit) : null, change.Merge }.OfType<string>().ToList() is { Count: > 0 } said
-                        ? $"  {change.Path}   ({string.Join("; ", said)})"
-                        : $"  {change.Path}"),
-                    .. plan.Shown,
-                    $"To hand it every other path and leave these as it changed them, run again with {RefreshRequest.ExceptOption} <path> for each:",
-                    $"  {string.Join(' ', OrchestrationReports.PathArguments(RefreshRequest.ExceptOption, left.Concat(changed.Select(change => change.Path)).Order(StringComparer.Ordinal)))}",
-                    .. staleOnes.Count == 0
-                        ? Array.Empty<string>()
-                        : [
-                            $"{staleOnes.Count} of them {(staleOnes.Count == 1 ? "holds" : "hold")} bytes the main tree itself held at that path: copies gone stale, where nobody changed them on purpose. "
-                                + "To hand it the main tree's copy of each instead, name them:",
-                            $"  {string.Join(' ', OrchestrationReports.PathArguments(RefreshRequest.StaleOption, staleOnes))}",
-                        ],
-                    .. mergeable.Count == 0
-                        ? Array.Empty<string>()
-                        : [
-                            $"{mergeable.Count} of them {(mergeable.Count == 1 ? "merges" : "merge")} clean with the main tree's copy. To write "
-                                + $"{(mergeable.Count == 1 ? "the merge" : "each merge")} into its worktree as its change, name {(mergeable.Count == 1 ? "it" : "them")}:",
-                            $"  {string.Join(' ', OrchestrationReports.PathArguments(FoldAllowances.MergeOption, mergeable))}",
-                        ],
-                    says.Count == 1 ? $"{says[0]}; it is not a --force." : $"{string.Join("; ", says)}. None is a --force.",
-                    .. bound,
-                ]));
-
-            // Weighed by the one rule a fold is: a clean merge nobody asked for a consent it lacks, a conflict told apart.
-            CommandOutcome Weighs(CommandOutcome refused)
-            {
-                if (!apply)
-                {
-                    return Dry(json, context.Layout, RefreshCommand, refused, weighed.Standing, new Typed(weighed.Needs, weighed.Reasons, planned), main, path);
-                }
-
-                met.Reasons = Applying(weighed.Needs, weighed.Reasons);
-                return refused;
-            }
-        }
-
-        if (inTheWay.Count > 0)
-        {
-            return RefusedInDry(InTheWay("Refreshing", record, inTheWay));
-        }
-
-        if (plan.InSubmodules.Count > 0)
-        {
-            return RefusedInDry(InSubmodules("Refreshing", record.Name, record.Orchestrator, plan.InSubmodules, ByRebasing, NothingWritten));
-        }
-
-        var all = moved.Files.Concat(moved.Deletions).Order(StringComparer.Ordinal).ToList();
-        var behind = await BehindAsync(main, record).ConfigureAwait(false);
-
-        // Handed like any other path, and listed apart, each with the commit its copy is the main tree's own at.
-        var staleHanded = plan.Stale.Select(copy => copy.Path).ToHashSet(StringComparer.Ordinal);
-        IReadOnlyList<string> handedLines = [.. all.Where(relative => !staleHanded.Contains(relative)).Select(relative => $"  {relative}")];
-        IReadOnlyList<string> staleLines = plan.Stale.Count == 0
-            ? []
-            : [
-                $"{ReportText.Counted(plan.Stale.Count, "path")} named with {RefreshRequest.StaleOption}, whose copy is the main tree's own at an earlier commit, "
-                    + $"{(apply ? "handed" : "to hand")} the main tree's copy:",
-                .. plan.Stale.Select(copy => $"  {copy.Path}   ({StaleSaid(copy.Commit)})"),
-            ];
-
-        // Never silent, and never taken for more than it is: git merged the text, and nobody has built it.
-        var merges = plan.Merged.Select(merge => merge.Merge).ToList();
-        IReadOnlyList<string> mergedLines = merges.Count == 0
-            ? []
-            : [
-                $"{ReportText.Counted(merges.Count, "path")} both trees changed, merged three-way, {(apply ? "written" : "to write")} into its worktree as its own "
-                    + $"change, for its fold to write, and {(apply ? "recorded" : "to record")} as handed the main tree's copy - a clean textual merge proves "
-                    + "nothing about the program:",
-                .. OrchestrationReports.MergedLines(merges),
-            ];
-
-        // Recorded as shared, so its record says what it holds: dropped unrecorded, the next move of the main tree reads
-        // its copy as its change. Never silent, and written only with --apply.
-        IReadOnlyList<string> alikeLines = alike.Count == 0
-            ? []
-            : [$"{ReportText.Counted(alike.Count, "path")} it already holds as the main tree does, {(apply ? "recorded" : "to record")} as shared:", .. alike.Select(relative => $"  {relative}")];
-
         // The line that asks for this refresh again, with everything it was asked: its paths or --all, and each path left
         // as the agent changed it. Said bare, it asked for another refresh - of the registries' directory alone, and
         // refused over the very changes this one was told to leave.
         var again = OrchestrationReports.Line(RefreshCommand, record.Orchestrator, record.Name, request.Arguments(), "--apply");
 
-        // Never silent: a path left out without a word is how a change of the main tree's goes missing while the refresh succeeds.
-        IReadOnlyList<string> leftLines = left.Count == 0
-            ? []
-            : [$"{ReportText.Counted(left.Count, "path")} it changed, named with {RefreshRequest.ExceptOption}, {(apply ? "left" : "to leave")} as it changed them:", .. left.Select(relative => $"  {relative}")];
+        var (weighed, stop) = await WeighedAsync(cancellationToken).ConfigureAwait(false);
 
-        var holds = $"{Lower(Agent(record))} holds the main tree's copy of every {(left.Count > 0 ? "other " : string.Empty)}changed path{under}";
-
-        if (all.Count == 0 && alike.Count == 0 && merges.Count == 0)
+        if (stop is not null)
         {
-            return CommandOutcome.Ok(holds, [.. leftLines, .. NotHanded(moved), .. behind]);
+            return stop;
         }
 
-        // What a summary says of the merges, beside what is handed; or alone, where nothing else is.
-        var merging = $"{ReportText.Counted(merges.Count, "path")} {(apply ? "merged" : "would be merged")} into the worktree of {Lower(Agent(record))} as its own "
-            + "change, recorded as handed the main tree's copy";
+        if (weighed!.Nothing)
+        {
+            return CommandOutcome.Ok(weighed.Holds, weighed.Lines);
+        }
 
         if (!apply)
         {
@@ -1043,15 +872,15 @@ public sealed class AgentService(
                 context.Layout,
                 RefreshCommand,
                 CommandOutcome.Ok(
-                    (all.Count, merges.Count) switch
+                    (weighed.All.Count, weighed.Merges.Count) switch
                     {
-                        (0, 0) => $"{holds}; {alike.Count} of them {(alike.Count == 1 ? "is" : "are")} not recorded as shared yet: pass --apply to record them",
-                        (0, _) => $"dry run: {merging}{(alike.Count == 0 ? string.Empty : $", and {alike.Count} recorded as shared")}; pass --apply to write them",
-                        _ => $"dry run: {ReportText.Counted(all.Count, "path")} would be refreshed into {Lower(Agent(record))}"
-                            + $"{(alike.Count == 0 ? string.Empty : $", and {alike.Count} recorded as shared")}"
-                            + $"{(merges.Count == 0 ? string.Empty : $", and {merges.Count} merged into its worktree as its own change")}; pass --apply to hand them over",
+                        (0, 0) => $"{weighed.Holds}; {weighed.Alike} of them {(weighed.Alike == 1 ? "is" : "are")} not recorded as shared yet: pass --apply to record them",
+                        (0, _) => $"dry run: {weighed.Merging}{(weighed.Alike == 0 ? string.Empty : $", and {weighed.Alike} recorded as shared")}; pass --apply to write them",
+                        _ => $"dry run: {ReportText.Counted(weighed.All.Count, "path")} would be refreshed into {Lower(Agent(record))}"
+                            + $"{(weighed.Alike == 0 ? string.Empty : $", and {weighed.Alike} recorded as shared")}"
+                            + $"{(weighed.Merges.Count == 0 ? string.Empty : $", and {weighed.Merges.Count} merged into its worktree as its own change")}; pass --apply to hand them over",
                     },
-                    [.. handedLines, .. staleLines, .. mergedLines, .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind]),
+                    weighed.Lines),
                 RequestStanding.Sound,
                 new Typed([], [], planned),
                 main,
@@ -1068,6 +897,24 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
+            // The tree's lock for the refresh's apply too: the hand-over reads what a side-task writes, and the merge writes
+            // what it writes, so neither meets the other part way. Weighed again under it, so what is handed and merged is
+            // what was weighed, and what its answer names.
+            using var tree = await TreeAsync(main, met, cancellationToken).ConfigureAwait(false);
+
+            (weighed, stop) = await WeighedAsync(cancellationToken).ConfigureAwait(false);
+
+            if (stop is not null)
+            {
+                return stop;
+            }
+
+            if (weighed!.Nothing)
+            {
+                return CommandOutcome.Ok(weighed.Holds, weighed.Lines);
+            }
+
+            var (plan, all, merges, alike) = (weighed.Plan, weighed.All, weighed.Merges, weighed.Alike);
             int handed;
             var merged = 0;
             string? stopped;
@@ -1077,7 +924,7 @@ public sealed class AgentService(
             {
                 var ledger = Ledger(layout, record.Name, seed);
                 await _fold.AlikeAsync(path, plan, ledger).ConfigureAwait(false);
-                (handed, stopped) = await _fold.HandAsync(main, path, moved, ledger, plan.Held, CancellationToken.None).ConfigureAwait(false);
+                (handed, stopped) = await _fold.HandAsync(main, path, plan.Handed, ledger, plan.Held, CancellationToken.None).ConfigureAwait(false);
 
                 // Each merge once everything else is handed: a merge stopped part way leaves the paths handed recorded.
                 if (stopped is null)
@@ -1096,7 +943,7 @@ public sealed class AgentService(
                     SeedRecords(layout, record.Name));
             }
 
-            var recorded = alike.Count == 0 ? string.Empty : $", and recorded {alike.Count} it already held as the main tree does";
+            var recorded = alike == 0 ? string.Empty : $", and recorded {alike} it already held as the main tree does";
 
             return stopped is not null
                 ? CommandOutcome.Failed(
@@ -1104,18 +951,221 @@ public sealed class AgentService(
                     $"Refreshing {Lower(Agent(record))} stopped after {handed} of {ReportText.Counted(all.Count, "path")}"
                     + $"{(merges.Count == 0 ? string.Empty : $" and merging {merged} of {merges.Count}")}: {stopped}. Its seed records the {handed} handed"
                     + $"{(merges.Count == 0 ? string.Empty : $", the {merged} merged")}"
-                    + $"{(alike.Count == 0 ? string.Empty : $" and the {alike.Count} it already held as the main tree does")}; run {again} again once that is dealt with.",
+                    + $"{(alike == 0 ? string.Empty : $" and the {alike} it already held as the main tree does")}; run {again} again once that is dealt with.",
                     [.. notes, .. SeedRecords(layout, record.Name)])
                 : CommandOutcome.Ok(
                     (all.Count, merges.Count) switch
                     {
-                        (0, 0) => $"{holds}, and recorded {alike.Count} of them as shared",
-                        (0, _) => $"{merging}{recorded}",
+                        (0, 0) => $"{weighed.Holds}, and recorded {alike} of them as shared",
+                        (0, _) => $"{weighed.Merging}{recorded}",
                         _ => $"refreshed {ReportText.Counted(all.Count, "path")} into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out"
                             + $"{recorded}{(merges.Count == 0 ? string.Empty : $", and merged {merges.Count} into its worktree as its own change")}",
                     },
-                    [.. handedLines, .. staleLines, .. mergedLines, .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind, .. notes, .. SeedRecords(layout, record.Name)]);
+                    [.. weighed.Lines, .. notes, .. SeedRecords(layout, record.Name)]);
         }
+
+        // What the refresh would hand and merge, and what its answer says of it; or why it cannot, as the answer it stops
+        // with: measured, nothing written. An --apply weighs it again under its holds and the tree's lock.
+        async Task<(RefreshWeighed? Weighed, CommandOutcome? Stop)> WeighedAsync(CancellationToken token)
+        {
+            RefreshPlan plan;
+
+            try
+            {
+                plan = await _fold.MeasureRefreshAsync(
+                    main,
+                    path,
+                    record.Base!,
+                    seed,
+                    floor,
+                    prefixes,
+                    except,
+                    stale,
+                    policy,
+                    Changes(context, layout, record.Name, keeping: apply),
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return (null, !apply
+                    ? Dry(json, context.Layout, RefreshCommand, CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied."), null, main, path)
+                    : CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied."));
+            }
+
+            planned = met.Planned = PlannedOf(plan, policy);
+
+            var (moved, left, changed, inTheWay, alike) = (plan.Handed, plan.Left, plan.Changed, plan.InTheWay, plan.Alike);
+
+            // Never silent, and never a guess: a name that leaves nothing out is the typo it usually is.
+            if (except.Where(relative => !left.Contains(relative, StringComparer.Ordinal)).Order(StringComparer.Ordinal).ToList() is { Count: > 0 } stray)
+            {
+                return (null, RefusedInDry(CommandOutcome.Refused(
+                    $"{RefreshRequest.ExceptOption} {ReportText.Listed([.. stray.Select(relative => $"'{relative}'")])} names no path to refresh{under} that "
+                    + $"{Lower(Agent(record))} changed, so it leaves nothing out: check its spelling. Nothing was copied.")));
+            }
+
+            if (plan.StaleStray.Count > 0)
+            {
+                return (null, RefusedInDry(CommandOutcome.Refused(
+                    $"{RefreshRequest.StaleOption} {ReportText.Listed([.. plan.StaleStray.Select(relative => $"'{relative}'")])} names no path{under} whose copy in "
+                    + "the agent is not the main tree's, so it hands nothing: check its spelling. Nothing was copied.")));
+            }
+
+            if (plan.MergeStray.Count > 0)
+            {
+                return (null, RefusedInDry(CommandOutcome.Refused(
+                    $"{FoldAllowances.MergeOption} {ReportText.Listed([.. plan.MergeStray.Select(relative => $"'{relative}'")])} names no path{under} the refresh "
+                    + "weighs, so it merges nothing: check its spelling. Nothing was copied.")));
+            }
+
+            // Where the search stopped short of the main tree's whole history, a copy older than it reached is not found stale.
+            IReadOnlyList<string> bound = plan.Capped
+                ? [$"The last {ReportText.Counted(TwoChanges.MostCommits, "commit")} of the main tree that changed these paths were searched, and its history goes "
+                    + "further back: a copy older than that is not found stale."]
+                : [];
+
+            if (plan.StaleRefused.Count > 0)
+            {
+                return (null, plan.StaleRefused is [var one]
+                    ? RefusedInDry(CommandOutcome.Refused($"{one} Nothing was copied.", bound))
+                    : RefusedInDry(CommandOutcome.Refused(
+                        $"{ReportText.Counted(plan.StaleRefused.Count, "path")} named with {RefreshRequest.StaleOption} are not proved stale, each said below. Nothing was copied.",
+                        [.. plan.StaleRefused.Select(why => $"  {why}"), .. bound])));
+            }
+
+            if (changed.Count > 0)
+            {
+                var staleOnes = changed.Where(change => change.StaleAt is not null).Select(change => change.Path).ToList();
+                var mergeable = plan.Mergeable;
+
+                // What each option says of a path, said of those this refusal offers: one, or several, none a --force.
+                List<string> says = [$"{RefreshRequest.ExceptOption} says the path stays the agent's change, for its fold to weigh against what the main tree holds"];
+
+                if (staleOnes.Count > 0)
+                {
+                    says.Add($"{RefreshRequest.StaleOption} says its copy is not the agent's work, and is taken only where the main tree's history holds those very bytes at that path");
+                }
+
+                if (mergeable.Count > 0)
+                {
+                    says.Add($"{FoldAllowances.MergeOption} writes a clean three-way merge into its worktree as its change, and a clean textual merge proves nothing about the program");
+                }
+
+                var weighing = Weighed(changed.Count, mergeable, plan.Conflicting, [], rowsOtherwiseRefused: false);
+
+                return (null, Weighs(CommandOutcome.Refused(
+                    $"{Agent(record)} changed {changed.Count} of the path(s) to refresh - {ReportText.Listed([.. changed.Select(change => change.Path)])} - and "
+                    + "refreshing would undo those changes. Nothing was copied.",
+                    [
+                        .. changed.Select(change => new[] { change.StaleAt is { } commit ? StaleSaid(commit) : null, change.Merge }.OfType<string>().ToList() is { Count: > 0 } said
+                            ? $"  {change.Path}   ({string.Join("; ", said)})"
+                            : $"  {change.Path}"),
+                        .. plan.Shown,
+                        $"To hand it every other path and leave these as it changed them, run again with {RefreshRequest.ExceptOption} <path> for each:",
+                        $"  {string.Join(' ', OrchestrationReports.PathArguments(RefreshRequest.ExceptOption, left.Concat(changed.Select(change => change.Path)).Order(StringComparer.Ordinal)))}",
+                        .. staleOnes.Count == 0
+                            ? Array.Empty<string>()
+                            : [
+                                $"{staleOnes.Count} of them {(staleOnes.Count == 1 ? "holds" : "hold")} bytes the main tree itself held at that path: copies gone stale, where nobody changed them on purpose. "
+                                    + "To hand it the main tree's copy of each instead, name them:",
+                                $"  {string.Join(' ', OrchestrationReports.PathArguments(RefreshRequest.StaleOption, staleOnes))}",
+                            ],
+                        .. mergeable.Count == 0
+                            ? Array.Empty<string>()
+                            : [
+                                $"{mergeable.Count} of them {(mergeable.Count == 1 ? "merges" : "merge")} clean with the main tree's copy. To write "
+                                    + $"{(mergeable.Count == 1 ? "the merge" : "each merge")} into its worktree as its change, name {(mergeable.Count == 1 ? "it" : "them")}:",
+                                $"  {string.Join(' ', OrchestrationReports.PathArguments(FoldAllowances.MergeOption, mergeable))}",
+                            ],
+                        says.Count == 1 ? $"{says[0]}; it is not a --force." : $"{string.Join("; ", says)}. None is a --force.",
+                        .. bound,
+                    ])));
+
+                // Weighed by the one rule a fold is: a clean merge nobody asked for a consent it lacks, a conflict told apart.
+                CommandOutcome Weighs(CommandOutcome refused)
+                {
+                    if (!apply)
+                    {
+                        return Dry(json, context.Layout, RefreshCommand, refused, weighing.Standing, new Typed(weighing.Needs, weighing.Reasons, planned), main, path);
+                    }
+
+                    met.Reasons = Applying(weighing.Needs, weighing.Reasons);
+                    return refused;
+                }
+            }
+
+            if (inTheWay.Count > 0)
+            {
+                return (null, RefusedInDry(InTheWay("Refreshing", record, inTheWay)));
+            }
+
+            if (plan.InSubmodules.Count > 0)
+            {
+                return (null, RefusedInDry(InSubmodules("Refreshing", record.Name, record.Orchestrator, plan.InSubmodules, ByRebasing, NothingWritten)));
+            }
+
+            var all = moved.Files.Concat(moved.Deletions).Order(StringComparer.Ordinal).ToList();
+            var behind = await BehindAsync(main, record).ConfigureAwait(false);
+
+            // Handed like any other path, and listed apart, each with the commit its copy is the main tree's own at.
+            var staleHanded = plan.Stale.Select(copy => copy.Path).ToHashSet(StringComparer.Ordinal);
+            IReadOnlyList<string> handedLines = [.. all.Where(relative => !staleHanded.Contains(relative)).Select(relative => $"  {relative}")];
+            IReadOnlyList<string> staleLines = plan.Stale.Count == 0
+                ? []
+                : [
+                    $"{ReportText.Counted(plan.Stale.Count, "path")} named with {RefreshRequest.StaleOption}, whose copy is the main tree's own at an earlier commit, "
+                        + $"{(apply ? "handed" : "to hand")} the main tree's copy:",
+                    .. plan.Stale.Select(copy => $"  {copy.Path}   ({StaleSaid(copy.Commit)})"),
+                ];
+
+            // Never silent, and never taken for more than it is: git merged the text, and nobody has built it.
+            var merges = plan.Merged.Select(merge => merge.Merge).ToList();
+            IReadOnlyList<string> mergedLines = merges.Count == 0
+                ? []
+                : [
+                    $"{ReportText.Counted(merges.Count, "path")} both trees changed, merged three-way, {(apply ? "written" : "to write")} into its worktree as its own "
+                        + $"change, for its fold to write, and {(apply ? "recorded" : "to record")} as handed the main tree's copy - a clean textual merge proves "
+                        + "nothing about the program:",
+                    .. OrchestrationReports.MergedLines(merges),
+                ];
+
+            // Recorded as shared, so its record says what it holds: dropped unrecorded, the next move of the main tree reads
+            // its copy as its change. Never silent, and written only with --apply.
+            IReadOnlyList<string> alikeLines = alike.Count == 0
+                ? []
+                : [$"{ReportText.Counted(alike.Count, "path")} it already holds as the main tree does, {(apply ? "recorded" : "to record")} as shared:", .. alike.Select(relative => $"  {relative}")];
+
+            // Never silent: a path left out without a word is how a change of the main tree's goes missing while the refresh succeeds.
+            IReadOnlyList<string> leftLines = left.Count == 0
+                ? []
+                : [$"{ReportText.Counted(left.Count, "path")} it changed, named with {RefreshRequest.ExceptOption}, {(apply ? "left" : "to leave")} as it changed them:", .. left.Select(relative => $"  {relative}")];
+
+            // What a summary says of the merges, beside what is handed; or alone, where nothing else is.
+            var merging = $"{ReportText.Counted(merges.Count, "path")} {(apply ? "merged" : "would be merged")} into the worktree of {Lower(Agent(record))} as its own "
+                + "change, recorded as handed the main tree's copy";
+
+            return (
+                new RefreshWeighed(
+                    plan,
+                    all,
+                    merges,
+                    alike.Count,
+                    $"{Lower(Agent(record))} holds the main tree's copy of every {(left.Count > 0 ? "other " : string.Empty)}changed path{under}",
+                    merging,
+                    [.. handedLines, .. staleLines, .. mergedLines, .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind]),
+                null);
+        }
+    }
+
+    /// <summary>
+    /// What a refresh weighed, and what its answer says of it: its plan, every path it hands, each merge, how many paths it
+    /// records as shared, the sentence that says the agent holds the main tree's copy, the one that says what is merged,
+    /// and every line its answer carries.
+    /// </summary>
+    private sealed record RefreshWeighed(RefreshPlan Plan, IReadOnlyList<string> All, IReadOnlyList<MergedPath> Merges, int Alike, string Holds, string Merging, IReadOnlyList<string> Lines)
+    {
+        /// <summary>Whether it hands, merges and records nothing: the agent holds the main tree's copy of everything already.</summary>
+        public bool Nothing => All.Count == 0 && Alike == 0 && Merges.Count == 0;
     }
 
     /// <summary>What a stale copy's line says of it, to stand in brackets: the commit of the main tree's history that holds its very bytes.</summary>
@@ -1246,6 +1296,10 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
+            // The tree's lock for the move of the base: what it keeps alive in the main checkout and what it settles there
+            // are the main tree's git's own, taken apart from a side-task's writes and commands as every engine write is.
+            using var tree = await TreeAsync(main, met, cancellationToken).ConfigureAwait(false);
+
             (plan, stop) = await MeasuredAsync(cancellationToken).ConfigureAwait(false);
 
             // What is written is what was weighed under the hold, and what its answer names.
@@ -1572,15 +1626,19 @@ public sealed class AgentService(
         bool apply,
         CancellationToken cancellationToken = default,
         bool json = false)
-        => FoldHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, apply, json, cancellationToken);
+        => FoldHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, intent: null, apply, json, cancellationToken);
 
-    /// <summary>Folding an agent, its <c>--apply</c> held to what its dry run named where <paramref name="expected"/> is given.</summary>
+    /// <summary>
+    /// Folding an agent, its <c>--apply</c> held to what its dry run named where <paramref name="expected"/> is given, and its
+    /// write recorded under its hold in the run's ledger of its folds where <paramref name="intent"/> is.
+    /// </summary>
     private async Task<CommandOutcome> FoldHeldAsync(
         string startDirectory,
         string orchestrator,
         string agent,
         FoldAllowances allowances,
         AgentPlanned? expected,
+        Flow.FoldIntent? intent,
         bool apply,
         bool json,
         CancellationToken cancellationToken)
@@ -1600,7 +1658,7 @@ public sealed class AgentService(
         }
 
         var met = new HoldersMet();
-        var outcome = await FoldLiveAsync(at, allowances, expected, apply, json, met, cancellationToken).ConfigureAwait(false);
+        var outcome = await FoldLiveAsync(at, allowances, expected, intent, apply, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, FoldCommand, outcome) : outcome;
 
         // Asked for one document, what the live agent answered brings one, and what was returned above brings the same
@@ -1609,7 +1667,7 @@ public sealed class AgentService(
     }
 
     /// <summary>Folding a live agent, once it is found.</summary>
-    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, AgentPlanned? expected, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, AgentPlanned? expected, Flow.FoldIntent? intent, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var policy = TwoChangePolicy.Of(context, []);
@@ -1659,6 +1717,9 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
+            // The tree's lock before the measure: what is written is what was weighed, never a file a side-task's write or
+            // command was part way through between the two.
+            using var tree = await TreeAsync(context.Layout.MainCheckoutRoot, met, cancellationToken).ConfigureAwait(false);
             var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, AnchorBatchMode.Check, cancellationToken).ConfigureAwait(false);
 
             // What it set out to write rides its answer, as measured under the hold.
@@ -1678,7 +1739,7 @@ public sealed class AgentService(
                 return unexpected;
             }
 
-            var written = await WriteAsync(context, layout, record, path, seed!, measured).ConfigureAwait(false);
+            var written = await WriteRecordedAsync(context, layout, record, path, seed!, measured, tree, intent).ConfigureAwait(false);
 
             // What the fold wrote rides the answer as its facts, whatever form the answer is asked in - as far as it went,
             // where it stopped part way, since that much is in the main tree now.
@@ -1701,15 +1762,19 @@ public sealed class AgentService(
         bool discardUncommitted,
         CancellationToken cancellationToken = default,
         bool json = false)
-        => DeleteHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, apply, discardUncommitted, json, cancellationToken);
+        => DeleteHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, intent: null, apply, discardUncommitted, json, cancellationToken);
 
-    /// <summary>Deleting an agent, the <c>--apply</c> of its fold held to what its dry run named where <paramref name="expected"/> is given.</summary>
+    /// <summary>
+    /// Deleting an agent, the <c>--apply</c> of its fold held to what its dry run named where <paramref name="expected"/> is
+    /// given, and that fold's write recorded under its hold in the run's ledger of its folds where <paramref name="intent"/> is.
+    /// </summary>
     private async Task<CommandOutcome> DeleteHeldAsync(
         string startDirectory,
         string orchestrator,
         string agent,
         FoldAllowances allowances,
         AgentPlanned? expected,
+        Flow.FoldIntent? intent,
         bool apply,
         bool discardUncommitted,
         bool json,
@@ -1737,7 +1802,7 @@ public sealed class AgentService(
         }
 
         var met = new HoldersMet();
-        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, expected, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
+        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, expected, intent, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(found.Layout!, agent, DeleteCommand, outcome) : outcome;
 
         // Asked for one document, what the agent found answered brings one, and what was returned above brings the same
@@ -1752,6 +1817,7 @@ public sealed class AgentService(
         AgentRecord record,
         FoldAllowances allowances,
         AgentPlanned? expected,
+        Flow.FoldIntent? intent,
         bool apply,
         bool discardUncommitted,
         bool json,
@@ -1791,7 +1857,7 @@ public sealed class AgentService(
 
         return record.State == AgentStates.Closed
             ? await FinishAsync(target, allowances, apply, json, met, cancellationToken).ConfigureAwait(false)
-            : await CloseAsync(target, allowances, expected, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
+            : await CloseAsync(target, allowances, expected, intent, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1856,7 +1922,7 @@ public sealed class AgentService(
     /// Deleting a live agent: its fold and rows - or nothing, abandoning it - then its transcripts and evidence kept, its
     /// closing recorded, and its worktree's removal asked for.
     /// </summary>
-    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, AgentPlanned? expected, bool apply, bool discard, bool json, HoldersMet met, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, AgentPlanned? expected, Flow.FoldIntent? intent, bool apply, bool discard, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (target.Context, target.Layout, target.Record, target.Path);
         var policy = TwoChangePolicy.Of(context, []);
@@ -1956,6 +2022,9 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
+            // A deletion that folds weighs and writes its fold under the tree's lock, as a fold does, and holds it until it
+            // has proved nothing is left to fold; one that discards writes nothing of the main tree, and takes none.
+            using var tree = discard ? null : await TreeAsync(context.Layout.MainCheckoutRoot, met, cancellationToken).ConfigureAwait(false);
             var measured = await MeasureClosingAsync(target, seed, allowances, discard, AnchorBatchMode.Check, cancellationToken).ConfigureAwait(false);
 
             // What its fold set out to write rides its answer, as measured under the hold.
@@ -2001,7 +2070,9 @@ public sealed class AgentService(
             if (!discard)
             {
                 var fold = measured.Fold!;
-                var written = await WriteAsync(context, layout, record, path, seed!, fold).ConfigureAwait(false);
+                // Recorded in the run's ledger under the hold it is written under, which is let go before the transcripts,
+                // the evidence and the worktree's removal: a throw or a crash in any of them leaves what it left recorded.
+                var written = await WriteRecordedAsync(context, layout, record, path, seed!, fold, tree!, intent).ConfigureAwait(false);
 
                 // The work the delete folded back rides the answer as its facts, whatever form the answer is asked in - as
                 // far as it went, where it stopped part way, since that much is in the main tree now.
@@ -2049,6 +2120,10 @@ public sealed class AgentService(
                             Live());
                     }
                 }
+
+                // The main tree is let go: what follows keeps the agent's transcripts and evidence and removes its worktree,
+                // none of it the main tree's.
+                tree?.Dispose();
 
                 var transcripts = await TranscriptsAsync(layout, record).ConfigureAwait(false);
                 lines.AddRange(transcripts.Lines);
@@ -3071,12 +3146,65 @@ public sealed class AgentService(
             + $"{OrchestrationReports.DeleteAgentLine(target.Record.Orchestrator, target.Record.Name)} then finishes this agent.";
 
     /// <summary>
+    /// <see cref="WriteAsync"/>, recorded in the run's ledger of its folds where a step of a run folds through one
+    /// (<paramref name="intent"/>): that the write begins, right before its first write, and what it left at each path once
+    /// it is done - or has thrown part way, before the throw goes on - both under <paramref name="tree"/>, before it is let
+    /// go. Whatever comes after - the verb's answer, a throw, a crash, a side-task's write let in once the hold is let go -
+    /// the fold is settled by what it left; only a crash part way through the write itself leaves the ledger to read the
+    /// tree. From the command line there is no ledger, and nothing more is done than the write.
+    /// </summary>
+    private async Task<Written> WriteRecordedAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string path, SeedRecord seed, Measured measured, MachineWideHold tree, Flow.FoldIntent? intent)
+    {
+        if (intent is null)
+        {
+            return await WriteAsync(context, layout, record, path, seed, measured, tree).ConfigureAwait(false);
+        }
+
+        var main = context.Layout.MainCheckoutRoot;
+        Written written;
+
+        intent.Writing(tree);
+
+        try
+        {
+            written = await WriteAsync(context, layout, record, path, seed, measured, tree).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // What it wrote before the throw is recorded all the same, still under the hold; where even that fails, the
+            // write stays begun and unrecorded, which the step settles from the tree, and what goes on is the write's own
+            // exception.
+            try
+            {
+                await intent.WrittenAsync(main, tree).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Left writing: the step reads what it left from the tree, under the lock.
+            }
+
+            throw;
+        }
+
+        await intent.WrittenAsync(main, tree).ConfigureAwait(false);
+        return written;
+    }
+
+    /// <summary>
     /// Writes a measured fold into the main tree, records what it wrote as shared, then applies the rows the agent declared
     /// anew and records them as applied, never interrupted: the rows as written and the seed as recorded, or - once anything
-    /// is written - what stopped it, as a change begun and not finished.
+    /// is written - what stopped it, as a change begun and not finished. All of it under <paramref name="tree"/>, the main
+    /// tree's lock its caller took before it measured, so what is written is what was weighed - the rows it applies among
+    /// it, for they write the registries the repository keeps in its tree.
     /// </summary>
-    private async Task<Written> WriteAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string path, SeedRecord seed, Measured measured)
+    /// <exception cref="InvalidOperationException"><paramref name="tree"/> was let go: nothing is written outside the lock.</exception>
+    private async Task<Written> WriteAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string path, SeedRecord seed, Measured measured, MachineWideHold tree)
     {
+        if (tree.Released)
+        {
+            throw new InvalidOperationException("a fold writes the main tree under the tree's lock alone, and the hold it was given was let go");
+        }
+
         var main = context.Layout.MainCheckoutRoot;
         var plan = measured.Plan!;
         var applied = await _fold.ApplyAsync(main, path, plan).ConfigureAwait(false);
@@ -3624,7 +3752,8 @@ public sealed class AgentService(
             had?.Needs ?? [],
             had?.Refusals ?? Reasons(standing, met.Reasons),
             met.Folded ?? had?.Folded,
-            had?.Planned ?? met.Planned);
+            had?.Planned ?? met.Planned,
+            met.Waited);
 
         return json && answered.Data.Count == 0
             ? OrchestrationReports.Document(answered, facts)
@@ -3647,6 +3776,22 @@ public sealed class AgentService(
         return json && stopped.Data.Count == 0
             ? stopped with { Data = [OrchestrationReports.Stopped(stopped.ExitCode, stopped.Message)], Quiet = true, Facts = facts }
             : stopped with { Facts = facts };
+    }
+
+    /// <summary>
+    /// The main tree's lock, taken for an engine write as every one takes it (<see cref="MainTreeWriteLock"/>): waited for
+    /// as long as <paramref name="cancellationToken"/> leaves it - a side-task's command can run long - and how long it
+    /// waited told to <paramref name="met"/>, which the step's record says. The command's stop ends the wait with nothing
+    /// weighed or written; the hold is the one its whole write is made under.
+    /// </summary>
+    /// <exception cref="OperationCanceledException">The command was stopped while it waited.</exception>
+    private static async Task<MachineWideHold> TreeAsync(string main, HoldersMet met, CancellationToken cancellationToken)
+    {
+        var tree = await MainTreeWriteLock.HoldAsync(main, cancellationToken).ConfigureAwait(false)
+            ?? throw new OperationCanceledException(cancellationToken);
+
+        met.Waited = tree.Waited;
+        return tree;
     }
 
     /// <summary>
@@ -3855,8 +4000,6 @@ public sealed class AgentService(
             ?? OrchestrationRules.NameProblem(agent)
             ?? OrchestrationRules.AgentNameProblem(orchestrator, agent);
 
-    /// <summary>What is wrong with paths given on the command line, asked of each as given, before anything tidies it.</summary>
-
     /// <summary>
     /// Whether <paramref name="exception"/> is one a step after a first write can meet and must answer, rather than let
     /// escape: the file system's, git's and the tool's own refusals, a record that does not read, and a configuration that
@@ -3984,7 +4127,7 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<AgentVerbFacts>.From(
-            await FoldHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Apply, request.Json, cancellationToken).ConfigureAwait(false));
+            await FoldHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Intent, request.Apply, request.Json, cancellationToken).ConfigureAwait(false));
     }
 
     /// <inheritdoc cref="IAgentService.DeleteAsync(DeleteAgentRequest, CancellationToken)"/>
@@ -3993,7 +4136,7 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<AgentVerbFacts>.From(
-            await DeleteHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Apply, request.DiscardUncommitted, request.Json, cancellationToken).ConfigureAwait(false));
+            await DeleteHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Intent, request.Apply, request.DiscardUncommitted, request.Json, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>What deleting a live agent measured before writing anything, and why it cannot go on where it cannot.</summary>
@@ -4016,6 +4159,9 @@ public sealed class AgentService(
 
         /// <summary>What the plan of the verb names, measured under its hold; <see langword="null"/> before, and where none was measured.</summary>
         public AgentPlanned? Planned { get; set; }
+
+        /// <summary>How long the apply waited for the main tree's lock, which a side-task held; zero where it did not wait.</summary>
+        public TimeSpan Waited { get; set; }
 
         /// <summary>The reasons the --apply's own measure was refused for, by kind, where it typed any; empty otherwise.</summary>
         public IReadOnlyList<RefusalKind> Reasons { get; set; } = [];

@@ -52,14 +52,14 @@ public sealed class WebSearchKinds
 
     /// <summary>
     /// Every concrete type of the core that implements <see cref="IWebSearchKind"/>, by its full name: the one scan that
-    /// finds them (<see cref="Composition.CoreImplementations{T}"/>), which the composition root registers each of and the
+    /// finds them (<see cref="CoreImplementations{T}"/>), which the composition root registers each of and the
     /// registry of this build is made from.
     /// </summary>
-    public static IReadOnlyList<Type> Implementations => Composition.CoreImplementations<IWebSearchKind>.Types;
+    public static IReadOnlyList<Type> Implementations => CoreImplementations<IWebSearchKind>.Types;
 
     /// <summary>The registry of this build's own kinds, each made with no argument as the container makes it: for what has no container to ask - help.</summary>
     public static WebSearchKinds OfThisBuild
-        => LazyInitializer.EnsureInitialized(ref _thisBuild, () => new(Composition.CoreImplementations<IWebSearchKind>.OfThisBuild));
+        => LazyInitializer.EnsureInitialized(ref _thisBuild, () => new(CoreImplementations<IWebSearchKind>.OfThisBuild));
 
     /// <summary>Every kind, by its name.</summary>
     public IReadOnlyList<IWebSearchKind> All { get; }

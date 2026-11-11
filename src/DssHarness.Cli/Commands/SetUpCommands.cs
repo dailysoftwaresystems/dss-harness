@@ -11,6 +11,7 @@ internal static class UpCommand
     internal const string Name = SetUpService.UpCommand;
 
     internal static Command Create() => SetUpCommand.Create(
+        Name,
         SetUpDirection.Up,
         "Bring a set-up up on this machine: run the 'up' command line config.json declares for it under setUp, at the root of the tree.");
 }
@@ -21,6 +22,7 @@ internal static class DownCommand
     internal const string Name = SetUpService.DownCommand;
 
     internal static Command Create() => SetUpCommand.Create(
+        Name,
         SetUpDirection.Down,
         "Bring a set-up down on this machine: run the 'down' command line config.json declares for it under setUp, at the root of the tree.");
 }
@@ -28,7 +30,7 @@ internal static class DownCommand
 /// <summary>What <c>up</c> and <c>down</c> share: one argument, <c>--input</c>, <c>--json</c>, and the service that runs the line.</summary>
 internal static class SetUpCommand
 {
-    internal static Command Create(SetUpDirection direction, string description)
+    internal static Command Create(string commandName, SetUpDirection direction, string description)
     {
         var name = new Argument<string>("name")
         {
@@ -45,7 +47,7 @@ internal static class SetUpCommand
             Description = "Write the line that ran, its exit code and how long it took, as JSON.",
         };
 
-        var command = new Command(SetUpService.CommandName(direction), description);
+        var command = new Command(commandName, description);
 
         command.Arguments.Add(name);
         command.Options.Add(input);

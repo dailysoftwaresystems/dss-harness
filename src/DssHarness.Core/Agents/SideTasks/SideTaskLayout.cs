@@ -54,4 +54,24 @@ public sealed record SideTaskLayout(string Root, string Name)
     /// its one shape.
     /// </summary>
     public string SessionsDirectory => System.IO.Path.Combine(Directory, "sessions");
+
+    /// <summary>
+    /// The side-task's own codebase graph, under its records as a run's is under its own - seeded from the newest graph
+    /// of the repository's runs or side-tasks, then incremental, synced when the side-task opens and after each of its
+    /// writes. Kept in the shape every graph is (<see cref="Orchestration.OrchestratorLayout.GraphDirectory"/>), for the
+    /// one graph service reads and writes them all.
+    /// </summary>
+    public string GraphDirectory => AsGraph.GraphDirectory;
+
+    /// <summary>The side-task's repository map, made once at its opening and read as it is by every message after.</summary>
+    public string MapFile => AsGraph.GraphMapFile;
+
+    /// <summary>
+    /// What the side-task's repository map was made from: the commit the base stood at, how many files the graph holds,
+    /// how many central declarations the map names, and its estimated tokens.
+    /// </summary>
+    public string MapMetaFile => AsGraph.GraphMapMetaFile;
+
+    /// <summary>The side-task's layout as the graph service holds it: the one shape every graph's records take.</summary>
+    public Orchestration.OrchestratorLayout AsGraph => new(Name, Directory);
 }

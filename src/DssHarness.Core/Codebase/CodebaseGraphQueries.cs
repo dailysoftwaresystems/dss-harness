@@ -30,7 +30,11 @@ public sealed class CodebaseGraphQueries
     private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _words;
     private readonly IReadOnlyDictionary<(string Kind, GraphSide Side), int> _percentile;
     private readonly IReadOnlyDictionary<string, FileExtract?> _extracts;
+    private readonly IReadOnlySet<string> _testFiles;
     private readonly ConcurrentDictionary<string, GraphCard> _cards = new(StringComparer.Ordinal);
+
+    /// <summary>Every path the view holds, by its spelling in any case: made once, where a file system that finds a name in any case first asks.</summary>
+    private readonly Lazy<ILookup<string, string>> _folded;
 
     /// <summary>Indexes <paramref name="read"/>: every lookup is built once, so the first answer pays for them and the rest read them.</summary>
     /// <param name="read">The view to answer from, as a sync or a check or the read-only open left it.</param>
@@ -39,6 +43,7 @@ public sealed class CodebaseGraphQueries
         ArgumentNullException.ThrowIfNull(read);
 
         _read = read;
+        _folded = new(() => read.Files.Keys.ToLookup(key => key, StringComparer.OrdinalIgnoreCase));
         var symbols = read.Symbols;
 
         var nodes = new Dictionary<string, IReadOnlyList<NodeAt>>(StringComparer.Ordinal);
@@ -67,6 +72,10 @@ public sealed class CodebaseGraphQueries
         }
 
         _extracts = extracts;
+
+        // A file that declares a test - its implementation marks the test - is test code whole: its classes, fixtures and
+        // helpers beside the tests.
+        _testFiles = extracts.Where(file => file.Value?.Nodes.Any(node => node.Test) == true).Select(file => file.Key).ToHashSet(StringComparer.Ordinal);
 
         // Each file's nodes by their ids, made once a file rather than looked for once a node.
         var declared = extracts.ToDictionary(file => file.Key, file => (file.Value?.Nodes ?? []).ToLookup(node => node.Id, StringComparer.Ordinal), StringComparer.Ordinal);
@@ -135,6 +144,71 @@ public sealed class CodebaseGraphQueries
     /// <summary>How many files the view holds.</summary>
     public int FileCount => _read.Files.Count;
 
+    /// <summary>How many declarations the view holds: its nodes that are code declarations, files and projects left out.</summary>
+    public int DeclarationCount => _symbols.Values.Count(symbol => CodeNodeKinds.Extracted.Contains(symbol.Kind, StringComparer.Ordinal));
+
+    /// <summary>
+    /// The view's most central declarations, most first: each by how many files other than its own hold a reference that
+    /// binds to it - over calls, references, instantiations, inheritance, implementations and dispatches, a test file's never -
+    /// raised by how its name matches <paramref name="task"/> as <see cref="Find"/> weighs a name's words: the share of the
+    /// task's words its name holds whole, each weighed by how often the task says it and how rare it is among the view's
+    /// names, a name that holds them all raised by <see cref="TaskRaise"/>. Ties broken by id; no declaration of a file the
+    /// view holds as generated, nor of one that declares a test.
+    /// </summary>
+    /// <param name="task">The task the centrality is raised for - a run's inputs, a side-task's message - or empty for none.</param>
+    public IReadOnlyList<GraphCard> Central(string task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+
+        var terms = new Terms(Split(task), _idf);
+
+        return [.. _symbols.Keys
+            .Where(id => !_symbols[id].Paths.Any(path => _testFiles.Contains(path)))
+            .Select(Card)
+            .Where(card => CodeNodeKinds.Extracted.Contains(card.Kind, StringComparer.Ordinal))
+            .Where(card => !Generated(card.Path))
+            .Select(card => (Card: card, Centrality: CentralityOf(card, terms)))
+            .OrderByDescending(scored => scored.Centrality.Files + (scored.Centrality.Named * TaskRaise))
+            .ThenBy(scored => scored.Card.Id, StringComparer.Ordinal)
+            .Select(scored => scored.Card)];
+    }
+
+    /// <summary>
+    /// What <see cref="Central"/> ranks the node <paramref name="id"/> names by: how many files other than its own, and
+    /// other than a test's, hold a reference that binds to it, and the share of <paramref name="task"/>'s weight its name
+    /// holds, from 0 to 1.
+    /// </summary>
+    /// <param name="id">A node's id, the view's.</param>
+    /// <param name="task">The task the centrality is raised for, or empty for none.</param>
+    internal (int Files, double Named) CentralityOf(string id, string task) => CentralityOf(Card(id), new Terms(Split(task), _idf));
+
+    /// <inheritdoc cref="CentralityOf(string, string)"/>
+    private (int Files, double Named) CentralityOf(GraphCard card, Terms terms)
+    {
+        IReadOnlyList<(GraphSide Side, string Kind)> binding =
+        [
+            (GraphSide.In, CodeEdgeKinds.Calls),
+            (GraphSide.In, CodeEdgeKinds.References),
+            (GraphSide.In, CodeEdgeKinds.Instantiates),
+            (GraphSide.In, CodeEdgeKinds.Inherits),
+            (GraphSide.In, CodeEdgeKinds.Implements),
+            (GraphSide.In, CodeEdgeKinds.Dispatches),
+        ];
+        var own = _symbols[card.Id].Paths;
+
+        // A test's reference is the test's, not the code's use of it: no test file counts.
+        return (
+            Steps(card.Id, binding).Select(step => Card(step.To).Path).Where(path => !own.Contains(path, StringComparer.Ordinal) && !_testFiles.Contains(path)).Distinct(StringComparer.Ordinal).Count(),
+            terms.Whole > 0 ? NameWeight(card, terms) / terms.Whole : 0);
+    }
+
+    /// <summary>
+    /// How far a name that holds every word of the task is raised among the view's most central declarations
+    /// (<see cref="Central"/>): as far as ten other files' references bind it, a name holding part of the task's weight
+    /// raised by that part.
+    /// </summary>
+    public const int TaskRaise = 10;
+
     /// <summary>The files, by path, whose extract the view no longer holds - one that does not read, or no longer declares what the link names - their declarations in no answer.</summary>
     public IReadOnlyList<string> Unheld { get; }
 
@@ -150,6 +224,37 @@ public sealed class CodebaseGraphQueries
         return _read.Files.ContainsKey(path) ? path
             : path.Replace('\\', '/') is var slashed && _read.Files.ContainsKey(slashed) ? slashed
             : null;
+    }
+
+    /// <summary>
+    /// The path the view holds <paramref name="path"/> at, as <see cref="HeldPath(string)"/> finds it - and, where the tree's
+    /// file system finds a name in any case (<paramref name="comparison"/> ignores case), the one file the view holds that
+    /// the path names in another case: never one of two the view holds that differ in their case alone.
+    /// </summary>
+    /// <param name="path">A path an agent or a person wrote, relative to the tree.</param>
+    /// <param name="comparison">How the tree's file system compares names, as it answers for itself.</param>
+    public string? HeldPath(string path, StringComparison comparison)
+    {
+        var held = HeldPath(path);
+
+        if (held is not null || comparison != StringComparison.OrdinalIgnoreCase)
+        {
+            return held;
+        }
+
+        return _folded.Value[path.Replace('\\', '/')].ToList() is [var one] ? one : null;
+    }
+
+    /// <summary>
+    /// The view's entry of the file it holds at <paramref name="held"/> - its state, its size and its lines as the graph read
+    /// them - or null where it holds none there.
+    /// </summary>
+    /// <param name="held">The path the view holds the file at (<see cref="HeldPath(string, StringComparison)"/>).</param>
+    public CodeGraphFileEntry? FileAt(string held)
+    {
+        ArgumentNullException.ThrowIfNull(held);
+
+        return _read.Files.GetValueOrDefault(held);
     }
 
     /// <summary>
@@ -497,6 +602,70 @@ public sealed class CodebaseGraphQueries
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
     public bool Dynamic(string path) => (_extracts.TryGetValue(path, out var extract) ? extract : _read.Extract(path)) is { Dynamic.Count: > 0 };
 
+    /// <summary>
+    /// Whether the view holds the file at <paramref name="path"/> as one it parsed - the state the narrowing of a whole
+    /// read is held to, for a file the graph parsed is one it can serve an outline and bodies of instead.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
+    public bool Parsed(string path)
+        => HeldPath(path) is { } held && _read.Files.TryGetValue(held, out var entry)
+            && string.Equals(entry.State, CodeFileStates.Parsed, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Why the graph is not sure of the file at <paramref name="path"/> - a whole read of it is let past the narrowing
+    /// as an escape <c>lowConfidence</c> - or null where it is sure: the file carries a <c>dynamic</c> mark, is marked
+    /// <c>generated</c>, or more than a quarter of the references its nodes make are edges of <c>candidates</c> or were
+    /// left unresolved by the linker.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
+    public string? UnsureOfFile(string path)
+    {
+        if (HeldPath(path) is not { } held)
+        {
+            return null;
+        }
+
+        if (Dynamic(held))
+        {
+            return "the graph cannot bind part of it";
+        }
+
+        if (Generated(held))
+        {
+            return "the graph holds it as generated code";
+        }
+
+        var edges = 0;
+        var unsure = 0;
+
+        foreach (var id in _inFile.TryGetValue(held, out var own) ? own : [])
+        {
+            foreach (var edge in _out[id])
+            {
+                if (string.Equals(edge.Kind, CodeEdgeKinds.Contains, StringComparison.Ordinal)
+                    || string.Equals(edge.Kind, CodeEdgeKinds.Declares, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                edges++;
+
+                if (string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal))
+                {
+                    unsure++;
+                }
+            }
+
+            var unresolved = _read.Symbols.Unresolved.GetValueOrDefault(id);
+            edges += unresolved;
+            unsure += unresolved;
+        }
+
+        return edges > 0 && unsure * 4 > edges
+            ? $"more than a quarter of its {edges.ToString(CultureInfo.InvariantCulture)} references the linker left candidates or unresolved"
+            : null;
+    }
+
     /// <summary>The nodes in the file at <paramref name="path"/>, as a text hit is turned to a card where one covers its line.</summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
     /// <param name="line">A line of that file, from 1.</param>
@@ -566,15 +735,19 @@ public sealed class CodebaseGraphQueries
             return 0;
         }
 
-        // Each of the query's words the name holds, as often as the query says it, weighed by how rare it is - summed in one
-        // order, so names that hold the same words score alike.
-        var matched = _words.GetValueOrDefault(card.Id, []).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Sum(word => terms.Weight.GetValueOrDefault(word));
-
         // A node's summary and its path count far less than its name: a word there is a twentieth of one in the name.
-        matched += (Hits(card.Summary, terms) + Hits(card.Path, terms)) * 0.05;
+        var matched = NameWeight(card, terms) + ((Hits(card.Summary, terms) + Hits(card.Path, terms)) * 0.05);
 
         return matched / terms.Whole * 100;
     }
+
+    /// <summary>
+    /// How much of <paramref name="terms"/>' weight <paramref name="card"/>'s name holds: each of the query's words the
+    /// name holds whole, as often as the query says it, weighed by how rare it is - summed in one order, so names that
+    /// hold the same words weigh alike.
+    /// </summary>
+    private double NameWeight(GraphCard card, Terms terms)
+        => _words.GetValueOrDefault(card.Id, []).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Sum(word => terms.Weight.GetValueOrDefault(word));
 
     /// <summary>How many of the query's words, each as often as it says it, <paramref name="text"/> holds.</summary>
     private static double Hits(string? text, Terms terms)

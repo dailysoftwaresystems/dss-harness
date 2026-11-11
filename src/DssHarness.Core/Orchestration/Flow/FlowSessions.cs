@@ -152,13 +152,17 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// section, which a deletion decides in too: the run still there - one deleted since the session looked at it
     /// refused by name, with no owner written beside it - the test for another unfinished run, leaving out
     /// <paramref name="run"/>, the run's owner claimed - refused where a live one holds it, a dead one reclaimed and said -
-    /// and a request no engine took removed, so it never reaches this session.
+    /// and a request no engine took removed, so it never reaches this session - where it cannot be taken, the claim just
+    /// made is let go before the refusal, so no owner is left behind by a session that never began.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
     /// <param name="cancellationToken">Stops the read of the main tree, before anything is written.</param>
     /// <returns>What is said of a dead owner reclaimed; null where none was recorded.</returns>
-    /// <exception cref="HarnessException">The run is gone, another run of the repository is unfinished, or a live engine owns the run (<see cref="HarnessExit.Refused"/>).</exception>
+    /// <exception cref="HarnessException">
+    /// The run is gone, another run of the repository is unfinished, or a live engine owns the run (<see cref="HarnessExit.Refused"/>);
+    /// or a request left for an engine that ended cannot be taken, the claim this process made let go first.
+    /// </exception>
     public async Task<string?> ClaimAsync(HarnessLayout layout, OrchestratorLayout run, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(layout);
@@ -175,11 +179,22 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
             RefuseAnotherUnfinished(layout, run.Name, differing);
 
-            var reclaimed = new FlowRunOwner(_store, _identity, _clock).Claim(run);
+            var owner = new FlowRunOwner(_store, _identity, _clock);
+            var reclaimed = owner.Claim(run);
 
-            // A pause or a stop asked of an engine that ended before it took it was asked of that engine, and of no
-            // session after it.
-            _ = _store.TakeStopFile(run);
+            try
+            {
+                // A pause or a stop asked of an engine that ended before it took it was asked of that engine, and of no
+                // session after it.
+                _ = _store.TakeStopFile(run);
+            }
+            catch
+            {
+                // A claim is never left behind by a session that does not begin: what this process just wrote is let go,
+                // so the run stands as no session holds it, and the refusal is the one said.
+                owner.Release(run);
+                throw;
+            }
 
             return reclaimed;
         });

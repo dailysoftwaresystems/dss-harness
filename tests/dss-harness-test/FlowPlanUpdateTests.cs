@@ -170,6 +170,13 @@ public sealed class FlowPlanUpdateTests
             return this;
         }
 
+        /// <summary>Answers <paramref name="step"/> by its script, which sees the whole run.</summary>
+        public FakeRunner On(string step, Func<FlowStepRun, FlowStepResult> script)
+        {
+            _scripts[step] = script;
+            return this;
+        }
+
         /// <summary>Holds <paramref name="step"/> open until the test completes it, or a stop cancels it.</summary>
         public TaskCompletionSource<FlowStepResult> Hold(string step)
         {
@@ -457,6 +464,95 @@ public sealed class FlowPlanUpdateTests
     }
 
     /// <summary>
+    /// The check the <c>amend</c> block's <c>then</c> names refuses an update's plan only by a word it said since the
+    /// planning step was raised for the update: a loop that ended at its bound on a check that refused an earlier plan,
+    /// accepted as it stood, is not gone round again on that old word when an update reopens it - the update's own check
+    /// runs, passes, and the loop ends on it, its bound asked about once, never again before that check has run.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdatesPlan_IsRefusedOnlyByTheCheckItsThenRan_NeverByOneAnEarlierPlanEndedOn()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: request
+            steps:
+              - name: ask
+                type: pause
+                question: '{input.request}'
+                options: [stay, go]
+              - name: planning
+                dependsOn: [ask]
+                repeat:
+                  until: 'check.ok'
+                  maxIterations: 1
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: plan.md
+                    outputs: plan.json
+                  - name: planupdate
+                    type: reason
+                    agent: planner
+                    prompt: plan.md
+                    outputs: plan.json
+                  - name: check
+                    type: validate-plan
+                    items: 'planning.plan.items'
+                    dependsOn: [plan]
+              - name: gate
+                type: pause
+                question: held?
+                options: [stay, go]
+                dependsOn: [planning]
+              - name: later
+                type: orient
+                dependsOn: [gate]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var checks = 0;
+
+        // The plan the run began from is refused by its check; every plan after it passes.
+        var runner = new FakeRunner()
+            .On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"items": [], "scope": []}""")))
+            .On("planupdate", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"items": [], "scope": []}""")))
+            .On("check", _ => Interlocked.Increment(ref checks) == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false, "problems": ["two items own one file"], "items": []}"""))
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": true, "problems": [], "items": []}""")));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+
+            // The loop ends at its bound on the refusing check, accepted as it stood.
+            _ = await coordinator.RunAsync(Token);
+            var bound = coordinator.OpenQuestions.Single();
+            Assert.Equal("loopBound", bound.Kind);
+            Assert.True(coordinator.TryAnswer(bound.Id, "accept", null, out _));
+
+            _ = await coordinator.RunAsync(Token);
+            var gate = coordinator.OpenQuestions.Single();
+            Assert.Equal("held?", gate.Problem);
+
+            // The update reopens the loop's iteration: the planner plans it, and the check its then names runs again.
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AmendmentHandedOver("narrow it", "amend-orchestrator-request", out var problem));
+            Assert.Null(problem);
+
+            var held = await coordinator.RunAsync(Token);
+
+            Assert.Equal(FlowRunStatus.Paused, held.Status);
+            Assert.Equal([gate.Id], coordinator.OpenQuestions.Select(question => question.Id));
+            Assert.Equal(2, Volatile.Read(ref checks));
+            Assert.Equal([bound.Id], coordinator.Questions.Where(question => question.Kind == "loopBound").Select(question => question.Id));
+        }
+    }
+
+    /// <summary>
     /// A changed answer that arrives while an update is under way is queued behind it, as an amendment is: the answer
     /// is not applied until its turn, and when the first update is done the change is applied and planned - the set's
     /// one change, both answers kept, the second naming the update that took it.
@@ -491,7 +587,14 @@ public sealed class FlowPlanUpdateTests
             Assert.Single(QuestionsOf(harness, layout).Questions.First(question => question.Id == ask).Answers);
 
             // The session drives the first whole, then the change at its turn: applied - both answers kept, the new
-            // one naming its update - and planned by its own visit of the planning step, whole in turn.
+            // one naming its update - and planned by its own visit of the planning step, whole in turn. The set it
+            // changes is still the last a person answered at its turn: the gate is answered only after, for an answer
+            // given before the turn would be the last set, and the change refused.
+            var held = await coordinator.RunAsync(Token);
+
+            Assert.Equal(FlowRunStatus.Paused, held.Status);
+            Assert.Equal([gate], coordinator.OpenQuestions.Select(question => question.Id));
+
             Assert.True(coordinator.TryAnswer(gate, "go", null, out _));
             var settled = await coordinator.RunAsync(Token);
 

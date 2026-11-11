@@ -105,6 +105,138 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
+    /// The programs whose work is to keep what they start running apart from the command that starts it - past its shell's
+    /// end, its hangup or its session - that are files, found by any path to them: <c>nohup</c>, <c>setsid</c>,
+    /// <c>daemonize</c>, <c>start-stop-daemon</c>, and <c>at</c> and <c>batch</c> given a job, which their daemon runs.
+    /// </summary>
+    private static readonly string[] DetachingPrograms = ["nohup", "setsid", "daemonize", "start-stop-daemon", "at", "batch"];
+
+    /// <summary>
+    /// PowerShell's cmdlets that keep what they start apart, which PowerShell also finds by a module-qualified name:
+    /// <c>Start-Process</c>, and its jobs, <c>Start-Job</c> and <c>Start-ThreadJob</c>, whose block runs on as the job
+    /// <c>&amp;</c>'s does.
+    /// </summary>
+    private static readonly string[] DetachingCmdlets = ["Start-Process", "Start-Job", "Start-ThreadJob"];
+
+    /// <summary>
+    /// The shell's and PowerShell's own commands that keep what they start apart, which no path reaches: <c>disown</c>,
+    /// Windows' <c>start</c> - cmd's own, and PowerShell's name for <c>Start-Process</c> - <c>saps</c> and <c>sajb</c>,
+    /// PowerShell's names for <c>Start-Process</c> and <c>Start-Job</c>, and <see cref="DetachingCmdlets"/>.
+    /// </summary>
+    private static readonly string[] DetachingCommands = ["disown", "start", "saps", "sajb", .. DetachingCmdlets];
+
+    /// <summary>
+    /// The programs and the shells' own commands whose work is to keep what they start running apart from the command
+    /// that starts it: <see cref="DetachingPrograms"/>, then <see cref="DetachingCommands"/>.
+    /// </summary>
+    public static IReadOnlyList<string> Detaching { get; } = [.. DetachingPrograms, .. DetachingCommands];
+
+    /// <summary>A name PowerShell reads as a module's command (<c>Microsoft.PowerShell.Management\Start-Process</c>): a module's name, a backslash, the command.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_.\-]*\\[^\\/]+$")]
+    private static partial System.Text.RegularExpressions.Regex ModuleQualified();
+
+    /// <summary>The shells a command may be read by, each expanding its words in its own way.</summary>
+    internal enum Reader
+    {
+        /// <summary>A POSIX shell, or fish: the string's own, or one a command runs.</summary>
+        Shell,
+
+        /// <summary>PowerShell, whose cmdlets expand their wildcards themselves, quoted or not.</summary>
+        PowerShell,
+
+        /// <summary>cmd.exe.</summary>
+        Cmd,
+    }
+
+    /// <summary>
+    /// The shell that reads <paramref name="analyzed"/>: the innermost of the commands that run it that is a shell
+    /// (<see cref="AnalyzedCommand.Wrappers"/>) - <c>pwsh -c</c>'s PowerShell, <c>cmd /c</c>'s cmd.exe, <c>bash -c</c>'s
+    /// shell - else the shell the string was given to.
+    /// </summary>
+    internal static Reader ReadBy(AnalyzedCommand analyzed)
+    {
+        foreach (var words in analyzed.Wrappers.Reverse())
+        {
+            var at = EnvironmentOf(words);
+
+            if (at >= words.Count)
+            {
+                continue;
+            }
+
+            var name = Name(words[at]);
+
+            if (name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase))
+            {
+                return Reader.PowerShell;
+            }
+
+            if (name.Equals("cmd", StringComparison.OrdinalIgnoreCase))
+            {
+                return Reader.Cmd;
+            }
+
+            if (IsShell(name))
+            {
+                return Reader.Shell;
+            }
+        }
+
+        return Reader.Shell;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="command"/> leaves a process running after the command it stands in ends: it runs in the
+    /// background (<see cref="AnalyzedCommand.Background"/>), PowerShell reads it given <c>-AsJob</c>, or one of
+    /// <see cref="Detaching"/> runs at a place a program of it runs (<see cref="RunsAt"/>) - among its words, or among a
+    /// wrapper's stripped before them, as <c>nohup</c> is - at and batch where they schedule a job (<see cref="AtJob"/>), not
+    /// where they list, remove or print one. A program is matched by the last segment of any path to it, a Windows
+    /// program's <c>.exe</c> folded (<c>/usr/bin/setsid</c>); a shell's own command by its bare word alone, for a word with a
+    /// directory part or a script's end (<c>./bin/start</c>, <c>scripts\start</c>, <c>start.cmd</c>) names the repository's own
+    /// script, never cmd's <c>start</c> - but where PowerShell reads the command, one of <see cref="DetachingCmdlets"/> by a
+    /// module-qualified name too, each with any of PowerShell's dashes.
+    /// </summary>
+    /// <param name="command">The command, as this read it.</param>
+    public static bool LeavesAProcessBehind(AnalyzedCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var powerShell = ReadBy(command) is Reader.PowerShell;
+
+        bool Detaches(IReadOnlyList<string> words, IReadOnlyList<ShellRedirect> redirects)
+        {
+            for (var at = EnvironmentOf(words); at < words.Count && RunsAt(words, at); at++)
+            {
+                var word = words[at].TrimStart('@');
+                var segment = word.TrimEnd('/', '\\').Replace('\\', '/').Split('/')[^1];
+                var program = segment.Length > 4 && segment.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? segment[..^4] : segment;
+                var cmdlet = powerShell && (word.IndexOfAny(['/', '\\']) < 0 || ModuleQualified().IsMatch(word))
+                    && Is(PowerShellReader.CommandName(word), DetachingCmdlets);
+
+                if (Is(word, DetachingCommands) || cmdlet
+                    || (Is(program, DetachingPrograms) && (!Is(program, "at", "batch") || AtJob([.. words.Skip(at)], redirects, program: false).Count > 0)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // PowerShell's -AsJob - by any start of its name from -as, never set :$false - runs the command as a job.
+        static bool AsJob(string word)
+            => PowerShellReader.Dashed(word) is ['-', not '-', ..] dashed
+                && dashed[1..].Split(':', 2) is var spelled
+                && spelled[0].Length >= 2 && "asjob".StartsWith(spelled[0].ToLowerInvariant(), StringComparison.Ordinal)
+                && (spelled.Length == 1 || !spelled[1].TrimStart('$', '{').StartsWith("false", StringComparison.OrdinalIgnoreCase));
+
+        return command.Background
+            || (powerShell && command.Words.Skip(EnvironmentOf(command.Words) + 1).Any(AsJob))
+            || Detaches(command.Words, command.Redirects)
+            || command.Wrappers.Any(words => Detaches(words, []));
+    }
+
+    /// <summary>
     /// Refuses <paramref name="words"/> where one holds a NUL: the system hands a program its name and its arguments cut
     /// at the first, so the command that would run is not the one read here.
     /// </summary>
@@ -475,7 +607,7 @@ public static partial class CommandAnalysis
         {
             readings.Add(new RuleReading(
                 ["git", "config", AssignedName(setting), .. words.Skip(environment)],
-                [string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]));
+                [string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]) { Configures = true });
         }
 
         // Setting where gh reads its configuration from is gh config set of the setter's choosing: its editor, pager and
@@ -484,14 +616,14 @@ public static partial class CommandAnalysis
         {
             readings.Add(new RuleReading(
                 ["gh", "config", "set", AssignedName(ghSetting), .. words.Skip(environment)],
-                [string.Empty, string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]));
+                [string.Empty, string.Empty, string.Empty, string.Empty, .. quoted.Skip(environment)]) { Configures = true });
         }
 
         var (command, commandQuoted, configured) = Plain(words, program, quoted);
 
         if (configured || ClonesConfigured(command))
         {
-            readings.Add(new RuleReading(["git", "config", .. command.Skip(1)], [string.Empty, string.Empty, .. commandQuoted.Skip(1)]));
+            readings.Add(new RuleReading(["git", "config", .. command.Skip(1)], [string.Empty, string.Empty, .. commandQuoted.Skip(1)]) { Configures = true });
         }
 
         readings.Add(new RuleReading(command, commandQuoted));
@@ -1374,32 +1506,11 @@ public static partial class CommandAnalysis
     /// <param name="from">Where the words after <c>config</c> begin.</param>
     private static (string Key, string Value)? ConfigSetting(IReadOnlyList<string> words, int from)
     {
-        var positional = new List<string>();
+        var (options, positional) = ConfigWords(words, from);
 
-        for (var at = from; at < words.Count; at++)
+        if (options.Any(option => GitConfigReads.Contains(option, StringComparer.Ordinal)))
         {
-            var word = words[at];
-
-            if (word == "--")
-            {
-                positional.AddRange(words.Skip(at + 1));
-                break;
-            }
-
-            if (word.Length > 1 && word[0] == '-')
-            {
-                var name = word.Split('=', 2)[0];
-
-                if (GitConfigReads.Contains(name, StringComparer.Ordinal))
-                {
-                    return null;
-                }
-
-                at += GitConfigValued.Contains(name, StringComparer.Ordinal) && !word.Contains('=', StringComparison.Ordinal) ? 1 : 0;
-                continue;
-            }
-
-            positional.Add(word);
+            return null;
         }
 
         // git config's own verbs: only set sets.
@@ -1416,15 +1527,76 @@ public static partial class CommandAnalysis
         return positional.Count >= 2 ? (positional[0], positional[1]) : null;
     }
 
+    /// <summary>
+    /// The words of <c>git config</c> from <paramref name="from"/> on: each option's name - its word to an <c>=</c> - and
+    /// every word that is no option and no option's value, in order; every word after a <c>--</c> one of them.
+    /// </summary>
+    /// <param name="words">A git command's words, its program first.</param>
+    /// <param name="from">Where the words after <c>config</c> begin.</param>
+    private static (List<string> Options, List<string> Positional) ConfigWords(IReadOnlyList<string> words, int from)
+    {
+        var (options, positional) = (new List<string>(), new List<string>());
+
+        for (var at = from; at < words.Count; at++)
+        {
+            var word = words[at];
+
+            if (word == "--")
+            {
+                positional.AddRange(words.Skip(at + 1));
+                break;
+            }
+
+            if (word.Length > 1 && word[0] == '-')
+            {
+                var name = word.Split('=', 2)[0];
+
+                options.Add(name);
+                at += GitConfigValued.Contains(name, StringComparer.Ordinal) && !word.Contains('=', StringComparison.Ordinal) ? 1 : 0;
+                continue;
+            }
+
+            positional.Add(word);
+        }
+
+        return (options, positional);
+    }
+
     /// <summary>git config's options that take their value as the next word.</summary>
-    private static readonly string[] GitConfigValued = ["-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url"];
+    private static readonly string[] GitConfigValued = ["-f", "--file", "--blob", "-t", "--type", "--default", "--comment", "--value", "--url"];
+
+    /// <summary>
+    /// git config's options that only read - a value got, every value listed - each an action git refuses beside any
+    /// other: printed by <c>help side-tasks</c>, open while a run works over the tree (<see cref="GitReadsOnly"/>).
+    /// </summary>
+    public static IReadOnlyList<string> GitConfigGets { get; } = ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "-l", "--list"];
+
+    /// <summary>git config's options that unset, rename, remove or edit.</summary>
+    private static readonly string[] GitConfigUnsets = ["--unset", "--unset-all", "--rename-section", "--remove-section", "-e", "--edit"];
 
     /// <summary>git config's options that read, unset, rename, remove, list or edit rather than setting a value.</summary>
-    private static readonly string[] GitConfigReads =
-        ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "--unset", "--unset-all", "--rename-section", "--remove-section", "-l", "--list", "-e", "--edit"];
+    private static readonly string[] GitConfigReads = [.. GitConfigGets, .. GitConfigUnsets];
+
+    /// <summary>git config's options that add or replace a value beside the ones a key holds.</summary>
+    private static readonly string[] GitConfigAdds = ["--add", "--replace-all"];
+
+    /// <summary>
+    /// git config's options that choose its file, the type of its values and what it prints, none of them an action: with
+    /// <see cref="GitConfigValued"/>, <see cref="GitConfigReads"/> and <see cref="GitConfigAdds"/>, every option of git
+    /// config's this knows, each by its whole name.
+    /// </summary>
+    private static readonly string[] GitConfigShaping =
+    [
+        "--global", "--system", "--local", "--worktree", "--bool", "--int", "--bool-or-int", "--bool-or-str", "--path", "--expiry-date",
+        "--no-type", "-z", "--null", "--name-only", "--includes", "--no-includes", "--show-origin", "--show-scope", "--fixed-value", "--all",
+        "--regexp",
+    ];
 
     /// <summary>git config's verbs, of which <c>set</c> alone sets.</summary>
     private static readonly string[] GitConfigVerbs = ["list", "get", "set", "unset", "rename-section", "remove-section", "edit"];
+
+    /// <summary>git config's verbs that only read: printed by <c>help side-tasks</c>.</summary>
+    public static IReadOnlyList<string> GitConfigReadVerbs { get; } = ["list", "get"];
 
     /// <summary>
     /// The command line <c>gh alias set</c> gives a name, read where it is given, for a later command calls it by a name
@@ -1545,12 +1717,6 @@ public static partial class CommandAnalysis
         => new($"'{string.Join(' ', words)}' is a script nested past {Depth} levels of going into, which this does not read");
 
     /// <summary>
-    /// What expansion names the word, where the shell would make one before it runs it: a
-    /// substitution (<c>$(...)</c>, a backtick, kept as <c>$(...)</c>, <c>&lt;(...)</c>), a
-    /// variable (<c>$X</c>, cmd's <c>%X%</c>), a pattern (<c>*</c>, <c>?</c>, <c>[</c>) or a brace
-    /// (<c>{a,b}</c>, <c>{a..b}</c>); null where it names none.
-    /// </summary>
-    /// <summary>
     /// What the shell expands in <paramref name="word"/>, as a refusal names it - a substitution, a variable, a
     /// pattern or a brace - or <see langword="null"/> where it expands nothing: each character asked where it stands
     /// to the shell by <paramref name="quoted"/> (<see cref="WordQuoting"/>), so a quoted character is never read as
@@ -1558,6 +1724,10 @@ public static partial class CommandAnalysis
     /// short of the word - reads as wholly open: refused as an expansion rather than quietly passed. A cmd percent is
     /// live inside double quotes as out of them, for the shell never expands one and cmd reads the word past every
     /// quote the shell read; what cmd reads again of a batch argument is <see cref="Processes.BatchFiles"/>' own rule.
+    /// A tilde the shell takes from a variable's value at a word's start - <c>~+</c> PWD's, <c>~-</c> OLDPWD's, and
+    /// <c>~N</c>, <c>~+N</c> and <c>~-N</c> the directory stack's, every character of it unquoted and nothing but a
+    /// separator after it - is a variable, as <c>$PWD</c> is: the string may set the variable to any word at all. A home
+    /// (<c>~</c>, <c>~name</c>) is none, read where a path is.
     /// </summary>
     /// <param name="word">The word, its quotes read as the shell reads them.</param>
     /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
@@ -1568,6 +1738,11 @@ public static partial class CommandAnalysis
         if (word.Contains(InputWord, StringComparison.Ordinal))
         {
             return "a substitution";
+        }
+
+        if (VariableTilde(word, quoted) > 0)
+        {
+            return "a variable";
         }
 
         var classes = ClassesOf(word, quoted);
@@ -2079,6 +2254,25 @@ public static partial class CommandAnalysis
     private static partial System.Text.RegularExpressions.Regex DelayedVariable();
 
     /// <summary>
+    /// A tilde the shell takes from a variable at a word's start, before a separator or the word's end: <c>~+</c> and
+    /// <c>~-</c>, and the directory stack's <c>~N</c>, <c>~+N</c> and <c>~-N</c>.
+    /// </summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^~(?:[+-]?[0-9]+|[+-])(?=$|[/\\])")]
+    private static partial System.Text.RegularExpressions.Regex TildeVariable();
+
+    /// <summary>
+    /// How long the tilde at <paramref name="word"/>'s start is that the shell takes from a variable's value
+    /// (<see cref="TildeVariable"/>), every character of it unquoted by <paramref name="quoted"/>; 0 where the word begins
+    /// with none: the one reading of where such a tilde ends, for <see cref="Expansion"/> and for whatever reads past it.
+    /// </summary>
+    /// <param name="word">The word, its quotes read as the shell reads them.</param>
+    /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
+    internal static int VariableTilde(string word, string? quoted)
+        => TildeVariable().Match(word) is { Success: true } tilde && ClassesOf(word, quoted)[..tilde.Length].All(character => character == WordQuoting.Open)
+            ? tilde.Length
+            : 0;
+
+    /// <summary>
     /// The command line <c>env -S</c> (<c>--split-string</c>) takes, the pairs before it and the
     /// words that follow it: null where the words name none. Read before any word of the command
     /// proper, as env reads it (<see cref="EnvWords"/>).
@@ -2355,7 +2549,7 @@ public static partial class CommandAnalysis
 
                 if (option == "--")
                 {
-                    return at + 1 < words.Count ? ScriptFile(words[at + 1], name, redirects, program, quoted: At(quoted, at + 1), seen: scriptFile, inputGiven: inputGiven) : Input(name, redirects, program, inputGiven: inputGiven);
+                    return at + 1 < words.Count ? ScriptFile(words[at + 1], name, redirects, program, quoted: At(quoted, at + 1), seen: scriptFile, inputGiven: inputGiven) : Input(name, redirects, program, inputGiven: inputGiven, seen: scriptFile);
                 }
 
                 if (!(option.StartsWith('-') || option.StartsWith('+')))
@@ -2396,7 +2590,7 @@ public static partial class CommandAnalysis
                 }
             }
 
-            return Input(name, redirects, program, inputGiven: inputGiven);
+            return Input(name, redirects, program, inputGiven: inputGiven, seen: scriptFile);
         }
 
         if (Is(name, "source", "."))
@@ -2424,7 +2618,7 @@ public static partial class CommandAnalysis
                 }
             }
 
-            return Input(name, redirects, program, CmdAsPosix, inputGiven: inputGiven);
+            return Input(name, redirects, program, CmdAsPosix, inputGiven: inputGiven, seen: scriptFile);
         }
 
         if (Is(name, "powershell", "pwsh"))
@@ -2439,7 +2633,7 @@ public static partial class CommandAnalysis
 
                 if (option == "-")
                 {
-                    return Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven);
+                    return Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven, seen: scriptFile);
                 }
 
                 if (PowerShellParameter(option) is not { } parameter)
@@ -2481,13 +2675,13 @@ public static partial class CommandAnalysis
                 {
                     return at + 1 >= words.Count ? null
                         : words[at + 1] != "-" ? [PowerShellAsPosix(string.Join(' ', words.Skip(at + 1)))]
-                        : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven);
+                        : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven, seen: scriptFile);
                 }
 
                 if ("file".StartsWith(parameter, StringComparison.Ordinal))
                 {
                     return at + 1 >= words.Count ? null
-                        : words[at + 1] == "-" ? Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven)
+                        : words[at + 1] == "-" ? Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven, seen: scriptFile)
                         : ScriptFile(words[at + 1], name, redirects, program, PowerShellAsPosix, seen: scriptFile, inputGiven: inputGiven);
                 }
 
@@ -2517,7 +2711,7 @@ public static partial class CommandAnalysis
             }
 
             return file is not null ? ScriptFile(file, name, redirects, program, PowerShellAsPosix, seen: scriptFile, inputGiven: inputGiven)
-                : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven);
+                : Input(name, redirects, program, PowerShellAsPosix, inputGiven: inputGiven, seen: scriptFile);
         }
 
         // trap's first word is the command it runs at a signal; script's and flock's -c, and the
@@ -2552,22 +2746,10 @@ public static partial class CommandAnalysis
             return null;
         }
 
+        // -x runs the words as they are, each met by the rules on its own program.
         if (Is(name, "watch"))
         {
-            var at = 1;
-
-            while (at < words.Count && words[at].StartsWith('-'))
-            {
-                // -x runs the words as they are, each met by the rules on its own program; a help or a version, nothing.
-                if (words[at] is "-x" or "--exec" or "-h" or "--help" or "-v" or "--version")
-                {
-                    return null;
-                }
-
-                at += words[at] is "-n" or "--interval" or "-q" or "--equexit" && at + 1 < words.Count ? 2 : 1;
-            }
-
-            return at < words.Count ? [string.Join(' ', words.Skip(at))] : null;
+            return WatchCommandAt(words) is { Exec: false, At: var at } && at < words.Count ? [string.Join(' ', words.Skip(at))] : null;
         }
 
         return null;
@@ -2580,25 +2762,28 @@ public static partial class CommandAnalysis
     /// <c>source $F</c>) or another open descriptor does (<c>/dev/fd/3</c>), where the words are a
     /// command's own, for what it runs is what another command printed. The expansion is read where
     /// the shell would make it: a file named in quotes is a file of that name, not one a variable
-    /// gave. <paramref name="seen"/> is told the file first.
+    /// gave. <paramref name="seen"/> is told the file first, and the file the input is where it names the input.
     /// </summary>
     private static IReadOnlyList<string>? ScriptFile(string file, string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null, string? quoted = null, Action<string>? seen = null, bool inputGiven = true)
     {
         seen?.Invoke(file);
 
-        return Folded(file) is "/dev/stdin" or "/dev/fd/0" or "/proc/self/fd/0" ? Input(name, redirects, program, spelled, inputGiven)
+        return Folded(file) is "/dev/stdin" or "/dev/fd/0" or "/proc/self/fd/0" ? Input(name, redirects, program, spelled, inputGiven, seen)
             : program && Unread(file, quoted) is { } unread ? throw new NotSupportedException($"'{file}' names the script it runs by {unread}, which this does not read")
             : null;
     }
 
     /// <summary>
     /// The script files the program <paramref name="words"/> start with reads and runs: a shell's, <c>source</c>'s and
-    /// PowerShell's script file, as <see cref="Into"/> reads their words, and sed's <c>-f</c> files - never a word a
-    /// <c>-c</c> runs as a command line, nor the arguments after a script. None where it reads none.
+    /// PowerShell's script file, as <see cref="Into"/> reads their words - the file its input is, where it reads its
+    /// script from its input (<c>bash &lt; x.sh</c>, <c>sh -s &lt; x.sh</c>, <c>source /dev/stdin &lt; x.sh</c>) - and sed's
+    /// <c>-f</c> files - never a word a <c>-c</c> runs as a command line, nor the arguments after a script. None where it
+    /// reads none.
     /// </summary>
     /// <param name="words">The program and its words.</param>
     /// <param name="quoted">How each word's characters stand to the shell, kept in step with <paramref name="words"/>.</param>
-    internal static IReadOnlyList<string> ScriptFilesOf(IReadOnlyList<string> words, IReadOnlyList<string> quoted)
+    /// <param name="redirects">The redirects the shell makes for the command the words stand in.</param>
+    internal static IReadOnlyList<string> ScriptFilesOf(IReadOnlyList<string> words, IReadOnlyList<string> quoted, IReadOnlyList<ShellRedirect> redirects)
     {
         if (words.Count == 0)
         {
@@ -2615,7 +2800,7 @@ public static partial class CommandAnalysis
                 return SedOf(words, quoted)?.Files ?? [];
             }
 
-            _ = Into(name, words, quoted, [], program: false, files.Add);
+            _ = Into(name, words, quoted, redirects, program: false, files.Add);
         }
         catch (NotSupportedException)
         {
@@ -2668,9 +2853,10 @@ public static partial class CommandAnalysis
     /// script file, unseen as any is. A program given no input of its own reads the one around it
     /// (<paramref name="inputGiven"/>): what an earlier command printed, or the text the tool runtime
     /// writes to it, refused where the words are a command's own; or, where nothing gives it one -
-    /// the agent's own command's input - no script at all, null.
+    /// the agent's own command's input - no script at all, null. <paramref name="seen"/> is told the
+    /// file its input is, as <see cref="ScriptFile"/> tells it a file a word names.
     /// </summary>
-    private static IReadOnlyList<string>? Input(string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null, bool inputGiven = true)
+    private static IReadOnlyList<string>? Input(string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null, bool inputGiven = true, Action<string>? seen = null)
     {
         // The shell reads what the last redirect of its descriptor 0 gives it: a text, or a file
         // unseen as any script file is; one duplicated from another descriptor, or named by one,
@@ -2680,6 +2866,7 @@ public static partial class CommandAnalysis
             case { Operator: "<<<" } text:
                 return [spelled is null ? text.Target : spelled(text.Target)];
             case { Operator: not "<&" } file when Unread(file.Target) is not { } || !program:
+                seen?.Invoke(file.Target);
                 return null;
             case { } other when program:
                 throw new NotSupportedException($"'{name}' reads the script it runs from '{other}', which this does not read");
@@ -2706,7 +2893,8 @@ public static partial class CommandAnalysis
     /// The programs that run the words after their own options as a command, which this does not strip - their options
     /// are theirs to read - each tried by the rules on its own program as every word is: a check that holds only where a
     /// program runs (a gh named by none of gh's own) holds past these too, and among any other program's words reads its
-    /// word as that program's data.
+    /// word as that program's data. The program each runs past its own options is read where a script the string wrote
+    /// may be it (<see cref="CommandAt"/>, <see cref="ProgramsAt"/>).
     /// </summary>
     public static IReadOnlyList<string> CommandRunners { get; } =
         ["setsid", "stdbuf", "ionice", "chrt", "taskset", "unshare", "nsenter", "prlimit", "numactl", "cpulimit", "firejail", "flock",
@@ -2805,7 +2993,7 @@ public static partial class CommandAnalysis
 
         var read = commanded ? [.. words.Skip(at).Where(word => word != InputWord)]
             : at < words.Count ? ScriptFile(words[at], name, redirects, program, seen: scriptFile, inputGiven: inputGiven)
-            : Input(name, redirects, program, inputGiven: inputGiven);
+            : Input(name, redirects, program, inputGiven: inputGiven, seen: scriptFile);
 
         return scripts.Count > 0 ? [.. scripts, .. read ?? []] : read;
     }
@@ -2859,7 +3047,9 @@ public static partial class CommandAnalysis
     /// <summary>
     /// A cmd script spelled for the shell reader: cmd quotes with double quotes alone and escapes
     /// with a caret, while a backslash, a single quote, a dollar and a backtick are its ordinary
-    /// characters - each escaped here, so the reader splits the script where cmd does.
+    /// characters - each escaped here - and its lone '&amp;' runs the next command once the one
+    /// before it ends, spelled ';' - so the reader splits the script where cmd does, and runs
+    /// nothing of it in the background.
     /// </summary>
     private static string CmdAsPosix(string script)
     {
@@ -2882,6 +3072,17 @@ public static partial class CommandAnalysis
             else if (character is '\\' or '$' or '`' || (!quoted && character == '\''))
             {
                 builder.Append('\\').Append(character);
+            }
+            else if (!quoted && character == '&' && at + 1 < script.Length && script[at + 1] == '&')
+            {
+                builder.Append("&&");
+                at++;
+            }
+            else if (!quoted && character == '&' && (at == 0 || script[at - 1] is not ('>' or '<')))
+            {
+                // cmd's lone '&' runs the next command once the one before it ends, as a ';' does - never in the
+                // background; a redirect's ('2>&1', '>&2') stays one.
+                builder.Append(';');
             }
             else
             {
@@ -2908,8 +3109,6 @@ public static partial class CommandAnalysis
             return null;
         }
 
-        var at = 1;
-
         // The wrapper's own spelling from here on: its options are read in the one case each of its
         // kinds writes them.
         name = name.ToLowerInvariant();
@@ -2926,77 +3125,12 @@ public static partial class CommandAnalysis
             return ([.. read.Pairs, .. words.Skip(read.At)], [.. envMade, .. quoted.Skip(read.At)]);
         }
 
-        if (name == "timeout")
+        if (name == "xargs")
         {
-            // Its options, each with its value where it takes one, then the duration the command waits.
-            while (at < words.Count && words[at].StartsWith('-'))
-            {
-                at += words[at] is "--foreground" or "-f" or "-p" || words[at].Contains('=', StringComparison.Ordinal) ? 1
-                    : words[at] is "-k" or "-s" or "--kill-after" or "--signal" && at + 1 < words.Count ? 2
-                    : 1;
-            }
-
-            if (at + 1 < words.Count && Duration().IsMatch(words[at]))
-            {
-                at++;
-            }
-        }
-        else if (name == "nice")
-        {
-            if (at < words.Count && (words[at] == "-n" || words[at] == "--adjustment") && at + 1 < words.Count)
-            {
-                at += 2;
-            }
-            else if (at < words.Count && Niceness().IsMatch(words[at]))
-            {
-                at++;
-            }
-        }
-        else if (name == "time")
-        {
-            if (at < words.Count && words[at] == "-p")
-            {
-                at++;
-            }
-        }
-        else if (name == "xargs")
-        {
-            // Its options, each a word of its own and each that takes a value with it; the command
-            // is the first word that is none. A replace string - -I's, -i's or --replace's - is where
-            // the input goes; without one the input follows the command's words.
-            string? replace = null;
-
-            while (at < words.Count && words[at].StartsWith('-'))
-            {
-                var option = words[at];
-
-                if (option == "-I" && at + 1 < words.Count)
-                {
-                    replace = words[at + 1];
-                    at += 2;
-                    continue;
-                }
-
-                if (option.StartsWith("-I", StringComparison.Ordinal) || option.StartsWith("-i", StringComparison.Ordinal))
-                {
-                    replace = option.Length > 2 ? option[2..] : "{}";
-                    at++;
-                    continue;
-                }
-
-                if (option.StartsWith("--replace", StringComparison.Ordinal))
-                {
-                    replace = option.StartsWith("--replace=", StringComparison.Ordinal) ? option["--replace=".Length..] : "{}";
-                    at++;
-                    continue;
-                }
-
-                at += option is "-d" or "-P" or "-n" or "-s" or "-E" or "-L" or "-a" or "--arg-file" or "--delimiter"
-                    or "--max-args" or "--max-procs" or "--max-chars" or "--process-slot-var" && at + 1 < words.Count ? 2 : 1;
-            }
-
-            // With no command of its own it echoes what it is handed.
-            IReadOnlyList<string> command = at < words.Count ? [.. words.Skip(at)] : ["echo"];
+            // A replace string - -I's, -i's or --replace's - is where the input goes; without one the input follows the
+            // command's words. With no command of its own it echoes what it is handed.
+            var (start, replace) = XargsOptions(words);
+            IReadOnlyList<string> command = start < words.Count ? [.. words.Skip(start)] : ["echo"];
 
             // What xargs fills from its input is an expansion, wherever it stands among these words: they are made
             // here, not read from the command line, so their spelling is not kept.
@@ -3006,23 +3140,224 @@ public static partial class CommandAnalysis
 
             return (filled, [.. filled.Select(_ => string.Empty)]);
         }
-        else if (name is "command" or "builtin")
+
+        // A word xargs fills from its input is an expansion wherever the shell would leave it alone, so the words a
+        // wrapper leaves keep the spelling it read them with. command -v and -V say what a name is and run nothing: no
+        // wrapper, its words each tried as a program still.
+        return CommandAt(name, words) is { } at ? ([.. words.Skip(at)], [.. quoted.Skip(at)]) : null;
+    }
+
+    /// <summary>
+    /// xargs' own options, each a word of its own and each that takes a value with it: where its command begins - the first
+    /// word that is none - and the replace string its <c>-I</c>, <c>-i</c> or <c>--replace</c> gives, where one does.
+    /// </summary>
+    private static (int At, string? Replace) XargsOptions(IReadOnlyList<string> words)
+    {
+        var at = 1;
+        string? replace = null;
+
+        while (at < words.Count && words[at].StartsWith('-'))
         {
-            while (at < words.Count && words[at] is "-v" or "-V" or "-p")
+            var option = words[at];
+
+            if (option == "-I" && at + 1 < words.Count)
             {
-                // -v and -V say what a name is and run nothing: no wrapper, its words each tried as a program still.
+                replace = words[at + 1];
+                at += 2;
+                continue;
+            }
+
+            if (option.StartsWith("-I", StringComparison.Ordinal) || option.StartsWith("-i", StringComparison.Ordinal))
+            {
+                replace = option.Length > 2 ? option[2..] : "{}";
+                at++;
+                continue;
+            }
+
+            if (option.StartsWith("--replace", StringComparison.Ordinal))
+            {
+                replace = option.StartsWith("--replace=", StringComparison.Ordinal) ? option["--replace=".Length..] : "{}";
+                at++;
+                continue;
+            }
+
+            at += option is "-d" or "-P" or "-n" or "-s" or "-E" or "-L" or "-a" or "--arg-file" or "--delimiter"
+                or "--max-args" or "--max-procs" or "--max-chars" or "--process-slot-var" && at + 1 < words.Count ? 2 : 1;
+        }
+
+        return (at, replace);
+    }
+
+    /// <summary>
+    /// Where the command a wrapper (<see cref="Stripped"/>) or a runner (<see cref="CommandRunners"/>) runs begins among
+    /// <paramref name="words"/>, its own name first: past its own options, each with the value it takes, and the words it
+    /// reads before the command - timeout's duration, nice's niceness, taskset's mask, chrt's priority, chroot's root,
+    /// flock's lock, faketime's time, abduco's session (<see cref="RunnerReadings"/>). Null where it runs no command of those
+    /// words on this machine - ssh's runs on its host; wsl's without <c>-e</c> and watch's without <c>-x</c> are command
+    /// lines read as scripts of their own (<see cref="ScriptsItRuns"/>, <see cref="Into"/>), and flock's <c>-c</c> and
+    /// runuser's without <c>-u</c> run a shell's - where it runs none (<c>command -v</c>, a process's settings by its id),
+    /// and where the program is neither. The one reading of a wrapper's and a runner's own options: the wrapper stripped,
+    /// and the program a runner runs (<see cref="ProgramsAt"/>), alike.
+    /// </summary>
+    /// <param name="name">The program's name, as <see cref="Name"/> reads it.</param>
+    /// <param name="words">The program and its words.</param>
+    /// <exception cref="NotSupportedException">env is given an option it does not name alone (<see cref="EnvWords"/>).</exception>
+    private static int? CommandAt(string name, IReadOnlyList<string> words)
+    {
+        var at = 1;
+
+        if (Is(name, "nohup", "exec", "busybox"))
+        {
+            return at;
+        }
+
+        if (Is(name, "timeout"))
+        {
+            // Its options, each with its value where it takes one, then the duration the command waits.
+            while (at < words.Count && words[at].StartsWith('-'))
+            {
+                at += words[at] is "--foreground" or "-f" or "-p" || words[at].Contains('=', StringComparison.Ordinal) ? 1
+                    : words[at] is "-k" or "-s" or "--kill-after" or "--signal" && at + 1 < words.Count ? 2
+                    : 1;
+            }
+
+            return at + 1 < words.Count && Duration().IsMatch(words[at]) ? at + 1 : at;
+        }
+
+        if (Is(name, "nice"))
+        {
+            return at < words.Count && (words[at] == "-n" || words[at] == "--adjustment") && at + 1 < words.Count ? at + 2
+                : at < words.Count && Niceness().IsMatch(words[at]) ? at + 1
+                : at;
+        }
+
+        if (Is(name, "time"))
+        {
+            return at < words.Count && words[at] == "-p" ? at + 1 : at;
+        }
+
+        if (Is(name, "command", "builtin"))
+        {
+            for (; at < words.Count && words[at] is "-v" or "-V" or "-p"; at++)
+            {
                 if (words[at] is "-v" or "-V")
                 {
                     return null;
                 }
-
-                at++;
             }
+
+            return at;
         }
 
-        // A word xargs fills from its input is an expansion wherever the shell would leave it alone, so the words a
-        // wrapper leaves keep the spelling it read them with.
-        return ([.. words.Skip(at)], [.. quoted.Skip(at)]);
+        if (Is(name, "env"))
+        {
+            return EnvWords(words) is { Split: null } read ? read.At : null;
+        }
+
+        if (Is(name, "xargs"))
+        {
+            return XargsOptions(words).At;
+        }
+
+        if (Is(name, "watch"))
+        {
+            return WatchCommandAt(words) is { Exec: true, At: var watched } ? watched : null;
+        }
+
+        if (Is(name, "wsl"))
+        {
+            return WslCommandAt(words) is { Exec: true, At: var run } ? run : null;
+        }
+
+        if (Is(name, "start"))
+        {
+            return StartOptionsEnd(words, at);
+        }
+
+        return RunnerReadings.TryGetValue(Name(name), out var reading) ? reading.CommandAt(words) : null;
+    }
+
+    /// <summary>
+    /// The words of <paramref name="command"/> that may be a program it runs on this machine: its own, past its environment,
+    /// and the one each wrapper or runner among them runs, past that one's own options (<see cref="CommandAt"/>) - for cmd's
+    /// start, the first word that is no option of its own and the next, for the first is its window's title where it was
+    /// quoted, which the words no longer say. Any other word a runner is given - an option's value, a remote command, a
+    /// command line of its own, an argument of the program it runs - is none.
+    /// </summary>
+    /// <param name="command">A command's words, its environment before them.</param>
+    internal static IReadOnlySet<int> ProgramsAt(IReadOnlyList<string> command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var programs = new HashSet<int>();
+
+        for (var at = EnvironmentOf(command); at < command.Count && programs.Add(at);)
+        {
+            var name = Name(command[at]);
+            int? next;
+
+            try
+            {
+                next = CommandAt(name, [.. command.Skip(at)]);
+            }
+            catch (NotSupportedException)
+            {
+                // An env this cannot read is refused where the command is flattened, before a program of its is asked.
+                next = null;
+            }
+
+            if (next is not { } run)
+            {
+                break;
+            }
+
+            if (Is(name, "start") && at + StartOptionsEnd([.. command.Skip(at)], run + 1) is var titled && titled < command.Count)
+            {
+                programs.Add(titled);
+            }
+
+            at += run;
+        }
+
+        return programs;
+    }
+
+    /// <summary>
+    /// Where cmd's start's own options end, from <paramref name="at"/> on: each a word that begins with <c>/</c>,
+    /// <c>/d</c>'s, <c>/node</c>'s and <c>/affinity</c>'s with the value each takes.
+    /// </summary>
+    private static int StartOptionsEnd(IReadOnlyList<string> words, int at)
+    {
+        while (at < words.Count && words[at].StartsWith('/'))
+        {
+            at += words[at].ToLowerInvariant() is "/d" or "/node" or "/affinity" && at + 1 < words.Count ? 2 : 1;
+        }
+
+        return at;
+    }
+
+    /// <summary>
+    /// Where the command watch runs begins among its words - past its own options, each with the value it takes - and
+    /// whether its <c>-x</c> runs those words as they are rather than as a shell's command line; null where it runs none,
+    /// its help or its version asked. The one reading of watch's own options.
+    /// </summary>
+    private static (int At, bool Exec)? WatchCommandAt(IReadOnlyList<string> words)
+    {
+        var at = 1;
+        var exec = false;
+
+        while (at < words.Count && words[at].StartsWith('-'))
+        {
+            if (words[at] is "-h" or "--help" or "-v" or "--version")
+            {
+                return null;
+            }
+
+            exec |= words[at] is "-x" or "--exec";
+            at += words[at] is "-n" or "--interval" or "-q" or "--equexit" && at + 1 < words.Count ? 2 : 1;
+        }
+
+        return (at, exec);
     }
 
     /// <summary>A duration as timeout takes it: digits, with a unit and a fraction.</summary>
@@ -3102,7 +3437,8 @@ public static partial class CommandAnalysis
         {
             foreach (var flat in FromWords(command.Words, [.. command.Quoted ?? command.Words.Select(_ => string.Empty)], command.Redirects, depth, environment, wrappers, inputGiven || command.InputGiven, level + command.Level, command.Joined))
             {
-                yield return flat;
+                // What a command in the background runs - its own words, a script they name - runs in the background with it.
+                yield return command.Background && !flat.Background ? flat with { Background = true } : flat;
             }
         }
     }

@@ -101,21 +101,22 @@ public sealed record WorkflowDefinition(
 
 /// <summary>
 /// The workflow's <c>codebaseGraph</c>: what the run's one graph is made of, as the file says it - each key left out
-/// <see langword="null"/>, a list given empty kept empty for the check to refuse.
+/// <see langword="null"/>, a list given empty kept empty for the check to refuse. Each key is optional where the run's
+/// frozen definition is read back, for one left out is left out of the record too.
 /// </summary>
 /// <param name="Include">Patterns only the paths one of which matches are graphed.</param>
 /// <param name="Exclude">Patterns the paths one of which matches are not graphed.</param>
 /// <param name="Languages">The implementations used, by name.</param>
 /// <param name="MaxFileBytes">The largest file read.</param>
 /// <param name="Generated">What becomes of generated code: <c>low</c> or <c>exclude</c>.</param>
-/// <param name="MapTokens">The cap, in tokens, of a repository map a later slice makes; nothing reads it yet.</param>
+/// <param name="MapTokens">The cap, in tokens, of the run's repository map, made once and read as it is by every step after; 0 asks for none.</param>
 public sealed record FlowCodebaseGraph(
-    IReadOnlyList<string>? Include,
-    IReadOnlyList<string>? Exclude,
-    IReadOnlyList<string>? Languages,
-    int? MaxFileBytes,
-    string? Generated,
-    int? MapTokens)
+    IReadOnlyList<string>? Include = null,
+    IReadOnlyList<string>? Exclude = null,
+    IReadOnlyList<string>? Languages = null,
+    int? MaxFileBytes = null,
+    string? Generated = null,
+    int? MapTokens = null)
 {
     /// <summary>
     /// The shape the block gives the run's graph, every key it leaves out at its default: read from the block, never
@@ -145,7 +146,11 @@ public sealed record FlowCodebaseGraph(
 /// <see cref="PauseOnFailure"/> or <see cref="StopOnFailure"/> - never the recovery again, which would be the recovery
 /// calling itself.
 /// </param>
-public sealed record FlowRecover(int? MaxVisits, IReadOnlyList<WorkflowStep> Steps, string OnSuccess, string OnFailure)
+public sealed record FlowRecover(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxVisits,
+    IReadOnlyList<WorkflowStep> Steps,
+    string OnSuccess,
+    string OnFailure)
 {
     /// <summary>The most a recovery may be given: the engine's bound on the visits of one step in one scope.</summary>
     public const int MostVisits = 99;
@@ -190,7 +195,12 @@ public sealed record FlowRecover(int? MaxVisits, IReadOnlyList<WorkflowStep> Ste
 /// <param name="Tokens">What the run's reasoning may spend, in tokens.</param>
 /// <param name="Minutes">How long the run's reasoning may run, in minutes.</param>
 /// <param name="ReservePercent">The share of the budget left when the run pauses instead of spending it.</param>
-public sealed record FlowBudget(double? Usd, long? Tokens, double? Minutes, int? ReservePercent);
+/// <remarks>
+/// Each amount is optional where it is given, so each is one the run's own record of its definition holds as absent
+/// where the workflow named none - a record is never guessed at, and a budget that names one amount round-trips as the
+/// one it is.
+/// </remarks>
+public sealed record FlowBudget(double? Usd = null, long? Tokens = null, double? Minutes = null, int? ReservePercent = null);
 
 /// <summary>The agent that recommends an answer to a question the engine raises itself.</summary>
 /// <param name="Agent">The agent definition, as a file under the workflow's <c>agents</c> directory.</param>
@@ -556,6 +566,71 @@ public sealed record WorkflowStep
     /// <summary>The longest a reasoning step ever waits before it is tried again, however the waits have doubled.</summary>
     public const int MostBackoffSeconds = 900;
 
+    /// <summary>
+    /// The step's use of the run's codebase graph: <c>off</c> (none), <c>map</c> (its context pack alone) or <c>tools</c>
+    /// (the pack and the one tool <c>graph</c>). Absent, <see cref="GraphOf"/> decides - <c>tools</c> where a graph is
+    /// made upstream and the step's agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is.
+    /// </summary>
+    public string? Graph { get; init; } = null;
+
+    /// <summary>Every <c>graph</c> a reason step may say, in the order a refusal lists them.</summary>
+    public static readonly IReadOnlyList<string> GraphModes = ["off", "map", "tools"];
+
+    /// <summary>
+    /// Where the step's context pack starts from: <see cref="GraphFromTask"/> (the default), <see cref="GraphFromChanges"/>,
+    /// or the reason step - one of its own scope or one around it - whose working set seeds it in place of the work the run
+    /// holds. A step that goes on with another's work may say it, and its own is what shapes its pack, for its pack is its own.
+    /// </summary>
+    public string? GraphFrom { get; init; } = null;
+
+    /// <summary>The default value of <see cref="GraphFrom"/>: the pack starts from what the step's task names, and the working sets of the work the run holds for it.</summary>
+    public const string GraphFromTask = "task";
+
+    /// <summary>The change-first value of <see cref="GraphFrom"/>: the pack starts from what the step's tree holds differently from its base.</summary>
+    public const string GraphFromChanges = "changes";
+
+    /// <summary>
+    /// The words <see cref="GraphFrom"/> says a seed with, in the order the help lists them - every other value names a
+    /// reason step - read by the definition's check, the help and the serving alike: a step named one of them cannot be
+    /// named as a seed, for the word means the seed.
+    /// </summary>
+    public static readonly IReadOnlyList<string> GraphFromWords = [GraphFromTask, GraphFromChanges];
+
+    /// <summary>
+    /// The cap of the step's context pack, in estimated tokens, from 0 to <see cref="MostGraphPromptTokens"/> - 0 asks for
+    /// no pack; absent, <see cref="DefaultGraphPromptTokens"/>. A step that goes on with another's work may say its own.
+    /// </summary>
+    public int? GraphPromptTokens { get; init; } = null;
+
+    /// <summary>The cap of a step's context pack where neither the step nor anything else says one.</summary>
+    public const int DefaultGraphPromptTokens = 3_000;
+
+    /// <summary>The most tokens a step may cap its context pack at.</summary>
+    public const int MostGraphPromptTokens = 20_000;
+
+    /// <summary>Whether the step's reads are narrowed to the graph: <c>narrow</c> (the default) or <c>guide</c>.</summary>
+    public string? GraphReads { get; init; } = null;
+
+    /// <summary>Every <c>graphReads</c> a reason step may say, in the order a refusal lists them.</summary>
+    public static readonly IReadOnlyList<string> GraphReadsModes = ["narrow", "guide"];
+
+    /// <summary>The narrowing of a step's whole-file reads to the graph: the default of <c>graphReads</c>.</summary>
+    public const string GraphReadsNarrow = "narrow";
+
+    /// <summary>
+    /// The step's use of the run's graph, its default resolved: its own <c>graph</c>; else <c>tools</c> where one is made
+    /// upstream and its agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is - an agent
+    /// the definition does not name is read as one that reads, its file's own problems said where it is read.
+    /// </summary>
+    /// <param name="step">The reason step - for one that goes on with another's work, the step its chain began with, whose <c>graph</c> its conversation holds.</param>
+    /// <param name="agent">The agent the step works as, where its definition was read.</param>
+    /// <param name="graphUpstream">
+    /// Whether the step has a graph to be given: a graphify step upstream of it - or, for a step of the recovery, one of the
+    /// run that ended done before it, as the run stands; the definition's check, which has no run, asks whether one is declared.
+    /// </param>
+    public static string GraphOf(WorkflowStep step, AgentDefinition? agent, bool graphUpstream)
+        => step.Graph ?? (graphUpstream ? agent?.May.Contains("read") == false ? "map" : "tools" : "off");
+
     /// <summary>The legs a leg step runs, by name; every declared leg where the file says nothing.</summary>
     public IReadOnlyList<string> Legs { get; init; } = [];
 
@@ -785,9 +860,9 @@ public sealed record FlowRepeat(
 /// <param name="AcceptOver">Cells of rows an earlier fold applied that both the agent and the registries changed since. A person's answer, written out only.</param>
 public sealed record FlowAllow(
     IReadOnlyList<string> Settled,
-    FlowList? New,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowList? New,
     IReadOnlyList<string> AcceptLost,
-    FlowList? Merge,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowList? Merge,
     IReadOnlyList<string> AcceptOver);
 
 /// <summary>
@@ -797,7 +872,11 @@ public sealed record FlowAllow(
 /// <param name="Answer">The answer it gives.</param>
 /// <param name="Text">A text the answer carries, where the question's option takes one.</param>
 /// <param name="Quote">Words looked for in the run's input before the answer counts, quoted in the report.</param>
-public sealed record FlowPreAnswer(string When, string Answer, string? Text, FlowQuote? Quote);
+public sealed record FlowPreAnswer(
+    string When,
+    string Answer,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Text,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowQuote? Quote);
 
 /// <summary>The words a pre-answer quotes from the run's input, looked for there before the answer counts.</summary>
 /// <param name="Text">An expression yielding the words to look for.</param>

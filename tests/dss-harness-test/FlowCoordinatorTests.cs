@@ -2998,7 +2998,7 @@ public sealed class FlowCoordinatorTests
         Assert.False(coordinator.TryAnswer("q9", "stay", out var unknown));
         Assert.Equal("'q9' is not a question this run leaves open", unknown);
         Assert.False(coordinator.TryAnswer("q1", "leave", out var problem));
-        Assert.Equal("'leave' is not one of the answers 'q1' takes: stay, go", problem);
+        Assert.Equal("'leave' is not one of the answers 'q1' takes: stay, go, abort", problem);
         Assert.Single(coordinator.OpenQuestions);
     }
 

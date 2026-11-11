@@ -25,10 +25,6 @@ public sealed class CompilerValueTests
     }
 
     /// <summary>
-    /// A value with a space whose first word is a path cannot be read from the value alone - that
-    /// word may be half a file name - so it is left to CMake, as an unset one is.
-    /// </summary>
-    /// <summary>
     /// A compiler the variant gives CMake as a cache variable is the one it uses, whatever the
     /// environment names - measured on CMake 4.3 - and a list caches its first entry alone.
     /// </summary>
@@ -43,6 +39,10 @@ public sealed class CompilerValueTests
         Assert.Equal("clang", CompilerValue.For(CompilerValue.C, new Dictionary<string, string>(), environment)?.ToString());
     }
 
+    /// <summary>
+    /// A value with a space whose first word is a path cannot be read from the value alone - that
+    /// word may be half a file name - so it is left to CMake, as an unset one is.
+    /// </summary>
     [Theory]
     [InlineData(@"C:\Program Files\LLVM\bin\clang-cl.exe")]
     [InlineData("/opt/my tools/cc")]

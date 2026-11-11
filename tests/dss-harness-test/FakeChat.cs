@@ -66,6 +66,9 @@ internal sealed class FakeChat : IChatProvider
 
     public string UserMessage(string text) => User(text);
 
+    /// <summary>A user message that begins with the run's repository map as its own part, in the fake's form, the split a test reads.</summary>
+    public string UserMessage(string map, string rest) => User(map, rest);
+
     /// <summary>An effort change told in the conversation, in the claude-api form a test can read.</summary>
     public string EffortMessage(string effort)
         => new JsonObject { ["role"] = "system", ["content"] = new JsonArray(), ["output_config"] = new JsonObject { ["effort"] = effort } }.ToJsonString();
@@ -88,6 +91,9 @@ internal sealed class FakeChat : IChatProvider
 
     /// <summary>A user message, in the fake's form.</summary>
     public static string User(string text) => new JsonObject { ["role"] = "user", ["content"] = text }.ToJsonString();
+
+    /// <summary>A user message that begins with the run's repository map as its own part, in the fake's form: the map a member of its own, so a test reads the split it was given.</summary>
+    public static string User(string map, string rest) => new JsonObject { ["role"] = "user", ["map"] = map, ["content"] = rest }.ToJsonString();
 
     /// <summary>An agent's message, in the fake's form.</summary>
     public static string Assistant(string text, IReadOnlyList<ChatCall> calls)

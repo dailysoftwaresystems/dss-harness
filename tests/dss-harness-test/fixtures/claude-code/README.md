@@ -23,7 +23,10 @@ In each:
   `mcp-message` (the engine's tool server over the control channel: an MCP server of type `sdk`,
   its connection, a call allowed and one denied) and `deny-rules` (a read, a search, a write and a
   command Claude Code's own deny rules refuse) - the two recorded 2026-10-26 on 2.1.287, the
-  `stable` tag's 2.1.308 and the `latest` tag's 2.1.310, the launches of another day.
+  `stable` tag's 2.1.308 and the `latest` tag's 2.1.310, the launches of another day - and
+  `ranged-edit` (an `Edit` after a `Read` with `offset` and `limit`, inside the range read and
+  outside it), recorded 2026-11-04 on the `stable` tag's 2.1.311 and the `latest` tag's 2.1.318
+  alone, for the oldest version taken changes nothing there.
 - `findings.jsonl` — what the probe found beside each launch's stream, one line a launch: files
   written or not, whether the child exited and with what, the session file it looked for, a
   hook's output.

@@ -32,6 +32,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The fixture repositories of the codebase graph's serving test are sources the graph reads from the repository,
+         never code this suite runs: they are kept out of the compile so their tests are not this suite's. -->
+    <Compile Remove="fixtures/**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- The workflow that runs this suite, as written: a test holds it to setting the variable the suite reads to
          fail, rather than skip, a real build on a runner lacking a tool (see BuildTools). The one that promotes a
          release and the one it starts are here too: a test holds both to running no suite, and Deploy to starting a

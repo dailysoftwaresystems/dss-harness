@@ -914,6 +914,44 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
             : [];
     }
 
+    /// <summary>
+    /// The run's repository map of the steps whose read rules <paramref name="reads"/> names (<see cref="OrchestratorLayout.GraphMapFileOf"/>):
+    /// the one kept, read as it is, where it is there; else made by <paramref name="make"/> and kept - what it was made
+    /// from first and the map after, so a map is never kept without it - all under the map's own section across the
+    /// machine's processes, so steps that start together keep one map and every one of them is given the same bytes.
+    /// Null where none is kept and <paramref name="make"/> makes none.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
+    /// <param name="make">Makes the map and what it was made from; null where there is nothing to make it of.</param>
+    /// <exception cref="HarnessException">Another process held the map past the window (<see cref="HarnessExit.Refused"/>).</exception>
+    public string? MapOnce(OrchestratorLayout orchestrator, string? reads, Func<(string Text, System.Text.Json.Nodes.JsonNode Meta)?> make)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(make);
+
+        var map = orchestrator.GraphMapFileOf(reads);
+
+        return MachineWideFile.Update(map, Window, () =>
+        {
+            if (_fileSystem.FileExists(map))
+            {
+                return _fileSystem.ReadAllText(map);
+            }
+
+            if (make() is not { } made)
+            {
+                return null;
+            }
+
+            _fileSystem.CreateDirectory(orchestrator.GraphDirectory);
+            _fileSystem.WriteAllTextAtomic(orchestrator.GraphMapMetaFileOf(reads), made.Meta.ToJsonString(JsonStateFile.Options));
+            _fileSystem.WriteAllTextAtomic(map, made.Text);
+
+            return made.Text;
+        });
+    }
+
     /// <summary>Appends one sync's line to the graph's <c>sync.jsonl</c>, whole and on the disk before it returns.</summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <param name="line">The sync.</param>

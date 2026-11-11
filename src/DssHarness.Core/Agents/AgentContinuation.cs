@@ -458,13 +458,40 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
 }
 
 /// <summary>
-/// The parts of a step's first user message, and the one owner of
-/// their order: the run context, the plan updates, the continuation record - only where the conversation is a new one,
-/// which is every conversation on Claude Code and a fallback's or a compaction's on the API clients - and the step's
+/// What of the codebase graph one launch's first message holds, as <see cref="AgentPromptParts"/> decides it: the run's
+/// repository map and the step's codebase section - its pack, or the sentence for a graph the run never built - where
+/// the launch begins a conversation of its own, or the changes of the codebase where it goes on with a stored one; none of
+/// them where it begins from a compaction's record, which is its first message whole.
+/// </summary>
+/// <param name="Map">Whether the message holds the run's repository map.</param>
+/// <param name="Codebase">Whether it holds the step's codebase section.</param>
+/// <param name="Changes">Whether it holds the changes of the codebase the conversation it goes on with is told.</param>
+public sealed record AgentCodebaseGiven(bool Map, bool Codebase, bool Changes)
+{
+    /// <summary>A first message that holds none of them: a compaction's record, or one whose run was given no graph.</summary>
+    public static AgentCodebaseGiven None { get; } = new(Map: false, Codebase: false, Changes: false);
+}
+
+/// <summary>
+/// The parts of a step's first user message, and the one owner of their order and of their form: the repository map (the
+/// run's own, the same bytes for every step of the run that reads alike, so a client that caches a prefix reads it from
+/// the cache) and the codebase section (a reason step's context pack, or the sentence for a graph the run never built) -
+/// both only where the conversation is a new one - or, where it goes on with a stored one, the changes of the codebase in
+/// their place; then the run context, the plan updates, the continuation record - only where the conversation is a new
+/// one, which is every conversation on Claude Code and a fallback's or a compaction's on the API clients - and the step's
 /// filled prompt as the task. A run given no part sends its prompt as it always did, shaped by nothing.
 /// </summary>
 public static class AgentPromptParts
 {
+    /// <summary>The repository map's tag, as the first user message wraps it: the run's own map, first of all.</summary>
+    public const string MapTag = "repository-map";
+
+    /// <summary>The codebase section's tag, as the first user message wraps it: the step's context pack, after the map.</summary>
+    public const string CodebaseTag = "codebase";
+
+    /// <summary>The tag of the changes of the codebase a conversation that goes on is told, in the place of a map and a pack.</summary>
+    public const string CodebaseChangesTag = "codebase-changes";
+
     /// <summary>The run context's tag, as the first user message wraps it.</summary>
     public const string RunContextTag = "run-context";
 
@@ -479,18 +506,67 @@ public static class AgentPromptParts
 
     private static string NL => Environment.NewLine;
 
+    /// <summary>The tags of the parts a first message may hold before its task, in their order.</summary>
+    private static readonly string[] PartTags = [MapTag, CodebaseTag, CodebaseChangesTag, RunContextTag, PlanUpdatesTag, ContinuationTag];
+
     /// <summary>
-    /// The first user message of <paramref name="run"/>: its parts in their order, the continuation record only where
-    /// <paramref name="newConversation"/> says the conversation is a new one, and the run's prompt as the task - the
-    /// prompt alone, shaped by nothing, where the run was given no part.
+    /// What of the codebase graph the first message a launch of <paramref name="run"/> sends holds: none where it begins
+    /// from a compaction's record, which is sent whole; else as <see cref="CodebaseOf(string?, string?, string?, bool)"/>
+    /// decides it.
     /// </summary>
     /// <param name="run">The run.</param>
-    /// <param name="newConversation">Whether the conversation the run begins is a new one, the continuation record sent only where it is.</param>
+    /// <param name="newConversation">Whether the conversation the launch begins is a new one.</param>
+    public static AgentCodebaseGiven CodebaseOf(AgentRun run, bool newConversation)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        return run.Compaction is { Length: > 0 } ? AgentCodebaseGiven.None : CodebaseOf(run.Map, run.Codebase, run.CodebaseChanges, newConversation);
+    }
+
+    /// <summary>
+    /// What of the codebase graph a first message holds, the one decision of it: a new conversation is given the run's map
+    /// and the step's codebase section, each where there is one; a conversation gone on with is told what changed of the
+    /// codebase, where there is that to tell - never a map or a pack again whole, for its prefix is never changed.
+    /// </summary>
+    /// <param name="map">The run's repository map; null where the run was given none.</param>
+    /// <param name="codebase">The step's codebase section; null where the run was given none.</param>
+    /// <param name="changes">The changes of the codebase a stored conversation is told; null where there are none.</param>
+    /// <param name="newConversation">Whether the conversation the launch begins is a new one.</param>
+    public static AgentCodebaseGiven CodebaseOf(string? map, string? codebase, string? changes, bool newConversation)
+        => newConversation
+            ? new AgentCodebaseGiven(map is { Length: > 0 }, codebase is { Length: > 0 }, Changes: false)
+            : new AgentCodebaseGiven(Map: false, Codebase: false, changes is { Length: > 0 });
+
+    /// <summary>
+    /// The first user message of <paramref name="run"/>: its parts in their order - the repository map and the codebase
+    /// section where <paramref name="newConversation"/> says the conversation is a new one, the changes of the codebase in
+    /// their place where it goes on with a stored one (<see cref="CodebaseOf(string?, string?, string?, bool)"/>), then the
+    /// run context, the plan updates and the continuation record, the last only where the conversation is a new one - and
+    /// the run's prompt as the task - the prompt alone, shaped by nothing, where the run was given no part.
+    /// </summary>
+    /// <param name="run">The run.</param>
+    /// <param name="newConversation">Whether the conversation the run begins is a new one: the map, the pack and the continuation record are sent only where it is, the changes of the codebase only where it is not.</param>
     public static string FirstMessage(AgentRun run, bool newConversation)
     {
         ArgumentNullException.ThrowIfNull(run);
 
+        var given = CodebaseOf(run.Map, run.Codebase, run.CodebaseChanges, newConversation);
         var parts = new List<(string Tag, string Text)>();
+
+        if (given.Map)
+        {
+            parts.Add((MapTag, run.Map!));
+        }
+
+        if (given.Codebase)
+        {
+            parts.Add((CodebaseTag, run.Codebase!));
+        }
+
+        if (given.Changes)
+        {
+            parts.Add((CodebaseChangesTag, run.CodebaseChanges!));
+        }
 
         if (run.RunContext is { Length: > 0 } context)
         {
@@ -516,20 +592,43 @@ public static class AgentPromptParts
 
         foreach (var (tag, text) in parts)
         {
-            written.Append('<').Append(tag).Append('>').Append(NL).Append(text.TrimEnd()).Append(NL).Append("</").Append(tag).Append('>').Append(NL).Append(NL);
+            written.Append(Part(tag, text));
         }
 
-        written.Append('<').Append(TaskTag).Append('>').Append(NL).Append(run.UserPrompt.TrimEnd()).Append(NL).Append("</").Append(TaskTag).Append('>');
+        written.Append(TaskOpen).Append(run.UserPrompt.TrimEnd()).Append(NL).Append("</").Append(TaskTag).Append('>');
 
         return written.ToString();
     }
 
     /// <summary>
+    /// One part as a message holds it, the one writer of a part's form: its tags around its text, the text's trailing
+    /// blanks gone, and a blank line after - so the part a provider is asked to carry as its own (the map, a cache mark
+    /// set on it alone), the parts of a side-task's message and the message the engine records read the same.
+    /// </summary>
+    /// <param name="tag">The part's tag.</param>
+    /// <param name="text">The part's text.</param>
+    public static string Part(string tag, string text)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag);
+        ArgumentNullException.ThrowIfNull(text);
+
+        return $"<{tag}>{NL}{text.TrimEnd()}{NL}</{tag}>{NL}{NL}";
+    }
+
+    /// <summary>The repository map's part as the first user message holds it (<see cref="Part"/>).</summary>
+    /// <param name="map">The run's repository map, whole.</param>
+    public static string MapPart(string map)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(map);
+        return Part(MapTag, map);
+    }
+
+    /// <summary>
     /// The task a first message holds, the inverse of <see cref="FirstMessage"/>: the text of its task part where it was
-    /// given parts - the run context, the plan updates and the continuation record before it left out, for each is the
-    /// engine's own record of what the conversation already holds - and the whole text where it was given none. The task
-    /// part begins right after the first part that closes before it, so a task whose own text holds the tags is read
-    /// whole.
+    /// given parts - every part before it left out (the map, the codebase section or its changes, the run context, the
+    /// plan updates and the continuation record), for each is the engine's own record of what the conversation already
+    /// holds - and the whole text where it was given none. The parts are read in their order, each ending where the next
+    /// part or the task opens, so a task whose own text holds the tags is read whole.
     /// </summary>
     /// <param name="firstMessage">A first user message, as sent.</param>
     public static string TaskOf(string firstMessage)
@@ -538,22 +637,97 @@ public static class AgentPromptParts
 
         var close = $"</{TaskTag}>";
 
-        if (!PartTags.Any(tag => firstMessage.StartsWith($"<{tag}>", StringComparison.Ordinal)) || !firstMessage.EndsWith(close, StringComparison.Ordinal))
+        if (Leading(firstMessage) is not { } leading || !firstMessage.EndsWith(close, StringComparison.Ordinal))
         {
             return firstMessage;
         }
 
-        var begins = PartTags
-            .Select(tag => $"</{tag}>{NL}{NL}<{TaskTag}>{NL}")
-            .Select(marker => (At: firstMessage.IndexOf(marker, StringComparison.Ordinal), marker.Length))
-            .Where(found => found.At >= 0)
-            .Select(found => found.At + found.Length)
-            .DefaultIfEmpty(-1)
-            .Min();
+        var begins = leading.Task + TaskOpen.Length;
 
-        return begins < 0 || begins > firstMessage.Length - close.Length ? firstMessage : firstMessage[begins..^close.Length].Trim();
+        return begins > firstMessage.Length - close.Length ? firstMessage : firstMessage[begins..^close.Length].Trim();
     }
 
-    /// <summary>The tags of the parts a first message may hold before its task, in their order.</summary>
-    private static readonly string[] PartTags = [RunContextTag, PlanUpdatesTag, ContinuationTag];
+    /// <summary>
+    /// The text of the part named <paramref name="tag"/> in <paramref name="firstMessage"/>, the inverse of what
+    /// <see cref="FirstMessage"/> writes for it, wherever among the parts before the task it stands; null where the
+    /// message holds none of it.
+    /// </summary>
+    /// <param name="firstMessage">A first user message, as sent.</param>
+    /// <param name="tag">The part's tag.</param>
+    public static string? PartOf(string firstMessage, string tag)
+    {
+        ArgumentNullException.ThrowIfNull(firstMessage);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag);
+
+        foreach (var (named, text) in Leading(firstMessage)?.Parts ?? [])
+        {
+            if (string.Equals(named, tag, StringComparison.Ordinal))
+            {
+                return text;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>How the task part opens.</summary>
+    private static string TaskOpen => $"<{TaskTag}>{NL}";
+
+    /// <summary>
+    /// The parts a first message holds before its task, read as <see cref="FirstMessage"/> writes them - each tag in
+    /// <see cref="PartTags"/>' order, its text ending at the first close after which the next part or the task opens - and
+    /// where the task part begins; null where the message holds no part, or is not of that form.
+    /// </summary>
+    /// <param name="firstMessage">A first user message, as sent.</param>
+    private static (IReadOnlyList<(string Tag, string Text)> Parts, int Task)? Leading(string firstMessage)
+    {
+        var parts = new List<(string Tag, string Text)>();
+        var at = 0;
+        var next = 0;
+
+        while (true)
+        {
+            if (firstMessage.AsSpan(at).StartsWith(TaskOpen, StringComparison.Ordinal))
+            {
+                return parts.Count > 0 ? (parts, at) : null;
+            }
+
+            var from = at;
+            var opened = Array.FindIndex(PartTags, next, tag => firstMessage.AsSpan(from).StartsWith($"<{tag}>{NL}", StringComparison.Ordinal));
+
+            if (opened < 0)
+            {
+                return null;
+            }
+
+            var tag = PartTags[opened];
+            var body = at + $"<{tag}>{NL}".Length;
+            var close = $"{NL}</{tag}>{NL}{NL}";
+            var end = -1;
+
+            for (var search = firstMessage.IndexOf(close, body, StringComparison.Ordinal); search >= 0; search = firstMessage.IndexOf(close, search + 1, StringComparison.Ordinal))
+            {
+                if (Opens(firstMessage, search + close.Length, opened + 1))
+                {
+                    end = search;
+                    break;
+                }
+            }
+
+            if (end < 0)
+            {
+                return null;
+            }
+
+            parts.Add((tag, firstMessage[body..end]));
+            at = end + close.Length;
+            next = opened + 1;
+        }
+    }
+
+    /// <summary>Whether the task, or a part whose tag comes at or after <paramref name="from"/> in their order, opens at <paramref name="at"/>.</summary>
+    private static bool Opens(string message, int at, int from)
+        => message.AsSpan(at).StartsWith(TaskOpen, StringComparison.Ordinal)
+            || PartTags.Skip(from).Any(tag => message.AsSpan(at).StartsWith($"<{tag}>{NL}", StringComparison.Ordinal));
 }
+

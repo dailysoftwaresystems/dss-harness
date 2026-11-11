@@ -10,11 +10,7 @@ internal static class TestCommand
 {
     internal const string Name = TestService.CommandName;
 
-    private static readonly Option<string[]> LegsOption = new("--legs")
-    {
-        Description = "Only these legs or leg sets: --legs a,b or --legs a b. Without it, every declared leg.",
-        AllowMultipleArgumentsPerToken = true,
-    };
+    private static readonly Option<string[]> LegsOption = LegSelectionOption.Create();
 
     private static readonly Option<string> FilterOption = new("--filter")
     {

@@ -495,9 +495,10 @@ public static partial class CommandAnalysis
 
     /// <summary>
     /// The readings of <paramref name="word"/> with each variable the shell expands in it given a value
-    /// <paramref name="values"/> knows - <c>$NAME</c> and <c>${NAME}</c> where its dollar is not quoted away, and a leading
-    /// <c>~</c> the shell expands as <c>HOME</c>'s - each value in turn, the text each takes standing to the shell as its
-    /// dollar did; the word alone where it names none of them. Every other expansion stays as it is spelled.
+    /// <paramref name="values"/> knows - <c>$NAME</c> and <c>${NAME}</c> where its dollar is not quoted away, a leading
+    /// <c>~</c> the shell expands as <c>HOME</c>'s and a leading <c>~+</c> as <c>PWD</c>'s - each value in turn, the text
+    /// each takes standing to the shell as its dollar did; the word alone where it names none of them. Every other
+    /// expansion stays as it is spelled.
     /// </summary>
     /// <param name="word">The word.</param>
     /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
@@ -553,12 +554,19 @@ public static partial class CommandAnalysis
             }
         }
 
-        // A leading tilde the shell expands is HOME's value: read as each one known for it, as $HOME is.
-        if (values("HOME") is { Count: > 0 } homes)
+        // A leading tilde the shell expands is HOME's value, and a leading ~+ PWD's: read as each one known for it, as $HOME
+        // and $PWD are.
+        foreach (var (tilde, name) in new[] { ("~", "HOME"), ("~+", "PWD") })
         {
-            readings = [.. readings.SelectMany(reading => reading.Word.Length > 0 && reading.Word[0] == '~' && reading.Quoted[0] == WordQuoting.Open
-                    && (reading.Word.Length == 1 || reading.Word[1] is '/' or '\\')
-                ? homes.Select(home => (home + reading.Word[1..], new string(WordQuoting.Open, home.Length) + reading.Quoted[1..]))
+            if (values(name) is not { Count: > 0 } known)
+            {
+                continue;
+            }
+
+            readings = [.. readings.SelectMany(reading => reading.Word.StartsWith(tilde, StringComparison.Ordinal)
+                    && reading.Quoted[..tilde.Length].All(character => character == WordQuoting.Open)
+                    && (reading.Word.Length == tilde.Length || reading.Word[tilde.Length] is '/' or '\\')
+                ? known.Select(value => (value + reading.Word[tilde.Length..], new string(WordQuoting.Open, value.Length) + reading.Quoted[tilde.Length..]))
                 : [reading])];
 
             if (readings.Count > MaxReadings)

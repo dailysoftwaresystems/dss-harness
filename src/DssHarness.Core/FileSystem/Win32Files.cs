@@ -105,6 +105,10 @@ internal static class Win32Files
     /// while whoever holds the old one open - sharing its deletion, as every read of a file here does - goes on reading the
     /// old one. Windows' own replace is refused while the old file is open at all, however it is shared, so a record
     /// streamed by one reader could not be written by another while it was read.
+    ///
+    /// One try: a refusal is raised as Windows gave it. Waiting out a holder that shares no deletion - a scanner's or an
+    /// indexer's brief look at a file nobody here holds - is the write's own, the one bounded wait every replace takes
+    /// (<c>PhysicalFileSystem.ReplaceWith</c>).
     /// </summary>
     /// <param name="source">The file to put in place, fully qualified.</param>
     /// <param name="destination">Where to put it, fully qualified.</param>

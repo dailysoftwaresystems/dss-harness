@@ -17,7 +17,7 @@ using DssHarness.Core.Execution;
 namespace DssHarness.Core.Agents.SideTasks;
 
 /// <summary>Runs and lists the side-tasks of a repository: the two commands' use case.</summary>
-public interface ISideTaskService : Application.IUseCase
+public interface ISideTaskService : DssHarness.Core.Application.IUseCase
 {
     /// <summary>Begins a side-task - a chat in the terminal, or one message with <c>--prompt</c> - or opens one again.</summary>
     /// <param name="call">What the command line said and how its chat is driven.</param>
@@ -65,6 +65,12 @@ public sealed record SideTaskCall(
     /// own. The first cuts the agent's turn, a second ends a chat.
     /// </summary>
     public SideTaskInterrupts Interrupts { get; init; } = new();
+
+    /// <summary>
+    /// Whether the side-task is given no codebase graph - no tool, no repository map, no context pack, nothing synced -
+    /// for one side-task, where the person turned it off with <c>--no-graph</c>.
+    /// </summary>
+    public bool NoGraph { get; init; }
 }
 
 /// <summary>
@@ -109,6 +115,7 @@ internal sealed record SideTaskSetUp(
 /// <param name="git">Asks git whether the side-tasks' directory is ignored before anything is written there.</param>
 /// <param name="ancestry">Tells, by the process tree, whether a process of this tool's started this one - the engine an agent's child runs under.</param>
 /// <param name="isolation">Decides the operating system's isolation the side-task's agent runs under.</param>
+/// <param name="graph">The one graph service every codebase graph is read and written by, the side-task's own among them.</param>
 /// <param name="clock">Tells when each turn began and what the balancing of keys reads.</param>
 /// <param name="environment">Reads this process's environment, where the mark of an agent's child is looked for.</param>
 public sealed class SideTaskService(
@@ -126,6 +133,7 @@ public sealed class SideTaskService(
     IGitClient git,
     AgentAncestry ancestry,
     Isolation.IAgentIsolation isolation,
+    Codebase.ICodebaseGraphService graph,
     TimeProvider? clock = null,
     Func<string, string?>? environment = null) : ISideTaskService
 {
@@ -482,6 +490,41 @@ public sealed class SideTaskService(
         try
         {
             var spend = new AgentKeySpend(_fileSystem, _store, _clock);
+
+            // The side-task's own graph, opened unless the person turned it off: synced whole - seeded from the newest
+            // graph of the repository - before the first message is sent, its map made once from the base as it stands.
+            // A graph that cannot be made takes nothing away from the conversation: the side-task goes on without one,
+            // and says so once, with why - in its chat or its one shot's answer, and in its graph's record.
+            string? withoutGraph = null;
+            var own = new SideTaskGraph(
+                graph,
+                _fileSystem,
+                platform,
+                git,
+                _store,
+                _clock,
+                common.Context.Layout,
+                layout,
+                common.Context.Config.Worktrees?.Root ?? WorktreeSettings.DefaultRoot);
+
+            if (!call.NoGraph)
+            {
+                try
+                {
+                    await own.OpenAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException
+                    || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+                {
+                    own = null;
+                    withoutGraph = WithoutGraph(layout, ex);
+                }
+            }
+            else
+            {
+                own = null;
+            }
+
             var working = new Working(
                 _runner,
                 _clients,
@@ -495,7 +538,9 @@ public sealed class SideTaskService(
                 record,
                 setUp,
                 (runsOn, form, token) => SetUpAsync(common, runsOn, layout.Name, form, token),
-                spend.RecordingIn(common.Context.Layout));
+                spend.RecordingIn(common.Context.Layout),
+                own,
+                withoutGraph);
 
             return prompt is null
                 ? await working.ChatAsync(cancellationToken, command).ConfigureAwait(false)
@@ -583,15 +628,23 @@ public sealed class SideTaskService(
 
         // Where the order holds the client that starts a program, it is made ready here - installed and brought up to
         // date where it must be - as a step's is: one not ready refuses the side-task with the finder's own words and
-        // code - the configuration (12), an update refused (13), a program missing (14).
+        // code - the configuration (12), an update refused (13), a program missing (14) - where the entry that would
+        // serve first needs it, and where only a later entry does, the side-task runs by an order that passes it over.
         var program = await _launch.ProgramAsync(layout, providers, order, ClaudeCodeAsker.SideTask(task), change: true, cancellationToken).ConfigureAwait(false);
 
-        if (program is { Ready: false })
+        if (program.Refusal is { } notReady)
         {
-            return (null, new CommandOutcome(program.ExitCode, program.Message, program.Details));
+            return (null, new CommandOutcome(notReady.ExitCode, notReady.Message, notReady.Details));
         }
 
-        var ground = SideTaskPolicy.Ground(layout, common.Context.Config, _launch.ClaudeDirectories(common.Context.Config, layout), _launch.CredentialPlaces(common.Context.Config));
+        order = program.Order;
+
+        var ground = SideTaskPolicy.Ground(
+            layout,
+            common.Context.Config,
+            _launch.ClaudeDirectories(common.Context.Config, layout),
+            _launch.CredentialPlaces(common.Context.Config),
+            liveRun: () => LiveRunOf(layout));
 
         // The operating system's isolation the agent's commands run under: where agentPolicy.isolation is required and this
         // machine has none, the side-task is refused (14), saying why and what would give it one.
@@ -602,7 +655,42 @@ public sealed class SideTaskService(
             return (null, CommandOutcome.Failed(HarnessExit.ToolMissing, $"{unisolated}. Nothing was started."));
         }
 
-        return (new SideTaskSetUp(resolution, order, program?.Program, program?.Version, ground, runsOn, isolated), null);
+        return (new SideTaskSetUp(resolution, order, program.Program, program.Version, ground, runsOn, isolated), null);
+    }
+
+    /// <summary>
+    /// The name of the run whose owner is live over <paramref name="layout"/>'s main tree, or null where none is: what a
+    /// side-task's agent is held off the git state the run works over by (<see cref="AgentPolicy.LiveRunHeld"/>), asked
+    /// at each call that would write it. An owner on another machine stands until somebody takes it over, as every owner
+    /// does.
+    /// </summary>
+    /// <param name="layout">The repository's layout.</param>
+    private string? LiveRunOf(Repository.HarnessLayout layout)
+        => _store.Orchestrators(layout)
+            .FirstOrDefault(other => new FlowRunOwner(_store, _identity, _clock).Live(other) is not null)
+            ?.Name;
+
+    /// <summary>
+    /// What a side-task whose graph could not be opened says of it, once: that it runs without one, and why. Its graph's
+    /// record says the same, as a prompt line that names why no pack is given; where even that cannot be written, the
+    /// sentence it returns still says it.
+    /// </summary>
+    /// <param name="layout">The side-task's layout.</param>
+    /// <param name="failure">What opening the graph met.</param>
+    private string WithoutGraph(SideTaskLayout layout, Exception failure)
+    {
+        var why = failure is OperationCanceledException ? "its opening was stopped" : failure.Message.TrimEnd('.');
+
+        try
+        {
+            _store.AppendGraphStepLine(layout.Directory, new Runtime.GraphPromptLine(0, 0, 0, 0, 0, $"the side-task's graph could not be opened: {why}"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+        {
+            // The sentence returned says it all the same.
+        }
+
+        return $"side-task '{layout.Name}' runs without its codebase graph, which could not be opened: {why}";
     }
 
     /// <summary>Says what a claim said of a dead owner's record reclaimed, where it said anything.</summary>

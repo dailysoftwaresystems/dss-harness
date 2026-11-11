@@ -28,6 +28,13 @@ public static partial class CommandAnalysis
     private static partial System.Text.RegularExpressions.Regex NamedDescriptor();
 
     /// <summary>
+    /// The name a <c>coproc</c> gives the coprocess it begins, which bash takes only before a compound command: a group, a
+    /// subshell, a loop, a conditional or a case - the name and the blanks after it.
+    /// </summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"\G[A-Za-z_][A-Za-z0-9_]*[ \t]+(?=\(|(?:\{|if|while|until|for|select|case)(?:[ \t\r\n;]|$))")]
+    private static partial System.Text.RegularExpressions.Regex CoprocName();
+
+    /// <summary>
     /// One simple command as the reader builds it: its words - each with how its characters stand to the shell, one of
     /// <see cref="WordQuoting"/> per character, so an expansion is read only where the shell would expand it - and its
     /// redirects kept apart, so a word's place is the place the program reads it at.
@@ -51,6 +58,12 @@ public static partial class CommandAnalysis
 
         /// <summary>How it is joined to the command before it (<see cref="AnalyzedCommand.Joined"/>).</summary>
         public string? Joined { get; set; }
+
+        /// <summary>Whether the shell runs it in the background (<see cref="AnalyzedCommand.Background"/>).</summary>
+        public bool Background { get; set; }
+
+        /// <summary>Where it begins a <c>coproc</c>, how many groups, loops, conditionals and cases stood open at the word: the coprocess ends where they close again.</summary>
+        public int? Coproc { get; set; }
 
         public bool IsEmpty => Words.Count == 0 && Redirects.Count == 0;
     }
@@ -131,12 +144,32 @@ public static partial class CommandAnalysis
             ReadList(ListEnd.Script);
             ReadDocuments();
 
-            return [.. _read.Where(command => !command.IsEmpty).Select(command => new AnalyzedCommand([.. command.Words], [.. command.Redirects], [.. command.Quoted]) { InputGiven = command.InputGiven, Level = command.Level, Joined = command.Joined })];
+            return [.. _read.Where(command => !command.IsEmpty).Select(command => new AnalyzedCommand([.. command.Words], [.. command.Redirects], [.. command.Quoted]) { InputGiven = command.InputGiven, Level = command.Level, Joined = command.Joined, Background = command.Background })];
         }
 
         /// <summary>Reads commands until <paramref name="end"/>: the script's end, the parenthesis that closes the list, or a case clause's terminator.</summary>
         private void ReadList(ListEnd end)
         {
+            // Where the list the next separator ends began among the commands read: a lone '&' runs that list in the
+            // background - every command of it, its pipes and its '&&' and '||' with it - and ';' and a line's end begin
+            // the next.
+            var list = _read.Count;
+
+            // A coprocess begun, where among the commands read and inside how many groups: the shell runs it in the
+            // background, as a lone '&' would, whole - its group, loop or subshell with it - once those it stands in close.
+            (int Start, int Open)? coproc = null;
+
+            // A separator read where the reader stands, or the list's end: a coprocess begun before it ends there, once the
+            // groups it began in have closed.
+            void Separated()
+            {
+                if (coproc is { } begun && _open <= begun.Open)
+                {
+                    InBackground(begun.Start);
+                    coproc = null;
+                }
+            }
+
             while (true)
             {
                 SkipBlanks();
@@ -148,6 +181,7 @@ public static partial class CommandAnalysis
                         throw new NotSupportedException("a parenthesis in it does not close, which this does not read");
                     }
 
+                    Separated();
                     return;
                 }
 
@@ -155,8 +189,10 @@ public static partial class CommandAnalysis
 
                 if (character is '\n' or '\r')
                 {
+                    Separated();
                     EndPipe(joined: null);
                     NewLine();
+                    list = _read.Count;
                     continue;
                 }
 
@@ -169,9 +205,11 @@ public static partial class CommandAnalysis
                 if (character == ';')
                 {
                     // ';;', ';&' and ';;&' end a case clause; outside one, they separate as ';' does.
+                    Separated();
                     var terminator = At(";;&") ? 3 : At(";;") || At(";&") ? 2 : 1;
                     _at += terminator;
                     EndPipe(joined: null);
+                    list = _read.Count;
 
                     if (terminator > 1 && end is ListEnd.CaseClause)
                     {
@@ -181,32 +219,53 @@ public static partial class CommandAnalysis
                     continue;
                 }
 
+                // After '&&', '||', '|' and '|&' the shell reads on past line ends and comments to the command they join: no
+                // line's end there ends the list or the pipeline.
                 if (character == '&' && !At("&>"))
                 {
                     var and = At("&&");
+                    Separated();
                     _at += and ? 2 : 1;
                     EndPipe(and ? "&&" : null);
+
+                    if (and)
+                    {
+                        SkipBlanksAndLines();
+                    }
+                    else
+                    {
+                        // Whatever waits after it: a wait may never run, or never be the shell's own (a function or
+                        // 'enable -n' takes its name, 'exit', 'exec' or errexit ends the shell first).
+                        InBackground(list);
+                        list = _read.Count;
+                    }
+
                     continue;
                 }
 
                 if (character == '|')
                 {
                     // '||' separates; '|' and '|&' hand what the command before printed to the one after as its input.
+                    Separated();
+
                     if (At("||"))
                     {
                         _at += 2;
                         EndPipe("||");
+                        SkipBlanksAndLines();
                         continue;
                     }
 
                     _at += At("|&") ? 2 : 1;
                     _piped = Level;
                     _joined = null;
+                    SkipBlanksAndLines();
                     continue;
                 }
 
                 if (character == ')')
                 {
+                    Separated();
                     _at++;
 
                     // The parenthesis that closes the list; one nothing opened separates, as a case pattern's would.
@@ -220,6 +279,7 @@ public static partial class CommandAnalysis
 
                 if (end is ListEnd.CaseClause && (_caseClosed || AtWord("esac")))
                 {
+                    Separated();
                     return;
                 }
 
@@ -229,7 +289,13 @@ public static partial class CommandAnalysis
                     continue;
                 }
 
+                var before = _read.Count;
                 ReadCommand(end);
+
+                if (_read[^1].Coproc is { } open)
+                {
+                    coproc = (before, open);
+                }
             }
         }
 
@@ -320,6 +386,26 @@ public static partial class CommandAnalysis
             if (_piped >= Level)
             {
                 _piped = -1;
+            }
+        }
+
+        /// <summary>
+        /// The list that began at <paramref name="list"/> among the commands read runs in the background: each command of it,
+        /// and each of a group, loop or conditional it closes, which began before it.
+        /// </summary>
+        private void InBackground(int list)
+        {
+            for (var at = _read.Count - 1; at >= list; at--)
+            {
+                if (_read[at].Closes is { } first && first < list)
+                {
+                    list = first;
+                }
+            }
+
+            for (var at = list; at < _read.Count; at++)
+            {
+                _read[at].Background = true;
             }
         }
 
@@ -450,6 +536,19 @@ public static partial class CommandAnalysis
                         else if (word is "}" or "fi" or "done")
                         {
                             Close(command);
+                        }
+
+                        // A coprocess: the shell runs the command after it - a compound one, its name before it passed -
+                        // in the background (ReadList settles it once the command ends).
+                        if (word == "coproc")
+                        {
+                            command.Coproc = _open;
+                            SkipBlanks();
+
+                            if (CoprocName().Match(text, _at) is { Success: true } name)
+                            {
+                                _at += name.Length;
+                            }
                         }
 
                         if (word == "time")
@@ -629,10 +728,15 @@ public static partial class CommandAnalysis
                 {
                     if (_at + 1 < text.Length && text[_at + 1] == '(')
                     {
-                        // A process substitution: its body runs, and the word is a file it names, whatever that is.
+                        // A process substitution: its body runs, and the word is a file it names, whatever that is. The shell
+                        // waits for neither kind: its body runs in the background, as long as it runs, whatever its command
+                        // reads of it.
                         var open = _at + 1;
+                        var body = _read.Count;
                         _at = open + 1;
                         Deeper(() => ReadList(ListEnd.Parenthesis));
+                        InBackground(body);
+
                         word.Append(character).Append(text, open, _at - open);
                         howRead.Append(WordQuoting.Open, 1 + _at - open);
                         continue;
@@ -1395,7 +1499,7 @@ public static partial class CommandAnalysis
         /// <summary>A command another reader read whole, as this reader keeps one: given the input a pipe gives where it stands.</summary>
         private Simple Built(AnalyzedCommand read)
         {
-            var command = new Simple { InputGiven = read.InputGiven || _piped >= 0, Level = read.Level, Joined = read.Joined };
+            var command = new Simple { InputGiven = read.InputGiven || _piped >= 0, Level = read.Level, Joined = read.Joined, Background = read.Background };
             command.Words.AddRange(read.Words);
             command.Quoted.AddRange(read.Quoted ?? []);
             command.Redirects.AddRange(read.Redirects);

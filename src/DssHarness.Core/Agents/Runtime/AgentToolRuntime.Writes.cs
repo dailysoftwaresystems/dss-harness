@@ -19,7 +19,7 @@ public sealed partial class AgentToolRuntime
     /// <c>create_file</c>: a new file holding the content as given, in UTF-8 with no mark, the directories on its way made,
     /// where it lands decided again before a byte is written (<see cref="AgentFiles.Write"/>).
     /// </summary>
-    private Answer Create(JsonObject input)
+    private async Task<Answer> Create(JsonObject input)
     {
         var path = Text(input, "path")!;
         var place = WritePlace(path);
@@ -50,7 +50,7 @@ public sealed partial class AgentToolRuntime
 
         // The agent wrote what it holds, and knows it as well as one it viewed.
         _viewed[full] = Hash(bytes);
-        Tally.Wrote(full);
+        await WroteAsync(AgentTools.CreateFile, full).ConfigureAwait(false);
 
         return Answer.Done($"wrote '{Said(full)}' ({DiskSpace.Size(bytes.Length)})");
     }
@@ -71,7 +71,7 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed("old_string and new_string are the same: nothing would change");
         }
 
-        return await EditAsync(input, edited =>
+        return await EditAsync(AgentTools.ReplaceInFile, input, edited =>
         {
             var count = edited.Count(old);
 
@@ -96,7 +96,7 @@ public sealed partial class AgentToolRuntime
         var line = Number(input, "line")!.Value;
         var text = Text(input, "text")!;
 
-        return await EditAsync(input, edited =>
+        return await EditAsync(AgentTools.InsertInFile, input, edited =>
         {
             if (line < 1 || line > edited.LineCount + 1)
             {
@@ -114,7 +114,7 @@ public sealed partial class AgentToolRuntime
     /// written back whole, in one write; read and written through the file as each was opened, where it stands decided
     /// again as a write before a byte passes (<see cref="AgentFiles.ReadAsync"/>, <see cref="AgentFiles.Write"/>).
     /// </summary>
-    private async Task<Answer> EditAsync(JsonObject input, Func<EditedText, string?> edit, CancellationToken cancellationToken)
+    private async Task<Answer> EditAsync(string tool, JsonObject input, Func<EditedText, string?> edit, CancellationToken cancellationToken)
     {
         var path = Text(input, "path")!;
         var place = WritePlace(path);
@@ -178,10 +178,29 @@ public sealed partial class AgentToolRuntime
         }
 
         _viewed[full] = Hash(written);
-        Tally.Wrote(full);
+        await WroteAsync(tool, full).ConfigureAwait(false);
 
         return Answer.Done($"edited '{Said(full)}': {ReportText.Counted(edited.LineCount, "line")} now");
     }
+
+    /// <summary>Counts a write of <paramref name="count"/> files at <paramref name="file"/> by <paramref name="tool"/>, and follows it as every write is.</summary>
+    /// <param name="tool">The tool that wrote.</param>
+    /// <param name="file">The file written, or the directory deleted whole.</param>
+    /// <param name="count">How many files that was.</param>
+    private Task WroteAsync(string tool, string file, int count = 1)
+    {
+        Tally.Wrote(file, count);
+        return FollowedAsync(AgentGraphWrite.Of(tool, file));
+    }
+
+    /// <summary>
+    /// What follows a write or a command of the run's, on every client alike (<see cref="AfterWrites.FollowAsync"/>): its
+    /// graph synced by it - a side-task's own, kept under its records, a reason step's the run's own, scoped to its view -
+    /// and, for a side-task's edit of the configuration where a run is working over the tree, the chat told where the
+    /// edit reaches.
+    /// </summary>
+    /// <param name="write">What was written.</param>
+    private Task FollowedAsync(AgentGraphWrite write) => AfterWrites.FollowAsync(_run, write, _events, _host.Platform.PathComparison);
 
     /// <summary><c>create_directory</c>: a directory made, with every one on its way; one that is there is no error.</summary>
     private Answer CreateDirectory(JsonObject input)
@@ -208,7 +227,7 @@ public sealed partial class AgentToolRuntime
     }
 
     /// <summary><c>delete_file</c>: one file deleted; one that is not there is an error.</summary>
-    private Answer DeleteFile(JsonObject input)
+    private async Task<Answer> DeleteFile(JsonObject input)
     {
         var path = Text(input, "path")!;
         var place = WritePlace(path);
@@ -234,7 +253,7 @@ public sealed partial class AgentToolRuntime
         }
 
         _viewed.TryRemove(full, out _);
-        Tally.Wrote(full);
+        await WroteAsync(AgentTools.DeleteFile, full).ConfigureAwait(false);
 
         return Answer.Done($"deleted '{Said(full)}'");
     }
@@ -243,7 +262,7 @@ public sealed partial class AgentToolRuntime
     /// <c>delete_directory</c>: an empty directory deleted, or with <c>recursive</c> everything in it - refused for a root,
     /// for one that holds a link, that holds a path the agent may not write, or that holds more entries than the bound.
     /// </summary>
-    private Answer DeleteDirectory(JsonObject input)
+    private async Task<Answer> DeleteDirectory(JsonObject input)
     {
         var path = Text(input, "path")!;
         var place = WritePlace(path);
@@ -295,18 +314,21 @@ public sealed partial class AgentToolRuntime
         {
             // A delete stops at what it cannot remove, the rest gone before or after it: what is gone is a write all the same.
             var gone = entries.Files.Where(file => !_host.FileSystem.FileExists(file)).ToList();
-            Deleted(full, gone);
+            await DeletedAsync(full, gone).ConfigureAwait(false);
 
             return Answer.Failed($"deleting '{Said(full)}' stopped part way, {gone.Count} of its {ReportText.Counted(entries.Files.Count, "file")} gone: {ex.Message.TrimEnd('.')}");
         }
 
-        Deleted(full, entries.Files);
+        await DeletedAsync(full, entries.Files).ConfigureAwait(false);
 
         return Answer.Done($"deleted '{Said(full)}' and the {ReportText.Counted(entries.Entries.Count, "entry")} it held");
     }
 
-    /// <summary>The files a delete under <paramref name="directory"/> removed: written, and no longer known as they were viewed.</summary>
-    private void Deleted(string directory, IReadOnlyCollection<string> files)
+    /// <summary>
+    /// The files a delete under <paramref name="directory"/> removed: written, no longer known as they were viewed, and
+    /// followed as every write is - by the directory, which names every file the graph held beneath it.
+    /// </summary>
+    private async Task DeletedAsync(string directory, IReadOnlyCollection<string> files)
     {
         foreach (var file in files)
         {
@@ -315,7 +337,7 @@ public sealed partial class AgentToolRuntime
 
         if (files.Count > 0)
         {
-            Tally.Wrote(directory, files.Count);
+            await WroteAsync(AgentTools.DeleteDirectory, directory, files.Count).ConfigureAwait(false);
         }
     }
 
@@ -323,7 +345,7 @@ public sealed partial class AgentToolRuntime
     /// <c>move_path</c>: a file or a directory moved inside the writable roots - every path it touches at both ends a
     /// write - the directories on the way made; a file at the end replaced only with <c>overwrite</c>, a directory never.
     /// </summary>
-    private Answer MovePath(JsonObject input)
+    private async Task<Answer> MovePath(JsonObject input)
     {
         var fromPath = Text(input, "from")!;
         var toPath = Text(input, "to")!;
@@ -432,8 +454,10 @@ public sealed partial class AgentToolRuntime
             }
         }
 
+        // Both ends are written: a directory names every file beneath it, those it held and those it holds now.
         Tally.Wrote(source, moved.Count);
         Tally.Wrote(destination, moved.Count);
+        await FollowedAsync(AgentGraphWrite.Of(AgentTools.MovePath, source, destination)).ConfigureAwait(false);
 
         return Answer.Done($"moved '{Said(source)}' to '{Said(destination)}'");
     }

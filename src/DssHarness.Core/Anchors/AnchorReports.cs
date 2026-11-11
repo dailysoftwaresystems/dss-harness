@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Mutations;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
@@ -121,6 +122,81 @@ public static class AnchorReports
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line it ends on.</param>
     public static string BalanceStopped(int exitCode, string summary) => ReportJson.Stopped(exitCode, summary, BalanceDocument(null));
+
+    /// <summary>
+    /// The document check-anchor-arms answers with where it stops before it reads anything - a <c>--directory</c> that
+    /// is not there, a usage error, an arms registry a listing refuses: its own, reading no registry and no row, after
+    /// the code it exits with and the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string ArmsStopped(int exitCode, string summary) => ReportJson.Stopped(exitCode, summary, ArmsDocument(null));
+
+    /// <summary>What check-anchor-arms reports.</summary>
+    /// <param name="report">What the check read and found.</param>
+    /// <param name="json">Whether the command was asked for its document.</param>
+    public static CommandOutcome Arms(AnchorArmsReport report, bool json)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        IReadOnlyList<string> data = json ? [ArmsDocument(report).ToJsonString(JsonOptions)] : ArmsText(report);
+
+        if (report.Passed)
+        {
+            // Said only of the arms a selected leg judged: one none of them judges is noted above, never counted as held.
+            var unjudged = report.NamedArms.Count - report.JudgedArms.Count;
+
+            return CommandOutcome.Ok(
+                $"{ReportText.Counted(report.Rows, "row")} across both registries; "
+                + (unjudged == 0
+                    ? "every arm a done row names is unmoved here with a recorded passed"
+                    : $"every arm a done row names that a selected leg judges is unmoved here with a recorded passed, and {ReportText.Counted(unjudged, "arm")} none of them judges")) with
+            {
+                Data = data,
+                Quiet = json,
+            };
+        }
+
+        // The claims that fail the check, counted as Passed counts them: a warning or a note fails nothing.
+        var problems = report.Findings.Count(finding => finding.Severity == AnchorFindingSeverity.Fatal);
+
+        return CommandOutcome.Failed(AnchorExit.Findings, $"{ReportText.Counted(problems, "claim")} about mutation arms that does not hold") with { Data = data };
+    }
+
+    /// <summary>What check-anchor-arms prints: each finding at its row, and the note a listing closes by, which this check says too.</summary>
+    private static List<string> ArmsText(AnchorArmsReport report)
+    {
+        var lines = new List<string>();
+
+        foreach (var finding in report.Findings)
+        {
+            lines.Add(FindingLine(finding));
+        }
+
+        if (report.Findings.Count > 0)
+        {
+            lines.Add(string.Empty);
+        }
+
+        lines.Add(MutationListing.Note);
+
+        return lines;
+    }
+
+    /// <summary>The one document of check-anchor-arms --json: what it read and found; of no report, one that reads and finds nothing.</summary>
+    private static JsonObject ArmsDocument(AnchorArmsReport? report)
+        => new()
+        {
+            ["armsRegistry"] = report?.ArmsRegistry,
+            ["mutationRecord"] = report?.MutationRecord,
+            ["legs"] = Strings(report?.Legs ?? []),
+            ["rows"] = report?.Rows ?? 0,
+            ["doneRows"] = report?.DoneRows ?? 0,
+            ["namedArms"] = Strings(report?.NamedArms ?? []),
+            ["judgedArms"] = Strings(report?.JudgedArms ?? []),
+            ["passed"] = report?.Passed ?? false,
+            ["findings"] = FindingsJson(report?.Findings ?? []),
+        };
 
     /// <summary>What read-anchors --lint reports: a finding fails it, and a note does not.</summary>
     public static CommandOutcome Lint(IReadOnlyList<AnchorFinding> findings, bool json)

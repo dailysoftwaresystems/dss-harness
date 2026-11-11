@@ -1,3 +1,4 @@
+using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
@@ -297,6 +298,49 @@ public sealed class OrchestrationStoreTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(file, refused.Message);
+    }
+
+    /// <summary>
+    /// The run's repository map is made once: two steps that start together and both find none take the map's section in
+    /// turn, and the second reads the map the first kept rather than make one of its own - so both are given the same
+    /// bytes, the prefix a client caches. What it was made from is kept before it, so a map is never kept without it.
+    /// </summary>
+    [Fact]
+    public void TwoStepsThatFindNoMap_KeepOne_TheSecondReadingTheFirsts()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "run");
+        Exception? whileMaking = null;
+        var secondMade = 0;
+
+        // While the first makes its map, the map's section is held: another's take of it - another process's, here
+        // another thread's - is refused at once, so no second map is made beside it.
+        var first = harness.OrchestrationStore.MapOnce(layout, reads: null, () =>
+        {
+            // A thread of its own, never this one: a machine-wide section is the thread's that took it, taken again freely.
+            var other = new Thread(() => whileMaking = Record.Exception(() => MachineWideFile.Update(layout.GraphMapFile, TimeSpan.Zero, () => 0)));
+            other.Start();
+            other.Join();
+            return ("the first map", new System.Text.Json.Nodes.JsonObject { ["by"] = "first" });
+        });
+
+        // The second, under the section after it, reads the map the first kept and makes none.
+        var second = harness.OrchestrationStore.MapOnce(layout, reads: null, () =>
+        {
+            secondMade++;
+            return ("the second map", new System.Text.Json.Nodes.JsonObject { ["by"] = "second" });
+        });
+
+        Assert.Equal(HarnessExit.Refused, Assert.IsType<HarnessException>(whileMaking).ExitCode);
+        Assert.Equal(("the first map", "the first map", 0), (first, second, secondMade));
+        Assert.Equal("the first map", File.ReadAllText(layout.GraphMapFile));
+        Assert.Equal("""{"by":"first"}""", System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(layout.GraphMapMetaFile))!.ToJsonString());
+
+        // Steps whose read rules differ keep a map each, beside the run's.
+        Assert.Equal("a narrowed map", harness.OrchestrationStore.MapOnce(layout, "0123456789abcdef", () => ("a narrowed map", new System.Text.Json.Nodes.JsonObject())));
+        Assert.Equal("a narrowed map", File.ReadAllText(Path.Combine(layout.GraphDirectory, "map-0123456789abcdef.md")));
+        Assert.Null(harness.OrchestrationStore.MapOnce(layout, "fedcba9876543210", () => null));
     }
 
     /// <summary>A front end's sink of events, keeping each as it is given.</summary>

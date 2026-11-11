@@ -1,6 +1,5 @@
 using System.CommandLine;
 using DssHarness.Core.Anchors;
-using DssHarness.Core.FileSystem;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Cli.Commands;
@@ -35,9 +34,8 @@ internal static class AnchorCellArguments
 
         var given = arguments.GetResult(inline) is { Implicit: false } ? arguments.GetValue(inline) : null;
 
-        return AnchorCellInputs.Resolve(
-            context.Get<IFileSystem>(),
-            new AnchorCellInput(cell, inline.Name, file.Name, given, arguments.GetValue(file)));
+        return context.Get<IAnchorRegistryService>()
+            .CellText(new AnchorCellInput(cell, inline.Name, file.Name, given, arguments.GetValue(file)));
     }
 
     /// <summary>The cell's text, refusing when neither option gave one.</summary>
@@ -462,6 +460,46 @@ internal static class CheckAnchorBalanceCommand
 
             return AnchorReports.Balance(report, context.Json);
         }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => AnchorReports.BalanceStopped(exitCode, summary)));
+
+        return command;
+    }
+}
+
+/// <summary>Wires <c>DssHarness check-anchor-arms</c>.</summary>
+internal static class CheckAnchorArmsCommand
+{
+    internal const string Name = AnchorArmsService.CommandName;
+
+    private static readonly Option<string[]> LegsOption = LegSelectionOption.Create("Only these legs or leg sets, judged as check-mutations --list judges them");
+
+    private static readonly Option<bool> JsonOption = new("--json")
+    {
+        Description = "Write the findings as JSON.",
+    };
+
+    internal static Command Create()
+    {
+        var command = new Command(
+            Name,
+            "Check what anchor rows say about mutation arms against the mutation record: an arm a done row names must be unmoved with a recorded passed, a pass citation must be spelled as history, and a retired arm id is reported.");
+
+        command.Options.Add(LegsOption);
+        command.Options.Add(JsonOption);
+        GlobalOptions.AddTo(command);
+
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
+        {
+            var arguments = context.ParseResult;
+
+            var report = await context.Get<IAnchorArmsService>()
+                .CheckAsync(
+                    context.Directory,
+                    arguments.GetResult(LegsOption) is { Implicit: false } ? arguments.GetValue(LegsOption) ?? [] : null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return AnchorReports.Arms(report, context.Json);
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => AnchorReports.ArmsStopped(exitCode, summary)));
 
         return command;
     }

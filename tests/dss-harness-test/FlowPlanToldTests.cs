@@ -344,9 +344,21 @@ public sealed class FlowPlanToldTests
             Amend = new FlowAmend("request", 5, null, "planning.planupdate", then, "planning.plan.latest.scope", add, change, remove, null),
         };
 
-    /// <summary>A work item of the plan.</summary>
+    /// <summary>A work item of the plan, shaped as the real plan check reads one.</summary>
     private static JsonObject Item(string name)
-        => new() { ["name"] = name, ["title"] = $"The {name} item", ["ownedPaths"] = new JsonArray($"src/{name}/**") };
+        => new()
+        {
+            ["name"] = name,
+            ["title"] = $"The {name} item",
+            ["instructions"] = $"Write the {name} item's code.",
+            ["done"] = $"the {name} item ships",
+            ["ownedPaths"] = new JsonArray($"src/{name}/**"),
+            ["forbiddenPaths"] = new JsonArray(),
+            ["reuses"] = new JsonArray(new JsonObject { ["path"] = "file.txt", ["what"] = "the content" }),
+            ["creates"] = new JsonArray(),
+            ["replaces"] = new JsonArray(),
+            ["testFilter"] = "",
+        };
 
     /// <summary>One piece of the plan's scope that tells work under way, as the planning step concluded it.</summary>
     private static JsonObject Told(string forId, string changed)
@@ -1447,6 +1459,161 @@ public sealed class FlowPlanToldTests
     }
 
     /// <summary>
+    /// A check that waits on the plan update it raised, left paused by a crash once the update was done, is left as the
+    /// records hold it by a session that begins over a stop asked between sessions - the stop draws nothing, so nothing
+    /// would stand in its place - and the session after runs it again on the list as it now is: the added round opens
+    /// and is built.
+    /// </summary>
+    [Fact]
+    public async Task ACheckWaitingOnTheUpdateItRaised_IsLeftAsTheRecordsHoldItByAStopBetweenSessions_AndRunsAgainAfter()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Ended());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var checks = new List<(string Instance, string Owed)>();
+        var runner = FindingAProblemOnce(checks);
+        var crashing = new CrashingRecords(records, updates => updates.Updates.Any(update => update.Cause == FlowUpdateCauses.PlanCheck && update.State == FlowUpdateStates.Done));
+
+        using (records)
+        {
+            await UntilTheUpdateItRaisedAsync(new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout)), crashing);
+        }
+
+        // On disk: the update done, and the check that raised it still paused on it.
+        Assert.Equal(nameof(FlowInstanceState.Paused), StepOf(harness, layout, "rounds.item-check+2").State);
+
+        var (_, _, stopped) = Records("r1", temp.Path, definition);
+
+        using (stopped)
+        {
+            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: stopped, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            resumed.RequestStop();
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        // The stop ended nothing that waited and drew nothing: the check stays paused on its update, as the records held it.
+        Assert.Equal(nameof(FlowInstanceState.Paused), StepOf(harness, layout, "rounds.item-check+2").State);
+        Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "rounds.item-check+3");
+
+        await TheRoundOpensAgainAsync(temp.Path, definition, harness, layout, runner, checks);
+    }
+
+    /// <summary>
+    /// A crash once the check that waited on the plan update it raised is ended for that update, before its next visit is
+    /// drawn, is gone on from by the resume: the records alone say the check is owed a new visit, and the session that
+    /// takes the run up draws it - the added round opens and is built.
+    /// </summary>
+    [Fact]
+    public async Task ACrashOnceTheWaitingCheckIsEndedForItsUpdate_BeforeItsNextVisit_IsGoneOnFromByTheResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Ended());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var checks = new List<(string Instance, string Owed)>();
+        var runner = FindingAProblemOnce(checks);
+        var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, to) => instance == "rounds.item-check+2" && to == nameof(FlowInstanceState.Stopped));
+
+        using (records)
+        {
+            await UntilTheUpdateItRaisedAsync(new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: crashing, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout)), crashing);
+        }
+
+        // On disk: the check ended for the update it raised, and nothing drawn in its place.
+        var ended = StepOf(harness, layout, "rounds.item-check+2");
+
+        Assert.Equal((nameof(FlowInstanceState.Stopped), "u2"), (ended.State, ended.EndedFor));
+        Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "rounds.item-check+3");
+
+        await TheRoundOpensAgainAsync(temp.Path, definition, harness, layout, runner, checks);
+    }
+
+    /// <summary>
+    /// The runner of <see cref="Ended"/> whose first update adds "three", whose round added for it opens with a check
+    /// that finds a problem on that visit alone - raising a plan update that plans nothing more - and whose every other
+    /// check answers the one list it is handed, noting in <paramref name="checks"/> the owed work each was handed.
+    /// </summary>
+    private static FakeRunner FindingAProblemOnce(List<(string Instance, string Owed)> checks)
+    {
+        var planned = 0;
+
+        return AddingThree(checks)
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Interlocked.Increment(ref planned) == 1
+                ? Concluded(new JsonArray(Piece("added", Item("three"), "the registry is a third work item")), Item("one"), Item("two"), Item("three"))
+                : Concluded(Item("one"), Item("two"), Item("three"))))
+            .On("item-check", run =>
+            {
+                var owed = run.Read!.TryGetValue("owed", out var owing) && !owing!.IsMissing ? (owing.ToNode() as JsonArray)! : new JsonArray();
+
+                lock (checks)
+                {
+                    checks.Add((run.Instance, string.Join(",", owed.Select(FlowWorkItems.NameOf))));
+                }
+
+                var ok = run.Instance != "rounds.item-check+2";
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+                {
+                    ["ok"] = ok,
+                    ["problems"] = ok ? new JsonArray() : new JsonArray("the registry owns a file the parser owns"),
+                    ["items"] = UnionOf(run),
+                });
+            });
+    }
+
+    /// <summary>
+    /// Drives a run of <see cref="Ended"/> until its crash: through its first round and the audit, an amendment adding a
+    /// round, and the check that opens that round raising a plan update - every question answered to go on.
+    /// </summary>
+    private static async Task UntilTheUpdateItRaisedAsync(FlowCoordinator coordinator, CrashingRecords crashing)
+    {
+        _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+        var audit = await UntilAskedAsync(coordinator, "anything else?");
+
+        Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+        Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
+
+        for (var sessions = 0; !crashing.Ended; sessions++)
+        {
+            Assert.True(sessions < 20, "the run never reached its crash");
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            foreach (var asked in coordinator.OpenQuestions.ToList())
+            {
+                Assert.True(coordinator.TryAnswer(asked.Id, "go", null, out _), asked.Problem);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Takes the run up from its records and drives it to its end: the check that opens the added round runs again on
+    /// the list as it now is - handed the owed work - and the round is built, the run done.
+    /// </summary>
+    private static async Task TheRoundOpensAgainAsync(string directory, WorkflowDefinition definition, HarnessFactory harness, OrchestratorLayout layout, FakeRunner runner, List<(string Instance, string Owed)> checks)
+    {
+        var (_, _, again) = Records("r1", directory, definition);
+
+        using (again)
+        {
+            lock (checks)
+            {
+                checks.Clear();
+            }
+
+            var resumed = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: again, resume: new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition)), updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+            var end = await DriveAsync(resumed);
+
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal([("rounds.item-check+3", "three")], checks);
+            Assert.Equal(nameof(FlowInstanceState.Done), StepOf(harness, layout, "rounds.items+2[0].build").State);
+        }
+    }
+
+    /// <summary>The record of the instance <paramref name="instance"/> in the run's state.</summary>
+    private static FlowStepRecord StepOf(HarnessFactory harness, OrchestratorLayout layout, string instance)
+        => harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == instance);
+
+    /// <summary>
     /// A round added to a work-item group with no loop around it opens through the real plan check: the check is handed
     /// the owed work beside the round's own items and answers them as one list, and the round built from that list
     /// carries the owed work alone - the items the round before built are not built again.
@@ -1816,9 +1983,12 @@ public sealed class FlowPlanToldTests
     }
 
     /// <summary>
-    /// A round an update added to a work-item group with no loop around it opens with the work its check was handed: once
-    /// that check has run, a change is refused, saying why and that it joins the round once the round has opened - never
-    /// taken to be owed to a round that opens without it - and given then, it joins the open round and is carried out.
+    /// A round an update added to a work-item group with no loop around it opens with the work its check was handed:
+    /// where that check finds a problem it raises a plan update and waits, and the check that runs again on the list as
+    /// it now is fails once more, the flow's own reaction takes it, the pause asking a person. While either stands -
+    /// the update under way, the round's check run and waiting for it, or the pause asking - a change is refused,
+    /// saying why and that it joins the round once the round has opened - never taken to be owed to a round that opens
+    /// without it - and given then, it joins the open round and is carried out.
     /// </summary>
     [Fact]
     public async Task AChangeGivenOnceTheAddedRoundsCheckHasRun_IsRefusedUntilTheRoundOpens_AndJoinsItThen()
@@ -1829,21 +1999,43 @@ public sealed class FlowPlanToldTests
         var checks = new List<(string Instance, string Owed)>();
         var built = new List<string>();
         var planned = 0;
+        var settling = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // The check of the added round finds a problem, so the pause between it and the group asks.
+        // The check of the added round finds a problem, and the one that runs again on the list as it then is fails
+        // once more, so the pause between the check and the group asks. The settle of the raised update is held, that
+        // a change given while it is under way has a window to be queued in.
         var runner = AddingThree(checks)
-            .On("planupdate", _ => Interlocked.Increment(ref planned) == 1
-                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
-                    new JsonArray(Piece("added", Item("three"), "the registry is a third work item")),
-                    Item("one"),
-                    Item("two"),
-                    Item("three")))
-                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
-                    new JsonArray(Piece("added", Item("four"), "the cache is a fourth work item")),
-                    Item("one"),
-                    Item("two"),
-                    Item("three"),
-                    Item("four"))))
+            .OnAsync("planupdate", async (run, cancellationToken) =>
+            {
+                var which = Interlocked.Increment(ref planned);
+
+                if (which == 2)
+                {
+                    _ = await settling.Task.WaitAsync(cancellationToken);
+                }
+
+                return which switch
+                {
+                    1 => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                        new JsonArray(Piece("added", Item("three"), "the registry is a third work item")),
+                        Item("one"),
+                        Item("two"),
+                        Item("three"))),
+                    2 => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                        new JsonArray(Piece("added", Item("four"), "the cache is a fourth work item")),
+                        Item("one"),
+                        Item("two"),
+                        Item("three"),
+                        Item("four"))),
+                    _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                        new JsonArray(Piece("added", Item("five"), "the listing is a fifth work item")),
+                        Item("one"),
+                        Item("two"),
+                        Item("three"),
+                        Item("four"),
+                        Item("five"))),
+                };
+            })
             .On("item-check", run =>
             {
                 var owed = run.Read!.TryGetValue("owed", out var owing) && !owing!.IsMissing ? (owing.ToNode() as JsonArray)! : new JsonArray();
@@ -1853,7 +2045,7 @@ public sealed class FlowPlanToldTests
                     checks.Add((run.Instance, string.Join(",", owed.Select(FlowWorkItems.NameOf))));
                 }
 
-                var ok = run.Instance != "rounds.item-check+2";
+                var ok = run.Instance is not ("rounds.item-check+2" or "rounds.item-check+3");
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
                 {
                     ["ok"] = ok,
@@ -1875,18 +2067,37 @@ public sealed class FlowPlanToldTests
         {
             var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout), runName: "r1");
 
-            // The first amendment adds a round, whose check runs on its work and finds a problem.
+            // The first amendment adds a round, whose check runs on its work and finds a problem: it raises a plan
+            // update, and the planner settles it - held here, that a change has its window.
             _ = await coordinator.RunAsync(Token);
             Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
             var audit = await UntilAskedAsync(coordinator, "anything else?");
             Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
             Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
-            var problems = await UntilAskedAsync(coordinator, "problems?");
 
-            // A second amendment now is refused, by the engine and by the command's gates alike.
+            var driving = coordinator.RunAsync(Token);
+
+            for (var at = 0; Volatile.Read(ref planned) < 2; at++)
+            {
+                if (at > 3000)
+                {
+                    throw new TimeoutException("the settle of the raised update never began");
+                }
+
+                await Task.Delay(10, Token);
+            }
+
+            // While the raised update is under way - the round's check has run, and waits for it - a second amendment
+            // is refused, by the engine and by the command's gates alike, saying it joins the round once it has opened.
             Assert.Equal(FlowHandedOver.Refused, coordinator.AmendmentHandedOver("add the cache as well", "amend-orchestrator-request", out problem));
             Assert.Equal(CheckedRoundRefusal, problem);
             Assert.Equal(CheckedRoundRefusal, FlowUpdateGates.Refused(definition, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowUpdates(layout), FlowUpdateCauses.Amendment));
+            settling.SetResult(true);
+            _ = await driving;
+
+            // The check runs again on the list as it now is, fails once more, and the flow's own reaction takes it:
+            // the pause asks a person.
+            var problems = await UntilAskedAsync(coordinator, "problems?");
 
             // Once the round has opened, the same amendment is taken and joins it.
             Assert.True(coordinator.TryAnswer(problems.Id, "continue", null, out _));
@@ -1898,13 +2109,15 @@ public sealed class FlowPlanToldTests
 
             var updates = UpdatesOf(harness, layout).Updates;
             Assert.Equal(
-                [("u1", FlowUpdateStates.Done, "rounds.items+2"), ("u2", FlowUpdateStates.Done, null)],
+                [("u1", FlowUpdateStates.Done, "rounds.items+2"), ("u2", FlowUpdateStates.Done, null), ("u3", FlowUpdateStates.Done, null)],
                 updates.Select(update => (update.Id, update.State, update.AddedIteration)));
             Assert.Equal(
-                [("three", "rounds.items+2[0]", "done"), ("four", "rounds.items+2[1]", "done")],
+                [("three", "rounds.items+2[0]", "done"), ("four", "rounds.items+2[1]", "done"), ("five", "rounds.items+2[2]", "done")],
                 updates.SelectMany(update => update.ThePieces).Select(piece => (piece.ItemName()!, piece.Placed, piece.Ended)));
-            Assert.Equal(["rounds.items+2[0].build=three", "rounds.items+2[1].build=four"], built.Where(one => one.StartsWith("rounds.items+2", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
-            Assert.Equal([("rounds.item-check", string.Empty), ("rounds.item-check+2", "three")], checks);
+            Assert.Equal(
+                ["rounds.items+2[0].build=three", "rounds.items+2[1].build=four", "rounds.items+2[2].build=five"],
+                built.Where(one => one.StartsWith("rounds.items+2", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
+            Assert.Equal([("rounds.item-check", string.Empty), ("rounds.item-check+2", "three"), ("rounds.item-check+3", "three,four")], checks);
         }
     }
 

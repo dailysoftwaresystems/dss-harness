@@ -25,12 +25,129 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
-        Assert.Equal(80, Count(definition.Steps));
+        Assert.Equal(82, Count(definition.Steps));
         Assert.Equal(46, Count(definition.Recover!.Steps));
         Assert.Equal(46, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "affectedTests" && input.Default == "off");
         Assert.Equal(["on", "off"], definition.Inputs.Single(input => input.Name == "affectedTests").Options);
+    }
+
+    /// <summary>
+    /// The shipped flow makes its graph of a tree the repository's own compiler just built green (the user,
+    /// 2026-10-23): the baseline is split in two - <c>build</c>, a build step that fails red and is taken by the
+    /// recovery, and <c>baseline</c>, the test step it was - and <c>codebase</c> makes the graph after <c>build</c>,
+    /// beside the baseline's tests, passed over where it cannot be made; every later step has it upstream, through
+    /// <c>intake</c>. Each type of reason step is served as part 05's table gives it (README value 377): the steps that
+    /// read code for their task say nothing - the tool and the task are their defaults - the reviewers, the diagnosis
+    /// and the steps that verify and fix say <c>graphFrom: changes</c>, the prioritiser and a review's scope are given
+    /// the map, and the scribe's steps, which write the run's records, ask none of it. The round's mutation sweep
+    /// drives only the arms with no recorded pass that still holds (the user's <c>--pending</c>).
+    /// </summary>
+    [Fact]
+    public void TheShippedFlow_MakesItsGraphAfterTheBaselineBuild_AndServesEachStepTypeAsTheTableGivesIt()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+
+        // The head: build, then the graph and the baseline's tests beside it, all reading the main tree only.
+        var build = StepAt(definition.Steps, "build");
+
+        Assert.Equal("build", build.Type);
+        Assert.Equal(["orient"], build.DependsOn);
+        Assert.Equal("orient.hasLegs", build.When);
+        Assert.True(build.Alone);
+        Assert.Equal(WorkflowStep.Recover, build.OnFailure);
+
+        var codebase = StepAt(definition.Steps, "codebase");
+
+        Assert.Equal("graphify-codebase", codebase.Type);
+        Assert.Equal(["build"], codebase.DependsOn);
+        Assert.Equal("continue", codebase.OnFailure);
+        Assert.Null(codebase.When);
+
+        var baseline = StepAt(definition.Steps, "baseline");
+
+        Assert.Equal("test", baseline.Type);
+        Assert.Equal(["build"], baseline.DependsOn);
+        Assert.Equal("orient.hasLegs", baseline.When);
+        Assert.Equal("never", baseline.FailOn);
+        Assert.True(baseline.Skippable);
+        Assert.True(baseline.Alone);
+        Assert.Equal(WorkflowStep.Recover, baseline.OnFailure);
+
+        Assert.Equal(["codebase", "baseline", "ci"], StepAt(definition.Steps, "intake").DependsOn);
+
+        // The round's sweep drives only what no recorded pass still holds.
+        Assert.True(StepAt(definition.Steps, "rounds", "mutations").Pending);
+
+        // Each type of reason step, in the flow and in the recovery alike, as the table gives it.
+        var expected = new (string Name, string? Graph, string? From)[]
+        {
+            ("priority", "map", null),
+            ("triage", null, null),
+            ("plan", null, null),
+            ("plan-update", null, null),
+            ("plan-audit", null, null),
+            ("implement", null, null),
+            ("unblock", null, null),
+            ("redo", null, null),
+            ("undo", null, null),
+            ("mend", null, "changes"),
+            ("settle", null, "changes"),
+            ("cite", null, "changes"),
+            ("review-scope", "map", "changes"),
+            ("correctness", null, "changes"),
+            ("errors", null, "changes"),
+            ("tests", null, "changes"),
+            ("types", null, "changes"),
+            ("comments", null, "changes"),
+            ("simplicity", null, "changes"),
+            ("rework", null, "changes"),
+            ("remend", null, "changes"),
+            ("resettle", null, "changes"),
+            ("recite", null, "changes"),
+            ("self-audit", null, "changes"),
+            ("deferrals", "off", null),
+            ("handoff", "off", null),
+            ("notes-cite", null, null),
+            ("diagnose", null, "changes"),
+            ("redirect", null, "changes"),
+            ("triage-pre-existing-issue", null, null),
+        };
+
+        var seen = new List<(string Path, string? Graph, string? From)>();
+
+        Walk(definition.Steps, parent: null);
+        Walk(definition.Recover!.Steps, parent: "recover");
+
+        // Every reason step of the flow is one the table names, and every site of a name is served the same.
+        Assert.Equal(
+            [.. expected.Select(row => (row.Name, row.Graph, row.From)).OrderBy(row => row.Item1, StringComparer.Ordinal)],
+            [.. seen.GroupBy(row => row.Path.Split('.')[^1], StringComparer.Ordinal)
+                .Select(group => group.First() with { })
+                .Select(row => (row.Path.Split('.')[^1], row.Graph, row.From))
+                .OrderBy(row => row.Item1, StringComparer.Ordinal)]);
+
+        // A name the table gives that the flow no longer holds, or one it holds the table does not, is told by the
+        // group assertion above only where both sides hold it; this holds the counts: the reviewers appear twice,
+        // once in the flow and once in the recovery.
+        Assert.Equal(2, seen.Count(row => row.Path.EndsWith(".correctness", StringComparison.Ordinal)));
+        Assert.Equal(2, seen.Count(row => row.Path.EndsWith(".review-scope", StringComparison.Ordinal)));
+
+        return;
+
+        void Walk(IReadOnlyList<WorkflowStep> steps, string? parent)
+        {
+            foreach (var step in steps)
+            {
+                if (step.Type == "reason")
+                {
+                    seen.Add((parent is null ? step.Name : $"{parent}.{step.Name}", step.Graph, step.GraphFrom));
+                }
+
+                Walk(step.Steps, parent is null ? step.Name : $"{parent}.{step.Name}");
+            }
+        }
     }
 
     /// <summary>
@@ -361,8 +478,16 @@ public sealed class WorkflowTemplatesTests
 
         // Only the reads that are told on, never judged, pass a failure over; every reasoning step asks, every other
         // step of the flow gives its failure to the recovery, and no step of the recovery does.
-        Assert.Equal(["ci", "rounds.items.reconcile.catch-up", "rounds.items.fix.revise.rereconcile.recatch-up", "recover.remedies.reconcile.catch-up", "recover.remedies.fix.revise.rereconcile.recatch-up"], passedOver);
+        Assert.Equal(["codebase", "ci", "rounds.items.reconcile.catch-up", "rounds.items.fix.revise.rereconcile.recatch-up", "recover.remedies.reconcile.catch-up", "recover.remedies.fix.revise.rereconcile.recatch-up"], passedOver);
         Assert.Empty(otherwise);
+
+        // The file's own header, which init writes into a repository, says the same of its steps.
+        var header = Prose.Words(string.Join(' ', Read("implementation.yml").Split('\n').TakeWhile(line => line.StartsWith('#')).Select(line => line.TrimStart('#'))));
+        Assert.Contains(
+            "A reasoning step asks ('onFailure: pause'); the graph of the codebase, the CI read and the catch-ups pass a failure over ('onFailure: continue'); "
+                + "every other step says 'onFailure: recover', which gives a failure no handler takes to 'recover'",
+            header,
+            StringComparison.Ordinal);
 
         // A limit of a reasoning step is answered a counted number of times and then asked, never failed into a recovery.
         foreach (var limit in new[] { "turnLimit", "truncated", "contextLimit" })

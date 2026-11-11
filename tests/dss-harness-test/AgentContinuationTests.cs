@@ -219,6 +219,103 @@ public sealed class AgentContinuationTests : IDisposable
     }
 
     /// <summary>
+    /// A step that was given its codebase section holds it at the head of its first user message, before the run
+    /// context and every other part - the sentence for a graph the run never built held the same way - and the task is
+    /// still read out of it alone, whatever the parts before it.
+    /// </summary>
+    [Fact]
+    public void AStepsCodebaseSection_IsTheHeadOfItsFirstMessage_BeforeEveryOtherPart()
+    {
+        var run = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { RunContext = "run facts", Continuation = "the work before", UserPrompt = "do the work" };
+        var withCodebase = run with { Codebase = "the pack of the step's work" };
+
+        var message = AgentPromptParts.FirstMessage(withCodebase, newConversation: true);
+        var nl = Environment.NewLine;
+
+        Assert.StartsWith($"<codebase>{nl}the pack of the step's work{nl}</codebase>{nl}{nl}<{AgentPromptParts.RunContextTag}>", message, StringComparison.Ordinal);
+        Assert.EndsWith($"</{AgentPromptParts.ContinuationTag}>{nl}{nl}<{AgentPromptParts.TaskTag}>{nl}do the work{nl}</{AgentPromptParts.TaskTag}>", message, StringComparison.Ordinal);
+        Assert.Equal("do the work", AgentPromptParts.TaskOf(message));
+
+        // A graph the run never built says so in the place of the pack, held the same way.
+        Assert.StartsWith($"<codebase>{nl}(step 'codebase' left no output: it has not run){nl}</codebase>", AgentPromptParts.FirstMessage(run with { Codebase = "(step 'codebase' left no output: it has not run)" }, newConversation: true), StringComparison.Ordinal);
+
+        // A run given no part is sent its prompt alone, shaped by nothing.
+        Assert.Equal("do the work", AgentPromptParts.FirstMessage(run with { RunContext = null, Continuation = null }, newConversation: true));
+    }
+
+    /// <summary>
+    /// A step that was given the run's repository map holds it first of all, ahead of its codebase section - the same
+    /// bytes for every step of the run - and the task is still read out of the message alone, the map a part before it
+    /// as the pack is.
+    /// </summary>
+    [Fact]
+    public void AStepsRepositoryMap_IsAheadOfItsCodebaseSection_InItsFirstMessage()
+    {
+        var run = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { RunContext = "run facts", UserPrompt = "do the work" };
+        var withMap = run with { Map = "the run's repository map", Codebase = "the pack of the step's work" };
+
+        var message = AgentPromptParts.FirstMessage(withMap, newConversation: true);
+        var nl = Environment.NewLine;
+
+        Assert.StartsWith($"<repository-map>{nl}the run's repository map{nl}</repository-map>{nl}{nl}<codebase>{nl}the pack of the step's work{nl}</codebase>{nl}{nl}<{AgentPromptParts.RunContextTag}>", message, StringComparison.Ordinal);
+        Assert.Equal("do the work", AgentPromptParts.TaskOf(message));
+
+        // A conversation gone on with is sent no map and no pack again: what changed is told in their place, never either whole.
+        Assert.StartsWith($"<{AgentPromptParts.RunContextTag}>{nl}", AgentPromptParts.FirstMessage(withMap, newConversation: false), StringComparison.Ordinal);
+        Assert.StartsWith(
+            $"<codebase-changes>{nl}what changed{nl}</codebase-changes>{nl}{nl}<{AgentPromptParts.RunContextTag}>",
+            AgentPromptParts.FirstMessage(withMap with { CodebaseChanges = "what changed" }, newConversation: false),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Whether a launch's conversation is handed is decided entry by entry, so a step carries its map, its pack and the
+    /// changes of the codebase together, and the one owner of the parts chooses: a new conversation - a fallback's on
+    /// another client or provider among them - is given the map and the pack and never a delta against a conversation it
+    /// never had; one gone on with is told the changes alone. What it chose is said the same way to the step's records.
+    /// </summary>
+    [Fact]
+    public void ANewConversation_IsGivenTheMapAndThePack_AndOneGoneOnWithTheChangesAlone()
+    {
+        var run = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { UserPrompt = "do the work", Map = "the map", Codebase = "the pack", CodebaseChanges = "what changed" };
+        var nl = Environment.NewLine;
+
+        Assert.Equal(
+            $"<repository-map>{nl}the map{nl}</repository-map>{nl}{nl}<codebase>{nl}the pack{nl}</codebase>{nl}{nl}<task>{nl}do the work{nl}</task>",
+            AgentPromptParts.FirstMessage(run, newConversation: true));
+        Assert.Equal(
+            $"<codebase-changes>{nl}what changed{nl}</codebase-changes>{nl}{nl}<task>{nl}do the work{nl}</task>",
+            AgentPromptParts.FirstMessage(run, newConversation: false));
+        Assert.Equal(new AgentCodebaseGiven(Map: true, Codebase: true, Changes: false), AgentPromptParts.CodebaseOf(run, newConversation: true));
+        Assert.Equal(new AgentCodebaseGiven(Map: false, Codebase: false, Changes: true), AgentPromptParts.CodebaseOf(run, newConversation: false));
+
+        // A compaction's record is a launch's first message whole: it holds none of them.
+        Assert.Equal(AgentCodebaseGiven.None, AgentPromptParts.CodebaseOf(run with { Compaction = "the compaction" }, newConversation: true));
+    }
+
+    /// <summary>
+    /// Each part of a first message is read back by the one inverse of what writes it, wherever among the parts before the
+    /// task it stands - the pack after a repository map as much as a part at the head - and a part whose own text holds
+    /// another part's tags is read whole; a part the message does not hold is none.
+    /// </summary>
+    [Fact]
+    public void EachPartOfAFirstMessage_IsReadBack_WhereverItStands()
+    {
+        var run = AgentRuns.Of(_temp.Combine("step"), _temp.Combine("work")) with { UserPrompt = "do the work", Map = "the map", Codebase = "the pack", RunContext = $"facts{Environment.NewLine}</codebase>{Environment.NewLine}{Environment.NewLine}<run-context>{Environment.NewLine}more", Continuation = "the work before" };
+        var message = AgentPromptParts.FirstMessage(run, newConversation: true);
+
+        Assert.Equal("the map", AgentPromptParts.PartOf(message, AgentPromptParts.MapTag));
+        Assert.Equal("the pack", AgentPromptParts.PartOf(message, AgentPromptParts.CodebaseTag));
+        Assert.Equal(run.RunContext, AgentPromptParts.PartOf(message, AgentPromptParts.RunContextTag));
+        Assert.Equal("the work before", AgentPromptParts.PartOf(message, AgentPromptParts.ContinuationTag));
+        Assert.Null(AgentPromptParts.PartOf(message, AgentPromptParts.CodebaseChangesTag));
+        Assert.Equal("do the work", AgentPromptParts.TaskOf(message));
+
+        // A message given no part holds none, however its own text reads.
+        Assert.Null(AgentPromptParts.PartOf("<codebase>\nnot a part\n</codebase>", AgentPromptParts.CodebaseTag));
+    }
+
+    /// <summary>
     /// On a provider told the envelope in words - Z.AI - each launch is sent its first message as the parts and then the
     /// envelope in a message of its own: the later launch's first message is read as its answer alone and the envelope
     /// said again is no new message of the engine's, so the record holds neither the record the launch carried nor the

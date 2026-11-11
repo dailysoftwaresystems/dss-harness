@@ -30,6 +30,12 @@ internal sealed class Working
     private readonly SideTaskOwner _owner;
     private readonly Func<SideTaskRunsOn, string, CancellationToken, Task<(SideTaskSetUp? SetUp, CommandOutcome? Refused)>> _setUpAgain;
     private readonly IAgentSpendSink _spend;
+
+    /// <summary>The side-task's own graph, where it was given one: its tool, its map and its pack, its records synced.</summary>
+    private readonly SideTaskGraph? _graph;
+
+    /// <summary>Why the side-task runs without the graph it was to have, said once - in its chat, or its one shot's answer; null where nothing is missing.</summary>
+    private readonly string? _withoutGraph;
     private readonly StreamTail _stream;
     private readonly List<SideTaskTurn> _turns = [];
 
@@ -53,7 +59,7 @@ internal sealed class Working
         IAgentRunner runner,
         IReadOnlyList<IAgentClient> clients,
         IFileSystem fileSystem,
-        IHarnessOutput output,
+        Output.IHarnessOutput output,
         TimeProvider clock,
         SideTaskCall call,
         SideTaskCommon common,
@@ -62,7 +68,9 @@ internal sealed class Working
         SideTaskRecord record,
         SideTaskSetUp setUp,
         Func<SideTaskRunsOn, string, CancellationToken, Task<(SideTaskSetUp? SetUp, CommandOutcome? Refused)>> setUpAgain,
-        IAgentSpendSink spend)
+        IAgentSpendSink spend,
+        SideTaskGraph? graph = null,
+        string? withoutGraph = null)
     {
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
         _clients = clients ?? throw new ArgumentNullException(nameof(clients));
@@ -77,6 +85,8 @@ internal sealed class Working
         _now = setUp ?? throw new ArgumentNullException(nameof(setUp));
         _setUpAgain = setUpAgain ?? throw new ArgumentNullException(nameof(setUpAgain));
         _spend = spend;
+        _graph = graph;
+        _withoutGraph = withoutGraph;
         _stream = new StreamTail(fileSystem, Path.Combine(layout.Directory, StoredStream.FileName));
 
         _conversation = record.Conversation;
@@ -86,6 +96,9 @@ internal sealed class Working
 
     /// <summary>The side-task's interrupts.</summary>
     private SideTaskInterrupts Interrupts => _call.Interrupts;
+
+    /// <summary>What a one shot's answer says beside its records of a graph it was to have and runs without: nothing where it has it.</summary>
+    private IReadOnlyList<string> Missing => _withoutGraph is { } why ? [why] : [];
 
     /// <summary>
     /// The entry the side-task's turns are served by first: its order's first - the resolution's serving entry, or the
@@ -127,7 +140,7 @@ internal sealed class Working
             // The turn itself refused - a key the provider rejects, a request the client cannot make - and its refusal
             // is the command's, with the records named.
             Kept(SideTaskStatus.Ended);
-            var refused = new CommandOutcome(ex.ExitCode, ex.Message, [$"Records: {_layout.Directory}"]);
+            var refused = new CommandOutcome(ex.ExitCode, ex.Message, [.. Missing, $"Records: {_layout.Directory}"]);
 
             return json ? refused with { Data = [SideTaskReports.Stopped(ex.ExitCode, ex.Message, _layout.Name, _layout.Directory)] } : refused;
         }
@@ -142,7 +155,7 @@ internal sealed class Working
         var line = result.Status == AgentRunStatus.Completed
             ? $"side-task '{_layout.Name}' answered on {(result.Served is [_, ..] served ? served[0].Model : Serving.Model)}"
             : $"side-task '{_layout.Name}' ended {result.Status}{(result.Error is null ? string.Empty : ": " + result.Error)}";
-        var outcome = new CommandOutcome(exit, line, [$"Records: {_layout.Directory}"]);
+        var outcome = new CommandOutcome(exit, line, [.. Missing, $"Records: {_layout.Directory}"]);
 
         if (json)
         {
@@ -171,6 +184,11 @@ internal sealed class Working
 
         _launching = command;
         _output.Info(SideTaskService.RunCommand, $"side-task '{_layout.Name}' on {Serving.Model} through {Serving.Client}; /help lists what the chat takes");
+
+        if (_withoutGraph is { } why)
+        {
+            chat.Say(why);
+        }
 
         try
         {
@@ -261,7 +279,7 @@ internal sealed class Working
                 }
                 else
                 {
-                    if (!open.Post(line))
+                    if (!open.Post(line, Later(line)))
                     {
                         // The launch's messages were ended under it: the line is never dropped, but sent with a new one.
                         open = await GoneOnAsync(open, front, chat, cancellationToken, [line]).ConfigureAwait(false);
@@ -371,21 +389,23 @@ internal sealed class Working
         var launch = new Launch { Entry = Serving };
 
         front.Seen.LaunchBegins(alreadyWritten);
-        launch.Run = _runner.RunAsync(Request(lines[0], launch.Messages, launch.Interrupt), front, _launching);
-        launch.Given.Add(lines[0]);
-
-        foreach (var line in lines.Skip(1))
-        {
-            launch.Post(line);
-        }
 
         // Every press reaches the launch, whose client cuts the turn under way and leaves it be between turns; what is
-        // said of it is whether a turn was under way.
+        // said of it is whether a turn was under way. Wired before the launch is begun: its first turn may begin, and a
+        // press come, before the call that begins it has returned here.
         Interrupts.WhileTurning(_ =>
         {
             launch.Interrupt.Interrupt();
             return front.Seen.TurnUnderWay;
         });
+
+        launch.Run = _runner.RunAsync(Request(lines[0], launch.Messages, launch.Interrupt), front, _launching);
+        launch.Given.Add(lines[0]);
+
+        foreach (var line in lines.Skip(1))
+        {
+            launch.Post(line, Later(line));
+        }
 
         return launch;
     }
@@ -565,6 +585,13 @@ internal sealed class Working
 
         var (conversation, compacted, continuation) = GoingOn();
 
+        // The graph's front, where the side-task was given one: the repository map with the first message alone, the
+        // context pack made from each - a launch held open's later lines are given theirs as they are posted (Later).
+        if (_graph is not null)
+        {
+            message = _graph.Front(message, first: _attempts == 1);
+        }
+
         return new AgentStepRequest(
             _layout.Name,
             "side-task",
@@ -614,8 +641,16 @@ internal sealed class Working
             Interrupt = interrupt,
             Chat = messages is not null,
             Moved = _moved,
+            Graph = _graph?.Support(_now.Ground),
         };
     }
+
+    /// <summary>
+    /// A later line of a launch held open, as its agent is given it: the context pack made from it at its head, where the
+    /// side-task has a graph - the one front every message of the person's is given, whichever shape its client takes it in.
+    /// </summary>
+    /// <param name="line">The person's line, as typed.</param>
+    private string Later(string line) => _graph?.Front(line, first: false) ?? line;
 
     /// <summary>The turn's record, from the run's result: when it began, what it ran on and how it ended.</summary>
     private SideTaskTurn TurnOf(AgentRunResult result, DateTimeOffset began)
@@ -996,7 +1031,7 @@ internal sealed class Working
         /// <summary>The launch's run.</summary>
         public Task<AgentRunResult> Run { get; set; } = Task.FromResult(new AgentRunResult(AgentRunStatus.Failed));
 
-        /// <summary>Every line given to it, in order, the first its prompt.</summary>
+        /// <summary>Every line given to it, in order, the first its prompt: each as the person typed it, for a new launch to be given again.</summary>
         public List<string> Given { get; } = [];
 
         /// <summary>How many of its turns the side-task's record holds.</summary>
@@ -1006,9 +1041,11 @@ internal sealed class Working
         public bool Retried { get; set; }
 
         /// <summary>Posts one more line to it; false where its messages were ended, and the line was not posted.</summary>
-        public bool Post(string line)
+        /// <param name="line">The person's line, as typed, which it is recorded as given.</param>
+        /// <param name="posted">The line as its agent is given it, its front at its head.</param>
+        public bool Post(string line, string posted)
         {
-            if (!Messages.Post(line))
+            if (!Messages.Post(posted))
             {
                 return false;
             }

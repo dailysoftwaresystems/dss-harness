@@ -50,11 +50,16 @@ public static class ClaudeCodeTools
     /// <summary>
     /// The runtime's tools a launch takes from the engine's tool server, by the runtime's names: every tool of the runtime
     /// whose capability names none of Claude Code's own in <see cref="Table"/> - the web's, the harness's own fetch and
-    /// search, on a step the runtime offers them to - each beside <c>--tools</c> and never named in it, with an ask rule as
-    /// every tool has. Claude Code's own <c>WebFetch</c> and <c>WebSearch</c> are given no launch.
+    /// search, on a step the runtime offers them to - and the run's graph tool, offered where its step is given one
+    /// (<c>graph: tools</c>), each beside <c>--tools</c> and never named in it, with an ask rule as every tool has.
+    /// Claude Code's own <c>WebFetch</c> and
+    /// <c>WebSearch</c> are given no launch.
     /// </summary>
     public static IReadOnlyList<string> ServerTools { get; } =
-        [.. Runtime.AgentTools.All(AgentCommandSettings.Default).Where(tool => Table.Any(row => row.Capability == tool.Needs && row.Tools.Count == 0)).Select(tool => tool.Name)];
+        [.. Runtime.AgentTools.All(AgentCommandSettings.Default)
+            .Where(tool => Table.Any(row => row.Capability == tool.Needs && row.Tools.Count == 0))
+            .Select(tool => tool.Name)
+            .Concat([AgentGraphSupport.ToolName])];
 
     /// <summary>
     /// The capabilities whose tools are the file tools: Claude Code's own, where its process runs where its commands do;

@@ -209,15 +209,18 @@ public sealed class ClaudeToolDeciderTests : IDisposable
     }
 
     /// <summary>
-    /// The engine's tool server's tools, as Claude Code names them: the web's, each the runtime's name behind the server's
-    /// prefix; a step's are those the runtime offers it that the server serves - its search where it has a source.
+    /// The engine's tool server's tools, as Claude Code names them: the web's and the run's graph tool, each the runtime's
+    /// name behind the server's prefix; a step's are those the runtime offers it that the server serves - its search where
+    /// it has a source.
     /// </summary>
     [Fact]
     public void TheServersTools_AreTheRuntimesWebTools_ByTheServersNames()
     {
-        Assert.Equal([AgentTools.WebFetch, AgentTools.WebSearch], ClaudeCodeTools.ServerTools);
+        Assert.Equal([AgentTools.WebFetch, AgentTools.WebSearch, AgentGraphSupport.ToolName], ClaudeCodeTools.ServerTools);
         Assert.Equal("mcp__dssharness__web_search", ClaudeCodeTools.ServedName(AgentTools.WebSearch));
+        Assert.Equal("mcp__dssharness__graph", ClaudeCodeTools.ServedName(AgentGraphSupport.ToolName));
         Assert.Equal(AgentTools.WebFetch, ClaudeCodeTools.ServedAs("mcp__dssharness__web_fetch"));
+        Assert.Equal(AgentGraphSupport.ToolName, ClaudeCodeTools.ServedAs("mcp__dssharness__graph"));
         Assert.Equal(AgentTools.ViewFile, ClaudeCodeTools.ServedAs("mcp__dssharness__view_file"));
         Assert.Null(ClaudeCodeTools.ServedAs("mcp__dssharness__run_command"));
         Assert.Null(ClaudeCodeTools.ServedAs("mcp__other__web_fetch"));

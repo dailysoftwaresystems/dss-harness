@@ -1156,10 +1156,6 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
-    /// The real file system, except that deleting a kept evidence file writes another into its root, as a run still
-    /// writing there would between the evidence being read back and the worktree being removed.
-    /// </summary>
-    /// <summary>
     /// delete-agent holds a row that does not keep its stored text to the fold's checks: its dry run names the command that
     /// deletes it accepting the loss, on the line its summary points at, and exits 13, as the --apply that refuses with
     /// nothing written and the agent still live does; the command it named deletes it.
@@ -1194,6 +1190,10 @@ public sealed class AgentDeletionTests
         Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
     }
 
+    /// <summary>
+    /// The real file system, except that deleting a kept evidence file writes another into its root, as a run still
+    /// writing there would between the evidence being read back and the worktree being removed.
+    /// </summary>
     internal sealed class LateEvidenceFileSystem(IFileSystem inner, string lateFile) : PassThroughFileSystem(inner)
     {
         private bool _written;

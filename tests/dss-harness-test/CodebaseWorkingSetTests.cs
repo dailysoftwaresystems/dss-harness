@@ -311,7 +311,11 @@ public sealed class CodebaseWorkingSetTests
         Assert.Null((line with { Outcome = GraphToolOutcome.Refused, Edited = [], Wrote = null }).Problem());
         Assert.Equal("a call names its operation, unless it was refused as misused", (line with { Op = " " }).Problem());
         Assert.Null(new GraphCallLine("", GraphToolOutcome.Usage, [], [], []).Problem());
-        Assert.Equal(new GraphCallLine("", GraphToolOutcome.Usage, [], [], []), GraphCallLine.Of(null, new GraphToolAnswer("op is missing", GraphToolOutcome.Usage)) with { Asked = [], Served = [], Edited = [] });
+        Assert.Equal(
+            new GraphCallLine("", GraphToolOutcome.Usage, [], [], [], Tokens: EstimatedTokens.Of("op is missing")),
+            GraphCallLine.Of(null, new GraphToolAnswer("op is missing", GraphToolOutcome.Usage)) with { Asked = [], Served = [], Edited = [] });
+        Assert.Equal("a call's tokens and hits are never below 0", (line with { Tokens = -1 }).Problem());
+        Assert.Equal("a call's tokens and hits are never below 0", (line with { Hits = -1 }).Problem());
         Assert.Equal("'99' is no way a call ends", (line with { Outcome = (GraphToolOutcome)99 }).Problem());
         Assert.Equal("a node is named by its id", (line with { Asked = [""] }).Problem());
         Assert.Equal("a node is named by its id", (line with { Served = [" "] }).Problem());

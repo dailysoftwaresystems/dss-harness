@@ -345,14 +345,348 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
-    /// A chat over lines a test types, collecting what it is told; where the test says until when, its input ends only
-    /// once the chat has said that line - as a person who waits for the answer before leaving.
+    /// A graph service that holds nothing: every side-task test's default, so the conversation alone is what runs and
+    /// nothing of the graph is served or said. The graph's own tests pass the real service.
+    /// </summary>
+    private sealed class EmptyGraph : DssHarness.Core.Codebase.ICodebaseGraphService
+    {
+        public Task<DssHarness.Core.Codebase.CodebaseGraphSynced> SyncAsync(
+            DssHarness.Core.Codebase.CodebaseGraphSync request,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new DssHarness.Core.Codebase.CodebaseGraphSynced(
+                request.Run.Name,
+                DssHarness.Core.Codebase.CodebaseGraphService.BaseView,
+                Commit: null,
+                Dirty: false,
+                Files: 0,
+                Listed: 0,
+                Hashed: 0,
+                Extracted: 0,
+                Reused: 0,
+                Removed: 0,
+                Nodes: 0,
+                Edges: 0,
+                Languages: [],
+                Skipped: [],
+                Seconds: 0));
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphSynced?> SyncPathsAsync(
+            DssHarness.Core.Codebase.CodebaseGraphSync request,
+            IReadOnlyList<string> paths,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<DssHarness.Core.Codebase.CodebaseGraphSynced?>(null);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphChecked> CheckAsync(
+            DssHarness.Core.Codebase.CodebaseGraphSync request,
+            IReadOnlyList<string> paths,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task DropViewAsync(DssHarness.Core.Orchestration.OrchestratorLayout run, string agent, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphRead?> ReadOnlyAsync(
+            DssHarness.Core.Orchestration.OrchestratorLayout run,
+            string? agent,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<DssHarness.Core.Codebase.CodebaseGraphRead?>(null);
+
+        public Task<IReadOnlyList<string>> DifferingAsync(
+            DssHarness.Core.Codebase.CodebaseGraphSync request,
+            string baseCommit,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphChanges> ChangesAsync(
+            DssHarness.Core.Codebase.CodebaseGraphSync request,
+            DssHarness.Core.Codebase.CodebaseGraphRead read,
+            string baseCommit,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// The real graph service over the test's repository, as a side-task's own graph is opened by: the tree listed, its
+    /// files extracted, its map made - a source file the real extractors read among them.
+    /// </summary>
+    private static DssHarness.Core.Codebase.ICodebaseGraphService RealGraph(HarnessFactory harness)
+        => new DssHarness.Core.Codebase.CodebaseGraphService(
+            harness.GitClient,
+            harness.FileSystem,
+            harness.OrchestrationStore,
+            DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild,
+            harness.Platform,
+            new RunningToolDouble(),
+            harness.Output,
+            TimeProvider.System);
+
+    /// <summary>
+    /// A side-task has its own codebase graph, under its records: opened - synced whole - before its first message is
+    /// sent, its repository map made once from the base as it stands and given with that message alone, a context pack
+    /// made from each message, and its agent given the graph tool among its own.
+    /// </summary>
+    [Fact]
+    public async Task ASideTask_HasItsOwnGraph_ItsMapWithItsFirstMessage_APackWithEach_AndTheToolForItsAgent()
+    {
+        var (harness, temp, service, stored, _) = await RepoAsync(graphs: RealGraph);
+        OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter\n{\n    public string Hello() => \"hi\";\n}\n");
+
+        var outcome = await service.RunAsync(
+            new SideTaskCall(temp.Path, Prompt: "where does Greeter say hello", Model: "glm-5.3", Json: false),
+            Token);
+
+        Assert.Equal(0, outcome.ExitCode);
+        var task = Assert.Single(Directory.EnumerateDirectories(temp.Path, ".side-tasks", SearchOption.AllDirectories));
+        Assert.Single(Directory.EnumerateFiles(task, "graph.json", SearchOption.AllDirectories));
+        var map = Assert.Single(Directory.EnumerateFiles(task, "map.md", SearchOption.AllDirectories));
+
+        Assert.Contains("Greeter", File.ReadAllText(map), StringComparison.Ordinal);
+        Assert.Contains("<codebase>", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
+        Assert.EndsWith("where does Greeter say hello", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
+        Assert.NotNull(stored.Runs[0].Graph);
+
+        // Its parts are written by the one writer of a first message's parts, in their form, the map's first.
+        Assert.StartsWith(AgentPromptParts.MapPart(File.ReadAllText(map)) + $"<{AgentPromptParts.CodebaseTag}>{Environment.NewLine}", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A side-task's <c>find</c> breaks a tie by how near each node is to the work of the person's last message - its
+    /// pack, the files it names - so of two declarations that match alike, the one the message names comes first.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksFind_BreaksATieByNearnessToItsLastMessage()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "One", "Widget.cs"), "namespace One;\n\npublic sealed class Widget\n{\n}\n");
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Two", "Widget.cs"), "namespace Two;\n\npublic sealed class Widget\n{\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "code", Token);
+        var repository = new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main);
+        var graph = new SideTaskGraph(kit.Harness.CodebaseGraph, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.GitClient, kit.Harness.OrchestrationStore, TimeProvider.System, repository, SideTaskLayout.Of(repository, "t1"), Path.Combine(kit.Main, OrchestrationKit.Settings.Root));
+        await graph.OpenAsync(Token);
+        var view = new DssHarness.Core.Codebase.CodebaseGraphQueries((await kit.Harness.CodebaseGraph.ReadOnlyAsync(SideTaskLayout.Of(repository, "t1").AsGraph, null, Token))!);
+        var widgets = view.Find("Widget", "type", null, 10, 0).Cards.OrderBy(card => card.Id, StringComparer.Ordinal).ToList();
+
+        Assert.Equal(2, widgets.Count);
+
+        // The message names the namespace of the one the ids put last: its pack holds that one, and not the other.
+        var named = widgets[^1].Path;
+        _ = graph.Front($"look under {widgets[^1].Qualified.Split('.')[0]}", first: true);
+        var support = graph.Support(SideTaskPolicy.Ground(repository, new HarnessConfig { Worktrees = new WorktreeSettings() }, [], []))!;
+        var found = await support.Tool!.RunAsync(new JsonObject { ["op"] = "find", ["query"] = "Widget", ["kind"] = "type" }, CodebaseGraphTool.Operations(write: true, narrow: false), Token);
+        var near = found.Text.IndexOf($"| {named}:", StringComparison.Ordinal);
+        var far = found.Text.IndexOf($"| {widgets[0].Path}:", StringComparison.Ordinal);
+
+        Assert.True(near >= 0 && far > near, $"the nearer declaration is not first:\n{found.Text}");
+    }
+
+    /// <summary>
+    /// One tool held for the whole chat - as Claude Code's one launch holds it - breaks <c>find</c>'s ties by the person's
+    /// last message, not the one the tool was made after: each message's pack moves what is nearest.
+    /// </summary>
+    [Fact]
+    public async Task OneToolForAWholeChat_BreaksFindsTiesByTheLastMessage()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "One", "Widget.cs"), "namespace One;\n\npublic sealed class Widget\n{\n}\n");
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Two", "Widget.cs"), "namespace Two;\n\npublic sealed class Widget\n{\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "code", Token);
+        var repository = new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main);
+        var graph = new SideTaskGraph(kit.Harness.CodebaseGraph, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.GitClient, kit.Harness.OrchestrationStore, TimeProvider.System, repository, SideTaskLayout.Of(repository, "t1"), Path.Combine(kit.Main, OrchestrationKit.Settings.Root));
+        await graph.OpenAsync(Token);
+
+        // The tool is made once, after the first message, and the chat goes on with it.
+        _ = graph.Front("look under One", first: true);
+        var tool = graph.Support(SideTaskPolicy.Ground(repository, new HarnessConfig { Worktrees = new WorktreeSettings() }, [], []))!.Tool!;
+
+        async Task<string> FirstWidgetAsync()
+        {
+            var found = await tool.RunAsync(new JsonObject { ["op"] = "find", ["query"] = "Widget", ["kind"] = "type" }, CodebaseGraphTool.Operations(write: true, narrow: false), Token);
+            var one = found.Text.IndexOf("| src/One/Widget.cs:", StringComparison.Ordinal);
+            var two = found.Text.IndexOf("| src/Two/Widget.cs:", StringComparison.Ordinal);
+
+            Assert.True(one >= 0 && two >= 0, $"find did not give both:\n{found.Text}");
+            return one < two ? "One" : "Two";
+        }
+
+        Assert.Equal("One", await FirstWidgetAsync());
+
+        _ = graph.Front("now look under Two", first: false);
+
+        Assert.Equal("Two", await FirstWidgetAsync());
+
+        _ = graph.Front("and back under One", first: false);
+
+        Assert.Equal("One", await FirstWidgetAsync());
+    }
+
+    /// <summary>
+    /// A side-task given --no-graph has none of it: no graph under its records, no map and no pack at its message's
+    /// head, no tool for its agent - the person's message as it was typed.
+    /// </summary>
+    [Fact]
+    public async Task ASideTaskGivenNoGraph_HasNone_ItsMessageAsTyped()
+    {
+        var (harness, temp, service, stored, _) = await RepoAsync(graphs: RealGraph);
+        OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter { }\n");
+
+        var outcome = await service.RunAsync(
+            new SideTaskCall(temp.Path, Prompt: "hello there", Model: "glm-5.3", Json: false) { NoGraph = true },
+            Token);
+
+        Assert.Equal(0, outcome.ExitCode);
+        var task = Assert.Single(Directory.EnumerateDirectories(temp.Path, ".side-tasks", SearchOption.AllDirectories));
+
+        Assert.False(Directory.Exists(Path.Combine(task, "graph")));
+        Assert.Equal("hello there", stored.Runs[0].UserPrompt);
+        Assert.Null(stored.Runs[0].Graph);
+    }
+
+    /// <summary>
+    /// The chat's later messages carry the pack and not the map: the map is a cache of the base as the side-task opened,
+    /// read as it is, while the pack is made from each message the person types.
+    /// </summary>
+    [Fact]
+    public async Task AChatsLaterMessages_CarryThePackAndNotTheMap()
+    {
+        var (harness, temp, service, stored, _) = await RepoAsync(graphs: RealGraph);
+        OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter { }\n");
+        var typed = new Typed(["hello", "and again"], until: "the answer");
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Chat: typed.Chat()), Token);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.StartsWith("<repository-map>", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("<repository-map>", stored.Runs[1].UserPrompt, StringComparison.Ordinal);
+        Assert.Contains("<codebase>", stored.Runs[1].UserPrompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A chat over a client that holds one launch open - Claude Code - gives each later message the pack as the chat over
+    /// a client that stores its conversations does: the map with the first message alone, the pack made from each message
+    /// at its head as it is posted to the launch, never the line bare.
+    /// </summary>
+    [Fact]
+    public async Task AChatOnALaunchHeldOpen_GivesEachLaterMessageItsPack_AndTheMapWithTheFirstAlone()
+    {
+        var (_, temp, service, _, rendered) = await RepoAsync(graphs: RealGraph);
+        using var tree = temp;
+        OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter { }\n");
+        var typed = new Typed(["hello", "and again"]);
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "held", Chat: typed.Chat()), Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.StartsWith("<repository-map>", Assert.Single(rendered.Runs).UserPrompt, StringComparison.Ordinal);
+
+        // What each turn of the launch took, said by its first twenty characters: the first message its prompt, the later
+        // one as it was posted.
+        Assert.Equal(2, typed.Said.Count);
+        Assert.StartsWith($"about: <repository-map>{Environment.NewLine}", typed.Said[0], StringComparison.Ordinal);
+        Assert.StartsWith($"about: <codebase>{Environment.NewLine}", typed.Said[1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A side-task whose graph cannot be opened - its records cannot be written, or the graph service refuses - goes on
+    /// without it, its message sent as typed and no graph tool given, and says so once, with why: in its one shot's
+    /// answer beside its records, and in its graph's record as the prompt line that names why no pack is given.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ASideTaskWhoseGraphCannotBeOpened_GoesOnWithoutIt_SayingSoOnceWithWhy(bool io)
+    {
+        Exception failure = io
+            ? new IOException("There is not enough space on the disk.")
+            : new HarnessException(HarnessExit.CommandFailed, "The graph's records do not read.");
+        var (harness, temp, service, stored, _) = await RepoAsync(graphs: _ => new UnopenableGraph(failure));
+        using var tree = temp;
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "hello there", Model: "glm-5.3", Name: "blind"), Token);
+
+        var directory = LayoutOf(temp, "blind").Directory;
+        var why = failure.Message.TrimEnd('.');
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal([$"side-task 'blind' runs without its codebase graph, which could not be opened: {why}", $"Records: {directory}"], outcome.Details);
+        Assert.Equal("hello there", Assert.Single(stored.Runs).UserPrompt);
+        Assert.Null(stored.Runs[0].Graph);
+        Assert.Equal(
+            new GraphPromptLine(0, 0, 0, 0, 0, $"the side-task's graph could not be opened: {why}"),
+            Assert.Single(harness.OrchestrationStore.ReadGraphStepLines(directory)));
+    }
+
+    /// <summary>A chat whose graph cannot be opened says so once, as the chat's first line, and goes on without it.</summary>
+    [Fact]
+    public async Task AChatWhoseGraphCannotBeOpened_SaysSoAsItsFirstLine()
+    {
+        var failure = new UnauthorizedAccessException("Access to the path 'graph' is denied.");
+        var (_, temp, service, stored, _) = await RepoAsync(graphs: _ => new UnopenableGraph(failure));
+        using var tree = temp;
+        var typed = new Typed(["hello"], until: "the answer");
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Name: "blind", Chat: typed.Chat()), Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            ["side-task 'blind' runs without its codebase graph, which could not be opened: Access to the path 'graph' is denied", "the answer"],
+            typed.Said);
+        Assert.Equal("hello", Assert.Single(stored.Runs).UserPrompt);
+    }
+
+    /// <summary>A graph service that cannot open anything: every call fails with the one failure it is given.</summary>
+    private sealed class UnopenableGraph(Exception failure) : DssHarness.Core.Codebase.ICodebaseGraphService
+    {
+        public Task<DssHarness.Core.Codebase.CodebaseGraphSynced> SyncAsync(DssHarness.Core.Codebase.CodebaseGraphSync request, CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphSynced>(failure);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphSynced?> SyncPathsAsync(DssHarness.Core.Codebase.CodebaseGraphSync request, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphSynced?>(failure);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphChecked> CheckAsync(DssHarness.Core.Codebase.CodebaseGraphSync request, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphChecked>(failure);
+
+        public Task DropViewAsync(DssHarness.Core.Orchestration.OrchestratorLayout run, string agent, CancellationToken cancellationToken = default)
+            => Task.FromException(failure);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphRead?> ReadOnlyAsync(DssHarness.Core.Orchestration.OrchestratorLayout run, string? agent, CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphRead?>(failure);
+
+        public Task<IReadOnlyList<string>> DifferingAsync(DssHarness.Core.Codebase.CodebaseGraphSync request, string baseCommit, CancellationToken cancellationToken = default)
+            => Task.FromException<IReadOnlyList<string>>(failure);
+
+        public Task<DssHarness.Core.Codebase.CodebaseGraphChanges> ChangesAsync(
+            DssHarness.Core.Codebase.CodebaseGraphSync request,
+            DssHarness.Core.Codebase.CodebaseGraphRead read,
+            string baseCommit,
+            CancellationToken cancellationToken = default)
+            => Task.FromException<DssHarness.Core.Codebase.CodebaseGraphChanges>(failure);
+    }
+
+    /// <summary>
+    /// A side-task's graph's paths are the graph records' own - the directory, the map and what the map was made from -
+    /// named by the one layout every graph's records take, so neither can drift from the other.
+    /// </summary>
+    [Fact]
+    public void ASideTasksGraphPaths_AreTheOneGraphLayoutsOwn()
+    {
+        var layout = new SideTaskLayout(Path.Combine(Path.GetTempPath(), ".side-tasks"), "named");
+
+        Assert.Equal(
+            (layout.AsGraph.GraphDirectory, layout.AsGraph.GraphMapFile, layout.AsGraph.GraphMapMetaFile),
+            (layout.GraphDirectory, layout.MapFile, layout.MapMetaFile));
+        Assert.Equal(Path.Combine(layout.Directory, DssHarness.Core.Orchestration.OrchestratorLayout.GraphDirectoryName), layout.GraphDirectory);
+    }
+
+    /// <summary>
+    /// The chat's front end as a person's typed lines: one read per message, the chat's own lines collected, and a
+    /// completion heard once the chat has said that line - as a person who waits for the answer before leaving.
     /// </summary>
     private sealed class Typed(IEnumerable<string> lines, string? until = null)
     {
         private readonly Queue<string> _lines = new(lines);
         private readonly TaskCompletionSource _heard = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
         public List<string> Said { get; } = [];
 
         public SideTaskChat Chat()
@@ -402,7 +736,8 @@ public sealed class SideTaskServiceTests
         ClientGates? gates = null,
         Func<HarnessFactory, IReadOnlyList<IAgentClient>>? apis = null,
         DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null,
-        TimeProvider? runnerClock = null)
+        TimeProvider? runnerClock = null,
+        Func<HarnessFactory, DssHarness.Core.Codebase.ICodebaseGraphService>? graphs = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -421,8 +756,8 @@ public sealed class SideTaskServiceTests
             ],
         };
 
-        // A tier of two models Claude Code reaches, for a move between two launches held open; and one of three, the third
-        // reached by an API client.
+        // A tier of two models Claude Code reaches, for a move between two launches held open; one of three, the third
+        // reached by an API client; and one whose first model an API client reaches, Claude Code its fallback.
         foreach (var model in agents.Providers.SelectMany(provider => provider.Models).Where(model => model.Code is "claude-sonnet-5-5" or "claude-opus-5-5"))
         {
             model.Tiers.Add("claudes");
@@ -433,12 +768,17 @@ public sealed class SideTaskServiceTests
             model.Tiers.Add("trio");
         }
 
+        foreach (var model in agents.Providers.SelectMany(provider => provider.Models).Where(model => model.Code is "claude-sonnet-5-5" or "glm-5.3"))
+        {
+            model.Tiers.Add("api-first");
+        }
+
         temp.WriteFile("file.txt", "content\n");
         await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig
         {
             Defaults = new() { AgentTier = agents.AgentTier },
             Providers = [.. agents.Providers, narrow],
-            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) { ["narrow"] = ["narrow-1"], ["pair"] = ["narrow-2", "narrow-1"], ["claudes"] = ["claude-sonnet-5-5", "claude-opus-5-5"], ["trio"] = ["claude-sonnet-5-5", "claude-opus-5-5", "glm-5.3"] },
+            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) { ["narrow"] = ["narrow-1"], ["pair"] = ["narrow-2", "narrow-1"], ["claudes"] = ["claude-sonnet-5-5", "claude-opus-5-5"], ["trio"] = ["claude-sonnet-5-5", "claude-opus-5-5", "glm-5.3"], ["api-first"] = ["glm-5.3", "claude-sonnet-5-5"] },
             AgentClients = clients ?? new(StringComparer.OrdinalIgnoreCase),
         });
 
@@ -468,6 +808,7 @@ public sealed class SideTaskServiceTests
             harness.GitClient,
             new AgentAncestry(new AgentAncestryTests.FixedTable(tree?.Invoke(harness.Identity.CurrentId) ?? AgentAncestryTests.UnderAShell(harness.Identity.CurrentId)), harness.Identity, new AgentAncestryTests.OwnProgramAt(null), harness.Platform, harness.FileSystem),
             isolation ?? new TestIsolation(),
+            graphs is null ? new EmptyGraph() : graphs(harness),
             clock,
             environment ?? (_ => null));
 
@@ -1827,6 +2168,102 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
+    /// A Claude Code that is not ready refuses a side-task only where the entry that would serve it first needs it: on a
+    /// tier whose first model an API client reaches, with npm off the PATH, the side-task runs on that model - Claude
+    /// Code, its fallback, never asked to start - as a step on the same tier does; on a tier whose first model Claude Code
+    /// reaches, it is refused with the finder's own words and code.
+    /// </summary>
+    [Fact]
+    public async Task AClaudeCodeNotReady_RefusesASideTask_OnlyWhereItsFirstEntryNeedsIt()
+    {
+        using var kit = new ClaudeCodeUpdateServiceTests.Kit(npm: false);
+        var finder = await kit.Service().ReadyAsync(kit.Layout, [], client: null, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeAsker.SideTask("claude-first"), Token);
+        var (_, temp, service, stored, rendered) = await RepoAsync(updates: kit.Service());
+        using var tree = temp;
+
+        var served = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Tier: "api-first", Name: "api-first"), Token);
+
+        Assert.Equal((HarnessExit.Success, "side-task 'api-first' answered on glm-5.3"), (served.ExitCode, served.Message));
+        Assert.Equal(["glm-5.3"], stored.Runs.Select(run => run.Model!));
+        Assert.Empty(rendered.Runs);
+
+        var refused = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Tier: "claudes", Name: "claude-first"), Token);
+
+        Assert.Equal((false, HarnessExit.ToolMissing, finder.Message), (finder.Ready, refused.ExitCode, refused.Message));
+        Assert.Empty(rendered.Runs);
+        Assert.False(Directory.Exists(LayoutOf(temp, "claude-first").Directory));
+    }
+
+    /// <summary>
+    /// While a run's owner is live over the main tree - the record the engine writes, read where the side-task asks -
+    /// the side-task's agent is refused a command that writes the git state the run works over, the refusal naming the
+    /// run and nothing committed; once the owner is released, the same command runs and commits.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksCommit_IsRefusedWhileARunsOwnerIsLive_NamingTheRun_AndRunsOnceItIsReleased()
+    {
+        var endpoint = new ApiEndpoint();
+        var opened = new List<IDisposable>();
+
+        try
+        {
+            var (harness, temp, service, _, _) = await RepoAsync(apis: ApiClients(endpoint, opened));
+            using var tree = temp;
+            await harness.CommitAllAsync(temp.Path, "base", Token);
+            temp.WriteFile("file.txt", "changed\n");
+
+            var run = DssHarness.Core.Orchestration.OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path), "r1");
+            harness.OrchestrationStore.WriteOrchestrator(run, new DssHarness.Core.Orchestration.OrchestratorRecord { Kind = DssHarness.Core.Orchestration.OrchestratorRecord.KindName, Name = "r1", Model = "flow-engine", Parallel = 1, CreatedAt = DateTimeOffset.UnixEpoch });
+            var owner = new FlowRunOwner(harness.OrchestrationStore, harness.Identity);
+            _ = owner.Claim(run);
+
+            async Task<string> SubjectAsync() => (await harness.RunGitAsync(temp.Path, ["log", "-1", "--format=%s"], Token)).StandardOutput.Trim();
+
+            // The agent asks to commit, then answers once it is told what came of it.
+            void Scripted()
+                => endpoint
+                    .Then(ApiReply.Stream(ClaudeApiFixtures.Events(
+                    [
+                        ClaudeApiFixtures.Start("claude-sonnet-5-5"),
+                        ("content_block_start", """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_000000000000000000000001","name":"run_command","input":{}}}"""),
+                        ("content_block_delta", """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"program\":\"git\",\"args\":[\"commit\",\"-am\",\"x\"]}"}}"""),
+                        ("content_block_stop", """{"type":"content_block_stop","index":0}"""),
+                        .. ClaudeApiFixtures.End("tool_use"),
+                    ])))
+                    .Then(ApiReply.Stream(ClaudeApiFixtures.Events(
+                    [
+                        ClaudeApiFixtures.Start("claude-sonnet-5-5"),
+                        ("content_block_start", """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"""),
+                        ("content_block_delta", """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"told"}}"""),
+                        ("content_block_stop", """{"type":"content_block_stop","index":0}"""),
+                        .. ClaudeApiFixtures.End("end_turn"),
+                    ])));
+
+            Scripted();
+            var held = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "commit it", Model: "claude-sonnet-5-5", Client: ClaudeApiClient.ClientName, Name: "held"), Token);
+
+            Assert.Equal(HarnessExit.Success, held.ExitCode);
+            var denied = Assert.Single(harness.OrchestrationStore.ReadStepStream(LayoutOf(temp, "held").Directory).OfType<PermissionDenied>());
+            Assert.Equal(
+                (AgentTools.RunCommand, DssHarness.Core.Agents.Policy.AgentPolicy.LiveRunRule, "run 'r1' is working over this tree, and 'git commit -am x' writes the git state it works over - its HEAD, index, refs, stash, configuration or worktrees; ask again when it ends, or pause it yourself"),
+                (denied.Tool, denied.Rule, denied.Reason));
+            Assert.Equal("base", await SubjectAsync());
+
+            owner.Release(run);
+            Scripted();
+            var free = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "commit it", Model: "claude-sonnet-5-5", Client: ClaudeApiClient.ClientName, Name: "free"), Token);
+
+            Assert.Equal(HarnessExit.Success, free.ExitCode);
+            Assert.Empty(harness.OrchestrationStore.ReadStepStream(LayoutOf(temp, "free").Directory).OfType<PermissionDenied>());
+            Assert.Equal("x", await SubjectAsync());
+        }
+        finally
+        {
+            opened.ForEach(each => each.Dispose());
+        }
+    }
+
+    /// <summary>
     /// An interrupt while the side-task is being set up - here while its Claude Code is made ready, the machine's
     /// processes being read - stops it where it stands: a one shot's first, a chat's second. Nothing is started or
     /// written, and the command ends interrupted (130).
@@ -1883,10 +2320,6 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
-    /// A process table whose reading takes the person's interrupts - pressed as it is read - and waits, as a slow machine
-    /// does, until it is stopped or a while has passed.
-    /// </summary>
-    /// <summary>
     /// The machine's timers and the time that passes, its time of day held where it began: what a run computes from the
     /// time of day - how long a limit has left - is the same however long the machine takes to get there.
     /// </summary>
@@ -1897,6 +2330,10 @@ public sealed class SideTaskServiceTests
         public override DateTimeOffset GetUtcNow() => _at;
     }
 
+    /// <summary>
+    /// A process table whose reading takes the person's interrupts - pressed as it is read - and waits, as a slow machine
+    /// does, until it is stopped or a while has passed.
+    /// </summary>
     private sealed class PressingTable(SideTaskInterrupts interrupts, int presses) : IProcessTable
     {
         public bool Stopped { get; private set; }

@@ -26,7 +26,8 @@ public sealed partial class AgentToolRuntime
     /// <summary>
     /// <c>run_command</c>: a program and its arguments, never a shell string, decided whole by the policy where it starts,
     /// run as a phase is - contained, its log kept whole beside the stream, its silence and its time bounded - with the
-    /// environment every child of an agent has; the answer how it ended and its output, cut as every answer is.
+    /// environment every child of an agent has, then followed as every write is; the answer how it ended and its output,
+    /// cut as every answer is.
     /// </summary>
     private async Task<Answer> RunCommandAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
@@ -121,6 +122,10 @@ public sealed partial class AgentToolRuntime
         {
             Tally.LeftRunning($"{command}: {left}");
         }
+
+        // A command that ran may have written anything in the tree, however it ended: it is followed as every write is,
+        // the run's graph synced by what the tree holds now.
+        await FollowedAsync(AgentGraphWrite.Command(AgentTools.RunCommand)).ConfigureAwait(false);
 
         var ended = result.Stopped switch
         {

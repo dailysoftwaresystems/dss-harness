@@ -283,7 +283,11 @@ internal sealed class FlowComing
         return count;
     }
 
-    /// <summary>What a group instance not ended may still make: its own scope's, or a loop's iterations past those it made, or a <c>forEach</c>'s items not drawn.</summary>
+    /// <summary>
+    /// What a group instance not ended may still make: its own scope's, or a loop's iterations past those it made, or a
+    /// <c>forEach</c>'s items not drawn - its declaration read at the path its record holds, never the one its id spells,
+    /// for a group of the recovery taken inside another nests its id where the failure was taken.
+    /// </summary>
     private void Group(FlowStepRecord group, FlowQuestionsFile? questions, FlowUpdatesFile? updates)
     {
         if (NameOf(group.Instance) == FlowScope.Recovery && group.RaisedBy is not null)
@@ -292,7 +296,7 @@ internal sealed class FlowComing
             return;
         }
 
-        var path = FlowInstanceId.PathOf(group.Instance);
+        var path = group.Step;
 
         if (FlowScope.At(path, _definition)?.Step is not { } step)
         {

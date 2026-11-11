@@ -50,7 +50,11 @@ namespace DssHarness.Tests;
 /// An allowed call's <c>exitsWhileRunning</c> ends the process once it is handed over, or not, its result never written,
 /// and its <c>hangsWhileRunning</c> writes no result and plays nothing more until the process is ended; its
 /// <c>cutAfterAllowed</c> is cut before it runs, stamped not run, nothing handed over.
-/// An allowed call's <c>pauseAfterMs</c> waits that long after its result before the turn plays on.
+/// An allowed call's <c>pauseAfterMs</c> waits that long after its result before the turn plays on, and its
+/// <c>probesLock</c> names a machine-wide lock it tries as it runs: its result is <c>held</c> where another holds the lock,
+/// and <c>free</c> where it took it - and let it go at once. A call's <c>askedAgain</c> asks the host twice about it, by two
+/// requests of one <c>tool_use_id</c>: <c>atOnce</c> writes the second right after the first and goes by the second's answer,
+/// and <c>afterAllowed</c> writes the second once the first was allowed, and goes by its answer.
 /// </para>
 /// <para>
 /// Where <c>--mcp-config</c> names a server of type <c>sdk</c>, it connects it before its first init as the probe saw
@@ -248,6 +252,19 @@ internal static class FakeClaude
             }
         }
 
+        // An ask of the host about the call id of tool with input, by a request of its own, whose id it returns.
+        string Ask(string tool, JsonNode input, string id)
+        {
+            var asking = Id("ask-");
+            Say(new JsonObject
+            {
+                ["type"] = "control_request",
+                ["request_id"] = asking,
+                ["request"] = new JsonObject { ["subtype"] = "can_use_tool", ["tool_name"] = tool, ["input"] = input.DeepClone(), ["tool_use_id"] = id },
+            });
+            return asking;
+        }
+
         // The echo of a message taken, by the id the host gave it.
         void Echo(string content, string? id)
             => Say(new JsonObject
@@ -344,13 +361,14 @@ internal static class FakeClaude
                     return;
                 }
 
-                waitingOn = Id("ask-");
-                Say(new JsonObject
+                waitingOn = Ask(tool, input, id);
+
+                if (Text(call["askedAgain"]) == "atOnce")
                 {
-                    ["type"] = "control_request",
-                    ["request_id"] = waitingOn,
-                    ["request"] = new JsonObject { ["subtype"] = "can_use_tool", ["tool_name"] = tool, ["input"] = input, ["tool_use_id"] = id },
-                });
+                    // It asks again at once, and goes by the second answer.
+                    waitingOn = Ask(tool, input, id);
+                }
+
                 return;
             }
 
@@ -745,6 +763,14 @@ internal static class FakeClaude
                 var tool = Text(call["tool"]) ?? "Read";
                 var behavior = Text(node["response"]?["response"]?["behavior"]);
 
+                if (behavior == "allow" && Text(call["askedAgain"]) == "afterAllowed" && !Flag(call, "askedAgainDone"))
+                {
+                    // Allowed, it asks about the same call again, and goes by that answer.
+                    call["askedAgainDone"] = true;
+                    waitingOn = Ask(tool, call["input"]?.DeepClone() ?? new JsonObject(), id);
+                    continue;
+                }
+
                 if (Text(node["response"]?["subtype"]) == "error")
                 {
                     ToolResult(id, ok: false, "Tool permission request failed: Error: " + Text(node["response"]?["error"]), Meta(id, "permission-rule", "reject", "config"));
@@ -795,7 +821,7 @@ internal static class FakeClaude
                         continue;
                     }
 
-                    ToolResult(id, ok: true, Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));
+                    ToolResult(id, ok: true, Probed(call) ?? Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));
 
                     if (call["pauseAfterMs"] is JsonValue pause && pause.TryGetValue<int>(out var paused))
                     {
@@ -902,4 +928,20 @@ internal static class FakeClaude
 
     private static string? Text(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    /// <summary>
+    /// What a call that probes a machine-wide lock found as it ran: <c>held</c> where another held it, <c>free</c> where the
+    /// fake took it - let go at once; null for a call that probes none.
+    /// </summary>
+    private static string? Probed(JsonNode call)
+    {
+        if (Text(call["probesLock"]) is not { } name)
+        {
+            return null;
+        }
+
+        using var taken = DssHarness.Core.Platform.MachineWideMutex.TryHold(name, "the fake claude's probe");
+
+        return taken is null ? "held" : "free";
+    }
 }

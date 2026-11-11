@@ -1,7 +1,5 @@
 using System.CommandLine;
 using DssHarness.Core.Commands;
-using DssHarness.Core.Git;
-using DssHarness.Core.Results;
 
 namespace DssHarness.Cli.Commands;
 
@@ -22,23 +20,13 @@ internal static class VerifyGitCommand
         CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var directory = context.Directory;
+            var service = context.Get<VerifyGitService>();
 
-            var status = await context
-                .Get<VerifyGitService>()
+            var status = await service
                 .VerifyAsync(directory, cancellationToken)
                 .ConfigureAwait(false);
 
-            // The enum value is the exit code: this command's whole contract is its
-            // status, so it is reported rather than translated.
-            return status switch
-            {
-                VerifyGitStatus.Success => CommandOutcome.Ok($"git is available and '{directory}' is a repository."),
-                VerifyGitStatus.GitNotInstalled => CommandOutcome.Failed(
-                    (int)status, "git is not installed or not on PATH."),
-                VerifyGitStatus.NotAGitRepository => CommandOutcome.Failed(
-                    (int)status, $"'{directory}' is not inside a git repository."),
-                _ => CommandOutcome.Failed(HarnessExit.CommandFailed, $"Unexpected status '{status}'."),
-            };
+            return service.Outcome(directory, status);
         });
 
         return command;

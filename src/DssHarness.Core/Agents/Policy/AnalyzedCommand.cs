@@ -47,6 +47,16 @@ public sealed record AnalyzedCommand(IReadOnlyList<string> Words, IReadOnlyList<
     public string? Joined { get; init; }
 
     /// <summary>
+    /// Whether the shell runs the command in the background - a list a lone <c>&amp;</c> ends, the command and every command
+    /// of that list: its pipes, its <c>&amp;&amp;</c> and <c>||</c>, the groups and subshells in it; the command a
+    /// <c>coproc</c> begins, whole; the body of a process substitution, <c>&lt;(...)</c> or <c>&gt;(...)</c>; the pipelines of
+    /// a PowerShell statement its job <c>&amp;</c> ends - so the shell goes on, and may end, while the command still runs; but
+    /// none cmd's lone <c>&amp;</c> ends, which runs the next command in turn. A command a script runs is in the background
+    /// where the command that runs the script is.
+    /// </summary>
+    public bool Background { get; init; }
+
+    /// <summary>
     /// How one word's characters stand to the shell, where the word's own spelling was kept: <see cref="WordQuoting"/>
     /// for each of its characters, in step.
     /// </summary>
@@ -86,6 +96,14 @@ public static class WordQuoting
 /// <param name="Quoted">How each word's characters stand to the shell, kept in step with <paramref name="Words"/>.</param>
 public sealed record RuleReading(IReadOnlyList<string> Words, IReadOnlyList<string> Quoted)
 {
+    /// <summary>
+    /// Whether the reading is one the analysis makes of a configuration set where the command runs - the <c>git config</c>
+    /// or <c>gh config set</c> it is - rather than the command's own words: a write of that configuration whatever words
+    /// it carries after its command, so none of them reads as a mode of the command that only reads
+    /// (<see cref="CommandAnalysis.GitReadsOnly"/>).
+    /// </summary>
+    public bool Configures { get; init; }
+
     /// <summary>
     /// How the word at <paramref name="at"/> stands to the shell, or null where its spelling was not kept - a word a
     /// reading made - which reads as wholly open.

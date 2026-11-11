@@ -24,7 +24,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// declared, a runner that writes the tree works in an agent's worktree, a commit step fills the
 /// commit template, and the agents a run makes are named within the worktrees' bound.
 /// </remarks>
-public interface IWorkflowValidationService
+public interface IWorkflowValidationService : DssHarness.Core.Application.IUseCase
 {
     /// <summary>
     /// Validates the declared workflow <paramref name="named"/>, or every one the configuration

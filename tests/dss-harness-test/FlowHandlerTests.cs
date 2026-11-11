@@ -1506,6 +1506,117 @@ public sealed class FlowHandlerRecordsTests
         public bool WritesTree(string runner) => false;
     }
 
+    /// <summary>
+    /// A handler that is a group is made running in its first record: a crash right after that record is written leaves
+    /// a visit the resume takes up, whose block is drawn and run - never one that never starts, holding the ending it was
+    /// raised for open for ever.
+    /// </summary>
+    [Fact]
+    public async Task AGroupHandlersFirstRecord_IsOneTheResumeRuns_ACrashRightAfterItNeverLeavesItUnstarted()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: orient
+              - name: mend
+                on: {step: work, outcome: failure}
+                steps:
+                  - name: fix
+                    type: orient
+              - name: after
+                type: orient
+                dependsOn: [work]
+            """);
+        var runner = new Runner()
+            .On("work", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, _) => instance == "mend");
+
+        using (records)
+        {
+            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+            Assert.True(crashing.Ended);
+        }
+
+        // On disk: the handler's one record, and nothing of its block.
+        Assert.Equal(nameof(FlowInstanceState.Running), harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "mend").State);
+        Assert.DoesNotContain(harness.OrchestrationStore.ReadFlow(layout)!.Steps, step => step.Instance == "mend.fix");
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var again = new Runner().On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = new FlowCoordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["mend.fix", "after"], again.Started);
+            Assert.Equal(FlowInstanceState.Done, resumed.Instances["mend"].State);
+            Assert.Equal("mend", resumed.Instances["work"].HandledBy);
+        }
+    }
+
+    /// <summary>
+    /// A handler that is a group whose record says it never started - its block never begun, as one made in two writes
+    /// with a crash between them is left - is started by the resume that makes its raise again, and its block runs: the
+    /// ending it was raised for is never held open by a visit that cannot start.
+    /// </summary>
+    [Fact]
+    public async Task AGroupHandlerItsRecordLeftUnstarted_IsStartedByTheResume_AndItsBlockRuns()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: orient
+              - name: mend
+                on: {step: work, outcome: failure}
+                steps:
+                  - name: fix
+                    type: orient
+              - name: after
+                type: orient
+                dependsOn: [work]
+            """);
+        var runner = new Runner()
+            .On("work", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
+            .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+        var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, _) => instance == "mend");
+
+        using (records)
+        {
+            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: crashing).RunAsync(TestContext.Current.CancellationToken);
+        }
+
+        // The records as a visit made in two writes, cut between them, leaves them: not started, in its own record and
+        // in the run's state alike.
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        harness.OrchestrationStore.WriteFlow(layout, flow with
+        {
+            Steps = [.. flow.Steps.Select(step => step.Instance == "mend" ? step with { State = nameof(FlowInstanceState.NotStarted) } : step)],
+        });
+        harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("mend"), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("mend"))! with { State = nameof(FlowInstanceState.NotStarted) });
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var again = new Runner().On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        using (var resumedRecords = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = new FlowCoordinator(definition, again, new RunnerFacts(), clock, records: resumedRecords, resume: taken);
+            var end = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["mend.fix", "after"], again.Started);
+            Assert.Equal(FlowInstanceState.Done, resumed.Instances["mend"].State);
+        }
+    }
+
     /// <summary>The run's records, made whole in <paramref name="directory"/> under run <paramref name="run"/>.</summary>
     private static (HarnessFactory Harness, OrchestratorLayout Layout, FlowRunRecords Records, ManualClock Clock) Records(string run, string directory, WorkflowDefinition definition)
     {

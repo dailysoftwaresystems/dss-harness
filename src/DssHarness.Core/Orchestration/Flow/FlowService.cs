@@ -195,6 +195,9 @@ public sealed class FlowService(
     private readonly FlowTimings _timings = timings ?? FlowTimings.Default;
     private readonly FlowRunOwner _owner = new(store, identity, clock);
 
+    /// <summary>How long an answer handed to a running engine waits between looks at what became of it.</summary>
+    private static readonly TimeSpan HandOverSlice = TimeSpan.FromMilliseconds(50);
+
     /// <inheritdoc/>
     public async Task<CommandOutcome> RunAsync(
         string startDirectory,
@@ -464,7 +467,7 @@ public sealed class FlowService(
                 AnswerCommand,
                 reclaimedChange,
                 () => Resumed(layout, digestOfChange!),
-                (set.Id, answer, changes),
+                (set.Id, answer, changes, null),
                 interrupts,
                 json,
                 cancellationToken,
@@ -511,46 +514,191 @@ public sealed class FlowService(
 
         // Where an engine is running the run, the answer is handed to it and the command returns: it lands in the
         // inbox under an id of its own, the engine takes it at its poll, and no second engine is started. An engine
-        // whose session ends before it took it leaves it there, and the next session of the run takes it.
+        // whose session ends before it took it leaves it there, and the next session of the run takes it - this
+        // command waits out that taking, and where the owner went with its session, so that no session is left to
+        // read the inbox, this command is that next session itself, and its answer is the entry it handed over.
+        string? handedUnder = null;
+
         if (_owner.Live(layout) is not null)
         {
-            _store.AddToInbox(layout, new FlowInboxAnswer(FlowInboxAnswer.NewId(), asked.Id, answer, _clock.GetUtcNow(), takes));
+            handedUnder = FlowInboxAnswer.NewId();
+            _store.AddToInbox(layout, new FlowInboxAnswer(handedUnder, asked.Id, answer, _clock.GetUtcNow(), takes));
+        }
 
-            var handed = new CommandOutcome(
+        // A refusal before the session begins that no session of the run can take up - the definition changed, another
+        // run unfinished, a state no session can take up - leaves an answer handed over where it is: in the inbox, for
+        // the next session of the run to take - said, and the inbox named.
+        CommandOutcome NotBegun(CommandOutcome outcome)
+        {
+            if (handedUnder is null)
+            {
+                return Ended(layout, AnswerCommand, outcome, ResultOf(layout, outcome), json);
+            }
+
+            var left = outcome with
+            {
+                Details =
+                [
+                    .. outcome.Details ?? [],
+                    StaysHandedOver(layout, answer, asked.Id),
+                    $"inbox: {layout.InboxFile}",
+                ],
+            };
+
+            return Ended(layout, AnswerCommand, left, ResultOf(layout, left) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+        }
+
+        // The session is held to the definition it began with, as a resume is.
+        string? digest;
+        string? reclaimed;
+
+        while (true)
+        {
+            // An answer handed over is waited on while a live engine holds the run - the one it was handed to, or a
+            // session that claimed the run since - and the command goes on to its own session only where the owner
+            // went with the entry unweighed.
+            if (handedUnder is not null && await WaitOnHandedAsync(layout, run, asked, answer, handedUnder, json, cancellationToken).ConfigureAwait(false) is { } ended)
+            {
+                return ended;
+            }
+
+            try
+            {
+                (digest, var changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
+
+                if (changed is not null)
+                {
+                    return NotBegun(changed);
+                }
+
+                reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
+                break;
+            }
+            catch (HarnessException ex)
+            {
+                // A claim refused with the answer handed over is not the answer's refusal where a session claimed the
+                // run first: that session takes the inbox as it begins. The owner is looked at before the entry is
+                // weighed, for a session writes what it made of the entry before it lets the run go: weighed, the
+                // command answers what the run made of it; not, with another session's live owner holding the run, it
+                // waits on the same entry as one handed to that owner. An owner that is this process is no other
+                // session, and nothing would ever take the entry while the command waited on itself.
+                if (handedUnder is not null)
+                {
+                    var live = _owner.Live(layout) is not null && !_owner.Holds(layout);
+
+                    if (AnswerOfWeighed(Weigh(layout, handedUnder), layout, run, answer, asked.Id, [], json) is { } settled)
+                    {
+                        return settled;
+                    }
+
+                    if (live)
+                    {
+                        continue;
+                    }
+                }
+
+                return NotBegun(new CommandOutcome(ex.ExitCode, ex.Message));
+            }
+        }
+
+        // The command holds the run now, and no session but its own weighs its entry from here on. One a session weighed
+        // between the engine's going and this claim - taking the inbox as it began - is settled by what the records hold
+        // under its id, answered as the hand-over answers it, and emptied from the inbox as settled: no session is driven
+        // over an answer the run has already taken, or refused.
+        if (handedUnder is not null && Weigh(layout, handedUnder) is { } weighed && weighed is not (null, null))
+        {
+            try
+            {
+                List<string> said = reclaimed is null ? [] : [reclaimed];
+                var settled = new Offered { [handedUnder] = Task.FromResult(FlowHandedOver.RecordedAlready) };
+                _ = SayUnemptied(layout, settled, Empty(layout, settled), said);
+
+                return AnswerOfWeighed(weighed, layout, run, answer, asked.Id, said, json)!;
+            }
+            finally
+            {
+                _owner.Release(layout);
+            }
+        }
+
+        // The session begins with the answer: the question it names, answered by a person through this command - under
+        // the inbox entry it was handed over under, where it was, so the run weighs that entry once - and everything
+        // that can run after it.
+        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes, handedUnder), interrupts, json, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Waits on an answer handed to the engine running the run, under the inbox entry it was written under - on the
+    /// service's clock, at most two of the engine's polls - until the run's questions say what became of that entry, or
+    /// the engine's owner is gone: the engine it was handed to, or a session that claimed the run since, which takes the
+    /// inbox as it begins - the entry is never handed over twice. An engine writes what it made of an entry before it
+    /// lets its owner go, so where the owner is seen gone the entry is weighed once more, and that weighing answers: a
+    /// read made before the look at the owner may have missed what the engine wrote as it left. Weighed, the command
+    /// answers what the run made of it (<see cref="AnswerOfWeighed"/>); not, with the engine still running, it answers
+    /// that the engine takes it at its poll. Every answer names the inbox, a cancelled wait's among them, for the entry
+    /// stands.
+    /// </summary>
+    /// <returns>The command's answer where it ends here; null where the owner is gone and the entry not weighed, which the command's own session takes.</returns>
+    private async Task<CommandOutcome?> WaitOnHandedAsync(OrchestratorLayout layout, string run, FlowQuestionEntry asked, string answer, string entry, bool json, CancellationToken cancellationToken)
+    {
+        var records = new[] { new FlowRecordPath("inbox", layout.InboxFile) };
+        (FlowQuestionEntry? Took, FlowRefusedAnswer? Refused) Weighed() => Weigh(layout, entry);
+
+        var weighed = Weighed();
+
+        try
+        {
+            for (var waited = TimeSpan.Zero; weighed is (null, null) && waited < _timings.PollEvery + _timings.PollEvery && _owner.Live(layout) is not null; waited += HandOverSlice)
+            {
+                await Task.Delay(HandOverSlice, _clock, cancellationToken).ConfigureAwait(false);
+                weighed = Weighed();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            var cancelled = CommandOutcome.Failed(
+                HarnessExit.Cancelled,
+                $"waiting for the engine running '{run}' to take '{answer}' for question '{asked.Id}' was cancelled; the answer stays handed over, and the engine takes it at its poll",
+                [$"inbox: {layout.InboxFile}"]);
+
+            return Ended(layout, AnswerCommand, cancelled, ResultOf(layout, cancelled) with { Records = records }, json);
+        }
+
+        // The owner seen gone, what became of the entry is read after it: the last poll of the engine's session may have
+        // weighed it between this command's read and its look at the owner.
+        var gone = weighed is (null, null) && _owner.Live(layout) is null;
+
+        if (gone)
+        {
+            weighed = Weighed();
+        }
+
+        if (AnswerOfWeighed(weighed, layout, run, answer, asked.Id, [], json) is { } settled)
+        {
+            return settled;
+        }
+
+        if (!gone)
+        {
+            var reads = new CommandOutcome(
                 HarnessExit.Success,
-                $"handed '{answer}' for question '{asked.Id}' to the engine running '{run}'",
+                Handed(run, answer, asked.Id),
                 [
                     $"the engine reads it within {_timings.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s and takes it while the question is open; where its session ends first, the next session of the run takes it",
                     $"inbox: {layout.InboxFile}",
                 ]);
 
-            return Ended(layout, AnswerCommand, handed, ResultOf(layout, handed) with { Records = [new FlowRecordPath("inbox", layout.InboxFile)] }, json);
+            return Ended(layout, AnswerCommand, reads, ResultOf(layout, reads) with { Records = records }, json);
         }
 
-        // The session is held to the definition it began with, as a resume is.
-        var (digest, changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
-
-        if (changed is not null)
-        {
-            return Ended(layout, AnswerCommand, changed, ResultOf(layout, changed), json);
-        }
-
-        string? reclaimed;
-
-        try
-        {
-            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
-        }
-        catch (HarnessException ex)
-        {
-            var outcome = new CommandOutcome(ex.ExitCode, ex.Message);
-            return Ended(layout, AnswerCommand, outcome, ResultOf(layout, outcome), json);
-        }
-
-        // The session begins with the answer: the question it names, answered by a person through this command, and
-        // everything that can run after it.
-        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes), interrupts, json, cancellationToken).ConfigureAwait(false);
+        return null;
     }
+
+    /// <summary>What the run's questions hold under the inbox entry <paramref name="entry"/>: taken, refused, or neither - and neither where they cannot be read.</summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="entry">The inbox entry's id.</param>
+    private (FlowQuestionEntry? Took, FlowRefusedAnswer? Refused) Weigh(OrchestratorLayout layout, string entry)
+        => SafeRead(() => _store.ReadFlowQuestions(layout))?.Weighed(entry) ?? (null, null);
 
     /// <summary>Holds a changed answer to the engine running the run, under an id of its own, and returns: the engine takes it at its poll, within the set's window as from the moment stamped here.</summary>
     /// <param name="layout">The run's layout.</param>
@@ -1119,10 +1267,36 @@ public sealed class FlowService(
     }
 
     /// <summary>
+    /// A run fact a template reads that the run's own state does not hold: where the step's instance works -
+    /// its agent's worktree, the scratch and plans the run keeps for that agent, the rows it files - and this machine.
+    /// Null for every other name, which reads nothing as it did.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="layout">The run's own places.</param>
+    /// <param name="instance">The instance whose template is filled.</param>
+    /// <param name="fact">The fact's name.</param>
+    private string? RunFactOf(HarnessContext context, OrchestratorLayout layout, FlowInstance instance, string fact)
+    {
+        var agent = instance.WorksIn ?? instance.Made;
+
+        return fact switch
+        {
+            "os" => _platform.PlatformKey,
+            "worktree" when agent is not null => _store.ReadAgent(layout, agent)?.WorktreePath(context.Layout),
+            "work" when agent is not null => layout.WorkDirectory(agent),
+            "plans" when agent is not null => layout.PlansDirectory(agent),
+            "rows" when agent is not null => layout.RowsDirectory(agent),
+            _ => null,
+        };
+    }
+
+    /// <summary>
     /// One session of a run, from its owner claimed to its end: the engine built over the run's records, the answer it
     /// begins with, what was handed to an engine that ended before it took it, then driven - again, where an answer
     /// handed over as it ended settles the question it paused on - and the report written. However it ends - a
-    /// refusal, a defect - the owner is released and the outcome is in the run's log.
+    /// refusal, a defect - the owner is released and the outcome is in the run's log. An answer it begins with that the
+    /// command handed over first (<c>Inbox</c>, the entry's id) is that entry: weighed under its id, so the run records
+    /// one outcome of it, and the inbox named on every exit.
     /// </summary>
     private async Task<CommandOutcome> SessionAsync(
         HarnessContext context,
@@ -1130,14 +1304,14 @@ public sealed class FlowService(
         string command,
         string? opening,
         Func<(WorkflowDefinition Definition, FlowRunContext Context, FlowResumeState? Resume)> begin,
-        (string Question, string Answer, string? Text)? answered,
+        (string Question, string Answer, string? Text, string? Inbox)? answered,
         FlowInterrupts? interrupts,
         bool json,
         CancellationToken cancellationToken,
         bool again = false)
     {
         var said = new List<string>();
-        var inbox = false;
+        var inbox = answered?.Inbox is not null;
         var offered = new Offered();
 
         // What the session says before anything else: a dead owner it reclaimed, or what a start could not hold its
@@ -1214,7 +1388,9 @@ public sealed class FlowService(
                 },
                 new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, updates),
                 updates: () => _store.ReadFlowUpdates(layout),
-                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"));
+                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
+                runFacts: (instance, fact) => RunFactOf(context, layout, instance, fact),
+                agentLive: agent => _store.ReadAgent(layout, agent) is { State: Orchestration.AgentStates.Live });
             var before = _store.ReadFlowQuestions(layout);
 
             // What a session before this one recorded and left queued - an amendment given while no engine ran - is
@@ -1225,12 +1401,28 @@ public sealed class FlowService(
             {
                 // The session begins with the command's own act: an answer to its open question, or - where it changes
                 // one already given - a change held to its window and to once by the engine, which says why where it
-                // was not taken.
+                // was not taken. An answer the command handed over first is its inbox entry, weighed under the entry's
+                // id by the one owner of an entry weighed once: taken or refused, the run's records hold it under that
+                // id, so the inbox's pass below never weighs it a second time, and the poller empties it as settled. The
+                // command met it unweighed once it held the run - one a session before weighed is the command's to
+                // answer, before any session (AnswerOfWeighed) - so this session weighs it first.
                 string? problem;
+                bool taken;
 
-                var taken = again
-                    ? coordinator.TryChangeAnswer(given.Answer, given.Text, out problem, AnswerCommand, given.Question)
-                    : coordinator.TryAnswer(given.Question, given.Answer, given.Text, out problem, AnswerCommand);
+                if (again)
+                {
+                    taken = coordinator.TryChangeAnswer(given.Answer, given.Text, out problem, AnswerCommand, given.Question);
+                }
+                else if (given.Inbox is { } entry)
+                {
+                    var handed = coordinator.AnswerHandedOver(given.Question, given.Answer, given.Text, out problem, AnswerCommand, entry);
+                    offered[entry] = Task.FromResult(handed);
+                    taken = handed != FlowHandedOver.Refused;
+                }
+                else
+                {
+                    taken = coordinator.TryAnswer(given.Question, given.Answer, given.Text, out problem, AnswerCommand);
+                }
 
                 if (!taken)
                 {
@@ -1268,13 +1460,7 @@ public sealed class FlowService(
             // or refused and recorded - that the inbox would not let go is said apart, for it was weighed: the run's records
             // hold it under its entry's id, so the next session only empties it from the inbox.
             inbox |= SayUnsettled(layout, offered, said);
-            var settled = offered.Where(pair => pair.Value.IsCompletedSuccessfully).Select(pair => pair.Key).ToList();
-
-            if (unemptied is not null && settled.Count > 0)
-            {
-                inbox = true;
-                said.Add($"{offered.Counted(settled)} this session settled could not be emptied from '{layout.InboxFile}': {unemptied}; {(settled.Count == 1 ? "it stays there, and the next session of the run only empties it" : "they stay there, and the next session of the run only empties them")}");
-            }
+            inbox |= SayUnemptied(layout, offered, unemptied, said);
 
             var flow = _store.ReadFlow(layout)
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
@@ -1304,9 +1490,19 @@ public sealed class FlowService(
             // definition changed - is answered as a refusal, naming the run's records as they stand; the report is the
             // last session's, for a refused session is none. An answer handed over that a refused start weighed was
             // handed back, for the start wrote nothing: it stays in the inbox, said as one the session never settled.
+            // The command's own answer, handed over before its session began and never weighed - the session was refused
+            // first - stays there too; one weighed and refused is settled under its entry's id, and leaves the inbox now
+            // as what a session settled does at its end.
             inbox |= SayUnsettled(layout, offered, said);
+
+            if (answered is { Inbox: { } own } unweighed && !offered.ContainsKey(own))
+            {
+                said.Add(StaysHandedOver(layout, unweighed.Answer, unweighed.Question));
+            }
+
+            inbox |= SayUnemptied(layout, offered, Empty(layout, offered), said);
             var flow = SafeRead(() => _store.ReadFlow(layout));
-            var records = flow is null ? [] : RecordsOf(layout, inbox);
+            IReadOnlyList<FlowRecordPath> records = flow is not null ? RecordsOf(layout, inbox) : inbox ? [new FlowRecordPath("inbox", layout.InboxFile)] : [];
             var outcome = new CommandOutcome(ex.ExitCode, ex.Message, [.. said, .. records.Select(record => $"{record.What}: {record.Path}")]);
             var result = FlowRunResult.Empty(ex.ExitCode, ex.Message) with
             {
@@ -1493,6 +1689,69 @@ public sealed class FlowService(
     }
 
     /// <summary>
+    /// The line saying an answer the command handed over that no session weighed - its own session refused before it
+    /// did - stays in the inbox, for the next session of the run to take.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="answer">The answer handed over.</param>
+    /// <param name="question">The question it answers.</param>
+    private static string StaysHandedOver(OrchestratorLayout layout, string answer, string question)
+        => $"the answer '{answer}' handed over for question '{question}' stays in '{layout.InboxFile}', and the next session of the run takes it";
+
+    /// <summary>
+    /// The one owner of what the command answers for an answer it handed over under its own inbox entry that a session
+    /// of the run weighed - the engine it was handed to, a session that claimed the run before the command's claim, live
+    /// or gone since: taken, said taken; refused, the run's refusal (13) with the run's why; the questions and the inbox
+    /// named either way, after what the command said before. Null where no session weighed it.
+    /// </summary>
+    /// <param name="weighed">What the run's questions hold under the entry's id (<see cref="FlowQuestionsFile.Weighed"/>).</param>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="run">The run's name.</param>
+    /// <param name="answer">The answer handed over.</param>
+    /// <param name="question">The question it answers.</param>
+    /// <param name="said">What the command said before: a dead owner it reclaimed, an entry the inbox would not let go.</param>
+    /// <param name="json">Whether the command answers in its own JSON shape.</param>
+    private CommandOutcome? AnswerOfWeighed((FlowQuestionEntry? Took, FlowRefusedAnswer? Refused) weighed, OrchestratorLayout layout, string run, string answer, string question, IReadOnlyList<string> said, bool json)
+    {
+        FlowRecordPath[] records = [new("questions", layout.QuestionsFile), new("inbox", layout.InboxFile)];
+        var named = records.Select(record => $"{record.What}: {record.Path}");
+        CommandOutcome outcome;
+
+        if (weighed.Took is not null)
+        {
+            outcome = new CommandOutcome(HarnessExit.Success, Handed(run, answer, question), [.. said, "the run took it under its inbox entry, while the question was open", .. named]);
+        }
+        else if (weighed.Refused is { } refusal)
+        {
+            outcome = CommandOutcome.Refused(NotTaken(run, answer, question, refusal.Why), [.. said, .. named]);
+        }
+        else
+        {
+            return null;
+        }
+
+        return Ended(layout, AnswerCommand, outcome, ResultOf(layout, outcome) with { Records = records }, json);
+    }
+
+    /// <summary>What the command says it did with an answer it handed to the engine running the run.</summary>
+    /// <param name="run">The run's name.</param>
+    /// <param name="answer">The answer handed over.</param>
+    /// <param name="question">The question it answers.</param>
+    private static string Handed(string run, string answer, string question)
+        => $"handed '{answer}' for question '{question}' to the engine running '{run}'";
+
+    /// <summary>
+    /// The run's refusal of an answer the command handed over, as the run's records hold it under the entry's id
+    /// (<see cref="AnswerOfWeighed"/>).
+    /// </summary>
+    /// <param name="run">The run's name.</param>
+    /// <param name="answer">The answer handed over.</param>
+    /// <param name="question">The question it answers.</param>
+    /// <param name="why">Why the run did not take it, as its records say.</param>
+    private static string NotTaken(string run, string answer, string question, string why)
+        => $"the engine running '{run}' did not take '{answer}' for question '{question}': {why}";
+
+    /// <summary>
     /// Says the answers handed over that the session never settled - never weighed, or handed back by the loop, as a
     /// refused start hands back what it weighed - each of which stays in the inbox for the next session of the run.
     /// </summary>
@@ -1507,6 +1766,25 @@ public sealed class FlowService(
         }
 
         said.Add($"{offered.Counted(handed)} handed to this engine {(handed.Count == 1 ? "was" : "were")} not taken before its session ended; {(handed.Count == 1 ? "it stays" : "they stay")} in '{layout.InboxFile}', and the next session of the run takes {(handed.Count == 1 ? "it" : "them")}");
+        return true;
+    }
+
+    /// <summary>
+    /// Says each answer or amendment the session settled - taken, or refused and recorded - that the inbox would not let
+    /// go (<paramref name="unemptied"/>, why): it was weighed, and the run's records hold it under its entry's id, so the
+    /// next session only empties it from the inbox.
+    /// </summary>
+    /// <returns>Whether there was one, so the inbox is named among the session's records.</returns>
+    private static bool SayUnemptied(OrchestratorLayout layout, Offered offered, string? unemptied, List<string> said)
+    {
+        var settled = offered.Where(pair => pair.Value.IsCompletedSuccessfully).Select(pair => pair.Key).ToList();
+
+        if (unemptied is null || settled.Count == 0)
+        {
+            return false;
+        }
+
+        said.Add($"{offered.Counted(settled)} this session settled could not be emptied from '{layout.InboxFile}': {unemptied}; {(settled.Count == 1 ? "it stays there, and the next session of the run only empties it" : "they stay there, and the next session of the run only empties them")}");
         return true;
     }
 
@@ -1908,6 +2186,11 @@ public static class QuestionsText
         {
             yield return $"question {question.Id} ({question.Kind}, {question.State}): {question.ProblemShown?.Happened ?? question.Kind}";
 
+            if (question.Recommendation is { } said)
+            {
+                yield return $"  {RecommendationOf(said)}";
+            }
+
             foreach (var option in question.Options)
             {
                 yield return $"  {option.Answer}: {option.Does}";
@@ -1919,6 +2202,17 @@ public static class QuestionsText
             }
         }
     }
+
+    /// <summary>
+    /// A question's recommendation as the listing says it: what is recommended and why, with who gave it - or, where none
+    /// was obtained, why. The report's own saying of it stays the one in <see cref="FlowReports"/>; this is the listing's,
+    /// beside the answers a reader may still give.
+    /// </summary>
+    /// <param name="said">The recommendation, as the question holds it.</param>
+    private static string RecommendationOf(FlowRecommendation said)
+        => said.State == "given"
+            ? $"recommended: '{said.Answer}'{(said.Why is { } why ? $", {why}" : string.Empty)}{(said.By is { } by ? $" (by {by})" : string.Empty)}"
+            : said.Why ?? "no recommendation was sought";
 
     /// <summary>Who gave an answer, in words: a person and how, the configuration and where, the input it came from.</summary>
     /// <param name="by">Who gave it, as the answer records it; null where it records nobody.</param>

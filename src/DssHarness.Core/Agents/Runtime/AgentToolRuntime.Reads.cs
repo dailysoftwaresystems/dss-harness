@@ -75,6 +75,17 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed($"'{Said(full)}' is {(reading.Binary ? "binary" : "no text this tool reads")}: {reading.Why}");
         }
 
+        var lines = CodeFileText.Lines(reading.Text.Text);
+
+        // A whole read of a parsed file the graph holds is narrowed (graphReads: narrow): denied with the way to the
+        // graph, let by as an escape where the graph is not sure of the file or a wholeFile lifted it - each escape and
+        // each denial a line of the run's graph lines, the denial recorded as every denial is. A read denied shows the
+        // agent nothing, so it is neither a view an edit may follow nor a read of the run's.
+        if (start is null && end is null && Narrowed(path, full, lines, reading.Text.Text) is { } narrowed)
+        {
+            return Answer.Refused(path, narrowed);
+        }
+
         // What an edit is checked against: the file as it was when it was viewed, whatever part of it was.
         _viewed[full] = Hash(bytes);
         Tally.Read(full);
@@ -84,9 +95,92 @@ public sealed partial class AgentToolRuntime
             return Answer.Done($"'{Said(full)}' is empty");
         }
 
-        var lines = CodeFileText.Lines(reading.Text.Text);
-
         return Paged($"'{Said(full)}' has {ReportText.Counted(lines.Count, "line")}", lines, "lines", start, end, numbered: true);
+    }
+
+    /// <summary>
+    /// What a whole read of the file at <paramref name="path"/> is under the narrowing of reads (<c>graphReads:
+    /// narrow</c>), for a client whose own tool reads the file - Claude Code's <c>Read</c> with no offset and no limit,
+    /// asked of the engine before it runs: the same refusal, with the same words and the same two escapes recorded, as
+    /// <see cref="ViewAsync"/> answers a whole <c>view_file</c>; null where the read passes plainly or nothing narrows it.
+    /// Nothing is read unless the run narrows its reads and its view holds the file as parsed, unlifted; the file is then
+    /// read as a view reads it - within <see cref="AgentTools.MostViewedBytes"/>, through the file as it was opened - and
+    /// one that is not there, is past the bound or does not read as text is left to the client's own tool to answer.
+    /// </summary>
+    /// <param name="path">The file as the agent's tool asked it.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    public async Task<AgentPolicyAnswer.Denied?> NarrowedReadAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        if (_run.Graph is not { Narrow: true, Tool: { } tool }
+            || ReadPlace(path).Full is not { } full
+            || AgentPolicy.Beneath(_run.Workspace.Worktree ?? _run.Workspace.MainCheckout, full, _host.Platform.PathComparison) is not { } relative
+            || !tool.MayNarrow(relative)
+            || !_host.FileSystem.FileExists(full)
+            || TooLarge(full) is not null)
+        {
+            return null;
+        }
+
+        AgentFileRead read;
+
+        try
+        {
+            read = await _host.Files.ReadAsync(full, AgentTools.MostViewedBytes, opened => OpenedPlace(opened, write: false).Denied, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        if (read.Bytes is not { } bytes || EncodedText.Read(bytes) is not { IsRead: true } reading)
+        {
+            return null;
+        }
+
+        return Narrowed(path, full, CodeFileText.Lines(reading.Text!.Text), reading.Text.Text);
+    }
+
+    /// <summary>
+    /// What a whole read of the file at <paramref name="full"/> is under the narrowing of reads, where the run is given a
+    /// graph that narrows (<c>graphReads: narrow</c>): the refusal, recorded as every denial is, where the graph holds
+    /// the file as parsed and it is over <see cref="CodebaseGraphTool.NarrowLines"/> lines; an escape let by, recorded,
+    /// where the graph is not sure of the file; null where the read passes plainly - a range, a search and a write are
+    /// never narrowed, and neither is a file the graph does not parse.
+    /// </summary>
+    /// <param name="path">The file as the agent's tool asked it.</param>
+    /// <param name="full">The file, absolute.</param>
+    /// <param name="lines">The file's lines, as they were read.</param>
+    /// <param name="text">The file's text, as it was read.</param>
+    private AgentPolicyAnswer.Denied? Narrowed(string path, string full, IReadOnlyList<string> lines, string text)
+    {
+        if (_run.Graph is not { Narrow: true, Tool: { } tool } graph)
+        {
+            return null;
+        }
+
+        var tree = _run.Workspace.Worktree ?? _run.Workspace.MainCheckout;
+
+        if (AgentPolicy.Beneath(tree, full, _host.Platform.PathComparison) is not { } relative)
+        {
+            return null;
+        }
+
+        var whole = tool.WholeRead(relative, lines.Count);
+
+        if (whole.Narrowed)
+        {
+            graph.Recorded?.Invoke(new GraphDeniedLine(whole.Path ?? relative, lines.Count, EstimatedTokens.Of(text)));
+            return new AgentPolicyAnswer.Denied("graphReads: narrow", AgentPolicySource.Builtin, whole.Text);
+        }
+
+        if (whole.Escape is { } escape)
+        {
+            graph.Recorded?.Invoke(new GraphEscapeLine(whole.Path ?? relative, lines.Count, EstimatedTokens.Of(text), escape, whole.Text));
+        }
+
+        return null;
     }
 
     /// <summary>

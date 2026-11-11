@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Codebase;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
@@ -182,8 +183,25 @@ public sealed partial class AgentToolRuntime : IDisposable
         _paths = new ConfinedPaths(host.FileSystem, host.Platform, ground);
         _records = records ?? new AgentCallRecords(host.FileSystem, run, host.Clock, events);
         _ownsRecords = records is null;
-        Tools = [.. AgentTools.Offered(ground, run.Commands, run.WebSearch).Where(tool => only?.Contains(tool.Name) != false)];
-        _tools = Tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
+        var tools = AgentTools.Offered(ground, run.Commands, run.WebSearch).Where(tool => only?.Contains(tool.Name) != false).ToList();
+
+        // The run's graph tool, where it is given one: offered among the harness's own, with the operations the run's
+        // step is given - a side-task's every one its client serves (Claude Code's none but the reads), with no narrowing
+        // of its reads. It is no barrier by its name: of its operations an edit, which writes, stands alone and holds a
+        // side-task's lock (Locks), and a wholeFile, which changes what the reads beside it are answered, stands alone (Alone).
+        if (run.Graph is { } graph)
+        {
+            var operations = graph.Operations ?? CodebaseGraphTool.Operations(write: true, narrow: false);
+            tools.Add(new AgentToolDefinition(
+                AgentGraphSupport.ToolName,
+                AgentCapability.Read,
+                Barrier: false,
+                CodebaseGraphTool.Description(operations),
+                CodebaseGraphTool.Schema(operations)));
+        }
+
+        Tools = tools;
+        _tools = tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
         _schemas = Tools.ToDictionary(tool => tool.Name, tool => JsonNode.Parse(tool.Schema)!, StringComparer.Ordinal);
         _viewed = new ConcurrentDictionary<string, string>(StringComparer.FromComparison(host.Platform.PathComparison));
 
@@ -286,7 +304,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         for (var at = 0; at < calls.Count; at++)
         {
-            if (_tools.TryGetValue(calls[at].Name, out var tool) && tool.Barrier)
+            if (Alone(calls[at]))
             {
                 await ReadsAsync().ConfigureAwait(false);
                 results[at] = await OneAsync(calls[at]).ConfigureAwait(false);
@@ -327,16 +345,78 @@ public sealed partial class AgentToolRuntime : IDisposable
         Tally.Called();
         Answer answer;
 
-        try
+        // A side-task's write or command - a file tool that writes, run_command, the graph's edit - holds the main tree's
+        // lock for its duration: the engine's folds and commits wait it out, as it waits out theirs, and its chat says
+        // when it waited - the engine's step records say the same of theirs. A read, the graph's among them, takes none. A
+        // lock that cannot be taken refuses the call in its own words, recorded as every denial is, and the run goes on.
+        MachineWideHold? tree = null;
+
+        if (_run.Ground is { SideTask: true } && Locks(call))
         {
-            answer = await AnswerAsync(call, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                tree = await _host.TreeLock(_run.Workspace.MainCheckout, cancellationToken).ConfigureAwait(false)
+                    ?? throw new OperationCanceledException(cancellationToken);
+            }
+            catch (HarnessException ex)
+            {
+                return await KeptAsync(call, Answer.Refused(call.Name, MainTreeWriteLock.Refusal(ex))).ConfigureAwait(false);
+            }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && Faulted(ex))
+
+        using (tree)
         {
-            answer = Answer.Failed($"{call.Name} failed: {ex.Message.TrimEnd('.')}");
+            if (tree is not null && MainTreeWriteLock.WaitedNotice(tree.Waited) is { } waited)
+            {
+                await _events.EmitAsync(new Notice(waited)).ConfigureAwait(false);
+            }
+
+            try
+            {
+                answer = await AnswerAsync(call, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && Faulted(ex))
+            {
+                answer = Answer.Failed($"{call.Name} failed: {ex.Message.TrimEnd('.')}");
+            }
         }
 
         return await KeptAsync(call, answer).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="call"/> stands alone in its turn - after every call before it and before every call after: a
+    /// call of a tool that writes or runs (<see cref="Locks"/>), and of the graph tool its <c>wholeFile</c> as well, which
+    /// changes what the narrowed reads beside it would be answered. A call of a tool not given, or whose input does not
+    /// read, runs nothing, and reads with the rest.
+    /// </summary>
+    /// <param name="call">The call.</param>
+    internal bool Alone(AgentToolCallRequest call)
+        => Locks(call) || (call.Name == AgentGraphSupport.ToolName && _tools.ContainsKey(call.Name) && GraphOpOf(call.Input) == GraphOp.WholeFile);
+
+    /// <summary>
+    /// Whether <paramref name="call"/>, for a side-task, holds the main tree's lock for its duration: a call of a tool that
+    /// writes or runs, and of the graph tool its <c>edit</c> alone, the one operation of it that writes.
+    /// </summary>
+    /// <param name="call">The call.</param>
+    internal bool Locks(AgentToolCallRequest call)
+        => _tools.TryGetValue(call.Name, out var tool)
+            && (tool.Barrier || (tool.Name == AgentGraphSupport.ToolName && GraphOpOf(call.Input) == GraphOp.Edit));
+
+    /// <summary>The operation a <c>graph</c> call's input asks; null for one that does not read, which runs no operation.</summary>
+    /// <param name="input">The call's input, as JSON.</param>
+    private static GraphOp? GraphOpOf(string input)
+    {
+        try
+        {
+            return JsonNode.Parse(input) is JsonObject members && members["op"] is JsonValue op && op.TryGetValue<string>(out var name)
+                ? CodebaseGraphTool.OpOf(name)
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -428,26 +508,109 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.ViewFile => await ViewAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.FindFiles => await FindAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.SearchFiles => await SearchAsync(input, cancellationToken).ConfigureAwait(false),
-            AgentTools.CreateFile => Create(input),
+            AgentTools.CreateFile => await Create(input).ConfigureAwait(false),
             AgentTools.ReplaceInFile => await ReplaceAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.InsertInFile => await InsertAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.CreateDirectory => CreateDirectory(input),
-            AgentTools.DeleteFile => DeleteFile(input),
-            AgentTools.DeleteDirectory => DeleteDirectory(input),
-            AgentTools.MovePath => MovePath(input),
+            AgentTools.DeleteFile => await DeleteFile(input).ConfigureAwait(false),
+            AgentTools.DeleteDirectory => await DeleteDirectory(input).ConfigureAwait(false),
+            AgentTools.MovePath => await MovePath(input).ConfigureAwait(false),
             AgentTools.RunCommand => await RunCommandAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebFetch => await FetchAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebSearch => await WebSearchAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentGraphSupport.ToolName => await GraphAsync(input, cancellationToken).ConfigureAwait(false),
             _ => throw new InvalidOperationException($"the runtime offers '{tool.Name}' and runs no such tool"),
         };
+    }
+
+    /// <summary>
+    /// One call of the run's graph tool, answered by the tool it was given and recorded as each of its calls is: a usage
+    /// the agent can correct is answered as a failed call with the tool's own words, a refusal with the policy's, recorded
+    /// as every denial is. An edit the tool made counts among the files written, and is followed as every write is; a body
+    /// it served and an edit it made count as views of their files for the edit check, as a <c>view_file</c> is a view; a
+    /// <c>wholeFile</c> that lifted the narrowing of reads is an escape <c>stated</c>, recorded as the tool made it - its
+    /// file as the view holds it, with the agent's reason.
+    /// </summary>
+    /// <param name="input">The call's input, its <c>op</c> among it.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    private async Task<Answer> GraphAsync(JsonObject input, CancellationToken cancellationToken)
+    {
+        var support = _run.Graph!;
+
+        if (support.Tool is not { } tool)
+        {
+            return Answer.Failed(support.Gone ?? "no codebase graph was built for this run, and the graph tool answers nothing");
+        }
+
+        var operations = support.Operations ?? CodebaseGraphTool.Operations(write: true, narrow: false);
+        var answer = await tool.RunAsync(input, operations, cancellationToken).ConfigureAwait(false);
+
+        support.Recorded?.Invoke(GraphCallLine.Of(input["op"]?.GetValue<string>(), answer));
+
+        var tree = _run.Workspace.Worktree ?? _run.Workspace.MainCheckout;
+
+        if (answer.Outcome == GraphToolOutcome.Wrote && answer.Path is { } wrote)
+        {
+            // The graph is synced after each of the run's writes, an edit of its own among them.
+            await WroteAsync(AgentGraphSupport.ToolName, Path.Combine(tree, wrote.Replace('/', Path.DirectorySeparatorChar))).ConfigureAwait(false);
+        }
+
+        foreach (var viewed in answer.Viewed)
+        {
+            ViewedAgain(Path.Combine(tree, viewed.Replace('/', Path.DirectorySeparatorChar)));
+        }
+
+        if (answer.Escape is { } escape)
+        {
+            support.Recorded?.Invoke(escape);
+        }
+
+        return answer.Outcome switch
+        {
+            GraphToolOutcome.Usage => Answer.Failed(answer.Text),
+            GraphToolOutcome.Refused when answer.Denied is { } denied => Answer.Refused(answer.Path ?? AgentGraphSupport.ToolName, denied),
+            GraphToolOutcome.Refused => Answer.Failed(answer.Text),
+            _ => Answer.Done(answer.Text),
+        };
+    }
+
+    /// <summary>
+    /// The lines of the file at <paramref name="full"/> as they stand now, recorded as a view of it for the edit check -
+    /// what a body the graph served and an edit it made leave, as a <c>view_file</c> leaves them.
+    /// </summary>
+    /// <param name="full">The file, absolute.</param>
+    private void ViewedAgain(string full)
+    {
+        try
+        {
+            if (_host.FileSystem.StandingOf(full) is { Length: <= AgentTools.MostViewedBytes } && _host.FileSystem.OpenRead(full) is { } read)
+            {
+                using (read)
+                {
+                    _viewed[full] = Hash(ReadAll(read));
+                }
+            }
+        }
+        catch (IOException)
+        {
+            // A file that cannot be read now leaves no view of it: an edit of it asks for one first, as any edit does.
+        }
+    }
+
+    /// <summary>Everything a stream holds.</summary>
+    /// <param name="stream">The stream.</param>
+    private static byte[] ReadAll(Stream stream)
+    {
+        using var copied = new MemoryStream();
+        stream.CopyTo(copied);
+        return copied.ToArray();
     }
 
     /// <summary>
     /// Reads every string <paramref name="node"/> holds, so a text no string holds - half of a surrogate pair, which the
     /// parser lets by - refuses the input here rather than meeting a tool.
     /// </summary>
-    private static void ReadWhole(JsonNode? node)
-    {
+    private static void ReadWhole(JsonNode? node)    {
         switch (node)
         {
             case JsonObject members:
@@ -603,6 +766,12 @@ public sealed class AgentToolHost(
 
     /// <summary>The harness's own web search; none for a host whose runs search no source.</summary>
     internal Web.Search.HarnessWebSearch? Search { get; } = search;
+
+    /// <summary>
+    /// Takes the main tree's lock for a side-task's write or command (<see cref="MainTreeWriteLock.HoldAsync"/>): a test's
+    /// seam alone, for a lock that cannot be opened is no fault a test can make of the machine's own.
+    /// </summary>
+    internal Func<string, CancellationToken, Task<MachineWideHold?>> TreeLock { get; init; } = MainTreeWriteLock.HoldAsync;
 
     /// <summary>Why this host cannot run <paramref name="tools"/>; null where it can: a run offered <c>web_search</c> searches with the harness's own.</summary>
     /// <param name="tools">The tools a run is offered.</param>

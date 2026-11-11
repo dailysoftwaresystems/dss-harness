@@ -1,3 +1,4 @@
+using DssHarness.Core.Application;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Repository;
@@ -6,7 +7,7 @@ using DssHarness.Core.Results;
 namespace DssHarness.Core.Anchors;
 
 /// <summary>Checks that a change did not create more anchors than its work closed.</summary>
-public interface IAnchorBalanceService
+public interface IAnchorBalanceService : IUseCase
 {
     /// <summary>
     /// Compares the registries in the working tree with the registries where HEAD's history - with what an unfinished

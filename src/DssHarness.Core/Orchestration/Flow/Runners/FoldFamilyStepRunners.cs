@@ -8,7 +8,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// One call of a fold family verb a step makes: the run, the agent it works on, the consents given by name, the paths a
-/// refresh leaves out for their merge conflicts, whether it applies, and what its apply is held to.
+/// refresh leaves out for their merge conflicts, whether it applies, what its apply is held to, and the entry of the run's
+/// ledger of its folds it records its write in.
 /// </summary>
 /// <param name="Run">The step's run, with what the engine read where it started.</param>
 /// <param name="Place">The run's place.</param>
@@ -18,6 +19,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="AlsoExcept">The paths a refresh leaves as the agent changed them, beside its <c>except</c>: those whose merges conflict.</param>
 /// <param name="Apply">Whether it applies.</param>
 /// <param name="Expected">What its dry run named, which a fold's apply and a deletion's are held to; null for a dry run, a refresh and a rebase.</param>
+/// <param name="Intent">
+/// The entry of the run's ledger of its folds an apply that writes the main tree was intended under, which the verb records
+/// its write in under its hold; null for a dry run, a refresh, a rebase, and an apply that writes nothing.
+/// </param>
 public sealed record FoldCall(
     FlowStepRun Run,
     FlowRunPlace Place,
@@ -26,7 +31,8 @@ public sealed record FoldCall(
     IReadOnlyList<FlowFoldGrant> Grants,
     IReadOnlyList<string> AlsoExcept,
     bool Apply,
-    AgentPlanned? Expected = null)
+    AgentPlanned? Expected = null,
+    FoldIntent? Intent = null)
 {
     /// <summary>The paths, rows or cells the consents of <paramref name="consent"/> were given for, each once, in the order given.</summary>
     /// <param name="consent">The consent, by the question kind it is asked as.</param>
@@ -223,11 +229,13 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
         if (ledger is not null)
         {
-            // An intent a crash left - the verb called, nothing recorded after - is settled from what the tree holds,
-            // before this attempt does anything: a deletion whose crash came after its closing folds nothing now, and
-            // what its fold wrote is the ledger's all the same - and the graph's base is synced by every path the
-            // ledger's folds changed that it has not taken yet.
-            _ = await ledger.SettleInterruptedAsync(layout, place.Repository, run.Instance).ConfigureAwait(false);
+            // A fold a crash left unsettled - the verb called, nothing recorded after its answer - is settled before this
+            // attempt does anything: by what the fold recorded it left under its hold, where it did; as found, where it
+            // never began to write; and from the tree, under the tree's lock, only where it died part way through its
+            // write. A deletion whose crash came after its closing folds nothing now, and what its fold wrote is the
+            // ledger's all the same - and the graph's base is synced by every path the ledger's folds changed that it has
+            // not taken yet. A stop while it waits for the lock leaves the fold for the attempt after.
+            _ = await ledger.SettleInterruptedAsync(layout, place.Repository, run.Instance, cancellationToken).ConfigureAwait(false);
             await graph.AfterFoldAsync(run, place, context, cancellationToken).ConfigureAwait(false);
         }
 
@@ -325,24 +333,45 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
             }
 
             var expected = folds ? dry.Facts!.Planned : null;
-            var applying = given with { Apply = true, Expected = expected };
             var intent = folds && expected is { } planned && Writes(planned)
                 ? await ledger!.IntendAsync(layout, place.Repository, run.Instance, run.Attempt, Type, agent, planned, cancellationToken).ConfigureAwait(false)
                 : null;
+            var applying = given with { Apply = true, Expected = expected, Intent = intent is null ? null : new FoldIntent(ledger!, layout, intent) };
             UseCaseResult<AgentVerbFacts> applied;
 
             try
             {
                 applied = await CallAsync(applying, cancellationToken).ConfigureAwait(false);
             }
-            catch when (intent is not null)
+            catch (OperationCanceledException) when (intent is not null)
             {
-                // What it wrote before it stopped is read from the tree: nothing reaches the main tree unrecorded. Where
-                // that read fails as well, the intent stays for the next attempt to settle, and what goes on is the
-                // apply's own exception, which says what happened, never the read's.
+                // A stop wrote nothing of the main tree: all an apply writes after its measure is written uncancelled, so
+                // a stop that ends it came before its write - while it waited for the tree's lock, a side-task perhaps
+                // writing what it plans - and its intent never began one. It is settled as it found each path, the tree
+                // unread; where even that cannot be written, it stays for the next attempt to settle, and what goes on is
+                // the stop.
                 try
                 {
-                    _ = await ledger!.SettleInterruptedAsync(layout, place.Repository, run.Instance).ConfigureAwait(false);
+                    _ = ledger!.Settle(layout, intent, HarnessExit.Incomplete);
+                }
+                catch (Exception)
+                {
+                    // Left intended: the next attempt settles it before it does anything.
+                }
+
+                throw;
+            }
+            catch when (intent is not null)
+            {
+                // Anything else may have come after its write - a deletion's transcripts, evidence or removal throwing
+                // once it let the tree go: it is settled as a crash's is, by what the fold recorded it left under its hold,
+                // the tree unread; as found where it never began to write; and from the tree, under the tree's lock, only
+                // where its write threw and could not be recorded. Where that read fails as well, or a stop ends its wait
+                // for the lock, the intent stays for the next attempt to settle, and what goes on is the apply's own
+                // exception, which says what happened, never the read's.
+                try
+                {
+                    _ = await ledger!.SettleInterruptedAsync(layout, place.Repository, run.Instance, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception)
                 {
@@ -354,13 +383,15 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
             // The step's record first: what the apply answered is kept whatever the ledger's settle meets after - an
             // intent it cannot settle stays for the next attempt to settle - and a stop while the graph is synced leaves
-            // the apply recorded, and what the graph was not given stays owed in the ledger.
+            // the apply recorded, and what the graph was not given stays owed in the ledger. The settle is by what the
+            // fold recorded it left under its own hold of the tree, never by the tree now, which a side-task that waited
+            // on that hold may have written since.
             record = record with { Applied = AppliedOf(applied, intent) };
             store.WriteFoldRecord(directory, record);
 
             if (intent is not null)
             {
-                _ = await ledger!.SettleAsync(layout, place.Repository, intent, applied.Outcome.ExitCode).ConfigureAwait(false);
+                _ = ledger!.Settle(layout, intent, applied.Outcome.ExitCode);
             }
 
             if (ledger is not null)
@@ -381,7 +412,7 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
                         Agent = agent,
                         Target = run.Target,
                     })
-                    : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: applied.Facts is { } facts ? OutputOf(facts) : null);
+                    : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: applied.Facts is { } facts ? MainTreeWriteLock.WaitedFor(facts.Waited, OutputOf(facts)) : null);
             }
 
             // Refused under its hold for what it was not refused for a moment before - its trees moved between the two -
@@ -439,7 +470,7 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
     /// <summary>How an apply ended, as the step's record keeps it.</summary>
     private static FlowFoldApplied AppliedOf(UseCaseResult<AgentVerbFacts> applied, string? intent)
-        => new(applied.Outcome.ExitCode, applied.Outcome.Message, applied.Facts?.Standing?.ToString(), applied.Facts?.Folded, applied.Facts?.Planned, intent);
+        => new(applied.Outcome.ExitCode, applied.Outcome.Message, applied.Facts?.Standing?.ToString(), applied.Facts?.Folded, applied.Facts?.Planned, intent, applied.Facts?.Waited ?? default);
 
     /// <summary>The allowances a fold or a deletion's fold is given: its <c>allow</c>, each list as written or read where it started, and each consent given by name.</summary>
     /// <param name="call">The call.</param>
@@ -524,7 +555,7 @@ public sealed class FoldStepRunner(IHarnessContextLoader contextLoader, IHostPla
         ArgumentNullException.ThrowIfNull(call);
 
         return agents.FoldAsync(
-            new FoldAgentRequest(call.Place.Repository, call.Place.Run, call.Agent, AllowancesOf(call), call.Apply) { Expected = call.Expected },
+            new FoldAgentRequest(call.Place.Repository, call.Place.Run, call.Agent, AllowancesOf(call), call.Apply) { Expected = call.Expected, Intent = call.Intent },
             cancellationToken);
     }
 
@@ -566,6 +597,7 @@ public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, I
             new DeleteAgentRequest(call.Place.Repository, call.Place.Run, call.Agent, Folds(call) ? AllowancesOf(call) : new FoldAllowances(), call.Apply, Discards(call))
             {
                 Expected = call.Expected,
+                Intent = call.Intent,
             },
             cancellationToken);
     }
@@ -603,7 +635,7 @@ public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, I
         }
 
         await graph.AfterDeleteAsync(call.Run, call.Place, context, cancellationToken).ConfigureAwait(false);
-        return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: record.Applied is { } applied ? FoldOutputOf(applied.Folded) : null);
+        return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: record.Applied is { } applied ? MainTreeWriteLock.WaitedFor(applied.Waited, FoldOutputOf(applied.Folded)) : null);
     }
 
     private static bool Discards(FoldCall call) => call.Run.Step.DiscardUncommitted is true;

@@ -23,7 +23,7 @@ public sealed class SideTaskPolicyTests
     private static readonly string SideTaskReason = $"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}";
 
     /// <summary>The side-task's policy over a tree of its own, with the policy the tool builds for it, and its Claude Code directory.</summary>
-    private static (AgentPolicy Policy, string Main, string Claude) Policy(PlatformId platform = PlatformId.Linux, IReadOnlyList<AgentRestriction>? restrictions = null, IReadOnlyList<string>? webDomains = null)
+    private static (AgentPolicy Policy, string Main, string Claude) Policy(PlatformId platform = PlatformId.Linux, IReadOnlyList<AgentRestriction>? restrictions = null, IReadOnlyList<string>? webDomains = null, Func<string?>? liveRun = null)
     {
         var main = new TempDirectory();
         var claude = new TempDirectory();
@@ -44,7 +44,7 @@ public sealed class SideTaskPolicyTests
             },
         };
         var layout = new HarnessLayout(main.Path, main.Path);
-        var ground = SideTaskPolicy.Ground(layout, config, [claude.Path], []);
+        var ground = SideTaskPolicy.Ground(layout, config, [claude.Path], [], liveRun);
 
         return (new AgentPolicy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), HostDoubles.Platform(platform), ground), main.Path, claude.Path);
     }
@@ -123,6 +123,188 @@ public sealed class SideTaskPolicyTests
         var denied = Assert.IsType<AgentPolicyAnswer.Denied>(step.Run((IReadOnlyList<string>)["dssharness", AgentPolicy.ToolVerbs[0], "x"]));
 
         Assert.Equal("the orchestrator and agent verbs", denied.Rule);
+    }
+
+    /// <summary>
+    /// While a run's owner is live over the tree, the side-task's agent is refused every command that writes the git
+    /// state the run works over - HEAD, the index, a ref, the stash, the configuration, a worktree - the run's name in the
+    /// refusal: git's and gh's, and git's otherwise open commands in the forms that write it; each command read as the
+    /// worktree rules read one, so neither git's own options before the verb, the verb's own program, a configuration that
+    /// makes a name for it nor a verb the shell expands passes it by. The forms of the held verbs that only read stay
+    /// open, read as git reads their options wherever they stand - a listing mode taken as another option's value, or
+    /// undone after it, is no listing - and an option of theirs this does not know holds the command. It is checked at
+    /// each call: a run that starts while the chat is open is held to from its first step, and one that ends releases it.
+    /// </summary>
+    [Fact]
+    public void ACommandThatWritesTheGitStateARunWorksOver_IsRefusedWhileItsOwnerIsLive_WithTheRunsName_AndOpenWhereNoneIs()
+    {
+        const string run = "r1";
+        var live = false;
+        var (side, _, _) = Policy(liveRun: () => live ? run : null);
+
+        foreach (var command in new[] { "git commit -am wip", "git add -A", "git stash", "gh pr checkout 5" })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+        }
+
+        live = true;
+
+        // Each way a command writes what the run works over, spelled here rather than read off the policy's own list.
+        foreach (var command in new[]
+        {
+            "git commit -am wip", "git stash", "git reset --hard HEAD~1", "git clean -fd", "git checkout other", "git switch other",
+            "git restore --staged a.txt", "git rebase main", "git merge other", "git cherry-pick abc", "git revert abc", "git pull",
+            "git push", "git am p.mbox", "git worktree add ../w", "git branch other", "git branch -D other", "git tag v1",
+            "git update-ref refs/heads/x HEAD", "git config user.name x", "git bisect start", "git symbolic-ref HEAD refs/heads/other",
+            "git notes add -m x", "git replace a b", "git sparse-checkout set src", "git read-tree HEAD",
+            "git add -A", "git stage a.txt", "git rm a.txt", "git mv a.txt b.txt", "git update-index --assume-unchanged a.txt",
+            "git apply --index p.patch", "git apply -p1 --cached p.patch", "gh pr checkout 5",
+
+            // gh's that write the local repository: a pull request opened (its branch pushed, its upstream set), merged (its
+            // base checked out and pulled, its branch deleted) and the local repository synced from its source.
+            "gh pr create --fill", "gh pr merge 12 --squash --delete-branch", "gh pr merge 12 -sd", "gh repo sync", "gh repo sync --force",
+
+            // git's other commands where they write the same: a fetch into the branch a worktree has checked out, the option
+            // anywhere among its words, in a cluster or by a start of its name; and the ref store migrated.
+            "git fetch --update-head-ok origin main:main", "git fetch origin main:main -u", "git fetch -fu origin main:main",
+            "git fetch --update-h origin main:main", "git refs migrate --ref-format=reftable",
+
+            // A listing verb's modes that write, wherever they stand, and a listing mode taken as another option's value or
+            // undone after it.
+            "git branch -u origin/main", "git branch --set-upstream-to=origin/main", "git branch --unset-upstream",
+            "git branch --edit-description", "git branch -m old new", "git branch -c old new", "git branch -a -d other",
+            "git branch --format --list other", "git branch --list --no-list other", "git branch --abbrev 7",
+            "git tag -a v1 -m msg", "git tag -d v1", "git tag -m --contains v1", "git tag -f v1 HEAD~1",
+            "git config --unset user.name", "git config --add x.y z", "git config --replace-all x.y z", "git config --unset-a x.y",
+            "git config set user.name x", "git config unset user.name", "git config --edit", "git config --remove-section x",
+            "git config --rename-section a b", "git config --global user.name x", "git config -t bool core.bare true",
+            "git symbolic-ref --delete HEAD", "git symbolic-ref -d HEAD", "git symbolic-ref -m why HEAD refs/heads/other",
+            "git reflog expire --all", "git reflog delete HEAD@{1}", "git reflog drop main",
+            "git notes --ref review add -m x", "git notes remove HEAD", "git notes prune",
+            "git bisect reset", "git bisect good",
+
+            // git's own options before the verb, the verb's own program, and a name a configuration makes for it.
+            "git -C . stash", "git --attr-source HEAD commit -am m", "git --shallow-file f commit", "git --no-pager stash",
+            "/usr/lib/git-core/git-commit -am m", "git -c alias.x=commit x -am msg", "git -c core.pager=less log", "export HOME=/tmp/h",
+        })
+        {
+            var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command));
+
+            Assert.Equal(
+                (AgentPolicy.LiveRunRule, AgentPolicySource.Builtin, $"run '{run}' is working over this tree, and '{command}' writes the git state it works over - its HEAD, index, refs, stash, configuration or worktrees; ask again when it ends, or pause it yourself"),
+                (refused.Rule, refused.Source, refused.Reason));
+        }
+
+        // A word the shell expands where a held word would stand may be any of them: held, and said so.
+        foreach (var (command, whole) in new[]
+        {
+            ("v=commit; git $v -am msg", "git $v -am msg"),
+            ("git co${E}mmit -am m", "git co${E}mmit -am m"),
+            ("git branch $X", "git branch $X"),
+            ("git branch --list $X", "git branch --list $X"),
+            ("git tag -l $X", "git tag -l $X"),
+            ("git config $K", "git config $K"),
+            ("git reflog $X", "git reflog $X"),
+            ("git notes --ref $R list", "git notes --ref $R list"),
+            ("git fetch $R", "git fetch $R"),
+        })
+        {
+            var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command));
+
+            Assert.Equal(
+                (AgentPolicy.LiveRunRule, $"run '{run}' is working over this tree, and '{whole}' may write the git state it works over: a word of it is one the shell expands, which this does not read; ask again when it ends, or pause it yourself"),
+                (refused.Rule, refused.Reason));
+        }
+
+        // An expansion the shell may split into a word of its own, inside a word of a fetch that begins otherwise: held, and
+        // said how quoting it lets it through.
+        foreach (var command in new[] { "git fetch --depth=$n origin", "git fetch origin refs/heads/$b:refs/remotes/origin/$b" })
+        {
+            var refused = Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command));
+
+            Assert.Equal(
+                (AgentPolicy.LiveRunRule, $"run '{run}' is working over this tree, and '{command}' may write the git state it works over: a word of it is one the shell expands, which this does not read; an unquoted expansion may be split into a word of its own - quoted (\"$x\"), inside a word that begins otherwise, it is let through; ask again when it ends, or pause it yourself"),
+                (refused.Rule, refused.Reason));
+        }
+
+        // The git that writes none of it, and the forms of the verbs that do that only read - a listing mode wherever it
+        // stands among the words, an option's value read as one - stay open.
+        foreach (var command in new[]
+        {
+            "git status", "git log -1", "git diff HEAD", "git -C . status", "git rev-parse --abbrev-ref HEAD",
+            "git fetch", "git fetch origin", "git fetch --all --prune", "git fetch origin main:refs/remotes/origin/main",
+            "git fetch --depth=\"$n\" origin", "git fetch origin \"refs/heads/$b:refs/remotes/origin/$b\"", "git fetch origin refs/heads/*:refs/remotes/o/*",
+            "git branch", "git branch -a", "git branch -vv", "git branch -av", "git branch --show-current", "git branch --list 'feat*'",
+            "git branch -l", "git branch -l 'feat*'", "git --no-pager branch", "git branch --contains abc", "git branch --merged",
+            "git branch --no-merged main", "git branch -a --contains abc", "git branch -r --merged main", "git branch --points-at HEAD",
+            "git branch --format='%(refname:short)'", "git branch --format '%(refname)'", "git branch --sort=-committerdate",
+            "git branch --abbrev=7 -v", "git branch -v --no-color",
+            "git tag", "git tag -l 'v*'", "git tag --list", "git tag -n", "git tag -n5", "git tag --contains abc", "git tag -l --contains abc 'v*'",
+            "git tag --points-at HEAD", "git tag --merged main", "git tag --sort=-v:refname", "git tag --format='%(refname)'",
+            "git symbolic-ref HEAD", "git symbolic-ref --short HEAD", "git symbolic-ref -q --short HEAD", "git symbolic-ref --no-recurse HEAD",
+            "git config user.name", "git config --get user.name", "git config --list", "git config -l", "git config --global --list",
+            "git config --show-origin --get user.name", "git config --get-regexp ^alias", "git config --get-all remote.origin.fetch",
+            "git config get user.name", "git config get --all remote.origin.fetch", "git config list", "git config --type=bool core.bare",
+            "git config -t bool core.bare", "git config --file .gitmodules --get-regexp path", "git config --name-only --list",
+            "git reflog", "git reflog -5", "git reflog --date=iso", "git reflog show main", "git reflog show -3 main", "git reflog list",
+            "git reflog exists main",
+            "git notes", "git notes list", "git notes list HEAD", "git notes show HEAD", "git notes --ref=review list",
+            "git notes --ref review show HEAD", "git notes --ref review", "git notes get-ref",
+            "git bisect log", "git bisect visualize", "git bisect view --stat",
+            "git refs verify", "git refs list",
+            "git stash list", "git stash show -p stash@{0}", "git worktree list --porcelain", "git remote -v", "git submodule status",
+            "gh pr view 12", "gh pr checks 12", "gh repo view",
+        })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+        }
+
+        // An option of a held verb's this does not know holds it, whatever git would make of it.
+        foreach (var command in new[] { "git branch --frobnicate", "git tag --frobnicate", "git config --frobnicate user.name", "git symbolic-ref --frobnicate HEAD", "git notes --frobnicate list" })
+        {
+            Assert.Equal(AgentPolicy.LiveRunRule, Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command)).Rule);
+        }
+
+        live = false;
+
+        foreach (var command in new[] { "git commit -am wip", "git add -A", "git -c alias.x=commit x -am msg" })
+        {
+            Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+        }
+    }
+
+    /// <summary>
+    /// The help says what a side-task's agent is held off while a run works over the tree from the very lists the policy
+    /// holds it by: a verb added to one is said where it is refused.
+    /// </summary>
+    [Fact]
+    public void TheHelp_NamesEveryCommandHeldWhileARunWorksOverTheTree_AndEveryListingFormLeftOpen()
+    {
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("side-tasks"));
+
+        Assert.Contains($"git's state-writing verbs ({string.Join(", ", AgentPolicy.GitStateVerbs)}), the verbs that write its index ({string.Join(", ", AgentPolicy.GitIndexVerbs)} - apply whole,", help, StringComparison.Ordinal);
+        Assert.Contains($"gh's that write git's state ({string.Join(", ", AgentPolicy.GhStateCommands)}, each whole)", help, StringComparison.Ordinal);
+        Assert.Contains(
+            $"the forms of git's other commands that write the same ({string.Join(", ", AgentPolicy.GitStateForms)}, the option met wherever it stands among the command's words, "
+                + "by any cluster that holds its letter or any start of its name git takes, and a word the shell expands held as one that may be it where its "
+                + "expansion may give it - a word it begins, quoted or not, one after a start the option's own may have (-f$X), or one the shell splits into "
+                + "words of their own where it stands unquoted (--depth=$n), the refusal saying that quoting it lets it through - never a quoted one inside a "
+                + "word that begins otherwise (--depth=\"$n\", \"refs/heads/$b:refs/remotes/o/$b\"), nor a pattern whose every match begins so (refs/heads/*))",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains($"Their forms that only read stay open: {string.Join(", ", AgentPolicy.LiveRunOpen)} (a trailing * any words after the form)", help, StringComparison.Ordinal);
+        Assert.Contains(
+            $"git branch in a listing mode ({string.Join(", ", CommandAnalysis.GitBranchListing)}) or naming no branch, with no mode that writes; "
+                + $"git tag in a listing mode ({string.Join(", ", CommandAnalysis.GitTagListing)}) or naming no tag, neither deleting nor verifying; "
+                + $"git config getting or listing ({string.Join(", ", CommandAnalysis.GitConfigGets)}, its verbs {string.Join(" and ", CommandAnalysis.GitConfigReadVerbs)}) or naming one key alone; "
+                + "git symbolic-ref naming one ref, deleting none; "
+                + $"git reflog alone, with an option first or by a verb that reads ({string.Join(", ", CommandAnalysis.GitReflogReads)}); "
+                + $"and git notes, after its --ref, alone or by a verb that reads ({string.Join(", ", CommandAnalysis.GitNotesReads)}).",
+            help,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            [.. AgentPolicy.GitStateVerbs.Select(verb => $"git {verb}"), .. AgentPolicy.GitIndexVerbs.Select(verb => $"git {verb}"), .. AgentPolicy.GhStateCommands],
+            AgentPolicy.LiveRunHeld);
     }
 
     /// <summary>
@@ -319,6 +501,208 @@ public sealed class SideTaskPolicyTests
         Assert.Equal("'gh auth token' is denied by Run(gh auth token), a rule of this tool: it prints a credential, which an agent of this tool is never handed", printing.Reason);
     }
 
+    /// <summary>
+    /// A side-task's command that leaves a process running after it ends is refused by the main tree's lock, named as it was
+    /// written: one the shell runs in the background - a lone <c>&amp;</c> takes its whole list, a pipe's, an and-or's, a
+    /// group's, a loop's and a subshell's with it, a <c>coproc</c> its command, a process substitution its body, PowerShell's
+    /// job <c>&amp;</c> its pipelines - whatever waits after it, and one a program keeps apart, wherever a program of the
+    /// command runs, a PowerShell job and <c>-AsJob</c> among them; a script a shell runs, and one the command wrote and
+    /// then runs, read the same. A step's agent, which holds no such lock, is refused none of it.
+    /// </summary>
+    [Theory]
+    [InlineData("make &", "make")]
+    [InlineData("npm run codegen > gen.log 2>&1 &", "npm run codegen >gen.log")]
+    [InlineData("make && make test &", "make")]
+    [InlineData("make | tee build.log &", "make")]
+    [InlineData("(make; make test) &", "make")]
+    [InlineData("{ make; make test; } &", "make")]
+    [InlineData("while true; do make; done &", "true")]
+    [InlineData("make & echo started", "make")]
+    [InlineData("echo started; make &", "make")]
+    [InlineData("bash -c 'make &'", "bash -c make &")]
+    [InlineData("cat > gen.sh <<'EOF'\nnpm run codegen > gen.log 2>&1 &\nEOF\nsh gen.sh", "npm run codegen >gen.log")]
+    [InlineData("cat > gen.sh <<'EOF'\nnohup make\nEOF\n. gen.sh", "nohup make")]
+    [InlineData("coproc npm run codegen > gen.log 2>&1", "npm run codegen >gen.log")]
+    [InlineData("coproc gen { make; }", "make")]
+    [InlineData("coproc (make)", "make")]
+    [InlineData(": > >(npm run codegen > gen.log 2>&1)", "npm run codegen >gen.log")]
+    [InlineData("tee build.log > >(gzip > build.log.gz)", "gzip >build.log.gz")]
+    [InlineData("pwsh -c 'npm run codegen &'", "pwsh -c npm run codegen &")]
+    [InlineData("make & wait; make test &", "make")]
+    [InlineData("make & wait -n", "make")]
+    [InlineData("make & wait %1", "make")]
+    [InlineData("(make &); wait", "make")]
+    [InlineData("make & (wait)", "make")]
+    [InlineData("make & test -f x && wait", "make")]
+    [InlineData("make & cat log | wait", "make")]
+    [InlineData("make & wait | cat", "make")]
+    [InlineData("make & wait &", "make")]
+    [InlineData("{ make & } & wait", "make")]
+    [InlineData("find . -name '*.log' | while read f; do gzip \"$f\" & done; wait", "gzip $f")]
+    [InlineData("bash -c 'make &'; wait", "bash -c make &")]
+    [InlineData("make & if false; then wait; fi", "make")]
+    [InlineData("make & case x in y) wait;; esac", "make")]
+    [InlineData("make & case x in x) wait;; esac | cat", "make")]
+    [InlineData("make & while false; do wait; done", "make")]
+    [InlineData("for f in a.log b.log; do gzip \"$f\" & wait; done", "gzip $f")]
+    [InlineData("make & test -f x || wait", "make")]
+    [InlineData("make & test -f x && { echo waiting; wait; }", "make")]
+    [InlineData("make & f() { wait; }", "make")]
+    [InlineData("make & function f { wait; }", "make")]
+    [InlineData("nohup make", "nohup make")]
+    [InlineData("bin/nohup make", "bin/nohup make")]
+    [InlineData("setsid make", "setsid make")]
+    [InlineData("/usr/bin/setsid -f make", "/usr/bin/setsid -f make")]
+    [InlineData("./tools/daemonize.exe make", "./tools/daemonize.exe make")]
+    [InlineData("stdbuf -oL setsid -f npm run codegen", "stdbuf -oL setsid -f npm run codegen")]
+    [InlineData("ionice -c3 nohup make", "ionice -c3 nohup make")]
+    [InlineData("disown -a", "disown -a")]
+    [InlineData("daemonize /usr/bin/make", "daemonize /usr/bin/make")]
+    [InlineData("start-stop-daemon --start --background --exec /usr/bin/make", "start-stop-daemon --start --background --exec /usr/bin/make")]
+    [InlineData("at now <<< 'npm run codegen'", "at now <<<npm run codegen")]
+    [InlineData("batch <<< make", "batch <<<make")]
+    [InlineData("start notepad", "start notepad")]
+    [InlineData("cmd /c start notepad", "cmd /c start notepad")]
+    [InlineData("cmd /c @start notepad", "cmd /c @start notepad")]
+    [InlineData("pwsh -c 'Start-Process notepad'", "pwsh -c Start-Process notepad")]
+    [InlineData("pwsh -c 'start notepad'", "pwsh -c start notepad")]
+    [InlineData("make a & make b & wait", "make a")]
+    [InlineData("for f in a.log b.log; do gzip \"$f\" & done; wait", "gzip $f")]
+    [InlineData("make & { wait; }", "make")]
+    [InlineData("if true; then make & fi; wait", "make")]
+    [InlineData("make &\nwait", "make")]
+    [InlineData("coproc make; wait", "make")]
+    [InlineData("(make & wait)", "make")]
+    [InlineData("bash -c 'make & wait'", "bash -c make & wait")]
+    [InlineData("wait() { :; }; npm run codegen > gen.log 2>&1 & wait", "npm run codegen >gen.log")]
+    [InlineData("f() { npm run codegen > gen.log 2>&1 & }; wait; f", "npm run codegen >gen.log")]
+    [InlineData("set -euo pipefail\nnpm run codegen > gen.log 2>&1 &\nnpm run lint\nwait", "npm run codegen >gen.log")]
+    [InlineData("npm run codegen > gen.log 2>&1 & false &&\nwait", "npm run codegen >gen.log")]
+    [InlineData("npm run codegen > gen.log 2>&1 & cat gen.log |\nwait", "npm run codegen >gen.log")]
+    [InlineData("pwsh -c 'npm run codegen &; wait'", "pwsh -c npm run codegen &; wait")]
+    [InlineData("diff <(sort a.txt) <(sort b.txt)", "sort a.txt")]
+    [InlineData("true <(npm run codegen > gen.log 2>&1)", "npm run codegen >gen.log")]
+    [InlineData(": < <(npm run codegen > gen.log 2>&1)", "npm run codegen >gen.log")]
+    [InlineData("pwsh -c 'Microsoft.PowerShell.Management\\Start-Process notepad'", "pwsh -c Microsoft.PowerShell.Management\\Start-Process notepad")]
+    [InlineData("pwsh -c 'Start–Process notepad'", "pwsh -c Start–Process notepad")]
+    [InlineData("pwsh -c 'Start-Job { npm run codegen }'", "pwsh -c Start-Job { npm run codegen }")]
+    [InlineData("pwsh -c 'sajb { npm run codegen }'", "pwsh -c sajb { npm run codegen }")]
+    [InlineData("pwsh -c 'ThreadJob\\Start-ThreadJob { npm run codegen }'", "pwsh -c ThreadJob\\Start-ThreadJob { npm run codegen }")]
+    [InlineData("pwsh -c 'Invoke-Command -ScriptBlock { npm run codegen } -AsJob'", "pwsh -c Invoke-Command -ScriptBlock { npm run codegen } -AsJob")]
+    [InlineData("pwsh -c 'Invoke-Command { npm run codegen } -asj'", "pwsh -c Invoke-Command { npm run codegen } -asj")]
+    [InlineData("pwsh -c 'Get-Thing -AsJob'", "pwsh -c Get-Thing -AsJob")]
+    public void ASideTasksCommandThatLeavesAProcessBehind_IsRefusedByTheMainTreesLock(string command, string named)
+    {
+        var (side, _, _) = Policy();
+
+        Assert.Equal(MainTreeWriteLock.LeftBehind(named), side.Run(command));
+        Assert.Equal(AgentPolicyAnswer.Allow, StepPolicy().Run("make &"));
+    }
+
+    /// <summary>
+    /// An <c>&amp;</c> that runs nothing in the background refuses a side-task's command nothing: one that joins two
+    /// commands, one of a redirect's, one a pipe of both outputs spells, one quoted or escaped, and cmd's own, which runs
+    /// the command after it once the one before it ends.
+    /// </summary>
+    [Theory]
+    [InlineData("make && make test")]
+    [InlineData("make &> build.log")]
+    [InlineData("make &>> build.log")]
+    [InlineData("make >build.log 2>&1")]
+    [InlineData("make >&2")]
+    [InlineData("make |& tee build.log")]
+    [InlineData("echo 'a & b'")]
+    [InlineData("echo \"a & b\"")]
+    [InlineData("echo a\\&b")]
+    [InlineData("cmd /c \"a & b\"")]
+    [InlineData("cmd /c \"cd /d src & dotnet build >build.log 2>&1\"")]
+    [InlineData("cmd /c \"a && b\"")]
+    [InlineData("cmd /c \"echo a^&b\"")]
+    public void AnAmpersandThatRunsNothingInTheBackground_RefusesASideTasksCommandNothing(string command)
+    {
+        var (side, _, _) = Policy();
+
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+    }
+
+    /// <summary>
+    /// What leaves nothing running after the command ends refuses a side-task's command nothing: at given no job, a
+    /// repository's own script named as one of the shells' own detaching commands is, by a path - one directory deep
+    /// under cmd or PowerShell among them - or a script's end, a module's command that keeps nothing apart, a parameter of
+    /// PowerShell's that only begins as <c>-AsJob</c> does, and another program's option cluster that spells it.
+    /// </summary>
+    [Theory]
+    [InlineData("at -l")]
+    [InlineData("at -r 3")]
+    [InlineData("./bin/start")]
+    [InlineData("./scripts/disown")]
+    [InlineData("start.cmd")]
+    [InlineData("scripts/start.ps1")]
+    [InlineData("cmd /c \".\\start.cmd\"")]
+    [InlineData("cmd /c start.cmd")]
+    [InlineData("pwsh -c 'Microsoft.PowerShell.Management\\Get-ChildItem'")]
+    [InlineData("pwsh -c '.\\scripts\\start'")]
+    [InlineData("pwsh -c 'Get-Content a.json | ConvertFrom-Json -AsHashtable'")]
+    [InlineData("pwsh -c 'Invoke-Command { npm run codegen } -AsJob:$false'")]
+    [InlineData("ls -aS")]
+    [InlineData("ls -as")]
+    [InlineData("grep -as x f")]
+    [InlineData("rsync -aS a b")]
+    [InlineData("uname -as")]
+    [InlineData("git commit -as -m x")]
+    [InlineData("bash -c 'ls -aS'")]
+    [InlineData("cmd /c \"scripts\\start\"")]
+    [InlineData("pwsh -c 'scripts\\start'")]
+    [InlineData("pwsh -c 'Tools\\start'")]
+    public void ACommandThatLeavesNothingRunning_IsRefusedASideTaskNothing(string command)
+    {
+        var (side, _, _) = Policy();
+
+        Assert.Equal(AgentPolicyAnswer.Allow, side.Run(command));
+    }
+
+    /// <summary>
+    /// <c>start</c>, <c>Start-Process</c> and <c>saps</c> told to wait name more than their program, which hands it a command
+    /// line of its own every agent is refused, before the main tree's lock weighs it; a terminal session's program given what
+    /// to run, and <c>systemd-run</c>, are refused to every agent too.
+    /// </summary>
+    [Theory]
+    [InlineData("start /wait notepad", "undecided")]
+    [InlineData("cmd /c start \"\" /wait notepad", "undecided")]
+    [InlineData("pwsh -c 'Start-Process notepad -Wait'", "undecided")]
+    [InlineData("screen -dmS gen make", "undecided")]
+    [InlineData("tmux new -d make", "undecided")]
+    [InlineData("systemd-run --user make", "the root actions")]
+    public void AWaitingStartAndASessionsProgram_AreRefusedToEveryAgent_BeforeTheLock(string command, string rule)
+    {
+        var (side, _, _) = Policy();
+
+        Assert.Equal(rule, Assert.IsType<AgentPolicyAnswer.Denied>(side.Run(command)).Rule);
+        Assert.Equal(rule, Assert.IsType<AgentPolicyAnswer.Denied>(StepPolicy().Run(command)).Rule);
+    }
+
+    /// <summary>
+    /// A pipe, <c>&amp;&amp;</c> or <c>||</c> at a line's end joins the command on the next line - past blank lines, comments
+    /// and a here-document the line named - as the shell reads on: a shell the next line runs reads its script from the pipe,
+    /// which no agent is let run, a credential's print and a push among what it would read.
+    /// </summary>
+    [Theory]
+    [InlineData("printf 'gh auth token\\n' |\nsh", "sh")]
+    [InlineData("printf 'gh auth token\\n' | # feed it\n\nsh", "sh")]
+    [InlineData("echo 'git push --force origin HEAD:main' |&\nbash", "bash")]
+    [InlineData("cat <<'EOF' |\ngh auth token\nEOF\nsh", "sh")]
+    public void AShellOnTheLineAfterAPipe_ReadsThePipe_ForEveryAgent(string command, string shell)
+    {
+        var (side, _, _) = Policy();
+        var refused = new AgentPolicyAnswer.Denied(
+            AgentPolicy.UndecidedRule,
+            AgentPolicySource.Builtin,
+            $"this tool could not decide '{command}' ('{shell}' reads the script it runs from its input, which this does not read): it denies what it cannot decide");
+
+        Assert.Equal(refused, side.Run(command));
+        Assert.Equal(refused, StepPolicy().Run(command));
+    }
+
     /// <summary>The root actions stay refused to the side-task's agent as to every agent's, wherever they stand.</summary>
     [Fact]
     public void TheRootActionsStayRefused()
@@ -356,6 +740,72 @@ public sealed class SideTaskPolicyTests
         Assert.Equal([.. sources.All.Where(source => source.Name != "feed1").Select(source => source.Name)], search.Sources.Select(source => source.Name));
         Assert.Contains(sources.All, source => source.Name == "feed1");
         Assert.Equal(int.MaxValue, search.MaxPerStep);
+    }
+
+    /// <summary>
+    /// The side-task's graph tool is held to the side-task's own policy, as a step's is held to its step's: a node in a file
+    /// its reads do not reach - here under a Claude Code directory - is left out of what the tool finds, and an edit of it
+    /// is refused as one of a file its reads do not reach, the file as it was; a file the policy lets it write is edited.
+    /// </summary>
+    [Fact]
+    public async Task TheSideTasksGraphTool_IsHeldToTheSideTasksOwnPolicy()
+    {
+        const string Secret = "namespace Demo;\n\npublic static class Secret\n{\n    public static int Code()\n    {\n        return 7;\n    }\n}\n";
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/hidden/Secret.cs", Secret));
+        var graph = new SideTaskGraph(tree.Service, tree.Harness.FileSystem, tree.Harness.Platform, tree.Harness.GitClient, tree.Store, TimeProvider.System, tree.Layout, SideTaskLayout.Of(tree.Layout, "one"), tree.WorktreesRoot);
+        await graph.OpenAsync(TestContext.Current.CancellationToken);
+        var hidden = Path.Combine(tree.Tree, "src", "hidden");
+        var ground = SideTaskPolicy.Ground(tree.Layout, new HarnessConfig { Worktrees = new WorktreeSettings() }, [hidden], []);
+        var tool = graph.Support(ground)!.Tool!;
+        var operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: true, narrow: false);
+
+        var found = await tool.RunAsync(System.Text.Json.Nodes.JsonNode.Parse("""{"op":"find","query":"Code"}""")!.AsObject(), operations, TestContext.Current.CancellationToken);
+
+        Assert.Equal("no node matched\n1 node(s) left out: in files your reads do not reach", found.Text);
+
+        var edited = await tool.RunAsync(
+            System.Text.Json.Nodes.JsonNode.Parse("""{"op":"edit","symbol":"Demo.Secret.Code","hash":"#00000000","text":"    public static int Code() => 8;"}""")!.AsObject(),
+            operations,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(DssHarness.Core.Agents.Runtime.GraphToolOutcome.Answered, edited.Outcome);
+        Assert.StartsWith("'Demo.Secret.Code' is in a file your reads do not reach", edited.Text, StringComparison.Ordinal);
+        Assert.Equal(Secret, File.ReadAllText(Path.Combine(hidden, "Secret.cs")));
+
+        // What the tool may write is what the side-task's policy may write: a file it may write is edited.
+        var twice = await tool.RunAsync(
+            System.Text.Json.Nodes.JsonNode.Parse("""{"op":"edit","symbol":"Twice","hash":"#aac0401c","text":"    public static double Twice(IShape shape) => 0;"}""")!.AsObject(),
+            operations,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(DssHarness.Core.Agents.Runtime.GraphToolOutcome.Wrote, twice.Outcome);
+    }
+
+    /// <summary>
+    /// The side-task's graph is synced by each write of its agent - its sync's record naming the side-task and the tool that
+    /// wrote, never its opening - and its tool answers from the view the sync left.
+    /// </summary>
+    [Fact]
+    public async Task TheSideTasksGraph_IsSyncedByEachWriteOfItsAgent_ItsRecordNamingTheWrite()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync();
+        var layout = SideTaskLayout.Of(tree.Layout, "one");
+        var graph = new SideTaskGraph(tree.Service, tree.Harness.FileSystem, tree.Harness.Platform, tree.Harness.GitClient, tree.Store, TimeProvider.System, tree.Layout, layout, tree.WorktreesRoot);
+        await graph.OpenAsync(TestContext.Current.CancellationToken);
+        var support = graph.Support(SideTaskPolicy.Ground(tree.Layout, new HarnessConfig { Worktrees = new WorktreeSettings() }, [], []))!;
+        tree.Write("src/Added.cs", "namespace Demo;\n\npublic static class Added\n{\n    public static int One()\n    {\n        return 1;\n    }\n}\n");
+
+        await support.AfterWriteAsync!(DssHarness.Core.Agents.Runtime.AgentGraphWrite.Of("create_file", Path.Combine(tree.Tree, "src", "Added.cs")), TestContext.Current.CancellationToken);
+
+        var line = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllLines(layout.AsGraph.GraphSyncFile)[^1])!;
+        Assert.Equal("the side-task 'one': create_file", line["why"]!.GetValue<string>());
+
+        var found = await support.Tool!.RunAsync(
+            System.Text.Json.Nodes.JsonNode.Parse("""{"op":"find","query":"Added"}""")!.AsObject(),
+            DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: true, narrow: false),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(" public static class Added | src/Added.cs:3-9 #", found.Text, StringComparison.Ordinal);
     }
 }
 

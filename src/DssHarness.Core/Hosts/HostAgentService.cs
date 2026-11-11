@@ -39,7 +39,7 @@ public sealed class HostAgentService(
     IDetachedProcessLauncher launcher,
     HomeShorthand home,
     IHostAgentLastResort lastResort,
-    HostAgentPatience? patience = null)
+    HostAgentPatience? patience = null) : DssHarness.Core.Application.IUseCase
 {
     private readonly IHostPlatform _platform = platform;
     private readonly IToolIdentityProvider _identity = identity;

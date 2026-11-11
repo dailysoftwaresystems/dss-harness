@@ -29,7 +29,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// 20, and a commit that is not the set's alone - a hook staged more, or moved the branch to a commit of its own on
 /// another parent - is left as it is for a person, the set left staged with it in the ledger, and fails the step 20. A staged set an attempt
 /// before left is settled first: committed where HEAD moved and holds each of its paths as the set staged it, else
-/// unstaged, its paths owed still. The folds upstream are those the engine read where the step started (<c>folds</c>).
+/// unstaged, its paths owed still. Everything from its first read of the main tree's git to the commit's own check is
+/// done under one hold of the main tree's lock (<see cref="MainTreeWriteLock"/>), so a side-task's write between what
+/// the step weighed and what it stages cannot reach the commit; the step's own stop ends the wait, nothing read or
+/// staged, and its output says what it waited out. The folds upstream are those the engine read where the step started (<c>folds</c>).
 /// The commit runs the repository's commit hooks inside the operating system's isolation of the agents' work
 /// (<see cref="ExecutionGrounds.OfHooks"/>), as <c>isolation</c> in its output says; where this machine has none,
 /// <c>agentPolicy.isolation: required</c> fails it 14 before anything is staged, and <c>preferred</c> runs them outside.
@@ -73,13 +76,21 @@ public sealed class CommitStepRunner(
             return MadeBefore(layout, run, upstream);
         }
 
+        // The tree's lock, from the first read of the main tree's git to the commit's own check: the branch, a set an
+        // attempt before left staged, the index, each path's digest and its marks are read under it, so what is staged and
+        // committed is what they weighed - a side-task's write or command waits it out, as the step waits out theirs, and
+        // what the step waited out for it is what its record says. The step's own stop ends the wait, nothing read or
+        // staged. One hold for all of it: a second take on another thread would wait on this one forever.
+        using var tree = await MainTreeWriteLock.HoldAsync(main, cancellationToken).ConfigureAwait(false)
+            ?? throw new OperationCanceledException(cancellationToken);
+
         // The run's work is committed on the branch it started on, or not at all.
         if (place.OffItsBranch(run.Instance, await git.GetBranchAsync(main, cancellationToken).ConfigureAwait(false), "staged") is { } off)
         {
             return FlowStepResult.Ended(passed: false, HarnessExit.Refused, off);
         }
 
-        if (await SettleAsync(run, layout, main, upstream, cancellationToken).ConfigureAwait(false) is { } settled)
+        if (await SettleAsync(run, layout, main, upstream, tree, cancellationToken).ConfigureAwait(false) is { } settled)
         {
             return settled;
         }
@@ -172,7 +183,7 @@ public sealed class CommitStepRunner(
 
         if (staging.Count == 0)
         {
-            return MadeBefore(layout, run, upstream);
+            return MadeBefore(layout, run, upstream, tree.Waited);
         }
 
         // The message is filled only where there is something to commit, and before anything is staged.
@@ -267,7 +278,7 @@ public sealed class CommitStepRunner(
         }
 
         ledger.Committed(layout, id, sha);
-        return Done(committed: true, sha, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream), hooks);
+        return Done(committed: true, sha, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream), tree.Waited, hooks);
     }
 
     /// <summary>
@@ -275,9 +286,11 @@ public sealed class CommitStepRunner(
     /// HEAD moved, the tree holds at each of its paths what the set staged there, and HEAD holds it so
     /// (<see cref="FoldLedger.DifferingAsync"/>), the commit took them, and the step is done with it; else no commit did -
     /// a HEAD another commit moved, its paths put back, reads clean in git's status all the same - so what the index holds
-    /// of it is unstaged and the set marked so, owed still, for this attempt to stage again whole.
+    /// of it is unstaged and the set marked so, owed still, for this attempt to stage again whole. Under the step's one hold
+    /// of the tree's lock, <paramref name="tree"/>: what a settle unstages is written to the main tree's index, as the
+    /// staging it settles was.
     /// </summary>
-    private async Task<FlowStepResult?> SettleAsync(FlowStepRun run, OrchestratorLayout layout, string main, IReadOnlyList<string> upstream, CancellationToken cancellationToken)
+    private async Task<FlowStepResult?> SettleAsync(FlowStepRun run, OrchestratorLayout layout, string main, IReadOnlyList<string> upstream, MachineWideHold tree, CancellationToken cancellationToken)
     {
         foreach (var left in store.ReadFolds(layout)?.Commits.Where(commit => commit.State == FlowCommitEntry.Staged && commit.Instance == run.Instance).ToList() ?? [])
         {
@@ -290,7 +303,7 @@ public sealed class CommitStepRunner(
                 && (await FoldLedger.DifferingAsync(git, fileSystem, main, paths, cancellationToken).ConfigureAwait(false)).Count == 0)
             {
                 ledger.Committed(layout, left.Id, head);
-                return Done(committed: true, head, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream));
+                return Done(committed: true, head, paths, FoldLedger.IgnoredOf(store.ReadFolds(layout), upstream), tree.Waited);
             }
 
             var status = await git.ReadStatusAsync(main, cancellationToken).ConfigureAwait(false);
@@ -360,16 +373,16 @@ public sealed class CommitStepRunner(
     /// <summary>
     /// The step done with nothing left to commit: with the commit an attempt of it made before - its ending cut off before
     /// it was recorded - where one did, else having committed nothing. A set it marked taken by HEAD, which it found there,
-    /// is no commit of its own.
+    /// is no commit of its own. Where it found that under the tree's lock, how long it waited for the lock is said.
     /// </summary>
-    private FlowStepResult MadeBefore(OrchestratorLayout layout, FlowStepRun run, IReadOnlyList<string> upstream)
+    private FlowStepResult MadeBefore(OrchestratorLayout layout, FlowStepRun run, IReadOnlyList<string> upstream, TimeSpan waited = default)
     {
         var file = store.ReadFolds(layout);
         var ignored = FoldLedger.IgnoredOf(file, upstream);
 
         return file?.Commits.LastOrDefault(commit => commit.Instance == run.Instance && commit.State == FlowCommitEntry.Committed && commit.Sha != commit.Head) is { } made
-            ? Done(committed: true, made.Sha, [.. made.Paths.Select(path => path.Path)], ignored)
-            : Done(committed: false, sha: null, [], ignored);
+            ? Done(committed: true, made.Sha, [.. made.Paths.Select(path => path.Path)], ignored, waited)
+            : Done(committed: false, sha: null, [], ignored, waited);
     }
 
     /// <summary>The paths of a staged set, each with what the main tree holds there.</summary>
@@ -384,10 +397,11 @@ public sealed class CommitStepRunner(
     private static string Quoted(IReadOnlyList<string> paths) => ReportText.Listed([.. paths.Select(path => $"'{path}'")]);
 
     /// <summary>
-    /// The step done: whether it committed, the commit, the paths it took, those its folds changed that git ignores, and,
-    /// where it ran git's commit, the isolation the repository's hooks ran under.
+    /// The step done: whether it committed, the commit, the paths it took, those its folds changed that git ignores,
+    /// where it ran git's commit, the isolation the repository's hooks ran under, and, where it waited for the tree's
+    /// lock, how long and what it waited for.
     /// </summary>
-    private static FlowStepResult Done(bool committed, string? sha, IReadOnlyList<string> paths, IReadOnlyList<string> ignored, ExecutionIsolation? hooks = null)
+    private static FlowStepResult Done(bool committed, string? sha, IReadOnlyList<string> paths, IReadOnlyList<string> ignored, TimeSpan waited, ExecutionIsolation? hooks = null)
     {
         var output = new JsonObject
         {
@@ -402,7 +416,7 @@ public sealed class CommitStepRunner(
             output["isolation"] = hooks.Record.ToOutput();
         }
 
-        return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: output);
+        return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: MainTreeWriteLock.WaitedFor(waited, output));
     }
 
     /// <summary>What a step that ran git's commit and failed answers: the isolation the repository's hooks ran under.</summary>

@@ -311,6 +311,143 @@ public static partial class CommandAnalysis
     /// <c>--shutdown</c> and their kind) and runs no command.
     /// </summary>
     private static IReadOnlyList<string> WslCommand(IReadOnlyList<string> words, IReadOnlyList<ShellRedirect> redirects, bool program, bool inputGiven)
+        => WslCommandAt(words) switch
+        {
+            null or { Exec: true } => [],
+            { At: var at } when at < words.Count => [string.Join(' ', words.Skip(at))],
+            _ => Input("wsl", redirects, program, inputGiven: inputGiven) ?? [],
+        };
+
+    /// <summary>
+    /// How each runner (<see cref="CommandRunners"/>) reads its own words before the command it runs (<see cref="CommandAt"/>),
+    /// by its name in any case: but ssh's, which runs on its host, and wsl's, watch's and start's, each read on its own.
+    /// </summary>
+    private static readonly Dictionary<string, RunnerReading> RunnerReadings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["setsid"] = new(string.Empty, []),
+        ["stdbuf"] = new("ioe", ["--input", "--output", "--error"]),
+        ["ionice"] = new("cnpPu", ["--class", "--classdata", "--pid", "--pgid", "--uid"], Without: "pPu", LongWithout: ["--pid", "--pgid", "--uid"]),
+        ["chrt"] = new("TPD", ["--sched-runtime", "--sched-period", "--sched-deadline"], Before: 1, Without: "pm", LongWithout: ["--pid", "--max"]),
+        ["taskset"] = new(string.Empty, [], Before: 1, Without: "p", LongWithout: ["--pid"]),
+        ["unshare"] = new("SGRw", ["--setuid", "--setgid", "--root", "--wd", "--propagation", "--setgroups", "--map-user", "--map-group", "--map-users", "--map-groups"]),
+        ["nsenter"] = new("tSG", ["--target", "--setuid", "--setgid"]),
+        ["prlimit"] = new("po", ["--pid", "--output"], Without: "p", LongWithout: ["--pid"]),
+        ["numactl"] = new("ipmNCPwSfMIL", ["--interleave", "--preferred", "--membind", "--cpunodebind", "--physcpubind", "--preferred-many", "--weighted-interleave", "--shm", "--file", "--shmmode", "--shmid", "--length", "--offset"], Without: "sH", LongWithout: ["--show", "--hardware"]),
+        ["cpulimit"] = new("lpePcs", ["--limit", "--pid", "--exe", "--path", "--cpu", "--signal"], Without: "peP", LongWithout: ["--pid", "--exe", "--path"]),
+        ["firejail"] = new(string.Empty, []),
+        ["flock"] = new("wE", ["--timeout", "--conflict-exit-code"], Before: 1, Without: "c", LongWithout: ["--command"]),
+        ["torsocks"] = new("upaP", ["--user", "--pass", "--address", "--port"]),
+        ["proxychains"] = new("f", []),
+        ["proxychains4"] = new("f", []),
+        ["faketime"] = new(string.Empty, ["--date-prog"], Before: 1),
+        ["strace"] = new("abeEIoOpPsSuUX", ["--attach", "--output", "--trace", "--trace-path", "--string-limit", "--summary-sort-by", "--user", "--signal", "--status", "--inject", "--fault", "--columns", "--env", "--interruptible", "--argv0"]),
+        ["ltrace"] = new("aADeFlnopsuwx", ["--align", "--config", "--library", "--output", "--indent", "--user"]),
+        ["valgrind"] = new(string.Empty, []),
+        ["caffeinate"] = new("tw", []),
+        ["chroot"] = new(string.Empty, ["--userspec", "--groups"], Before: 1),
+        ["runuser"] = new("ugGsw", ["--user", "--group", "--supp-group", "--shell", "--whitelist-environment"], Without: "c", LongWithout: ["--command", "--session-command"], Needs: 'u', LongNeeds: "--user"),
+        ["call"] = new(string.Empty, []),
+        ["dtach"] = new("AacnNer", []),
+        ["abduco"] = new("e", [], Before: 1),
+        ["daemonize"] = new("ceEoplu", []),
+    };
+
+    /// <summary>
+    /// How a runner reads its own words before the command it runs: its short options that take a value - the rest of
+    /// their word, or the next - its long options that take the next word where no <c>=</c> gives them one, the words it
+    /// reads past its options before the command, the options with which it runs none of them - a process's settings by
+    /// its id, a shell's command line - and the option it runs a command of them only with.
+    /// </summary>
+    private sealed record RunnerReading(string Valued, string[] LongValued, int Before = 0, string Without = "", string[]? LongWithout = null, char? Needs = null, string? LongNeeds = null)
+    {
+        /// <summary>Where the command begins among <paramref name="words"/>, the runner's name first; null where it runs none of them.</summary>
+        public int? CommandAt(IReadOnlyList<string> words)
+        {
+            var at = 1;
+            var needed = Needs is null;
+
+            for (; at < words.Count; at++)
+            {
+                var word = words[at];
+
+                if (word == "--")
+                {
+                    at++;
+                    break;
+                }
+
+                if (word.Length < 2 || word[0] != '-')
+                {
+                    break;
+                }
+
+                if (RunsNone(word))
+                {
+                    return null;
+                }
+
+                if (word.StartsWith("--", StringComparison.Ordinal))
+                {
+                    var option = word.Split('=', 2)[0];
+
+                    needed |= option == LongNeeds;
+                    at += !word.Contains('=', StringComparison.Ordinal) && LongValued.Contains(option, StringComparer.Ordinal) ? 1 : 0;
+                    continue;
+                }
+
+                for (var letter = 1; letter < word.Length; letter++)
+                {
+                    needed |= word[letter] == Needs;
+
+                    if (Valued.Contains(word[letter], StringComparison.Ordinal))
+                    {
+                        at += letter + 1 < word.Length ? 0 : 1;
+                        break;
+                    }
+                }
+            }
+
+            at += Before;
+
+            // An option after the words it reads first may still take its command line (flock's lock, then -c).
+            return needed && at < words.Count && !RunsNone(words[at]) ? at : null;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="word"/> is an option with which the runner runs none of its words: a long one by its name,
+        /// a short one among its cluster's letters before one that takes a value.
+        /// </summary>
+        private bool RunsNone(string word)
+        {
+            if (word.StartsWith("--", StringComparison.Ordinal))
+            {
+                return LongWithout?.Contains(word.Split('=', 2)[0], StringComparer.Ordinal) == true;
+            }
+
+            for (var letter = 1; letter < word.Length && word[0] == '-'; letter++)
+            {
+                if (Without.Contains(word[letter], StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                if (Valued.Contains(word[letter], StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Where the command wsl runs begins among its words, past its own options and each value they take, and whether its
+    /// <c>-e</c> runs those words as they are rather than as its distribution's shell's command line; null where it runs no
+    /// command an agent may - the root user started, a distribution managed (<c>--list</c>, <c>--shutdown</c>). The one
+    /// reading of wsl's own options.
+    /// </summary>
+    private static (int At, bool Exec)? WslCommandAt(IReadOnlyList<string> words)
     {
         for (var at = 1; at < words.Count; at++)
         {
@@ -318,11 +455,15 @@ public static partial class CommandAnalysis
 
             // -e runs its words as they are; and a wsl that starts the root user runs nothing an agent may, refused as a
             // root action before what it runs is read.
-            if (word is "-e" or "--exec"
-                || (word is "-u" or "--user" && at + 1 < words.Count && words[at + 1].Equals("root", StringComparison.OrdinalIgnoreCase))
+            if (word is "-e" or "--exec")
+            {
+                return (at + 1, true);
+            }
+
+            if ((word is "-u" or "--user" && at + 1 < words.Count && words[at + 1].Equals("root", StringComparison.OrdinalIgnoreCase))
                 || word.Equals("--user=root", StringComparison.OrdinalIgnoreCase))
             {
-                return [];
+                return null;
             }
 
             if (word.StartsWith("--", StringComparison.Ordinal) && word.Contains('=', StringComparison.Ordinal))
@@ -332,7 +473,7 @@ public static partial class CommandAnalysis
 
             if (word == "--")
             {
-                return at + 1 < words.Count ? [string.Join(' ', words.Skip(at + 1))] : Input("wsl", redirects, program, inputGiven: inputGiven) ?? [];
+                return (at + 1, false);
             }
 
             if (word is "-d" or "--distribution" or "-u" or "--user" or "--cd" or "--shell-type" or "--distribution-id")
@@ -348,13 +489,13 @@ public static partial class CommandAnalysis
 
             if (word.StartsWith('-'))
             {
-                return [];
+                return null;
             }
 
-            return [string.Join(' ', words.Skip(at))];
+            return (at, false);
         }
 
-        return Input("wsl", redirects, program, inputGiven: inputGiven) ?? [];
+        return (words.Count, false);
     }
 
     /// <summary>

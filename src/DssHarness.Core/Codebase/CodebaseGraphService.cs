@@ -1363,9 +1363,37 @@ public sealed class CodebaseGraphService(
             }
 
             var (listed, _, _) = await ListAsync(asked, withHead: false).ConfigureAwait(false);
+
+            // A path that names a directory - one moved or deleted whole - names every file beneath it: each git lists there
+            // now, and each the tree's graph holds there, gone where git lists none. A file is never taken for one.
+            asked = Beneath(asked, listed, current.Entries);
+
             var changed = asked.Count(path => listed.TryGetValue(path, out var file) ? current.Entries.GetValueOrDefault(path)?.Blob != file.Blob : current.Entries.ContainsKey(path));
 
             return await ApplyAsync(current, asked.ToDictionary(path => path, path => listed.GetValueOrDefault(path), StringComparer.Ordinal), head, changed > 0, asked.Count).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// <paramref name="asked"/>, each path that names neither a file git lists nor one the tree keeps taken as every file
+        /// beneath it - those of <paramref name="listed"/> and those of <paramref name="kept"/> - in its place: a directory
+        /// moved or deleted whole, whose files are what the sync takes. One that names nothing beneath it either stays, as a
+        /// file gone.
+        /// </summary>
+        private static List<string> Beneath(List<string> asked, IReadOnlyDictionary<string, Listed> listed, IReadOnlyDictionary<string, CodeGraphFileEntry> kept)
+        {
+            var taken = new List<string>();
+            var given = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var path in asked)
+            {
+                List<string> under = listed.ContainsKey(path) || kept.ContainsKey(path)
+                    ? []
+                    : [.. listed.Keys.Concat(kept.Keys).Where(file => file.StartsWith(path + "/", StringComparison.Ordinal)).Order(StringComparer.Ordinal)];
+
+                taken.AddRange((under.Count > 0 ? under : [path]).Where(given.Add));
+            }
+
+            return taken;
         }
 
         /// <summary>
@@ -1622,8 +1650,9 @@ public sealed class CodebaseGraphService(
         }
 
         /// <summary>
-        /// What the sync starts from: the run's own manifest; where it has none, the newest earlier run's that reads, whose
-        /// extracts are copied as they are reused; and why the graph is built again whole, where it is.
+        /// What the sync starts from: the run's own manifest; where it has none, the newest manifest that reads of the
+        /// repository's other runs and side-tasks, whose extracts are copied as they are reused; and why the graph is
+        /// built again whole, where it is.
         /// </summary>
         private (CodeGraphManifest? Manifest, OrchestratorLayout? From, string? Rebuilt, string? SeededFrom) Previous()
         {
@@ -1644,7 +1673,11 @@ public sealed class CodebaseGraphService(
                 return (own, null, _request.Rebuild ? Rebuilding : null, null);
             }
 
+            // The newest graph of the repository's runs or side-tasks: whichever was synced last seeds the first sync,
+            // its extracts reused as they are reached. A side-task's graph is held in the one shape every graph's
+            // records take, so the same read answers for it.
             var seed = _service._store.Orchestrators(_request.Repository)
+                .Concat(SideTaskGraphs())
                 .Where(other => !string.Equals(other.Name, _run.Name, StringComparison.Ordinal))
                 .Select(other => (Run: other, Manifest: ReadOrNull(other)))
                 .Where(other => other.Manifest is not null)
@@ -1653,6 +1686,22 @@ public sealed class CodebaseGraphService(
                 .FirstOrDefault();
 
             return seed.Manifest is { } seeded ? (seeded, seed.Run, null, seed.Run.Name) : (null, null, null, null);
+        }
+
+        /// <summary>Every side-task of the repository that holds a graph, in the one layout shape the graph reads.</summary>
+        private IEnumerable<Orchestration.OrchestratorLayout> SideTaskGraphs()
+        {
+            var root = _request.Repository.SideTasksDirectory;
+
+            if (!_service._fileSystem.DirectoryExists(root))
+            {
+                return [];
+            }
+
+            return _service._fileSystem.EnumerateDirectories(root)
+                .Select(directory => new Orchestration.OrchestratorLayout(
+                    System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(directory)),
+                    directory));
         }
 
         /// <summary>Why a graph a step said to rebuild was built again whole.</summary>

@@ -16,7 +16,7 @@ namespace DssHarness.Core.SetUps;
 /// <c>down &lt;name&gt;</c>, which run it at the root of the tree they were given, and for a leg that sets up, which
 /// runs it in its own tree.
 /// </summary>
-public interface ISetUpService
+public interface ISetUpService : DssHarness.Core.Application.IUseCase
 {
     /// <summary>
     /// Runs the line <paramref name="direction"/> names for the set-up <paramref name="name"/> at the root of the tree

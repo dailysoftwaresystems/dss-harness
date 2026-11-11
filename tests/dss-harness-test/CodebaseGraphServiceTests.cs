@@ -244,6 +244,31 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
+    /// A side-task's first sync seeds from the newest graph of the repository's runs or side-tasks alike: a side-task's
+    /// graph is held under its records in the one shape every graph's records take, so the same seed answers for it.
+    /// </summary>
+    [Fact]
+    public async Task AFirstSync_OfASideTask_SeedsFromTheNewestGraph_RunsAndSideTasksAlike()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("src/a.toy", "class A\n");
+        await graph.CommitAsync();
+        await graph.ForRun("alpha").SyncAsync();
+        graph.Clock.Advance(TimeSpan.FromMinutes(1));
+
+        var side = new OrchestratorLayout("t1", Path.Combine(graph.Layout.SideTasksDirectory, "t1"));
+        var first = await graph.Service.SyncAsync(new CodebaseGraphSync(graph.Layout, side, CodebaseGraphShape.Default, graph.WorktreesRoot, Rebuild: false, "the side-task 't1' opened"), TestContext.Current.CancellationToken);
+
+        Assert.Equal("alpha", first.SeededFrom);
+
+        // The side-task's own graph seeds the next comer, run or side-task, once it is the newest.
+        graph.Clock.Advance(TimeSpan.FromMinutes(1));
+        var second = await graph.ForRun("bravo").SyncAsync();
+
+        Assert.Equal("t1", second.SeededFrom);
+    }
+
+    /// <summary>
     /// A run's first sync starts from the graph of the earlier run synced last - not the first or the last by name -
     /// copying the extracts it reuses, and reads only what changed since; nothing is counted removed from a graph it never
     /// had.
@@ -1040,6 +1065,27 @@ public sealed class CodebaseGraphServiceTests
         Assert.Equal(graph.Manifest().Digest, graph.View("w").Base);
         Assert.Equal(["a.toy", "c.toy"], graph.View("w").Files.Keys.Order(StringComparer.Ordinal));
         Assert.Equal(["e.toy"], graph.View("w").Deleted);
+    }
+
+    /// <summary>
+    /// A sync by paths given a directory moved or deleted whole takes every file beneath it: those the graph held there,
+    /// gone, and those git lists there now, read - and never a file whose name only begins as the directory's does.
+    /// </summary>
+    [Fact]
+    public async Task ASyncByPaths_OfADirectoryMovedWhole_TakesEveryFileBeneathItAtBothEnds()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("lib/a.toy", "class A\n");
+        graph.Write("lib/deep/b.toy", "class B\n");
+        graph.Write("libs.toy", "class L\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        Directory.Move(Path.Combine(graph.Tree, "lib"), Path.Combine(graph.Tree, "moved"));
+
+        var synced = (await graph.SyncPathsAsync("lib", "moved"))!;
+
+        Assert.Equal((2, 2), (synced.Extracted, synced.Removed));
+        Assert.Equal(["README.md", "libs.toy", "moved/a.toy", "moved/deep/b.toy"], graph.Manifest().Files.Keys.Order(StringComparer.Ordinal));
     }
 
     /// <summary>

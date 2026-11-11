@@ -1,5 +1,5 @@
 using System.CommandLine;
-using DssHarness.Core.Output;
+using DssHarness.Core.Application.Hosting;
 using DssHarness.Core.Results;
 using DssHarness.Core.Sync;
 
@@ -11,8 +11,8 @@ namespace DssHarness.Cli.Commands;
 /// </summary>
 /// <remarks>
 /// Hidden because nobody types it: it is the far side of a sync, and every operation it performs is
-/// one the machine asking already decided on. It serves them through the same
-/// <see cref="LocalSyncTransport"/> this machine uses for a copy of its own, so there is one
+/// one the machine asking already decided on. <see cref="SyncServeHandler"/> serves them, through the
+/// same <see cref="LocalSyncTransport"/> this machine uses for a copy of its own, so there is one
 /// implementation of what a sync does to a tree and no second one to drift from it.
 /// </remarks>
 internal static class SyncServeCommand
@@ -47,184 +47,16 @@ internal static class SyncServeCommand
         {
             var operation = context.ParseResult.GetRequiredValue(OperationArgument);
             var arguments = context.ParseResult.GetRequiredValue(ArgumentsArgument);
-            var transport = context.Get<ISyncTransport>();
-            var root = arguments[0];
 
-            switch (operation)
-            {
-                case SyncServe.Inspect:
-                    return Answer(await transport
-                        .InspectAsync(root, SyncServe.WantedIn(arguments, 1), cancellationToken)
-                        .ConfigureAwait(false));
+            var served = await context.Get<SyncServeHandler>()
+                .ServeAsync(operation, arguments, cancellationToken)
+                .ConfigureAwait(false);
 
-                case SyncServe.Create:
-                    await (SyncServe.ReadingIn(arguments) is { } reading
-                            ? transport.MarkFinishedAsync(root, reading, cancellationToken)
-                            : transport.CreateRootAsync(root, SyncServe.MarkIn(arguments), cancellationToken))
-                        .ConfigureAwait(false);
-
-                    return Done();
-
-                case SyncServe.InitRepository:
-                    await transport
-                        .InitialiseRepositoryAsync(root, SyncServe.ObjectFormatIn(arguments), cancellationToken)
-                        .ConfigureAwait(false);
-
-                    return Done();
-
-                case SyncServe.HistoryPiece:
-                    await transport
-                        .SendHistoryAsync(
-                            root,
-                            Required(arguments, 1, operation),
-                            SyncServe.OffsetIn(Required(arguments, 2, operation)),
-                            new SyncFileWrite(Required(arguments, 1, operation), Required(arguments, 3, operation)).Bytes(),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-
-                    return Done();
-
-                case SyncServe.TakeHistory:
-                    return Answer(await transport
-                        .TakeHistoryAsync(
-                            root,
-                            new DssHarness.Core.Git.GitHistoryTaken(
-                                SyncServe.WantedIn(arguments, 3)
-                                    ?? throw new HarnessException(
-                                        HarnessExit.UsageError,
-                                        $"sync operation '{operation}' was given no commit to take. The two ends are different builds."),
-                                SyncServe.Given(arguments, 1, operation),
-                                SyncServe.Given(arguments, 2, operation)),
-                            cancellationToken)
-                        .ConfigureAwait(false));
-
-                case SyncServe.Index:
-                    await transport
-                        .IndexAsync(root, SyncServe.CarriedPaths(arguments), cancellationToken)
-                        .ConfigureAwait(false);
-                    return Done();
-
-                case SyncServe.RemoveCopy:
-                    return Answer(new SyncRemoveAnswer(
-                        await transport.RemoveCopyAsync(root, cancellationToken).ConfigureAwait(false)));
-
-                case SyncServe.ListCopies:
-                    return Answer(new SyncCopiesAnswer(
-                        await transport.ListCopiesAsync(root, cancellationToken).ConfigureAwait(false)));
-
-                case SyncServe.RemoveWorkers:
-                    return Answer(new SyncWorkersAnswer(
-                        await transport.RemoveWorkersAsync(root, SyncServe.MeasuresOnly(operation, arguments), cancellationToken).ConfigureAwait(false)));
-
-                case SyncServe.RemoveFormerWorkers:
-                    return Answer(new SyncWorkersAnswer(
-                        await transport
-                            .RemoveFormerWorkersBesideCopiesAsync(root, SyncServe.MeasuresOnly(operation, arguments), cancellationToken)
-                            .ConfigureAwait(false)));
-
-                case SyncServe.Manifest:
-                    var manifest = await transport
-                        .ReadManifestAsync(root, SyncServe.Named(arguments), cancellationToken)
-                        .ConfigureAwait(false);
-
-                    return Answer(new SyncManifestAnswer([.. manifest.Paths.Select(path => manifest.Entries[path])])
-                    {
-                        Links = manifest.Links,
-                    });
-
-                case SyncServe.Write:
-                    var file = new SyncFileWrite(Required(arguments, 1, operation), Required(arguments, 2, operation));
-
-                    await transport
-                        .WriteFileAsync(root, file.Path, file.Bytes(), cancellationToken)
-                        .ConfigureAwait(false);
-
-                    return Done();
-
-                case SyncServe.WriteMany:
-                    await transport
-                        .WriteFilesAsync(
-                            root,
-                            [.. SyncServe.CarriedFiles(arguments).Select(carried => new SyncFileContent(carried.Path, carried.Bytes()))],
-                            cancellationToken)
-                        .ConfigureAwait(false);
-
-                    return Done();
-
-                case SyncServe.Delete:
-                    await transport
-                        .DeleteFileAsync(root, Required(arguments, 1, operation), cancellationToken)
-                        .ConfigureAwait(false);
-
-                    return Done();
-
-                case SyncServe.Prune:
-                    return Answer(new SyncPruneAnswer(
-                        await transport
-                            .RemoveEmptyDirectoriesAsync(root, SyncServe.Named(arguments), cancellationToken)
-                            .ConfigureAwait(false)));
-
-                case SyncServe.List:
-                    return Answer(await transport
-                        .ListFilesAsync(root, Required(arguments, 1, operation), HiddenHere(context, root), cancellationToken)
-                        .ConfigureAwait(false));
-
-                case SyncServe.Read:
-                case SyncServe.Pull:
-                    var contents = await (operation == SyncServe.Pull
-                            ? transport.PullFileAsync(root, Required(arguments, 1, operation), HiddenHere(context, root), cancellationToken)
-                            : transport.ReadFileAsync(root, Required(arguments, 1, operation), cancellationToken))
-                        .ConfigureAwait(false);
-
-                    // Refused here rather than where it is decoded, because this is the side
-                    // that knows the size and is about to spend the memory.
-                    SyncServe.RefuseAFileTooLargeToCarry(
-                        contents.LongLength,
-                        Required(arguments, 1, operation),
-                        "this host");
-
-                    // Hashed here, where the bytes were read. A hash the asking machine took of what
-                    // arrived would agree with those bytes whatever happened on the way.
-                    return Answer(
-                        new SyncFileAnswer(contents.LongLength, DssHarness.Core.FileSystem.FileContentHash.Of(contents)),
-                        SyncServe.ContentLines(contents));
-
-                default:
-                    // Named rather than passed over: an operation this build does not know means the
-                    // two ends are different builds, which the version check should already have
-                    // refused, so reporting it as "nothing happened" would hide a real defect.
-                    throw new HarnessException(
-                        HarnessExit.UsageError,
-                        $"'{operation}' is not a sync operation this build serves.");
-            }
+            return served.Line is { } line
+                ? CommandOutcome.Ok(string.Empty) with { Data = [line, .. served.Following], Quiet = true }
+                : CommandOutcome.Ok(string.Empty) with { Quiet = true };
         });
 
         return command;
     }
-
-    /// <summary>
-    /// An answer the machine syncing reads, written to standard output on its own line, and the lines that follow it - a
-    /// file's content, a piece to a line - where it has any.
-    /// </summary>
-    private static CommandOutcome Answer<T>(T answer, IEnumerable<string>? following = null)
-        => CommandOutcome.Ok(string.Empty) with { Data = [SyncServe.Answer(answer), .. following ?? []], Quiet = true };
-
-    /// <summary>An operation that answers nothing, which must still say nothing rather than a status line.</summary>
-    private static CommandOutcome Done() => CommandOutcome.Ok(string.Empty) with { Quiet = true };
-
-    /// <summary>
-    /// The places the isolation hides on this host, which no pull out of the copy at <paramref name="root"/> reaches: its
-    /// user's Claude Code directories and the file Claude Code keeps beside one, and any credential slot the copy holds
-    /// (<see cref="DssHarness.Core.Agents.Isolation.IAgentIsolation.Hidden"/>). No provider of the machine asking names a
-    /// directory here, so none is read from its configuration.
-    /// </summary>
-    private static IReadOnlyList<DssHarness.Core.Processes.IsolatedPath> HiddenHere(CommandContext context, string root)
-        => context.Get<DssHarness.Core.Agents.Isolation.IAgentIsolation>().Hidden(new DssHarness.Core.Configuration.HarnessConfig(), root);
-
-    private static string Required(string[] arguments, int index, string operation)
-        => index < arguments.Length
-            ? arguments[index]
-            : throw new HarnessException(
-                HarnessExit.UsageError,
-                $"sync operation '{operation}' needs {ReportText.Counted(index + 1, "argument")}; it was given {arguments.Length}.");
 }

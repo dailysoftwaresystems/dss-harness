@@ -92,7 +92,7 @@ public sealed class SetUpConfinement(IReadOnlyList<string> trees, string directo
         {
             for (var at = 0; at < command.Words.Count; at++)
             {
-                if ((Expanded(command.Words[at], command.QuotedWord(at)) ?? Named(command.Words[at], places, holds: true)) is { } why)
+                if ((Expanded(command.Words[at], command.QuotedWord(at)) ?? Named(command.Words[at], places, holds: true, quoted: command.QuotedWord(at))) is { } why)
                 {
                     return why;
                 }
@@ -126,15 +126,16 @@ public sealed class SetUpConfinement(IReadOnlyList<string> trees, string directo
     /// <summary>
     /// Why <paramref name="word"/> may not be read outside the isolation: a path it names, read against each of
     /// <paramref name="places"/>, lies in a tree or - where <paramref name="holds"/> and the word gives it whole - holds
-    /// one; or the links along it cannot be followed. Null where it names neither.
+    /// one; or the links along it cannot be followed. Null where it names neither. A tilde of a variable the shell does not
+    /// expand - a program reads it out of its word, or it is quoted (<paramref name="quoted"/>) - is the text it spells.
     /// </summary>
-    private string? Named(string word, IReadOnlyList<string> places, bool holds, bool braces = true)
+    private string? Named(string word, IReadOnlyList<string> places, bool holds, bool braces = true, string? quoted = null)
     {
         IReadOnlyList<NamedPath> paths;
 
         try
         {
-            paths = CommandAnalysis.PathsNamed(word, braces, lists: true);
+            paths = CommandAnalysis.PathsNamed(word, braces, lists: true, quoted);
         }
         catch (NotSupportedException ex)
         {
@@ -147,7 +148,7 @@ public sealed class SetUpConfinement(IReadOnlyList<string> trees, string directo
 
             try
             {
-                expanded = AgentPolicy.HomeExpanded(named.Path, platform.HomeDirectory);
+                expanded = AgentPolicy.HomeExpanded(named.Path, platform.HomeDirectory, named.TildeExpands);
             }
             catch (NotSupportedException ex)
             {
@@ -193,7 +194,7 @@ public sealed class SetUpConfinement(IReadOnlyList<string> trees, string directo
 
         try
         {
-            homeless = AgentPolicy.HomeExpanded(word, platform.HomeDirectory);
+            homeless = AgentPolicy.HomeExpanded(word, platform.HomeDirectory, CommandAnalysis.TildeExpands(word, quoted));
         }
         catch (NotSupportedException ex)
         {

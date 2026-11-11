@@ -229,6 +229,79 @@ public sealed class FlowReasonStepTests
     }
 
     /// <summary>
+    /// A placeholder that names a step that left no output is filled with the sentence saying so and why, naming the step
+    /// as the placeholder spells it - its members left out, and <c>previous.</c> before it where it reads the iteration
+    /// before: in a loop's first iteration a <c>previous</c> read says there is none before it, never reading the
+    /// iteration it is in, and in the next it says why the step left nothing in the iteration before.
+    /// </summary>
+    [Fact]
+    public async Task APlaceholderOfAStepThatLeftNoOutput_NamesTheStepAsItIsSpelled_AndPreviousReadsTheIterationBefore()
+    {
+        var rounds = 0;
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: loop
+                repeat:
+                  until: think.done
+                  maxIterations: 2
+                steps:
+                  - name: review
+                    type: orient
+                    when: 'false'
+                  - name: think
+                    type: reason
+                    prompt: prompts/plan.md
+                    resumePrompt: prompts/again.md
+                    outputs: schemas/plan.schema.json
+                    resume: think
+                    dependsOn: [review]
+            """);
+        var runner = new Runner().On("think", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["done"] = ++rounds == 2 }));
+        var end = await Coordinator(
+            definition,
+            runner,
+            workflowFile: named => named == "prompts/plan.md" ? "First."
+                : named == "prompts/again.md" ? "{previous.review} | {previous.review.findings} | {review.findings}"
+                : throw new ArgumentException(named)).RunAsync(Token);
+
+        const string Skipped = "skipped: its when read false";
+        const string NoneBefore = "there is no iteration before this one";
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            [
+                $"(step 'previous.review' left no output: {NoneBefore}) | (step 'previous.review' left no output: {NoneBefore}) | (step 'review' left no output: {Skipped})",
+                $"(step 'previous.review' left no output: {Skipped}) | (step 'previous.review' left no output: {Skipped}) | (step 'review' left no output: {Skipped})",
+            ],
+            runner.Runs.Where(asked => asked.Step.Name == "think").Select(asked => FlowTemplate.Joined(asked.Prompts!["resumePrompt"])));
+    }
+
+    /// <summary>
+    /// The reason a step left no output is said by the state its newest visit stands in, every state a step stands in
+    /// having its own - one owner, read off the engine's instance and off a step's record alike.
+    /// </summary>
+    [Fact]
+    public void WhyAStepLeftNoOutput_IsSaidForEveryStateAStepStandsIn()
+    {
+        Assert.Equal("it has not run", FlowNoOutput.Why(state: null, passedOver: false, null, null, null));
+        Assert.Equal(
+            [
+                "it has not ended",
+                "it has not ended",
+                "it ended done and wrote none",
+                "skipped: its when read false",
+                "it failed: a leg was red",
+                "it has not ended",
+                "it was stopped before it ended",
+                "the run never reached it: its dependency failed",
+            ],
+            Enum.GetValues<FlowInstanceState>().Select(state => FlowNoOutput.Why(state, passedOver: false, skippedBecause: null, error: "a leg was red", notRunBecause: "its dependency failed")));
+        Assert.Equal("it failed and was passed over: a leg was red", FlowNoOutput.Why(FlowInstanceState.Failed, passedOver: true, null, "a leg was red", null));
+        Assert.Equal("(step 'codebase' left no output: it has not run)", FlowNoOutput.Sentence("codebase", FlowNoOutput.Why(record: null)));
+    }
+
+    /// <summary>
     /// A read-only agent no step goes on with is deleted when its step ends done and the run goes on; one a later step
     /// goes on with is kept until that step has ended, and then deleted.
     /// </summary>

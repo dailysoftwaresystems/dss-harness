@@ -170,9 +170,10 @@ public sealed record AgentPlanned(
 /// <summary>
 /// What one answer of fold-agent, delete-agent, refresh-agent or rebase-agent knows beyond its lines: the document the
 /// verbs answer with under <c>--json</c> is this record serialised, member by member
-/// (<see cref="OrchestrationReports.Document(Results.CommandOutcome, AgentVerbFacts)"/>), and a step of an orchestrator
-/// run will read it typed - one thing, so the two cannot drift. An answer stopped before anything was weighed - its
-/// arguments a usage error, its agent not found - answers with the stopped form of the document
+/// (<see cref="OrchestrationReports.Document(Results.CommandOutcome, AgentVerbFacts)"/>), but for what only a step of an
+/// orchestrator run reads - <see cref="Waited"/> - and the step reads it typed: one thing, so the two cannot drift. An
+/// answer stopped before anything was weighed - its arguments a usage error, its agent not found - answers with the
+/// stopped form of the document
 /// (<see cref="OrchestrationReports.Stopped"/>), which says what its facts say: nothing applied, no standing, nobody
 /// asked, no lines, nothing needed and no reason typed.
 /// </summary>
@@ -204,6 +205,10 @@ public sealed record AgentPlanned(
 /// What the plan of the verb names, wherever it was measured, its dry run's and its <c>--apply</c>'s alike - of delete-agent,
 /// the fold it makes; null where no plan was measured, and for a deletion that folds nothing.
 /// </param>
+/// <param name="Waited">
+/// How long the apply waited for the main tree's lock before it wrote, held by a side-task's write or command; zero where
+/// it did not wait, and for every dry run, which writes nothing.
+/// </param>
 public sealed record AgentVerbFacts(
     int ExitCode,
     string Summary,
@@ -214,4 +219,5 @@ public sealed record AgentVerbFacts(
     IReadOnlyList<ConsentKind> Needs,
     IReadOnlyList<RefusalKind> Refusals,
     AgentFolded? Folded = null,
-    AgentPlanned? Planned = null);
+    AgentPlanned? Planned = null,
+    TimeSpan Waited = default);

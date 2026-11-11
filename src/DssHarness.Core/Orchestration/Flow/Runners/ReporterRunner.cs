@@ -114,13 +114,16 @@ public sealed class ReporterRunner(
         var order = _launch.Order(providers, resolution, context.Layout);
 
         // The reporter only reads, so a Claude Code its order starts is only found: one that is not there, or is too old,
-        // is why no model worded the facts, and installing or updating it is a run's step's or a side-task's to do.
+        // is why no model worded the facts where the entry that would serve first needs it - and only passed over where a
+        // later entry does - and installing or updating it is a run's step's or a side-task's to do.
         var program = await _launch.ProgramAsync(context.Layout, providers, order, ClaudeCodeAsker.Run(" (the run's reporter)"), change: false, cancellationToken).ConfigureAwait(false);
 
-        if (program is { Ready: false })
+        if (program.Refusal is { } notFound)
         {
-            return Wordless(program.Message, program.ExitCode);
+            return Wordless(notFound.Message, notFound.ExitCode);
         }
+
+        order = program.Order;
 
         // The reporter works over the run's records alone: its work directory, its records and the conversations a client
         // stores under the call's own asks/ directory, which is inside the run's and which the engine never reads - never
@@ -179,8 +182,8 @@ public sealed class ReporterRunner(
             BackoffSeconds = call.Reporter.BackoffSeconds,
             RecordDirectory = asks,
             SessionsDirectory = Path.Combine(asks, OrchestratorLayout.SessionsDirectoryName),
-            Program = program?.Program,
-            ProgramVersion = program?.Version,
+            Program = program.Program,
+            ProgramVersion = program.Version,
         };
 
         // What the reporter spends is counted as every agent run of the engine's is, from its turns as they come: every

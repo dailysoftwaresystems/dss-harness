@@ -69,7 +69,7 @@ public sealed record WorkingSetNode(
 
 /// <summary>
 /// What a step found and used (value 372): each node it edited, served, read and found, to be written by the engine when
-/// the step ends as <c>working-set.json</c> beside its output - never by the model; nothing writes it yet - and read as
+/// the step ends as <c>working-set.json</c> beside its output - never by the model - and read as
 /// seeds by the context packs of the steps after it (<see cref="ContextPackRequest.Worked"/>).
 /// </summary>
 /// <remarks>
@@ -140,6 +140,32 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
     }
 
     /// <summary>
+    /// The whole-file reads <paramref name="stream"/> holds, on every client's form of them as the working set reads its
+    /// calls - Claude Code's <c>Read</c> with neither an offset nor a limit, the runtime's <c>view_file</c> with neither a
+    /// start nor an end line - how many, and the estimated tokens of what they gave.
+    /// </summary>
+    /// <param name="stream">The step's stored stream, every attempt's.</param>
+    public static (int Count, int Tokens) WholeFileReads(IReadOnlyList<AgentEvent> stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        var count = 0;
+        var tokens = 0;
+
+        foreach (var (tool, input, result) in Making.Calls(stream))
+        {
+            if ((ClaudeCodeTools.ServedAs(tool) ?? tool) is ClaudeCodeTools.Read or AgentTools.ViewFile
+                && input["offset"] is null && input["limit"] is null && input["start_line"] is null && input["end_line"] is null)
+            {
+                count++;
+                tokens += EstimatedTokens.Of(result);
+            }
+        }
+
+        return (count, tokens);
+    }
+
+    /// <summary>
     /// The seeds <paramref name="sets"/> give a step's pack, in the order they are given: each node the view held once,
     /// edited where any set says so - a node gone is no seed.
     /// </summary>
@@ -189,29 +215,9 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
                 Touched(call.Asked, WorkingSetUses.Found);
             }
 
-            // A call is named by its start, or by the message of the model that made it.
-            var tools = new Dictionary<string, string>(StringComparer.Ordinal);
-
-            foreach (var @event in stream)
+            foreach (var (tool, input, result) in Calls(stream))
             {
-                switch (@event)
-                {
-                    case ToolCallStarted started:
-                        tools[started.Id] = started.Tool;
-                        break;
-
-                    case AssistantMessage message:
-                        foreach (var made in message.Calls)
-                        {
-                            tools[made.Id] = made.Name;
-                        }
-
-                        break;
-
-                    case ToolCallFinished { Ok: true } finished when tools.TryGetValue(finished.Id, out var tool) && Input(finished.Input) is { } input:
-                        Call(tool, input, finished.Result);
-                        break;
-                }
+                Call(tool, input, result);
             }
 
             List<WorkingSetNode> nodes = [.. _touched.Values
@@ -443,6 +449,38 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
             }
 
             return lines;
+        }
+
+        /// <summary>
+        /// Every call of the stream that went through, in order, by the tool its client named it - by its start, or by the
+        /// message of the model that made it - with its input and its answer: the one reading of a call's form, every
+        /// client's alike.
+        /// </summary>
+        public static IEnumerable<(string Tool, JsonObject Input, string Result)> Calls(IReadOnlyList<AgentEvent> stream)
+        {
+            var tools = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            foreach (var @event in stream)
+            {
+                switch (@event)
+                {
+                    case ToolCallStarted started:
+                        tools[started.Id] = started.Tool;
+                        break;
+
+                    case AssistantMessage message:
+                        foreach (var made in message.Calls)
+                        {
+                            tools[made.Id] = made.Name;
+                        }
+
+                        break;
+
+                    case ToolCallFinished { Ok: true } finished when tools.TryGetValue(finished.Id, out var tool) && Input(finished.Input) is { } input:
+                        yield return (tool, input, finished.Result);
+                        break;
+                }
+            }
         }
 
         private static JsonObject? Input(string input)

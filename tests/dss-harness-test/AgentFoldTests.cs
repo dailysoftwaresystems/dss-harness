@@ -2175,7 +2175,6 @@ public sealed class AgentFoldTests
         Assert.Equal("the main tree's\n", OrchestrationKit.Read(kit.Main, "a.txt/inner.txt"));
     }
 
-    /// <summary>The real file system, except that one file is written anew just before its second read, as by an agent still at work.</summary>
     /// <summary>
     /// Makes a repository of its own at <paramref name="nested"/>, holding lib.c where <paramref name="file"/> is given,
     /// and records it as a submodule of the main tree's: staged, and committed where <paramref name="committed"/>.

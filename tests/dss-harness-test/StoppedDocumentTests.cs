@@ -60,6 +60,7 @@ public sealed class StoppedDocumentTests
             "exitCode", "summary", "base", "baseCommit", "commit", "merging", "openAtBase", "openNow", "netNew", "passed", "closed", "lost",
             "opened", "missingAtBase", "malformedAtBase", "findings",
         ],
+        ["check-anchor-arms"] = ["exitCode", "summary", "armsRegistry", "mutationRecord", "legs", "rows", "doneRows", "namedArms", "judgedArms", "passed", "findings"],
         ["check-anchor-citations"] = ["exitCode", "summary", "subject", "roots", "filesScanned", "citationsFound", "registryRows", "passed", "unresolved"],
         ["fix-line-endings"] = ["exitCode", "summary", "scope", "check", "considered", "binary", "undeclared", "excluded", "changed"],
         ["check-ci-legs"] = ["exitCode", "summary", "branch", "runs"],
@@ -460,7 +461,7 @@ public sealed class StoppedDocumentTests
         Assert.Contains(
             "Every other command asked for `--json` that stops before it has anything of its own to say answers in its own document's "
                 + "shape, never the ledger's: the agent verbs with the agent document, empty; `list-orchestrator`, `list-worktree`, `legs`, "
-                + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, "
+                + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `check-anchor-arms`, `fix-line-endings`, `validate-workflow`, "
                 + "`export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs "
                 + "(`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`, "
                 + "`stop-orchestrator`) with the flow document - the session they would have run, empty "

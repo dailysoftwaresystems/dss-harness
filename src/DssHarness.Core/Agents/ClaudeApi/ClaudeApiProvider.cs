@@ -72,6 +72,31 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The run's repository map is its own block with the client's cache mark on it alone: tools, the system text and
+    /// the map are the same for every step of the run with the same agent, these tools and the same ground of reads, so
+    /// each after the first reads them from the cache, while the pack and the task after the block are each step's own.
+    /// </remarks>
+    public string UserMessage(string map, string rest)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(rest);
+
+        return new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = new JsonArray(
+                new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = map,
+                    ["cache_control"] = new JsonObject { ["type"] = "ephemeral", ["ttl"] = _settings.CacheTtl },
+                },
+                TextBlock(rest)),
+        }.ToJsonString(ApiBody.Json);
+    }
+
+    /// <inheritdoc/>
     public string EffortMessage(string effort)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(effort);

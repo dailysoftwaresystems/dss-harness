@@ -1,0 +1,10 @@
+[
+  {
+    "task": "Sum the areas of every shape in an order and report the largest of them",
+    "needs": ["Total", "Largest", "IShape.Area"]
+  },
+  {
+    "task": "Describe each shape for the report table",
+    "needs": ["Describe", "Table", "IShape.Name"]
+  }
+]

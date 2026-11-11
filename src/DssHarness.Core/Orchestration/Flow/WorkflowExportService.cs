@@ -38,7 +38,7 @@ public sealed record WorkflowExport(string Workflow, bool Shipped, string Destin
 /// never left behind. A declared workflow's files are copied byte for byte and each proved where it lands
 /// (<see cref="VerifiedFileCopy"/>); the shipped one's are written as <c>init</c> writes them.
 /// </remarks>
-public interface IWorkflowExportService : IUseCase
+public interface IWorkflowExportService : DssHarness.Core.Application.IUseCase
 {
     /// <summary>Exports the workflow <paramref name="request"/> names into a folder of its own under the folder it gives.</summary>
     /// <param name="startDirectory">A directory inside the repository, whose configuration declares the workflow; unread where it is the shipped one.</param>

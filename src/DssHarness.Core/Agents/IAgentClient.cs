@@ -70,10 +70,15 @@ public interface IAgentEventSink
 }
 
 /// <summary>
-/// What the engine, the command line and a graphical front end call to work an agent's step: one way in, events as
-/// they happen, and a result at the end.
+/// What the engine calls to work an agent's step - a reason step's, an advisor's, a reporter's, each turn of a
+/// side-task's: one way in, events as they happen, and a result at the end.
 /// </summary>
-public interface IAgentRunner : Application.IUseCase
+/// <remarks>
+/// The engine's own service, never a use case: its request carries what the engine built for the step out of the
+/// machine's seams - the codebase graph's tool, the step's ground - so a front end reaches an agent only through the use
+/// cases that drive one (an orchestrator's run, a side-task) and never builds a request itself.
+/// </remarks>
+public interface IAgentRunner
 {
     /// <summary>Works the step, from its request to its result, emitting what happens to <paramref name="events"/>.</summary>
     /// <param name="step">The step, as the engine resolved it.</param>
@@ -523,6 +528,47 @@ public sealed record AgentStepRequest(
     public Policy.AgentPolicyGround? Ground { get; init; }
 
     /// <summary>
+    /// The codebase graph the run is given - a side-task's, its own under its records, or a reason step's, the run's own
+    /// scoped to its view: the <c>graph</c> tool the runtime offers among the harness's own with the operations and the
+    /// narrowing of reads its step says, what records each of its calls and each escape of the narrowing, and what syncs
+    /// the graph after each of the run's writes. Null where none is given.
+    /// </summary>
+    public AgentGraphSupport? Graph { get; init; }
+
+    /// <summary>
+    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of the first user message of each launch that begins a
+    /// conversation of its own, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason
+    /// step's context pack, or the sentence for a graph the run never built; null where the run was given none.
+    /// </summary>
+    public string? Codebase { get; init; }
+
+    /// <summary>
+    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of the
+    /// first user message of each launch that begins a conversation of its own (<see cref="AgentPromptParts"/>): the run's
+    /// own, made once for each ground of reads its steps share, from the base as it stood when the first graphed reason
+    /// step of that ground was given its prompt - the same bytes for every step that reads alike, so a client that caches
+    /// a prefix reads it from the cache; null where the run was given none.
+    /// </summary>
+    public string? Map { get; init; }
+
+    /// <summary>
+    /// The changes of the codebase a stored conversation the run goes on with is told, the
+    /// <c>&lt;codebase-changes&gt;</c> part of its one new user message in the place of a map and a pack - the declarations
+    /// its view changed since what that conversation was told of them - its pack and every delta after it - and the nodes
+    /// of its own pack the conversation was not given; null where there are none to tell. A launch whose entry is handed no
+    /// conversation - another client's, another provider's - begins its own, and is given <see cref="Map"/> and
+    /// <see cref="Codebase"/> in their place: the one decision is <see cref="AgentPromptParts.CodebaseOf(AgentRun, bool)"/>'s.
+    /// </summary>
+    public string? CodebaseChanges { get; init; }
+
+    /// <summary>
+    /// Told, as each launch's first message is written and before its client is taken, what of the codebase graph that
+    /// message holds (<see cref="AgentPromptParts.CodebaseOf(AgentRun, bool)"/>), so what a launch was given is recorded
+    /// as it was given; null where nothing is told.
+    /// </summary>
+    public Action<AgentCodebaseGiven>? CodebaseGiven { get; init; }
+
+    /// <summary>
     /// The operating system's isolation the launch's agent runs under - the mechanism and what it denies each command, or
     /// why there is none - as the engine decided it from the ground; null where none was decided, and every command then
     /// runs on the words policy alone.
@@ -739,6 +785,36 @@ public sealed record AgentRun(
     /// <summary>The names a child the run starts never inherits: every name the configuration appoints a value of the slot for.</summary>
     public IReadOnlyList<string> Withheld { get; init; } = [];
 
+    /// <summary>
+    /// The codebase graph the run is given - a side-task's, its own under its records, or a reason step's, the run's own
+    /// scoped to its view: the <c>graph</c> tool the runtime offers among the harness's own with the operations and the
+    /// narrowing of reads its step says, what records each of its calls and each escape of the narrowing, and what syncs
+    /// the graph after each of the run's writes. Null where none is given.
+    /// </summary>
+    public AgentGraphSupport? Graph { get; init; }
+
+    /// <summary>
+    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of its first user message where the conversation is a
+    /// new one, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason step's context pack,
+    /// or the sentence for a graph the run never built; null where the run was given none.
+    /// </summary>
+    public string? Codebase { get; init; }
+
+    /// <summary>
+    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of its
+    /// first user message where the conversation is a new one (<see cref="AgentPromptParts"/>): the run's own, made once for
+    /// each ground of reads - the same bytes for every step that reads alike, so a client that caches a prefix reads it
+    /// from the cache; null where the run was given none.
+    /// </summary>
+    public string? Map { get; init; }
+
+    /// <summary>
+    /// The changes of the codebase a stored conversation the run goes on with is told, the
+    /// <c>&lt;codebase-changes&gt;</c> part of its one new user message in the place of a map and a pack, where the
+    /// conversation is handed; null where there are none to tell.
+    /// </summary>
+    public string? CodebaseChanges { get; init; }
+
     /// <summary>What the configuration says of the agent's commands: the names a child is given back, and their times.</summary>
     public AgentCommandSettings Commands { get; init; } = AgentCommandSettings.Default;
 
@@ -844,3 +920,36 @@ public delegate Task<Web.Search.WebSearchPart> AgentNativeAsk(string query, Canc
 /// <param name="Model">The model's entry, one of the provider's.</param>
 /// <param name="Client">The client's entry under <c>agentClients</c>; null where the configuration declares none, and every key is its default.</param>
 public sealed record AgentEntries(Configuration.AgentProviderConfig Provider, Configuration.AgentModelConfig Model, Configuration.AgentClientConfig? Client);
+
+/// <summary>
+/// The codebase graph a run is given with: its <see cref="Runtime.CodebaseGraphTool">graph tool</see>, offered by the
+/// tool runtime among the harness's own tools on every client, each of its calls recorded where the run's graph lines
+/// are kept, and its graph synced after each of the run's writes and commands, on every client
+/// (<see cref="Runtime.AfterWrites.FollowAsync"/>) - a side-task's own under its records, unlimited (every operation the
+/// client serves, no narrowing), a reason step's the run's own, scoped to its view, its operations and its narrowing of
+/// reads said by its step (<c>graph</c> and <c>graphReads</c>).
+/// </summary>
+/// <param name="Tool">
+/// The tool, answering from the run's own view of its graph; null where none was built, and every call of the tool then
+/// answers <see cref="Gone"/>.
+/// </param>
+/// <param name="Recorded">Told of each line the graph leaves - a call, an escape, a denied read - where the run keeps them; null where it keeps none.</param>
+/// <param name="AfterWriteAsync">
+/// Syncs the graph by what a write or a command of the run's wrote, and makes <paramref name="Tool"/> answer from the view
+/// it leaves (<see cref="Runtime.AfterWrites.SyncGraphAsync"/>); null where nothing syncs.
+/// </param>
+/// <param name="Operations">The operations the run's step is given; null where it is given every one (a side-task's).</param>
+/// <param name="Narrow">Whether the run's whole-file reads are narrowed to the graph (<c>graphReads: narrow</c>).</param>
+public sealed record AgentGraphSupport(
+    Runtime.CodebaseGraphTool? Tool,
+    Action<Runtime.GraphStepLine>? Recorded = null,
+    Func<Runtime.AgentGraphWrite, CancellationToken, Task>? AfterWriteAsync = null,
+    IReadOnlySet<Runtime.GraphOp>? Operations = null,
+    bool Narrow = false)
+{
+    /// <summary>The tool's name, as the runtime offers it and an agent calls it.</summary>
+    public const string ToolName = "graph";
+
+    /// <summary>Why no graph was built, where none was - every call of the tool answers it, and the run's codebase section says it; null where one was.</summary>
+    public string? Gone { get; init; }
+}

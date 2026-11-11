@@ -96,6 +96,19 @@ public sealed class CompositionRootTests
     }
 
     /// <summary>
+    /// The agent runner is the engine's own service, never a use case: its request carries what the engine built for a
+    /// step out of the machine's seams - the codebase graph's tool among it - which no front end builds, so a front end
+    /// reaches an agent only through the use cases that drive one, an orchestrator's run and a side-task.
+    /// </summary>
+    [Fact]
+    public void TheAgentRunner_IsTheEnginesOwnService_NeverAUseCase()
+    {
+        Assert.False(typeof(IUseCase).IsAssignableFrom(typeof(Core.Agents.IAgentRunner)));
+        Assert.True(typeof(IUseCase).IsAssignableFrom(typeof(IFlowService)));
+        Assert.True(typeof(IUseCase).IsAssignableFrom(typeof(Core.Agents.SideTasks.ISideTaskService)));
+    }
+
+    /// <summary>
     /// The front end's own output and prompt are what the operation runs with, in the place of the console's: a
     /// graphical front end begins the same operations without the command line's terminal.
     /// </summary>
