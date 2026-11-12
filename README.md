@@ -233,7 +233,7 @@ unreadable, left as links, naming nothing, or left uncopied by a stop, and direc
 could not be read.
 
 **Refuse early, with the arithmetic.** `create-worktree` will not create a worktree
-whose build paths cannot fit inside Windows' path limit, because that failure
+whose files or build paths cannot fit inside Windows' path limit, because that failure
 otherwise appears as compile errors in files the worktree never touched. It says how
 long a name would fit instead. The name limit and both sides of the budget are set
 in `config.json`.

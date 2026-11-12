@@ -261,13 +261,19 @@ public sealed class FlowService(
         // takes - the engine holds its run to the same - so nothing is written for a start that is refused. The checkout
         // the run starts from is read by the probe its orient step reads, and held to what a run starts from once the
         // run's name, which its pull request's base may read, is chosen.
+        // The files its worktrees will hold - the checkout's, where every worktree is made - are what the path budget
+        // counts below each as the worktree's own check does (WorktreeRoom) - listed only where a limit holds a path.
         IReadOnlyDictionary<string, string> resolved;
         FlowCheckout checkout;
+        int files;
 
         try
         {
             resolved = FlowInputs.Resolve(workflow, given);
             checkout = await FlowCheckout.ReadAsync(_gitClient, context.Layout.MainCheckoutRoot, workflow, cancellationToken).ConfigureAwait(false);
+            files = _pathBudget.Bounds(context.Config.Worktrees.PathLimit) && checkout.Head is { } head
+                ? await WorktreeRoom.ForFilesAsync(_gitClient, context.Layout.MainCheckoutRoot, head, cancellationToken).ConfigureAwait(false)
+                : 0;
         }
         catch (HarnessException ex)
         {
@@ -290,7 +296,7 @@ public sealed class FlowService(
                 checkout.Head,
                 checkout.Branch,
                 refusal: name => StartRefusal(checkout, workflow, resolved, name)
-                    ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey),
+                    ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey, files),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)

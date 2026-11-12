@@ -381,7 +381,8 @@ public sealed class FlowSessionsTests
     /// <summary>
     /// A run's start is held to the path budget of the legs this machine runs that its leg steps may name, under its
     /// deepest agent's worktree: refused by a sentence naming that worktree where it passes the limit. A leg that works
-    /// in its tree rather than a copy keeps no copy to count, and a file a work item writes is counted where it lies.
+    /// in its tree rather than a copy keeps no copy to count, and its build in the tree is counted as the worktree's own
+    /// check counts it; a file the tree holds is counted where it lies.
     /// </summary>
     [Fact]
     public void ARunsStartIsHeldToThePathBudgetOfItsLegSteps()
@@ -412,12 +413,22 @@ public sealed class FlowSessionsTests
         inTree.Legs["local"] = new LegConfig { Os = platform.PlatformKey, Processor = "x64", Toolchain = "gcc", Config = "Debug" };
         var (alone, _) = FlowRunPaths.AtStart(new PathBudget(platform), new HarnessContext(layout, inTree), "r1", definition, platform.PlatformKey);
 
+        // A leg working in its tree keeps no copy to count, and builds in the tree: one separator, build/<variant>/, and
+        // the reserve below that.
+        var variant = VariantKey.For(inTree, inTree.Legs["local"], platform.PlatformKey);
         Assert.True(alone.RequiredLength < inCopy.RequiredLength, "a leg working in its tree keeps no copy to count");
-        Assert.Equal(Path.TrimEndingDirectorySeparator(tree).Length + inTree.Worktrees.PathBudgetMargin, alone.RequiredLength);
+        Assert.Equal(
+            Path.TrimEndingDirectorySeparator(tree).Length + 1 + "build".Length + 1 + variant.DirectoryName.Length + 1 + inTree.Worktrees.PathBudgetReserve + inTree.Worktrees.PathBudgetMargin,
+            alone.RequiredLength);
 
-        // A file a work item writes is counted as it lies below the tree: its path after one separator.
-        var (written, _) = FlowRunPaths.AtStart(new PathBudget(platform), new HarnessContext(layout, inTree), "r1", definition, platform.PlatformKey, written: 10);
-        Assert.Equal(Path.TrimEndingDirectorySeparator(tree).Length + 1 + 10 + inTree.Worktrees.PathBudgetMargin, written.RequiredLength);
+        // A file the tree holds is counted as it lies below the tree: its path after one separator - alone where no leg
+        // builds on this machine, and where one does only as it is the deeper.
+        var bare = Limited(40);
+        bare.Legs.Clear();
+        var (written, _) = FlowRunPaths.AtStart(new PathBudget(platform), new HarnessContext(layout, bare), "r1", definition, platform.PlatformKey, written: 10);
+        var (deeper, _) = FlowRunPaths.AtStart(new PathBudget(platform), new HarnessContext(layout, inTree), "r1", definition, platform.PlatformKey, written: 1000);
+        Assert.Equal(Path.TrimEndingDirectorySeparator(tree).Length + 1 + 10 + bare.Worktrees.PathBudgetMargin, written.RequiredLength);
+        Assert.Equal(Path.TrimEndingDirectorySeparator(tree).Length + 1 + 1000 + inTree.Worktrees.PathBudgetMargin, deeper.RequiredLength);
     }
 
     /// <summary>A runner that answers every step as asked.</summary>

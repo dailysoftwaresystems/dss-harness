@@ -590,7 +590,12 @@ The root is configurable because it is spent before a worktree's own name. The d
 characters of the Windows path budget, and a repository whose build paths are long has no name left
 that fits; a shorter root such as `.worktrees` buys those characters back. The budget is still
 checked against the real path, so a shorter root never hides an overrun — it only makes one
-avoidable. Every build measures the deepest path it left below its build directory against the
+avoidable. What lies below a worktree is reckoned by one owner, `WorktreeRoom`, which a run's
+start asks too, so a run that passed its start never fails on a worktree it needs: the deeper of
+the longest file the repository tracks at the main checkout's HEAD, where every worktree is made,
+and - where a leg builds on this machine - `build/<variant>` for the longest variant with
+`worktrees.pathBudgetReserve` below it; where no leg builds here, the reserve guesses at nothing
+and is not counted. Every build measures the deepest path it left below its build directory against the
 reserve, and warns where it went deeper. A Ninja build leaves out of that the outputs ninja says no
 target of the current build produces any more - asked as a dry run of `ninja -t cleandead`, which
 names them and removes nothing - since a new worktree's build directory, starting from clean, never
@@ -3340,8 +3345,8 @@ to as well); then, inside the repository's one section (`FlowSessions.AcrossRuns
 unfinished run with work in the tree - a run whose agent's record cannot be read counts as one,
 said - chooses the name (`r<N>`, one more than the highest there; a name `--run` gives is held to
 `worktrees.maxNameLength` and refused where a record or anything else is there), holds the start
-to the path budget of its agents' worktrees with the copies and workers its leg steps keep inside
-them (`FlowRunPaths`), makes the run's record, its status and its owner
+to the path budget of its agents' worktrees - what each worktree's own check counts below it
+(`WorktreeRoom`), with the copies and workers its leg steps keep inside them (`FlowRunPaths`) - makes the run's record, its status and its owner
 (`.orchestrators/<run>.owner.json`), and leaves the section. A session of a run already made -
 `resume-orchestrator`, or `answer-orchestrator` where no engine runs the run - first sweeps what a
 killed engine's steps left running (`ChildSessions`), refuses a definition the repository's entry

@@ -2271,8 +2271,10 @@ public static class HelpTopics
         builder.AppendLine("assuming either.");
         builder.AppendLine("On Windows that path, plus build/<variant> for the longest variant this machine");
         builder.AppendLine("builds, plus the longest path the build system generates below that, must stay");
-        builder.AppendLine($"under {HostPlatform.WindowsMaxPath} characters. Exceeding it does not fail as a path error: it appears");
-        builder.AppendLine("as compile errors in files the worktree never touched.");
+        builder.AppendLine($"under {HostPlatform.WindowsMaxPath} characters - and so must that path plus the longest file the");
+        builder.AppendLine("repository tracks, which is all that counts where this machine builds no leg.");
+        builder.AppendLine("A build past the limit does not fail as a path error: it appears as compile");
+        builder.AppendLine("errors in files the worktree never touched.");
         builder.AppendLine();
         builder.AppendLine("create-worktree refuses up front when the budget cannot be met, and says how");
         builder.AppendLine("long a name would still fit. Both sides of the budget are in config.json:");

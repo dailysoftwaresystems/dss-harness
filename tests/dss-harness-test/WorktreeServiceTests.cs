@@ -194,9 +194,10 @@ public sealed class WorktreeServiceTests
 
     /// <summary>
     /// A machine that builds no leg grows no build directory, and neither the directory nor the
-    /// reserve that guesses at what builds below it is added: a run's start check counts the reserve
-    /// only for trees a build works in, and this check agrees. The worktree fits one character under
-    /// the limit, and not at it: the limit counts the NUL that ends a path.
+    /// reserve that guesses at what builds below it is added: what lies below the worktree is the
+    /// files the repository tracks, the test repository's README.md the longest of them. The
+    /// worktree fits one character under the limit, and not at it: the limit counts the NUL that
+    /// ends a path.
     /// </summary>
     [Theory]
     [InlineData(1, true)]
@@ -213,8 +214,9 @@ public sealed class WorktreeServiceTests
 
         await harness.InitializeHarnessAsync(temp.Path, TestContext.Current.CancellationToken, new HarnessConfig
         {
-            // The worktree and a margin of 2 - the reserve of 5 names what builds below, and nothing does.
-            Worktrees = new WorktreeSettings { PathBudgetReserve = 5, PathBudgetMargin = 2, PathLimit = path.Length + 2 + slack },
+            // The worktree, one separator, its longest tracked file and a margin of 2 - the reserve of 5 names what
+            // builds below, and nothing does.
+            Worktrees = new WorktreeSettings { PathBudgetReserve = 5, PathBudgetMargin = 2, PathLimit = path.Length + 1 + "README.md".Length + 2 + slack },
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
             Legs = { ["elsewhere"] = new LegConfig { Os = other, Processor = "x86_64", Config = "debug" } },
         });
@@ -223,6 +225,106 @@ public sealed class WorktreeServiceTests
             temp.Path, "wt", useRandomName: false, TestContext.Current.CancellationToken);
 
         Assert.Equal(fits, outcome.Succeeded);
+    }
+
+    /// <summary>
+    /// The files the repository tracks lie below a worktree from the moment it is made, and a tracked
+    /// path deeper than the build's room is what the worktree needs: git could not check it out past
+    /// the limit, and a worktree whose files do not fit is refused before git is asked.
+    /// </summary>
+    [Fact]
+    public async Task CreateAsync_CountsTheLongestTrackedFile_WhereItIsDeeperThanTheBuild()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var path = HarnessFactory.WorktreePath(temp.Path, "wt");
+        // Deeper than anything init writes, and than the build's room.
+        var tracked = "src/" + string.Join('/', Enumerable.Repeat("deeper", 20)) + "/file.txt";
+        const int Margin = 2;
+
+        await harness.InitializeHarnessAsync(temp.Path, TestContext.Current.CancellationToken, new HarnessConfig
+        {
+            Worktrees = new WorktreeSettings { PathBudgetReserve = 1, PathBudgetMargin = Margin, PathLimit = path.Length + 1 + tracked.Length + Margin },
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Legs = { ["here"] = new LegConfig { Os = platform.PlatformKey, Processor = "x86_64", Config = "debug" } },
+        });
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(temp.Path, tracked))!);
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, tracked), "deep", TestContext.Current.CancellationToken);
+        await harness.CommitAllAsync(temp.Path, "a deep file", TestContext.Current.CancellationToken);
+        var listed = await harness.RunGitAsync(temp.Path, ["ls-files"], TestContext.Current.CancellationToken);
+        Assert.Equal(tracked, listed.OutputLines.MaxBy(line => line.Length));
+
+        var outcome = await harness.WorktreeService.CreateAsync(
+            temp.Path, "wt", useRandomName: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, outcome.Outcome.ExitCode);
+        Assert.Contains($"needs {path.Length + 1 + tracked.Length + Margin} characters", outcome.Outcome.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(path));
+    }
+
+    /// <summary>
+    /// The worktree an agent of a run is made in fits wherever the run passed its start check, the
+    /// start counting below each worktree what the worktree's own check counts: with no leg, with a
+    /// leg of another operating system, with one this machine builds in its tree and with one it
+    /// builds in a copy alike. A start that counted less than the worktree's check passed, and the
+    /// run then failed on the worktree it needed.
+    /// </summary>
+    [Theory]
+    [InlineData("none")]
+    [InlineData("elsewhere")]
+    [InlineData("in-tree")]
+    [InlineData("in-copy")]
+    public async Task AnAgentsWorktree_FitsWhereverItsRunsStartCheckPassed(string placement)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var other = platform.PlatformKey == DssHarness.Core.Platform.PlatformNames.Linux
+            ? DssHarness.Core.Platform.PlatformNames.MacOs
+            : DssHarness.Core.Platform.PlatformNames.Linux;
+
+        HarnessConfig Configured(int? limit)
+        {
+            var config = new HarnessConfig
+            {
+                Worktrees = new WorktreeSettings { PathBudgetReserve = 40, PathBudgetMargin = 2, PathLimit = limit },
+                BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            };
+
+            if (placement != "none")
+            {
+                config.Legs["leg"] = new LegConfig
+                {
+                    Os = placement == "elsewhere" ? other : platform.PlatformKey,
+                    Processor = "x86_64",
+                    Config = "debug",
+                    LocalCopy = placement == "in-copy",
+                };
+            }
+
+            return config;
+        }
+
+        await harness.InitializeHarnessAsync(temp.Path, token, Configured(100_000));
+        var definition = DssHarness.Core.Orchestration.Flow.WorkflowFileParser.Parse("workflows/flow/flow.yml", """
+            name: flow
+            steps:
+              - name: build
+                type: build
+            """);
+        var context = await harness.ContextLoader.LoadAsync(temp.Path, token);
+        var head = await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", token);
+        var files = await WorktreeRoom.ForFilesAsync(harness.GitClient, temp.Path, head!, token);
+        var (start, tree) = DssHarness.Core.Orchestration.Flow.FlowRunPaths.AtStart(harness.PathBudget, context, "r1", definition, platform.PlatformKey, files);
+
+        // A limit one over what the start needs: the start passes, and the worktree it reckoned from must too.
+        harness.WriteConfig(temp.Path, Configured(start.RequiredLength + 1));
+        var made = await harness.WorktreeService.CreateAtAsync(temp.Path, WorktreeAddress.Nested("r1", Path.GetFileName(tree)), token);
+
+        Assert.True(made.Succeeded, made.Outcome.Message);
+        PathAssert.Same(tree, made.Path);
     }
 
     /// <summary>
