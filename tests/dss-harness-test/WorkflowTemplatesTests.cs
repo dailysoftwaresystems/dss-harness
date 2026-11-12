@@ -40,15 +40,17 @@ public sealed class WorkflowTemplatesTests
     /// beside the baseline's tests, passed over where it cannot be made; every later step has it upstream, through
     /// <c>intake</c>. Which type is served what the twenty-run measurement of 2026-11-11 set (README measurement 24),
     /// by the user's ruling: the graph stays where it costs equal or less, and where what it bought - correction
-    /// rounds avoided, each worth more than the step's own overhead - outweighs its cost. The steps that read and
-    /// write code keep the tool - the implementer and, through it, everything that resumes it, the six reviewers, the
-    /// self-audit, the diagnosis - and the pre-existing-issue triage keeps it too (it measured cheaper); the request
-    /// triage and the plan audit, whose work is text the map does not light, ask none (each measured costlier with no
-    /// quality gained); the prioritiser and a review's scope keep the map (the scope's whole overhead is a fifth of a
-    /// cent beside the review rounds it steers; the prioritiser is unmeasured, serving only a run with no request);
-    /// the scribes ask none as before. The planner's serving is structural - it goes on with its own work, and such a
-    /// step carries no graph key - and stays as it is. The round's mutation sweep drives only the arms with no
-    /// recorded pass that still holds (the user's <c>--pending</c>).
+    /// rounds avoided, each worth more than the step's own overhead - outweighs its cost. The steps that work on code
+    /// keep the tool - the implementer and everything that resumes it, the six reviewers, the self-audit, the
+    /// diagnosis, and the pre-existing-issue triage (it measured cheaper) - the reviewers, the self-audit, the
+    /// diagnosis and the steps that verify and fix starting their packs from their changes (<c>graphFrom: changes</c>);
+    /// the request triage and the plan audit, whose work is text the map does not light, ask none (each measured
+    /// costlier with no quality gained); the prioritiser and a review's scope keep the map (the scope's whole overhead
+    /// is a fifth of a cent beside the review rounds it steers; the prioritiser is unmeasured, serving only a run with
+    /// no request); the scribes ask none as before. The planner, which resumes itself and so may say a graph key of its
+    /// own, keeps its default, the tool, as it was: the measurement found it costlier with the graph and did not move
+    /// it. The round's mutation sweep drives only the arms with no recorded pass that still holds (the user's
+    /// <c>--pending</c>).
     /// </summary>
     [Fact]
     public void TheShippedFlow_MakesItsGraphAfterTheBaselineBuild_AndServesEachStepTypeAsTheTableGivesIt()

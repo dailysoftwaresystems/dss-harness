@@ -502,14 +502,16 @@ and is taken by the recovery and built again - and the `test` step it was, which
 makes its codebase graph after that build, beside the baseline's tests and the CI read, passed over where it cannot be
 made. Every reason step after it is served from the graph as the twenty-run measurement of 2026-11-11
 set each type's value (graph arm against `graph: off`, five requests on this repository and five on a
-small C repository, the same models and efforts): the steps that read and write code keep the tool -
-the implementer and everything that resumes it, the six reviewers, the self-audit, the diagnosis - and
-the pre-existing-issue triage with them, which measured cheaper; the request triage and the plan audit,
-whose work is text the map does not light, ask none, each having measured costlier with no quality
-gained; the prioritiser and a review's scope are given the map alone (the scope's whole overhead a
-fifth of a cent beside the review rounds it steers); and the scribe's steps, which write the run's
-records, ask none of it (`dssharness help codebase-graph`). The planner's serving is structural - it
-goes on with its own work, and such a step carries no graph key - and is not set by the measurement.
+small C repository, the same models and efforts): the steps that work on code keep the tool - the
+implementer and everything that resumes it, the six reviewers, the self-audit, the diagnosis, and the
+pre-existing-issue triage, which measured cheaper - the reviewers, the self-audit, the diagnosis and
+the steps that verify and fix starting their packs from their changes (`graphFrom: changes`); the
+request triage and the plan audit, whose work is text the map does not light, ask none, each having
+measured costlier with no quality gained; the prioritiser and a review's scope are given the map alone
+(the scope's whole overhead a fifth of a cent beside the review rounds it steers); and the scribe's
+steps, which write the run's records, ask none of it (`dssharness help codebase-graph`). The planner
+keeps the tool, its default, as it was: the measurement found it costlier with the graph and did not
+move it.
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That

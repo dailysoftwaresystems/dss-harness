@@ -5214,11 +5214,13 @@ public static class HelpTopics
         builder.AppendLine("step, which fails red and is taken by the recovery and built again - and the test step it was, which");
         builder.AppendLine("waits for the build - and the flow makes its codebase graph after that build, beside the baseline's");
         builder.AppendLine("tests and the CI read, passed over where it cannot be made; every reason step after it is served from");
-        builder.AppendLine("the graph as the twenty-run measurement of 2026-11-11 set each type's value: the steps that read and");
-        builder.AppendLine("write code - the implementer and everything that resumes it, the six reviewers, the self-audit, the");
-        builder.AppendLine("diagnosis, the pre-existing-issue triage - are given the tool, the request triage and the plan audit,");
-        builder.AppendLine("whose work is text the map does not light, ask none, the prioritiser and a review's scope are given");
-        builder.AppendLine("the map alone, and the scribe's steps, which write the run's records, ask none of it. Where");
+        builder.AppendLine("the graph as the twenty-run measurement of 2026-11-11 set each type's value: the steps that work on");
+        builder.AppendLine("code keep the tool - the implementer and the pre-existing-issue triage say nothing and are given it");
+        builder.AppendLine("and their task's seeds by default, as the planner is, which the measurement left as it was, and the");
+        builder.AppendLine("reviewers, the self-audit, the diagnosis and the steps that verify and fix say graphFrom: changes -");
+        builder.AppendLine("the request triage and the plan audit, whose work is text the map does not light, ask none, the");
+        builder.AppendLine("prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the");
+        builder.AppendLine("run's records, ask none of it. Where");
         builder.AppendLine($"config.json declares {WorkflowTemplates.ShippedWorkflowName},");
         builder.AppendLine("init writes each of its files that is missing - the whole set where the repository has no");
         builder.AppendLine("definition of it yet, and where it has one only the shipped files that definition names,");
