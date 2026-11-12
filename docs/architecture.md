@@ -1663,11 +1663,14 @@ folds and reviews its fix as a round's work items are. The flow builds first: it
 in two - a `build` step, which fails red and is taken by the recovery and built again - and the
 `test` step it was, which waits for the build - and it makes its codebase graph after that build,
 beside the baseline's tests and the CI read (`onFailure: continue`, for a run goes on without a map);
-every reason step after it is served from the graph as its type of work needs, its steps saying the
-graph keys only where a type is served otherwise than by default (`graphFrom: changes` on the
-reviewers, the self-audit, the diagnosis and the steps that verify and fix - a step that goes on with
-another's work starting its own pack where it says; `graph: map` on the prioritiser and a review's
-scope; `graph: off` on the scribe's).
+every reason step after it is served from the graph as the twenty-run measurement of 2026-11-11 set
+each type's value, its steps saying the graph keys only where a type is served otherwise than by
+default (`graph: off` on the request triage and the plan audit, whose work is text the map does not
+light, and on the scribe's; `graph: map` on the prioritiser and a review's scope; the steps that read
+and write code - the implementer and everything that resumes it, the six reviewers, the self-audit,
+the diagnosis, the pre-existing-issue triage - saying nothing, for the tool is their default; the
+planner carries no key at all, for it goes on with its own work and such a step asks the graph of the
+conversation it resumes).
 
 Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may
 say `timeoutMinutes` (`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole
