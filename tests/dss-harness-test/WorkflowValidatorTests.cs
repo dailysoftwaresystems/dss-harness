@@ -2007,9 +2007,9 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>The named files of a workflow's directory, reading each agent definition the steps name.</summary>
-    private static Func<string, string?>? AgentFiles(params (string Agent, string Text)[] agents)
-        => agents.Length == 0 ? null : named => named is { } file && file.StartsWith("agents/", StringComparison.Ordinal) && file.EndsWith(".md", StringComparison.Ordinal)
-            ? agents.FirstOrDefault(agent => agent.Agent == file["agents/".Length..^".md".Length]).Text
+    private static Func<string, string?, string?>? AgentFiles(params (string Agent, string Text)[] agents)
+        => agents.Length == 0 ? null : (named, owner) => owner is null && named.StartsWith("agents/", StringComparison.Ordinal) && named.EndsWith(".md", StringComparison.Ordinal)
+            ? agents.FirstOrDefault(agent => agent.Agent == named["agents/".Length..^".md".Length]).Text
             : "text";
 
     /// <summary>A test step's filterWhen is an expression as when is, with the same reads, and must yield a boolean.</summary>
@@ -2818,7 +2818,7 @@ public sealed class WorkflowValidatorTests
 
         // A step gives its failure to a recovery only where the workflow declares one.
         Assert.Equal(
-            ["step 'test' gives its failure to the recovery (onFailure: recover), and the workflow declares no recover; declare one, or say what the failure does"],
+            ["step 'test' gives its failure to the recovery (onFailure: recover), and neither the workflow nor any workflow it uses around it declares a recover; declare one, or say what the failure does"],
             Problems(
                 """
                 name: default
@@ -4420,7 +4420,7 @@ public sealed class WorkflowValidatorTests
     /// step's output typed by its schema, and each prompt read for what it reads.
     /// </summary>
     private static IReadOnlyList<string> Problems(string text, IReadOnlyDictionary<string, string> files)
-        => [.. WorkflowValidator.Validate(Parse(text), hasCommitTemplate: false, path => files.GetValueOrDefault(path))];
+        => [.. WorkflowValidator.Validate(Parse(text), hasCommitTemplate: false, (path, owner) => owner is null ? files.GetValueOrDefault(path) : null)];
 
     /// <summary>
     /// V41: a ci-wait's time limit is always more than its wait - the hour it waits where it says none among them - for one
@@ -5129,7 +5129,7 @@ public sealed class WorkflowValidatorTests
     [Fact]
     public void AReasonStepsGraphKeys_AreHeldToTheGraphTheRunMakes_AndToWhatEachKeyDoes()
     {
-        IReadOnlyList<string> Checked(string body, Func<string, string?>? files = null)
+        IReadOnlyList<string> Checked(string body, Func<string, string?, string?>? files = null)
             => WorkflowValidator.Validate(Parse($$"""
                 name: default
                 steps:
@@ -5237,7 +5237,7 @@ public sealed class WorkflowValidatorTests
                 - name: codebase
                   type: graphify-codebase
                 {{reason.Replace("prompt:", "graph: tools\n  dependsOn: [codebase]\n  prompt:")}}
-                """, files: path => path == "agents/thinker.md" ? "---\nname: thinker\ndescription: Writes.\ncapabilities: [write]\n---\nYou write." : null));
+                """, files: (path, owner) => owner is null && path == "agents/thinker.md" ? "---\nname: thinker\ndescription: Writes.\ncapabilities: [write]\n---\nYou write." : null));
     }
 
     /// <summary>

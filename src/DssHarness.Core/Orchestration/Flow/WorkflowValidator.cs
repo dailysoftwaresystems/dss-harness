@@ -136,10 +136,11 @@ public static class WorkflowValidator
     /// <param name="definition">A workflow's parsed definition.</param>
     /// <param name="hasCommitTemplate">Whether the configuration the definition is checked under declares a <c>commit.template</c>.</param>
     /// <param name="files">
-    /// The text of a file the definition names, by the path it names it with, relative to the workflow's directory; or
-    /// <see langword="null"/> where it cannot be given, which the caller that reads files says on its own. A schema that
-    /// is not one the subset reads types nothing. Where no files are given at all, a reason step's output may be
-    /// anything and no prompt is read.
+    /// The text of a file the definition names, by the path it names it with and the workflow whose directory it is
+    /// read in - the run's own where the second is <see langword="null"/>, the called workflow a step of a used one
+    /// names it in otherwise; or <see langword="null"/> for the whole delegate where files cannot be given, which the
+    /// caller that reads files says on its own. A schema that is not one the subset reads types nothing. Where no files
+    /// are given at all, a reason step's output may be anything and no prompt is read.
     /// </param>
     /// <param name="providers">
     /// The configuration's providers and tiers, resolved; or <see langword="null"/> where the configuration cannot be
@@ -163,7 +164,7 @@ public static class WorkflowValidator
     public static IReadOnlyList<string> Validate(
         WorkflowDefinition definition,
         bool hasCommitTemplate,
-        Func<string, string?>? files,
+        Func<string, string?, string?>? files,
         DssHarness.Core.Agents.AgentProviders? providers = null,
         IReadOnlyList<string>? languages = null,
         Web.Search.WebSearchSources? search = null,
@@ -188,7 +189,7 @@ public static class WorkflowValidator
         public static IReadOnlyList<string> ModelLevels(
             WorkflowDefinition definition,
             DssHarness.Core.Agents.AgentProviders providers,
-            Func<string, string?>? files = null)
+            Func<string, string?, string?>? files = null)
         {
             ArgumentNullException.ThrowIfNull(definition);
             ArgumentNullException.ThrowIfNull(providers);
@@ -208,7 +209,7 @@ public static class WorkflowValidator
         public static IReadOnlyList<(DssHarness.Core.Configuration.AgentProviderConfig Provider, DssHarness.Core.Configuration.AgentModelConfig Model)> ModelsRunOn(
             WorkflowDefinition definition,
             DssHarness.Core.Agents.AgentProviders providers,
-            Func<string, string?>? files = null)
+            Func<string, string?, string?>? files = null)
         {
             ArgumentNullException.ThrowIfNull(definition);
             ArgumentNullException.ThrowIfNull(providers);
@@ -228,7 +229,7 @@ public static class WorkflowValidator
         public static IReadOnlyDictionary<string, string> AgentModels(
             WorkflowDefinition definition,
             DssHarness.Core.Agents.AgentProviders providers,
-            Func<string, string?>? files = null)
+            Func<string, string?, string?>? files = null)
         {
             ArgumentNullException.ThrowIfNull(definition);
             ArgumentNullException.ThrowIfNull(providers);
@@ -289,6 +290,13 @@ public static class WorkflowValidator
         private Entry? _recover;
 
         /// <summary>
+        /// The places the recoveries of workflows used as steps hang from, each under the step that uses it, in the
+        /// order their uses are declared: their steps are checked as the flow's own recovery's are, and read by no name
+        /// a step outside their use could read.
+        /// </summary>
+        private readonly List<Entry> _useRecoveries = [];
+
+        /// <summary>
         /// The groups whose <c>forEach</c> was refused for itself - not written whole, reading a name nothing provides, or
         /// yielding what is no list - which no later rule reads again.
         /// </summary>
@@ -297,7 +305,7 @@ public static class WorkflowValidator
         internal Check(
             WorkflowDefinition definition,
             bool hasCommitTemplate,
-            Func<string, string?>? files,
+            Func<string, string?, string?>? files,
             DssHarness.Core.Agents.AgentProviders? providers = null,
             IReadOnlyList<string>? languages = null,
             Web.Search.WebSearchSources? search = null,
@@ -319,6 +327,7 @@ public static class WorkflowValidator
             Cycle();
             WorkflowAnswers();
             Steps();
+            Uses();
             AgentBodies();
             CodebaseGraph();
             Amend();
@@ -453,6 +462,13 @@ public static class WorkflowValidator
             {
                 var where = parentPath is null ? step.Name : $"{parentPath}.{step.Name}";
 
+                // V60, the resolution rule: a step that still names a use was never resolved, and no check after this
+                // one can know what it is - the workflow it names was never read.
+                if (step.UseSource is not null)
+                {
+                    _problems.Add($"step '{where}' uses '{step.UseSource}', and the definition was never resolved; a use is read before the definition is checked, so this is a defect of the tool that read it");
+                }
+
                 if (FlowScope.IsReserved(step.Name))
                 {
                     _problems.Add($"step '{where}' is named '{step.Name}', a word a definition reads for its own; a read could not tell the step from the word");
@@ -484,23 +500,41 @@ public static class WorkflowValidator
         /// </summary>
         private void IndexRecover()
         {
-            if (_definition.Recover is not { } recover)
+            if (_definition.Recover is { } recover)
             {
-                return;
+                if (!_entries.Any(entry => entry.Step.OnFailure == WorkflowStep.Recover || entry.Step.OnAddress == WorkflowStep.Recover))
+                {
+                    _problems.Add("the workflow declares recover, and no step gives it a failure or an issue to fix; a step says onFailure: recover, itself or through a group around it, for its failures to reach it, or onAddress: recover for the pre-existing issues it decides to fix");
+                }
+
+                // The recovery's own onFailure is what a failure of one of its steps does where the step says none, as a
+                // group's is for its members. Its place is the recovery's whatever a step of the flow is named, as
+                // FlowScope reads the path.
+                _recover = new Entry(recover.Declaration, FlowScope.Recovery, _entries.Count, null);
+                _entries.Add(_recover);
+                _byPath[FlowScope.Recovery] = _recover;
+                Index(recover.Steps, _recover);
             }
 
-            if (!_entries.Any(entry => entry.Step.OnFailure == WorkflowStep.Recover || entry.Step.OnAddress == WorkflowStep.Recover))
-            {
-                _problems.Add("the workflow declares recover, and no step gives it a failure or an issue to fix; a step says onFailure: recover, itself or through a group around it, for its failures to reach it, or onAddress: recover for the pre-existing issues it decides to fix");
-            }
+            IndexUseRecoveries();
+        }
 
-            // The recovery's own onFailure is what a failure of one of its steps does where the step says none, as a
-            // group's is for its members. Its place is the recovery's whatever a step of the flow is named, as
-            // FlowScope reads the path.
-            _recover = new Entry(recover.Declaration, FlowScope.Recovery, _entries.Count, null);
-            _entries.Add(_recover);
-            _byPath[FlowScope.Recovery] = _recover;
-            Index(recover.Steps, _recover);
+        /// <summary>
+        /// Places the recovery of each workflow a step uses, under the step that uses it: its steps are the called
+        /// workflow's own, read by no name outside its use, and reached by a failure inside it before the caller's
+        /// handling of the step.
+        /// </summary>
+        private void IndexUseRecoveries()
+        {
+            foreach (var used in _entries.Where(entry => entry.Step.Use is { Recover: not null }).ToList())
+            {
+                var called = used.Step.Use!.Recover!;
+                var place = new Entry(called.Declaration, $"{used.Path}.{FlowScope.Recovery}", _entries.Count, used);
+                _useRecoveries.Add(place);
+                _entries.Add(place);
+                _byPath.TryAdd(place.Path, place);
+                Index(called.Steps, place);
+            }
         }
 
         /// <summary>
@@ -534,7 +568,7 @@ public static class WorkflowValidator
         /// </summary>
         private void Size()
         {
-            var declared = _entries.Count(entry => !ReferenceEquals(entry, _recover));
+            var declared = _entries.Count(entry => !ReferenceEquals(entry, _recover) && !_useRecoveries.Any(place => ReferenceEquals(entry, place)));
 
             if (declared > MostSteps)
             {
@@ -556,9 +590,9 @@ public static class WorkflowValidator
         {
             foreach (var entry in _entries)
             {
-                if (ReferenceEquals(entry, _recover))
+                if (ReferenceEquals(entry, _recover) || _useRecoveries.Any(place => ReferenceEquals(entry, place)))
                 {
-                    // The recovery's own place takes no keys: its steps are checked as every step is.
+                    // A recovery's own place takes no keys: its steps are checked as every step is.
                     continue;
                 }
 
@@ -686,6 +720,140 @@ public static class WorkflowValidator
             }
         }
 
+        /// <summary>
+        /// V61, the one boundary of a used workflow: the step that uses it, nearest above <paramref name="entry"/> -
+        /// null at the flow's own levels. Every step under it reads the called workflow's inputs and params as
+        /// <c>input</c> and <c>param</c>, and no step of the workflow that called it.
+        /// </summary>
+        private Entry? UseOf(Entry entry)
+        {
+            for (var at = entry.Parent; at is not null; at = at.Parent)
+            {
+                if (at.Step.Use is not null)
+                {
+                    return at;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Checks every step that uses a workflow: the values it fills the workflow's inputs with, read as each input's kind declares.</summary>
+        private void Uses()
+        {
+            foreach (var entry in _entries)
+            {
+                if (entry.Step.Use is { } use)
+                {
+                    UseRules(entry, use);
+                }
+            }
+        }
+
+        /// <summary>The with values of one use, against the inputs of the workflow it uses.</summary>
+        private void UseRules(Entry entry, FlowUse use)
+        {
+            var where = $"step '{entry.Path}'";
+            var declared = use.Inputs.ToDictionary(input => input.Name, StringComparer.Ordinal);
+
+            foreach (var name in entry.Step.With.Keys.Where(name => !declared.ContainsKey(name)))
+            {
+                _problems.Add($"{where} fills '{name}' with, and the workflow '{use.Name}' it uses declares no input of that name");
+            }
+
+            foreach (var input in use.Inputs.Where(input => input.Required && input.Default is null && !entry.Step.With.ContainsKey(input.Name)))
+            {
+                _problems.Add($"{where} names no '{input.Name}' in with, and the workflow '{use.Name}' it uses requires the input");
+            }
+
+            foreach (var (name, value) in entry.Step.With)
+            {
+                if (!declared.TryGetValue(name, out var input))
+                {
+                    continue;
+                }
+
+                var what = $"{where}.with.{name}";
+
+                switch (input.Kind)
+                {
+                    case FlowInput.ValueKind:
+                        Expression(entry, value, $"with.{name}");
+                        break;
+
+                    case FlowInput.TextKind:
+                        foreach (var read in WorkflowExpressions.TemplateReads(value))
+                        {
+                            TemplateRead(entry, read, $"with.{name}");
+                        }
+
+                        break;
+
+                    case FlowInput.FileKind:
+                        if (value.Length == 0 || value.Contains('{') || value.Contains(':') || value.StartsWith('/') || value.StartsWith('\\') || value.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Any(part => part is "." or ".."))
+                        {
+                            _problems.Add($"{what} is '{value}', which is no path relative to the directory of the workflow '{use.Name}' it uses; a file input is such a path, read inside that directory");
+                        }
+
+                        break;
+
+                    case FlowInput.StepKind:
+                        StepInputRules(entry, use, name, value, what);
+                        break;
+
+                    default:
+                        Expression(entry, value, $"with.{name}");
+                        break;
+                }
+            }
+
+            if (use.Recover is { } called)
+            {
+                Within(called.MaxVisits, 1, FlowRecover.MostVisits, $"{where}: the recovery of '{use.Name}' maxVisits");
+
+                if (called.OnFailure == WorkflowStep.Recover)
+                {
+                    _problems.Add($"{where}: the recovery of the workflow '{use.Name}' it uses gives a failure of its own work to a recovery (onFailure: recover), and no recovery takes its own");
+                }
+            }
+
+            // Each declared output of the used workflow, checked as the workflow's own are, inside the use and after
+            // every step of it - which is what a later step of the caller reads as the use step's output.
+            foreach (var output in use.Outputs)
+            {
+                Expression(new Entry(entry.Step, entry.Path, AfterEveryStep, entry), output.From, $"outputs.{output.Name}.from");
+            }
+        }
+
+        /// <summary>
+        /// One <c>step</c>-kind with value: a single name, which where a step of the used workflow reads it into
+        /// <c>onFailure</c> is one of the failure policies, and where into <c>then</c> a step of the caller it sees - so
+        /// a policy names a recovery to reach, and a name a step beside the use.
+        /// </summary>
+        private void StepInputRules(Entry entry, FlowUse use, string name, string value, string what)
+        {
+            if (value.Length == 0 || value.Contains('{') || value.Contains('.') || value.Contains('/') || value.Contains('\\') || value.Contains(' '))
+            {
+                _problems.Add($"{what} is '{value}', which is no single name: a step input is one word, the policy a step's onFailure takes or the step a handler's then sends the run to");
+                return;
+            }
+
+            if (WorkflowStep.FailurePolicies.Contains(value, StringComparer.Ordinal))
+            {
+                if (value == WorkflowStep.Recover && use.Recover is null && _definition.Recover is null)
+                {
+                    _problems.Add($"{what} is 'recover', and neither the workflow '{use.Name}' it uses nor the calling workflow declares a recover; one of them must, for the failures it hands there");
+                }
+
+                return;
+            }
+
+            if (Scope(entry, value) is null)
+            {
+                _problems.Add($"{what} is '{value}', which is no step the use sees and no failure policy; a step input names a step beside the use, or one of {string.Join(", ", WorkflowStep.FailurePolicies.Select(known => $"'{known}'"))}");
+            }
+        }
+
         /// <summary>The keys every step takes, group or typed step alike.</summary>
         private void CommonStepRules(Entry entry)
         {
@@ -695,11 +863,44 @@ public static class WorkflowValidator
             Within(step.Retries, 1, 20, $"{where}: retries");
             HandlerRules(entry, where);
 
+            if (step.OnFailure is { } policy && policy.Contains('{'))
+            {
+                // V62, the one place a failure policy is read rather than written: a step of a workflow used as a step
+                // takes it from one of the used workflow's step-kind inputs, filled by the use - every other step says
+                // one of the policies itself.
+                if (UseOf(entry) is not { Step.Use: { } use } holder)
+                {
+                    _problems.Add($"{where} reads its onFailure from '{policy}', and only a step of a workflow used as a step does: a step of the workflow itself says one of {string.Join(", ", WorkflowStep.FailurePolicies.Select(known => $"'{known}'"))}");
+                }
+                else
+                {
+                    var reads = WorkflowExpressions.TemplateReads(policy);
+
+                    if (reads is not [{ Root: "input", Names: [_, { } named] }]
+                        || !step.OnFailure.Equals($"{{input.{named}}}", StringComparison.Ordinal)
+                        || use.Inputs.FirstOrDefault(input => string.Equals(input.Name, named, StringComparison.Ordinal)) is not { Kind: FlowInput.StepKind } filled)
+                    {
+                        _problems.Add($"{where} reads its onFailure from '{policy}', which is not one read of a step-kind input; it is {{input.<name>}} whole, the name of an input the workflow '{use.Name}' declares of the kind 'step'");
+                    }
+                    else if (holder.Step.With.GetValueOrDefault(named, filled.Default ?? string.Empty) is { } given && given.Length > 0 && !given.Contains('{'))
+                    {
+                        // The value the use fills it with is known where the file is read: it is one of the policies,
+                        // said here as a step's own is.
+                        if (!WorkflowStep.FailurePolicies.Contains(given, StringComparer.Ordinal))
+                        {
+                            _problems.Add($"{where} reads its onFailure from '{{input.{named}}}', which '{holder.Path}' fills with '{given}', and that is none of {string.Join(", ", WorkflowStep.FailurePolicies.Select(known => $"'{known}'"))}");
+                        }
+                    }
+                }
+            }
+
             if (step.OnFailure == WorkflowStep.Recover)
             {
-                if (_definition.Recover is null)
+                var reached = _definition.Recover is not null || UseOf(entry)?.Step.Use?.Recover is not null;
+
+                if (!reached)
                 {
-                    _problems.Add($"{where} gives its failure to the recovery (onFailure: recover), and the workflow declares no recover; declare one, or say what the failure does");
+                    _problems.Add($"{where} gives its failure to the recovery (onFailure: recover), and neither the workflow nor any workflow it uses around it declares a recover; declare one, or say what the failure does");
                 }
                 else if (InRecovery(entry))
                 {
@@ -824,9 +1025,30 @@ public static class WorkflowValidator
 
             Within(step.MaxVisits, 1, 20, $"{where}: maxVisits");
 
-            if (step.Then is not { } then)
+            if (step.Then is not { } written)
             {
                 return;
+            }
+
+            // A handler of a used workflow may take its target from a step-kind input of that workflow, filled by the
+            // use: where the value is known where the file is read, the target is checked as a written one is.
+            var then = written;
+
+            if (written.Contains('{'))
+            {
+                if (UseOf(entry) is not { Step.Use: { } use } holder
+                    || WorkflowExpressions.TemplateReads(written) is not [{ Root: "input", Names: [_, { } named] }]
+                    || !written.Equals($"{{input.{named}}}", StringComparison.Ordinal)
+                    || use.Inputs.FirstOrDefault(input => string.Equals(input.Name, named, StringComparison.Ordinal)) is not { Kind: FlowInput.StepKind } filled)
+                {
+                    _problems.Add($"{where} sends the run to '{written}', which is not one read of a step-kind input; a handler's then is a step's name, or {{input.<name>}} whole for one a used workflow's step input fills");
+                    return;
+                }
+
+                if (holder.Step.With.GetValueOrDefault(named, filled.Default ?? string.Empty) is { } given && given.Length > 0 && !given.Contains('{'))
+                {
+                    then = given;
+                }
             }
 
             if (AlwaysAround(entry) is { } always)
@@ -1802,6 +2024,18 @@ public static class WorkflowValidator
                         return;
                     }
 
+                    if (UseOf(entry) is { Step.Use: { } use })
+                    {
+                        // Inside a used workflow, an input is one the called workflow declares - what the use fills
+                        // with - never one of the calling run's.
+                        if (!use.Inputs.Any(input => string.Equals(input.Name, segments[1], StringComparison.Ordinal)))
+                        {
+                            _problems.Add($"'{what}' reads '{read.Whole}', and the workflow '{use.Name}' declares no input '{segments[1]}'");
+                        }
+
+                        return;
+                    }
+
                     if (!_definition.InputsByName.ContainsKey(segments[1]))
                     {
                         _problems.Add($"'{what}' reads '{read.Whole}', and the workflow declares no input '{segments[1]}'");
@@ -1813,6 +2047,16 @@ public static class WorkflowValidator
                     if (segments.Count < 2)
                     {
                         _problems.Add($"'{what}' reads '{read.Whole}', which names no param; read 'param.<name>'");
+                        return;
+                    }
+
+                    if (UseOf(entry) is { Step.Use: { } used })
+                    {
+                        if (!used.Params.Any(parameter => string.Equals(parameter.Name, segments[1], StringComparison.Ordinal)))
+                        {
+                            _problems.Add($"'{what}' reads '{read.Whole}', and the workflow '{used.Name}' declares no param '{segments[1]}'");
+                        }
+
                         return;
                     }
 
@@ -1952,6 +2196,15 @@ public static class WorkflowValidator
                         return;
                     }
 
+                    // The boundary of a used workflow, before any order is weighed: a step inside it reads the steps of
+                    // the workflow that called it never, whatever order they run in - its world is the called one's own.
+                    if (UseOf(entry) is { } boundary && !(located is { Step: var inside } && boundary.Owns(inside)))
+                    {
+                        var whose = located is { } found ? $"'{found.Step.Path}' is" : "it is";
+                        _problems.Add($"'{what}' reads '{read.Whole}', and a workflow used as a step reads only its own steps and its own names: {whose} of the workflow that called it. Give the fact to the called workflow as one of its inputs");
+                        return;
+                    }
+
                     // Where a name is, FlowScope says; whether the step it finds is there to be read, this check: one
                     // declared before the reader, or one of a group's own members where the key is its loop's own
                     // (within), read once an iteration has ended. Every other key of a group - its when, its forEach - is
@@ -2030,8 +2283,9 @@ public static class WorkflowValidator
             return null;
         }
 
-        /// <summary>Whether <paramref name="entry"/> is one of the recovery's steps, or inside one.</summary>
-        private bool InRecovery(Entry entry) => _recover is not null && _recover.Owns(entry);
+        /// <summary>Whether <paramref name="entry"/> is one of the recovery's steps, or inside one - the flow's own, or a used workflow's.</summary>
+        private bool InRecovery(Entry entry)
+            => (_recover is not null && _recover.Owns(entry)) || _useRecoveries.Any(place => place.Owns(entry));
 
         /// <summary>
         /// The group holding <paramref name="entry"/> - or <paramref name="entry"/> itself - that is declared beside
@@ -2565,25 +2819,28 @@ public static class WorkflowValidator
         }
 
         /// <summary>
-        /// The agent definition <paramref name="agent"/> names, as its <c>agents/&lt;name&gt;.md</c> file reads it: read
-        /// once wherever it is named, its file's problems said once. Null where no files are given, the file is not there
-        /// or does not read - the service that reads files says a missing one, the parser's problems are said here.
+        /// The agent definition <paramref name="agent"/> names, as its <c>agents/&lt;name&gt;.md</c> file reads it in the
+        /// workflow <paramref name="workflow"/> names - the run's own, or the called workflow a step of which names it:
+        /// read once wherever it is named, its file's problems said once. Null where no files are given, the file is not
+        /// there or does not read - the service that reads files says a missing one, the parser's problems are said here.
         /// </summary>
-        private AgentDefinition? DefinitionOf(string? agent)
+        private AgentDefinition? DefinitionOf(string? agent, string? workflow = null)
         {
             if (agent is null || _files is null)
             {
                 return null;
             }
 
-            if (_agents.TryGetValue(agent, out var read))
+            var key = (workflow ?? string.Empty, agent);
+
+            if (_agents.TryGetValue(key, out var read))
             {
                 return read;
             }
 
-            if (_files($"agents/{agent}.md") is not { } text)
+            if (_files($"agents/{agent}.md", workflow) is not { } text)
             {
-                return _agents[agent] = null;
+                return _agents[key] = null;
             }
 
             var (definition, problems) = AgentDefinitionParser.Parse(text, agent);
@@ -2608,7 +2865,7 @@ public static class WorkflowValidator
                 }
             }
 
-            return _agents[agent] = definition;
+            return _agents[key] = definition;
         }
 
         /// <summary>The model each create-agent step makes its agent for, and each reason step that names no agent its own read-only one, by its path, where one resolves (<see cref="WorkflowValidator.AgentModels"/>).</summary>
@@ -2664,7 +2921,7 @@ public static class WorkflowValidator
         {
             var root = ResumeChain.Root(_definition, reason.Path, reason.Step);
 
-            return (root, DefinitionOf(root.Agent));
+            return (root, DefinitionOf(root.Agent, root.WorkflowOf));
         }
 
         /// <summary>
@@ -3273,7 +3530,7 @@ public static class WorkflowValidator
         private static string KindOf(WorkflowStep step) => step.IsGroup ? "a group" : $"a {step.Type} step";
 
         /// <summary>The text of a file the definition names, by the path it names it with; <see langword="null"/> where no files are given.</summary>
-        private readonly Func<string, string?>? _files;
+        private readonly Func<string, string?, string?>? _files;
 
         /// <summary>The configuration's providers and tiers, where the caller gave them: V38's config half is checked only under a configuration the caller chose.</summary>
         private readonly DssHarness.Core.Agents.AgentProviders? _providers;
@@ -3291,13 +3548,13 @@ public static class WorkflowValidator
         private readonly AgentSkills? _skills;
 
         /// <summary>Each reason step's schema as a reading, by the path its <c>outputs</c> names; <see langword="null"/> where it types nothing.</summary>
-        private readonly Dictionary<string, JsonSchemaSubset.Reading?> _schemas = new(StringComparer.Ordinal);
+        private readonly Dictionary<(string Workflow, string Named), JsonSchemaSubset.Reading?> _schemas = new();
 
         /// <summary>
         /// Each agent definition the definition's steps, its advisor and its reporter name, as its file read it - or
         /// null where the file does not read or no files are given, its problems said once by the first that names it.
         /// </summary>
-        private readonly Dictionary<string, AgentDefinition?> _agents = new(StringComparer.Ordinal);
+        private readonly Dictionary<(string Workflow, string Agent), AgentDefinition?> _agents = new();
 
         /// <summary>The expressions being typed, by the step and the key: one whose reading needs its own is read as anything.</summary>
         private readonly HashSet<(Entry Entry, string Key)> _yielding = [];
@@ -3430,6 +3687,25 @@ public static class WorkflowValidator
             => Reading(entry, read.Root, [.. read.Names.Skip(1).Select(name => new FlowExpression.Segment(name, null))], read.Whole, what, within, template, report);
 
         /// <summary>
+        /// What a <c>value</c>-kind input of a used workflow yields, from the with value that fills it: the expression
+        /// read in the caller, where the use sits - a literal, and an expression nothing types, anything.
+        /// </summary>
+        private JsonSchemaSubset.Reading WithValueReading(Entry use, string value, string what)
+        {
+            try
+            {
+                var reads = WorkflowExpressions.ReadsOf(value);
+
+                return reads is [var read, ..] ? Typed(use, read, what, within: false, template: false, report: null) : JsonSchemaSubset.Reading.Anything;
+            }
+            catch (ArgumentException)
+            {
+                // The expression's own grammar is checked where the with value is read.
+                return JsonSchemaSubset.Reading.Anything;
+            }
+        }
+
+        /// <summary>
         /// What a path from <paramref name="root"/> through <paramref name="steps"/> yields, read from where
         /// <paramref name="entry"/> sits, its name already found by <see cref="CheckRead"/>: a step's output by its
         /// schema, the engine's facts of a step, an input or a param as a text, the work item of the nearest
@@ -3453,6 +3729,24 @@ public static class WorkflowValidator
             switch (root)
             {
                 case "input" or "param":
+                    if (root == "input"
+                        && UseOf(entry) is { Step.Use: { } use } boundary
+                        && steps is [{ Key: { } input }, ..]
+                        && use.Inputs.FirstOrDefault(declared => string.Equals(declared.Name, input, StringComparison.Ordinal)) is { } filled)
+                    {
+                        // An input of a used workflow yields what its with value yields, read in the caller - or a
+                        // string, the kinds that are templates, paths and names.
+                        var value = boundary.Step.With.GetValueOrDefault(input, filled.Default ?? string.Empty);
+
+                        return said.Walked(
+                            filled.Kind is FlowInput.TextKind or FlowInput.FileKind or FlowInput.StepKind
+                                ? JsonSchemaSubset.Reading.Of("string")
+                                : WithValueReading(boundary, value, $"{boundary.Path}.with.{input}"),
+                            $"input.{input}",
+                            steps.Skip(1),
+                            $"the input '{input}' of the workflow '{use.Name}'");
+                    }
+
                     return steps is [{ Key: { } declared }, ..]
                         ? said.Walked(JsonSchemaSubset.Reading.Of("string"), $"{root}.{declared}", steps.Skip(1), $"{root} '{declared}'")
                         : JsonSchemaSubset.Reading.Anything;
@@ -3676,6 +3970,26 @@ public static class WorkflowValidator
 
             if (step.Step.IsGroup)
             {
+                // The declared outputs of a workflow used as a step are the step's own, once it ends: each typed by
+                // what its from-expression yields inside the used workflow, after every step of it.
+                if (step.Step.Use is { } use)
+                {
+                    if (rest is [])
+                    {
+                        return JsonSchemaSubset.Reading.Of("object");
+                    }
+
+                    if (rest[0].Key is { } named && use.Outputs.FirstOrDefault(held => string.Equals(held.Name, named, StringComparison.Ordinal)) is { } declared)
+                    {
+                        var inside = new Entry(step.Step, step.Path, AfterEveryStep, step);
+                        var read = WorkflowExpressions.ReadsOf(declared.From) is [var from, ..]
+                            ? Typed(inside, from, $"{path}.{named}", within: false, template: false, report: null)
+                            : JsonSchemaSubset.Reading.Anything;
+
+                        return said.Walked(read, $"{start}.{named}", rest.Skip(1), $"the output '{named}' the workflow '{use.Name}' declares");
+                    }
+                }
+
                 if (step.Step.Gather.Count == 0)
                 {
                     said.Refused(rest is [{ Key: { } named }, ..]
@@ -3707,7 +4021,7 @@ public static class WorkflowValidator
 
             if (type.Type == "reason")
             {
-                return step.Step.Outputs is { } outputs && SchemaOf(outputs) is { } schema
+                return step.Step.Outputs is { } outputs && SchemaOf(outputs, step.Step.WorkflowOf) is { } schema
                     ? said.Walked(schema, start, rest, $"the schema '{outputs}' of step '{path}'")
                     : JsonSchemaSubset.Reading.Anything;
             }
@@ -3760,18 +4074,18 @@ public static class WorkflowValidator
         /// The schema the reason step's <paramref name="outputs"/> names, as a reading; <see langword="null"/> where no
         /// files are given, the file is not there, or it is no schema the subset reads - each said by whoever reads files.
         /// </summary>
-        private JsonSchemaSubset.Reading? SchemaOf(string outputs)
+        private JsonSchemaSubset.Reading? SchemaOf(string outputs, string? workflow = null)
         {
             if (_files is null)
             {
                 return null;
             }
 
-            if (!_schemas.TryGetValue(outputs, out var reading))
+            if (!_schemas.TryGetValue((workflow ?? string.Empty, outputs), out var reading))
             {
                 try
                 {
-                    reading = _files(outputs) is { } text
+                    reading = _files(outputs, workflow) is { } text
                         && JsonNode.Parse(text) is JsonObject schema
                         && JsonSchemaSubset.SubsetProblems(schema).Count == 0
                             ? JsonSchemaSubset.Read(schema)
@@ -3782,7 +4096,7 @@ public static class WorkflowValidator
                     reading = null;
                 }
 
-                _schemas[outputs] = reading;
+                _schemas[(workflow ?? string.Empty, outputs)] = reading;
             }
 
             return reading;
@@ -3901,7 +4215,7 @@ public static class WorkflowValidator
 
             foreach (var (key, named) in new[] { ("prompt", step.Prompt), ("resumePrompt", step.ResumePrompt) })
             {
-                if (named is null || _files?.Invoke(named) is not { } text)
+                if (named is null || _files?.Invoke(named, null) is not { } text)
                 {
                     continue;
                 }
@@ -3970,7 +4284,7 @@ public static class WorkflowValidator
         {
             foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
             {
-                _ = DefinitionOf(entry.Step.Agent);
+                _ = DefinitionOf(entry.Step.Agent, entry.Step.WorkflowOf);
             }
 
             if (_definition.Advisor is { } advisor)
@@ -4035,7 +4349,7 @@ public static class WorkflowValidator
         /// </summary>
         private void Placeholders(string where, string file, string what, Action<WorkflowExpressions.Read, string> check)
         {
-            if (_files?.Invoke(file) is not { } text)
+            if (_files?.Invoke(file, null) is not { } text)
             {
                 return;
             }

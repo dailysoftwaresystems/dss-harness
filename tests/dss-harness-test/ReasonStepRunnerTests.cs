@@ -1329,7 +1329,7 @@ public sealed class ReasonStepRunnerTests
             runName: "o1",
             place: new FlowRunPlace(kit.Main, "o1", StartCommit: null, definition),
             agentModels: new Dictionary<string, string>(StringComparer.Ordinal) { ["think"] = "claude-opus-5-5" },
-            workflowFile: named => File.ReadAllText(Path.Combine(kit.Main, ".harness-config", "workflows", "flow", named)));
+            workflowFile: (owner, named) => File.ReadAllText(Path.Combine(kit.Main, ".harness-config", "workflows", "flow", named)));
 
         var session = coordinator.RunAsync(Token);
         await agents.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);

@@ -5265,6 +5265,23 @@ public static class HelpTopics
         builder.AppendLine("more, one more recovery; direct, with the fix in words, for the next one; skip, where the");
         builder.AppendLine("step is skippable; or abort.");
         builder.AppendLine();
+        builder.AppendLine("A step may be a whole workflow of its own: it says use - a path to the workflow's yml,");
+        builder.AppendLine("relative to the calling workflow's directory and resolving inside the workflows folder -");
+        builder.AppendLine("and the workflow it names is read as a definition of its own and runs inside the run, its");
+        builder.AppendLine("steps the step's own, its files read in its own directory and its declared outputs the");
+        builder.AppendLine("step's once it ends. Its with fills the workflow's inputs, each value read as the input");
+        builder.AppendLine("it fills declares: an expression for a value, a template for a text, a path of the used");
+        builder.AppendLine("workflow's directory for a file, and a name for a step - what a step of the used workflow");
+        builder.AppendLine("reads as {input.<name>} in its onFailure or then, filled where it runs. The steps of a used");
+        builder.AppendLine("workflow read only its inputs, its params and its own steps, never the calling run's -");
+        builder.AppendLine("every fact of the caller they need comes through an input - and a failure inside it goes");
+        builder.AppendLine("to the workflow's own recovery first, then to the caller's handling of the step. Its");
+        builder.AppendLine("budget, limits, advisor, amend and answers are never applied - the calling run's own hold -");
+        builder.AppendLine("and validate-workflow says so beside the fingerprint of the file it read. A workflow that");
+        builder.AppendLine($"uses itself, directly or through others, is refused with the chain, and uses nest at most {WorkflowFileParser.MaxDepth} deep");
+        builder.AppendLine("in all; a run records each use's resolution, and a resume is refused where the called");
+        builder.AppendLine("workflow's file changed since the run began, as its own definition's would.");
+        builder.AppendLine();
         AppendWrapped(
             builder,
             $"A step that runs may bound each of its attempts with timeoutMinutes, from 1 to {WorkflowStep.MostTimeoutMinutes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}: the engine counts "

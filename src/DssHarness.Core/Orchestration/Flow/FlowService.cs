@@ -1354,9 +1354,9 @@ public sealed class FlowService(
                     ? WorkflowValidator.AgentModels(
                         definition,
                         providers,
-                        named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "an agent definition"))
+                        (named, owner) => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, owner ?? definition.Name, named, "an agent definition"))
                     : null,
-                named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "a workflow file"),
+                (owner, named) => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, owner ?? definition.Name, named, "a workflow file"),
                 async (run, agent, token) =>
                 {
                     // The engine's own deleting of a read-only agent whose work is over: applied, with nothing to fold

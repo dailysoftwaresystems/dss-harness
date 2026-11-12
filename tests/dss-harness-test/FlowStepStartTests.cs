@@ -106,7 +106,7 @@ public sealed class FlowStepStartTests
         }
     }
 
-    private static FlowCoordinator Coordinator(WorkflowDefinition definition, Runner runner, IFlowRecords? records = null, IReadOnlyDictionary<string, string>? models = null, IReadOnlyDictionary<string, string>? inputs = null, FlowRunPlace? place = null, HarnessConfig? config = null, Func<string, string>? workflowFile = null)
+    private static FlowCoordinator Coordinator(WorkflowDefinition definition, Runner runner, IFlowRecords? records = null, IReadOnlyDictionary<string, string>? models = null, IReadOnlyDictionary<string, string>? inputs = null, FlowRunPlace? place = null, HarnessConfig? config = null, Func<string?, string, string>? workflowFile = null)
         => new(definition, runner, new ConfiguredRunnerFacts(config ?? new HarnessConfig()), new JumpingClock(), inputs, records, runName: "r1", place: place, agentModels: models, workflowFile: workflowFile);
 
     /// <summary>
@@ -798,7 +798,7 @@ public sealed class FlowStepStartTests
             """);
         var runner = new Runner();
         var asked = new List<string>();
-        var coordinator = Coordinator(definition, runner, workflowFile: name =>
+        var coordinator = Coordinator(definition, runner, workflowFile: (owner, name) =>
         {
             asked.Add(name);
             return "# {run.name}\n\nchecked: {run.ran}; left: {run.leftover}; assumed: {run.assumptions}; found: {run.preExisting}\n";
@@ -826,7 +826,7 @@ public sealed class FlowStepStartTests
                 body: body.md
             """);
 
-        async Task<FlowInstance> PullRequestAsync(Func<string, string>? workflowFile)
+        async Task<FlowInstance> PullRequestAsync(Func<string?, string, string>? workflowFile)
         {
             var runner = new Runner();
             var coordinator = Coordinator(definition, runner, workflowFile: workflowFile);
@@ -838,8 +838,8 @@ public sealed class FlowStepStartTests
         }
 
         var unread = await PullRequestAsync(null);
-        var missing = await PullRequestAsync(_ => throw new HarnessException(HarnessExit.ConfigInvalid, "'body.md', a pull request's body, is not there"));
-        var empty = await PullRequestAsync(_ => "{input.x}");
+        var missing = await PullRequestAsync((owner, _) => throw new HarnessException(HarnessExit.ConfigInvalid, "'body.md', a pull request's body, is not there"));
+        var empty = await PullRequestAsync((owner, _) => "{input.x}");
 
         Assert.Equal(
             (FlowInstanceState.Failed, HarnessExit.ConfigInvalid, "expression 'body' of 'pr': 'body.md', its body, is a file of the workflow, and this run reads none"),

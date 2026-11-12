@@ -313,10 +313,14 @@ public sealed record FlowAnswer(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? Times,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Then);
 
-/// <summary>One value a run of the workflow is started with.</summary>
-/// <param name="Name">The input's name, as <c>--input name=value</c> spells it.</param>
+/// <summary>One value a run of the workflow is started with, or a workflow used as a step is handed.</summary>
+/// <param name="Name">The input's name, as <c>--input name=value</c> spells it, or as a <c>with:</c> value spells it.</param>
 /// <param name="Description">What the value is for, shown when it is missing.</param>
-/// <param name="Kind"><c>text</c>, or <c>file</c>: a path inside the repository, which must be a file when the run starts.</param>
+/// <param name="Kind">
+/// <c>text</c>, or <c>file</c>: a path inside the repository, which must be a file when the run starts - and, of a
+/// workflow another uses as a step, also <c>value</c>: any typed value, read as an expression, and <c>step</c>: a name
+/// its steps say in <c>onFailure</c> or <c>then</c> through <c>{input.&lt;name&gt;}</c>, resolved in the caller.
+/// </param>
 /// <param name="Default">What to use when nothing supplies it, or <see langword="null"/>; empty is the input not given, and is always taken.</param>
 /// <param name="Required">Whether the run is refused when nothing supplies it and there is no default.</param>
 /// <param name="Options">The values a <c>text</c> input takes; a run started with another is refused.</param>
@@ -331,11 +335,17 @@ public sealed record FlowInput(
     /// <summary>The kind a file that says nothing is read as.</summary>
     public const string TextKind = "text";
 
-    /// <summary>The other kind: a path inside the repository, checked to be a file when the run starts.</summary>
+    /// <summary>The kind a path inside the repository is: checked to be a file when the run starts.</summary>
     public const string FileKind = "file";
 
-    /// <summary>Both kinds, in the order a refusal lists them.</summary>
-    public static IReadOnlyList<string> Kinds { get; } = [TextKind, FileKind];
+    /// <summary>The kind any typed value takes, read as an expression: a used workflow's alone.</summary>
+    public const string ValueKind = "value";
+
+    /// <summary>The kind a name its steps say in onFailure or then takes, resolved in the caller: a used workflow's alone.</summary>
+    public const string StepKind = "step";
+
+    /// <summary>Every kind, in the order a refusal lists them.</summary>
+    public static IReadOnlyList<string> Kinds { get; } = [TextKind, FileKind, ValueKind, StepKind];
 }
 
 /// <summary>
@@ -360,6 +370,35 @@ public sealed record WorkflowOutput(
     string Name,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Description,
     string From);
+
+/// <summary>
+/// The workflow a step that says <c>use:</c> is, as resolution found it: everything of its own the step needs to run it
+/// - its inputs, its declared outputs, its recovery - beside the fingerprint of its file, which the run records so a
+/// resume is refused where the file changed, and the run-level keys of its own that no step applies.
+/// </summary>
+/// <param name="Source">The path as written, <c>./pipeline/pipeline.yml</c> among the callers.</param>
+/// <param name="Name">
+/// The called workflow's name: its path under the repository's workflows directory, <c>implementation/pipeline</c> for a
+/// pipeline the implementation workflow uses, under whose directory its files are read.
+/// </param>
+/// <param name="Fingerprint">The SHA-256 of the called workflow's file, as the run records its resolution.</param>
+/// <param name="Inputs">The called workflow's declared inputs, which the step's <c>with:</c> values fill.</param>
+/// <param name="Params">The called workflow's own params, read as <c>param.&lt;name&gt;</c> inside it.</param>
+/// <param name="Outputs">The called workflow's declared outputs: the step's own outputs once it ends.</param>
+/// <param name="Recover">The called workflow's recovery, which a failure inside the step reaches first; null where it declares none.</param>
+/// <param name="NotApplied">
+/// The run-level keys the called workflow declares that no step applies - its budget, limits, advisor, amend and
+/// answers are the calling run's own - said by <c>validate-workflow</c> so nothing is applied in silence.
+/// </param>
+public sealed record FlowUse(
+    string Source,
+    string Name,
+    string Fingerprint,
+    IReadOnlyList<FlowInput> Inputs,
+    IReadOnlyList<FlowParam> Params,
+    IReadOnlyList<WorkflowOutput> Outputs,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowRecover? Recover,
+    IReadOnlyList<string> NotApplied);
 
 /// <summary>
 /// One step of a workflow: a definition, of one <c>type</c>, or a group holding <c>steps</c> of its own.
@@ -389,6 +428,32 @@ public sealed record WorkflowStep
 
     /// <summary>The group's own steps; a group has these and no <see cref="Type"/>.</summary>
     public IReadOnlyList<WorkflowStep> Steps { get; init; } = [];
+
+    /// <summary>
+    /// The workflow this step is, as written: <c>use: ./pipeline.yml</c>. Read by the parser, cleared by resolution -
+    /// which puts the called workflow's steps in <see cref="Steps"/> and its record in <see cref="Use"/> - so a
+    /// definition that reaches the engine holding one was never resolved, and is refused.
+    /// </summary>
+    public string? UseSource { get; init; } = null;
+
+    /// <summary>The values the step hands the workflow it uses, as written: one scalar for each of its inputs.</summary>
+    public IReadOnlyDictionary<string, string> With { get; init; } = NoWith;
+
+    /// <summary>
+    /// The called workflow, once the step is resolved: its name among the repository's workflows, the fingerprint of its
+    /// file, its inputs, outputs and recovery, and the run-level keys of its own that no step applies. Null on every
+    /// other step, and on this one before resolution.
+    /// </summary>
+    public FlowUse? Use { get; init; } = null;
+
+    /// <summary>
+    /// The workflow this step is declared in, where that is not the run's own: the called workflow's name, under which
+    /// its files - its agents, prompts and schemas - are read. Null on every step of the run's own workflow.
+    /// </summary>
+    public string? WorkflowOf { get; init; } = null;
+
+    /// <summary>No with values at all, the shape a step that names none holds.</summary>
+    private static readonly IReadOnlyDictionary<string, string> NoWith = new Dictionary<string, string>();
 
     /// <summary>The steps this one waits for, by name, each declared before it among its siblings.</summary>
     public IReadOnlyList<string> DependsOn { get; init; } = [];

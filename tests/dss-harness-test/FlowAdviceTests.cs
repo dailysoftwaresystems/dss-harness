@@ -505,7 +505,7 @@ public sealed class FlowAdviceTests
             AtItsTurnsFirst(),
             new RunnerFacts(),
             new JumpingClock(),
-            workflowFile: named => named == "bar.md"
+            workflowFile: (owner, named) => named == "bar.md"
                 ? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', a workflow file, is not at '.harness-config/workflows/flow/{named}'; write it there, beside the definition that names it")
                 : "Do the work.",
             advisor: advisor);

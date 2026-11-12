@@ -439,8 +439,12 @@ public sealed class FlowCoordinator
     private readonly FlowRunPlace? _place;
     private readonly IReadOnlyDictionary<string, string> _agentModels;
 
-    /// <summary>Reads the text of a file the run's workflow names, by its name in the definition; null where the run reads none.</summary>
-    private readonly Func<string, string>? _workflowFile;
+    /// <summary>
+    /// Reads the text of a file a workflow names, by its name in the definition and the workflow whose directory it is
+    /// read in - the run's own where the first is null, the called workflow a step of a used one names it in otherwise;
+    /// null where the run reads none.
+    /// </summary>
+    private readonly Func<string?, string, string>? _workflowFile;
 
     /// <summary>Reads the text of a file the run's workflow may hold and owes none of; null where it is not there, and null itself where the run reads none.</summary>
     private readonly Func<string, string?>? _workflowFileIfThere;
@@ -657,9 +661,10 @@ public sealed class FlowCoordinator
     /// which its runner refuses.
     /// </param>
     /// <param name="workflowFile">
-    /// Reads the text of a file the run's workflow names, by its name in the definition, throwing with why where it cannot
-    /// (<see cref="WorkflowNamedFiles.ReadText"/>): a pull request's body, and a reason step's prompt files. Null where
-    /// the run reads none, and a step that needs one then fails 12, saying so.
+    /// Reads the text of a file a workflow names, by its name in the definition and the workflow whose directory it is
+    /// read in - the run's own where the first is null, the called workflow a step of a used one names it in otherwise -
+    /// throwing with why where it cannot (<see cref="WorkflowNamedFiles.ReadText"/>): a pull request's body, and a
+    /// reason step's prompt files. Null where the run reads none, and a step that needs one then fails 12, saying so.
     /// </param>
     /// <param name="deleteAgent">
     /// Deletes a read-only agent of the run whose work is over, applied, as the engine is to
@@ -708,7 +713,7 @@ public sealed class FlowCoordinator
         string? runName = null,
         FlowRunPlace? place = null,
         IReadOnlyDictionary<string, string>? agentModels = null,
-        Func<string, string>? workflowFile = null,
+        Func<string?, string, string>? workflowFile = null,
         Func<string, string, CancellationToken, Task<Results.CommandOutcome>>? deleteAgent = null,
         IFlowAdvisorRunner? advisor = null,
         IFlowStreamAccount? streamAccount = null,
@@ -5161,6 +5166,14 @@ public sealed class FlowCoordinator
                 var item = NewScope($"{instance.Id}[{index}]", PathOf(scope, declaration), scope, declaration, list[index], index, null, instance);
                 instance.Children.Add(item);
 
+                // A use inside a forEach fills its inputs per item, for its with values read the item of their own.
+                OpenUse(item, declaration, instance);
+
+                if (instance.Failing is not null)
+                {
+                    return;
+                }
+
                 // The pieces owed a work item of this name - the newest update's carries it, and an older one's work
                 // goes on as the newest places it.
                 var owing = WorkItemGroupOf(instance) && ItemNameOf(item) is { } named
@@ -5211,6 +5224,85 @@ public sealed class FlowCoordinator
 
         instance.OwnScope = NewScope(instance.Id, PathOf(scope, declaration), scope, declaration, FlowValue.Missing, null, null, null);
         instance.OwnScope.OwnGroupInstance = instance;
+
+        // A workflow used as a step runs on what the use fills its inputs with: the values are read in the scope its
+        // members run in, and a use inside a forEach reads the item of its own.
+        OpenUse(instance.OwnScope, declaration, instance);
+    }
+
+    /// <summary>
+    /// Fills a used workflow's inputs into the scope its members run in: each <c>with</c> value read as the input it
+    /// fills declares - an expression's value, a filled template, a path, a name - and the workflow's own params with
+    /// their defaults. A value that cannot be read fails the use step as a whole, said with the input's name.
+    /// </summary>
+    private void OpenUse(Scope scope, WorkflowStep declaration, FlowInstance group)
+    {
+        var use = declaration.Use;
+
+        if (use is null)
+        {
+            return;
+        }
+
+        var inputs = new JsonObject();
+
+        foreach (var input in use.Inputs)
+        {
+            var raw = declaration.With.TryGetValue(input.Name, out var withValue) ? withValue : input.Default;
+
+            if (raw is null)
+            {
+                if (input.Required)
+                {
+                    FailGroup(group, HarnessExit.ConfigInvalid, $"'{group.Id}' names no '{input.Name}' in with, and '{use.Name}' requires the input", group.Path);
+                    return;
+                }
+
+                // An input the use fills none for, that requires none, is absent: nothing inside reads a value for it.
+                continue;
+            }
+
+            FlowValue value;
+
+            if (input.Kind is FlowInput.TextKind)
+            {
+                if (FlowTemplate.Fill(raw, path => Read(path, scope), out var unfilled) is not { } filled)
+                {
+                    FailGroup(group, HarnessExit.ConfigInvalid, Unreadable($"with.{input.Name}", group.Id, unfilled!), group.Path);
+                    return;
+                }
+
+                value = FlowValue.Of(filled);
+            }
+            else if (input.Kind is FlowInput.ValueKind)
+            {
+                value = Evaluate(raw, scope, out var problem);
+
+                if (problem is not null)
+                {
+                    FailGroup(group, HarnessExit.ConfigInvalid, Unreadable($"with.{input.Name}", group.Id, problem), group.Path);
+                    return;
+                }
+            }
+            else
+            {
+                // A file is a path of the used workflow's directory and a step a single name: both are read as written,
+                // held to their shape where the definition is checked.
+                value = FlowValue.Of(raw);
+            }
+
+            inputs[input.Name] = value.ToNode()?.DeepClone();
+        }
+
+        var @params = new JsonObject();
+
+        foreach (var parameter in use.Params)
+        {
+            @params[parameter.Name] = parameter.Default;
+        }
+
+        scope.UseInputs = inputs;
+        scope.UseParams = @params;
     }
 
     /// <summary>The iterations a repeat's own bound allows: its maxIterations, or its rounds and the further ones its blocking holds for.</summary>
@@ -5803,6 +5895,7 @@ public sealed class FlowCoordinator
                 {
                     foreach (var child in instance.Children.Select(child => child.GroupInstance).Where(child => child is { State: FlowInstanceState.Running }))
                     {
+                        UseOutputs(child!);
                         End(child!, FlowInstanceState.Done, null, null);
                     }
 
@@ -5822,6 +5915,7 @@ public sealed class FlowCoordinator
             if ((instance.OwnScope ?? IterationScopeOf(instance)) is { } block && ScopeEnded(block))
             {
                 Gather(instance);
+                UseOutputs(instance);
                 End(instance, FlowInstanceState.Done, null, null);
                 changed = true;
             }
@@ -6296,7 +6390,7 @@ public sealed class FlowCoordinator
                             continue;
                         }
 
-                        if (FlowTemplate.FillAroundSkills(readFile(promptFileNamed), path => Read(path, instance.DeclaredScope!, reader: instance), name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
+                        if (FlowTemplate.FillAroundSkills(readFile(step.WorkflowOf, promptFileNamed), path => Read(path, instance.DeclaredScope!, reader: instance), name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
                         {
                             _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
                             return;
@@ -7113,13 +7207,15 @@ public sealed class FlowCoordinator
         ClearOwed(instance);
         instance.FailureSettled = true;
 
-        if (instance.Step.OnFailure == WorkflowStep.Recover)
+        var own = FailurePolicyOf(instance.Step.OnFailure, instance);
+
+        if (own is { Policy: WorkflowStep.Recover })
         {
             TakeRecovery(instance);
             return;
         }
 
-        if (instance.Step.OnFailure is { } policy)
+        if (own is { Policy: { } policy })
         {
             Apply(instance, policy);
             MaybeSettle(instance);
@@ -7128,7 +7224,7 @@ public sealed class FlowCoordinator
 
         if (instance.GroupOf is { } group)
         {
-            if ((group.Step.ForEach is not null || group.Step.Repeat is not null) && PolicyAbove(instance.DeclaredScope!) == WorkflowStep.Recover)
+            if ((group.Step.ForEach is not null || group.Step.Repeat is not null) && PolicyAbove(instance) == WorkflowStep.Recover)
             {
                 // The hand-over stops at a member of a forEach or a repeat: the recovery takes the failure there, for
                 // that step, so it never ends the loop's other items or iterations.
@@ -7154,13 +7250,15 @@ public sealed class FlowCoordinator
                     return;
                 }
 
-                if (taking.Step.OnFailure == WorkflowStep.Recover)
+                var handed = FailurePolicyOf(taking.Step.OnFailure, instance);
+
+                if (handed is { Policy: WorkflowStep.Recover })
                 {
                     TakeRecovery(instance);
                     return;
                 }
 
-                if (taking.Step.OnFailure is { } groupsPolicy)
+                if (handed is { Policy: { } groupsPolicy })
                 {
                     Apply(instance, groupsPolicy);
                     MaybeSettle(instance);
@@ -7174,6 +7272,33 @@ public sealed class FlowCoordinator
         MaybeSettle(instance);
     }
 
+    /// <summary>
+    /// One failure policy as it reads for <paramref name="instance"/>: written as one of the policies, or - for a step
+    /// of a workflow used as a step - read from one of its inputs, filled where the failure happened. One that is no
+    /// policy when it is read reads as none: the failure goes where a step that wrote nothing's goes, never to a guess.
+    /// </summary>
+    private (string? Policy, string? Problem)? FailurePolicyOf(string? written, FlowInstance instance)
+    {
+        if (written is null)
+        {
+            return null;
+        }
+
+        if (!written.Contains('{'))
+        {
+            return (written, null);
+        }
+
+        if (Filled(instance, written, out var problem) is not { } filled)
+        {
+            return (null, problem);
+        }
+
+        return WorkflowStep.FailurePolicies.Contains(filled, StringComparer.Ordinal)
+            ? (filled, null)
+            : (null, $"'{written}' fills with '{filled}', which is none of {string.Join(", ", WorkflowStep.FailurePolicies.Select(known => $"'{known}'"))}");
+    }
+
     /// <summary>Takes back the owed mark a failure is recorded with as it ends, once it is being decided: what decides it writes the step's record.</summary>
     private static void ClearOwed(FlowInstance instance)
     {
@@ -7183,14 +7308,17 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>The first <c>onFailure</c> written on <paramref name="scope"/> or any scope around it, and where the scope holds none.</summary>
-    private static string? PolicyAbove(Scope scope)
+    /// <summary>
+    /// The first <c>onFailure</c> written on <paramref name="instance"/>'s scope or any scope around it, filled where
+    /// the failure it decides for happened, and where the scopes hold none.
+    /// </summary>
+    private string? PolicyAbove(FlowInstance instance)
     {
-        for (var at = scope; at is not null; at = at.Parent)
+        for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
         {
-            if (at.Group?.OnFailure is { } policy)
+            if (at.Group?.OnFailure is { } written)
             {
-                return policy;
+                return FailurePolicyOf(written, instance) is { Policy: { } policy } ? policy : null;
             }
         }
 
@@ -7539,13 +7667,33 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>Whether <paramref name="instance"/> is a visit of the workflow's recovery.</summary>
+    /// <summary>Whether <paramref name="instance"/> is a visit of a recovery - the workflow's own, or a used workflow's.</summary>
     private bool IsRecovery(FlowInstance instance)
-        => _definition.Recover is not null && instance.Step.Name == FlowScope.Recovery;
+        => instance.Step.Name == FlowScope.Recovery;
 
     /// <summary>The declaration the recovery's instances are made of: its steps, under the reserved name.</summary>
     private WorkflowStep RecoveryDeclaration()
         => _definition.Recover!.Declaration;
+
+    private (FlowRecover Recover, Scope PathScope) RecoveryAt(Scope from)
+    {
+        for (var at = from; at is not null; at = at.Parent)
+        {
+            if (at.Group?.Use?.Recover is { } called)
+            {
+                return (called, at);
+            }
+        }
+
+        if (_definition.Recover is { } own)
+        {
+            return (own, _top);
+        }
+
+        throw new HarnessException(
+            HarnessExit.Refused,
+            $"a failure of '{from.Id}' reaches a recovery, and neither the workflow nor any workflow it uses around it declares one; the run's state and the definition do not agree");
+    }
 
     /// <summary>Decides the redirect a handler that ended done names: what it resets is written to the run's records before the first reset.</summary>
     private void DecideRedirect(FlowInstance handler)
@@ -7561,9 +7709,20 @@ public sealed class FlowCoordinator
     /// <summary>The step a handler's <c>then</c> names, with the scope that declares it: siblings first, then outward.</summary>
     private (Scope Scope, WorkflowStep Declaration)? ResolveThen(FlowInstance handler)
     {
+        // The target may come from one of the used workflow's inputs - {input.failTo} - filled where the handler ran;
+        // a fill that names no step resolves to nothing, and the handler ends holding the redirect it could not make.
+        var then = handler.Step.Then is { } written
+            ? written.Contains('{') ? Filled(handler, written, out _) : written
+            : null;
+
+        if (then is null)
+        {
+            return null;
+        }
+
         for (var at = handler.DeclaredScope; at is not null; at = at.Parent)
         {
-            if (DeclarationsOf(at).FirstOrDefault(declaration => declaration.Name == handler.Step.Then) is { } declaration)
+            if (DeclarationsOf(at).FirstOrDefault(declaration => declaration.Name == then) is { } declaration)
             {
                 return (at, declaration);
             }
@@ -7829,7 +7988,7 @@ public sealed class FlowCoordinator
     /// <param name="direction">The fix a person gave this visit, answering the bound direct; null for none.</param>
     private void TakeRecoveryOf(FlowInstance source, string? direction = null)
     {
-        var recover = _definition.Recover!;
+        var (recover, pathScope) = RecoveryAt(source.DeclaredScope ?? _top);
         var scope = source.DeclaredScope ?? _top;
         var (_, issue, key) = RecoveryOf(source);
 
@@ -7856,7 +8015,11 @@ public sealed class FlowCoordinator
         // The source's own record says its failure - or its issue - is the recovery's now, before the visit is made.
         WriteStepRecordOf(source);
 
-        var declaration = RecoveryDeclaration();
+        // A block of its own in the scope the source stands in: its steps are scheduled as any scope's are, and read
+        // the source - the failed step, or the triage instance and its issue - as source and {issue}. Its names are the
+        // recovery's own, read from where its workflow declares them: the flow's root, or the step that uses the
+        // workflow whose recovery it is, however deep the failure it was taken for.
+        var declaration = recover.Declaration;
         var instance = NewVisit(scope, declaration, FlowInstanceState.Running, made: visit =>
         {
             visit.RaisedBy = source;
@@ -7864,10 +8027,7 @@ public sealed class FlowCoordinator
             visit.Direction = direction;
         });
 
-        // A block of its own in the scope the source stands in: its steps are scheduled as any scope's are, and read
-        // the source - the failed step, or the triage instance and its issue - as source and {issue}. Its names are the
-        // flow's own, read from the root where its steps are declared, however deep the failure it was taken for.
-        instance.OwnScope = NewScope(instance.Id, PathOf(_top, declaration), scope, declaration, FlowValue.Missing, null, null, null);
+        instance.OwnScope = NewScope(instance.Id, PathOf(pathScope, declaration), scope, declaration, FlowValue.Missing, null, null, null);
         instance.OwnScope.OwnGroupInstance = instance;
         Record(FlowChangeKind.Step, instance, detail: issue is null
             ? $"the failure of '{source.Id}' is given to the recovery (visit {visits.ToString(System.Globalization.CultureInfo.InvariantCulture)})"
@@ -9568,8 +9728,28 @@ public sealed class FlowCoordinator
         switch (path.Root)
         {
             case "input":
+                // The inputs of the workflow a use made, nearest one first: a step of a used workflow reads what the use
+                // filled, and never the calling run's own. At the top, past every use, they are the run's.
+                for (var at = scope; at is not null; at = at.Parent)
+                {
+                    if (at.UseInputs is { } given)
+                    {
+                        return new(FlowValue.Of(given), 0);
+                    }
+                }
+
                 return new(FlowValue.Of(Inputs()), 0);
             case "param":
+                // A used workflow's params are its own defaults, read inside it; the calling run's are read at its own
+                // levels, outside every use.
+                for (var at = scope; at is not null; at = at.Parent)
+                {
+                    if (at.UseParams is { } own)
+                    {
+                        return new(FlowValue.Of(own), 0);
+                    }
+                }
+
                 return new(FlowValue.Of(Params()), 0);
             case "item":
                 // The work item of the nearest loop that bound one: a step inside a repeat within a work item - a review
@@ -10390,8 +10570,7 @@ public sealed class FlowCoordinator
         return values;
     }
 
-    /// <summary>
-    /// Gathers what a block gathers when it ends, done or failed alike: each named list of its members' outputs, in
+    /// <summary>Gathers what a block gathers when it ends, done or failed alike: each named list of its members' outputs, in
     /// declaration order - a member that was skipped or passed over, or whose output holds no such list, adds nothing,
     /// and what every member left out is an empty list and never Missing.
     /// </summary>
@@ -10427,6 +10606,44 @@ public sealed class FlowCoordinator
         }
 
         group.Output = gathered;
+    }
+
+    /// <summary>
+    /// Writes the outputs a used workflow declares onto its step's instance as it ends: each one's <c>from</c> read in
+    /// the scope the use's members ran in, after every one of them - so a later step reads <c>{use.changed}</c> as any
+    /// step's output, beside what the step gathers. An unreadable one ends the group failed, said with the output's
+    /// name; nothing is written over what a visit before it already wrote, for the newest ending is the one read.
+    /// </summary>
+    private void UseOutputs(FlowInstance group)
+    {
+        if (group.Step.Use is not { } use || use.Outputs.Count == 0)
+        {
+            return;
+        }
+
+        var scope = group.OwnScope ?? group.ScopeOf;
+
+        if (scope is null)
+        {
+            return;
+        }
+
+        var outputs = group.Output as JsonObject ?? [];
+
+        foreach (var output in use.Outputs)
+        {
+            var value = Evaluate(output.From, scope, out var problem);
+
+            if (problem is not null)
+            {
+                FailGroup(group, HarnessExit.ConfigInvalid, Unreadable($"outputs.{output.Name}", group.Id, problem), group.Path);
+                return;
+            }
+
+            outputs[output.Name] = value.ToNode()?.DeepClone();
+        }
+
+        group.Output = outputs;
     }
 
     /// <summary>
@@ -10682,7 +10899,7 @@ public sealed class FlowCoordinator
 
             try
             {
-                text = _workflowFile?.Invoke(body)
+                text = _workflowFile?.Invoke(step.WorkflowOf, body)
                     ?? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{body}', its body, is a file of the workflow, and this run reads none");
             }
             catch (HarnessException unread)
@@ -10782,7 +10999,7 @@ public sealed class FlowCoordinator
     {
         if (_definition.Recommendations is { } named)
         {
-            return _workflowFile is { } read ? read(named) : NoBar();
+            return _workflowFile is { } read ? read(null, named) : NoBar();
         }
 
         // The folder holds no bar of its own, and none was named: said plainly, never refused, for a repository owes
@@ -11393,16 +11610,28 @@ public sealed class FlowCoordinator
                 var parentPrefix = lastDot < 0 ? string.Empty : record.Instance[..lastDot];
                 var segment = lastDot < 0 ? record.Instance : record.Instance[(lastDot + 1)..];
                 var name = segment.Split(['[', '#', '+'], 2)[0];
-                var recovery = _definition.Recover is not null && name == FlowScope.Recovery;
+                var recovery = name == FlowScope.Recovery;
                 var declaredName = recovery
                     ? name
                     : record.Step.Contains('.', StringComparison.Ordinal) ? record.Step[(record.Step.LastIndexOf('.') + 1)..] : record.Step;
-                var declaration = recovery
-                    ? RecoveryDeclaration()
-                    : DeclarationsOf(declaring).FirstOrDefault(declared => declared.Name == declaredName)
+                WorkflowStep declaration;
+                Scope pathScope = declaring;
+
+                if (recovery)
+                {
+                    // A visit of a recovery: the one the workflow declares at its root, or the one a workflow used
+                    // around the failure declares, read from the scope the visit stands in.
+                    var (declared, at) = RecoveryAt(declaring);
+                    declaration = declared.Declaration;
+                    pathScope = at;
+                }
+                else
+                {
+                    declaration = DeclarationsOf(declaring).FirstOrDefault(declared => declared.Name == declaredName)
                         ?? throw new HarnessException(
                             HarnessExit.Refused,
                             $"'{record.Instance}' names no step of the definition among '{(declaring.Id.Length == 0 ? "the flow" : declaring.Id)}'; the run's state and the definition do not agree, and a record is never guessed at");
+                }
 
                 FlowInstance instance;
 
@@ -11441,9 +11670,10 @@ public sealed class FlowCoordinator
                 {
                     // A block: its own scope holds its members, keyed by its instance's id - in whatever state it
                     // ended, for a block that failed or was left holds the records of its members too. The recovery's
-                    // scope is read from the flow's root, where its steps are declared, wherever its visit was taken.
+                    // scope is read from where its workflow declares it - the flow's root, or the step that uses the
+                    // workflow whose recovery it is - wherever its visit was taken.
                     instance = Create(declaring, declaration, StateOf(record), memberId: record.Instance);
-                    instance.OwnScope = NewScope(instance.Id, recovery ? PathOf(_top, declaration) : PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, null, null);
+                    instance.OwnScope = NewScope(instance.Id, recovery ? PathOf(pathScope, declaration) : PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, null, null);
                     instance.OwnScope.OwnGroupInstance = instance;
                     scopes[instance.Id] = instance.OwnScope;
                 }
@@ -11717,6 +11947,18 @@ public sealed class FlowCoordinator
             }
 
             CountTheAnswers();
+
+            // The inputs a use filled its workflow with are read again, from the same values over the same records: the
+            // scopes the replay rebuilt hold them as the session that made them did.
+            foreach (var scope in scopes.Values.Where(scope => scope.Group?.Use is not null))
+            {
+                var group = scope.OwnGroupInstance ?? scope.GroupInstance;
+
+                if (group is { } && !group.Failing.HasValue)
+                {
+                    OpenUse(scope, scope.Group!, group);
+                }
+            }
 
             if (resume.File.Pause is { } pause && pause.CompletedAt is not null)
             {
@@ -12116,4 +12358,17 @@ internal sealed class Scope(
 
     /// <summary>How many more visits of each member an answer granted past the bound its declaration names.</summary>
     public Dictionary<string, int> ExtraVisits { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The inputs of the workflow the scope's group is, where that group is a use: what its <c>with</c> filled, each
+    /// read as the input it fills declares - an expression's value, a filled template, a path, a name. Null in every
+    /// other scope, and the run's own inputs are read instead.
+    /// </summary>
+    internal JsonObject? UseInputs;
+
+    /// <summary>
+    /// The params of the workflow the scope's group is, where that group is a use: its own defaults, for its steps read
+    /// <c>param.&lt;name&gt;</c> against them and never the calling run's. Null in every other scope.
+    /// </summary>
+    internal JsonObject? UseParams;
 }

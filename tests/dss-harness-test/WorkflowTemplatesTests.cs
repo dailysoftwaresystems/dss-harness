@@ -175,12 +175,14 @@ public sealed class WorkflowTemplatesTests
         diagnosis["properties"]!.AsObject().Remove("choices");
         required.RemoveAt(required.Select(name => name!.GetValue<string>()).ToList().IndexOf("choices"));
 
-        var problems = WorkflowValidator.Validate(definition, hasCommitTemplate: false, file => file switch
-        {
-            "schemas/diagnosis.schema.json" => diagnosis.ToJsonString(),
-            "prompts/diagnose.md" => prompt + "{previous.course}\n",
-            _ => WorkflowTemplates.TextOf(file),
-        });
+        var problems = WorkflowValidator.Validate(definition, hasCommitTemplate: false, (file, owner) => owner is null
+            ? file switch
+            {
+                "schemas/diagnosis.schema.json" => diagnosis.ToJsonString(),
+                "prompts/diagnose.md" => prompt + "{previous.course}\n",
+                _ => WorkflowTemplates.TextOf(file),
+            }
+            : null);
 
         Assert.Equal(
             [

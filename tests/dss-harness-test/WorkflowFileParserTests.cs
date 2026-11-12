@@ -691,7 +691,8 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
-    /// An input's kind is text or file, a file input takes no options - it is a path, checked when the run starts - and
+    /// An input's kind is one of the four it can take, an input of a kind other than text takes no options - a file
+    /// input is a path, checked when the run starts, a value is read as an expression and a step as a name - and
     /// options given empty are refused rather than read as any value, which is what leaving the key out says.
     /// </summary>
     [Fact]
@@ -715,8 +716,8 @@ public sealed class WorkflowFileParserTests
 
         Assert.Equal(
             [
-                "line 3, column 5: inputs.plan.kind is 'folder', which is neither of text nor file.",
-                "line 5, column 5: inputs.spec declares options and the kind 'file': options list what a 'text' input takes, and a file input is a path, checked when the run starts.",
+                "line 3, column 5: inputs.plan.kind is 'folder', which is none of 'text', 'file', 'value', 'step'.",
+                "line 5, column 5: inputs.spec declares options and the kind 'file': options list what a 'text' input takes, and an input of another kind is read as it is.",
                 "line 9, column 14: 'inputs.tone.options' is given empty, which is never read as any value: list the values it takes, or leave the key out for any value.",
             ],
             problems);

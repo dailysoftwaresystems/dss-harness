@@ -157,6 +157,17 @@ public sealed class WorkflowValidationService(
             return new WorkflowCheck(name, [$"{Shown(name)} names itself '{definition.Name}'; a workflow's name is its directory's and its file's, said again in the file so a copied directory cannot pass as the workflow it was copied from"]);
         }
 
+        // Every use is resolved before the definition is checked: the called workflows are read, parsed and placed, so
+        // that the definition under the check is the one a run runs - and what a resume is refused by is what was read.
+        var (withUses, useProblems) = WorkflowResolver.Resolve(definition!, name.Replace('\\', '/'), relative => ReadWorkflowFile(context.Layout, relative));
+
+        if (useProblems.Count > 0)
+        {
+            return new WorkflowCheck(name, [.. useProblems.Select(problem => $"{Shown(name)}: {problem}")]);
+        }
+
+        definition = withUses;
+
         // The configuration's providers, resolved once: the same resolution checks the definition and says each
         // agent's models and levels where it holds.
         var resolved = DssHarness.Core.Agents.AgentProviders.Resolve(context.Config);
@@ -164,12 +175,12 @@ public sealed class WorkflowValidationService(
         var problems = new List<string>(WorkflowValidator.Validate(
             definition,
             context.Config.Commit.Template is not null,
-            named => Text(named, directory, name),
+            (named, owner) => Text(named, owner is null ? directory : DirectoryOf(context.Layout, owner), owner ?? name),
             resolved.Providers,
             _extractors.Languages,
             Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild),
             new AgentSkills(_fileSystem, _platform, context.Layout.RepositoryRoot)));
-        problems.AddRange(Files(definition, directory, name, context.Config));
+        problems.AddRange(Files(definition, directory, name, context, context.Config));
 
         // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,
         // said where the definition is checked; which names it holds is no problem at all, so a machine that only
@@ -193,8 +204,8 @@ public sealed class WorkflowValidationService(
         var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
         IReadOnlyList<string> agents = resolved.Providers is { } providers
             ? [
-                .. WorkflowValidator.ModelLevels(definition, providers, named => Text(named, directory, name)),
-                .. Prices(definition, providers, named => Text(named, directory, name)),
+                .. WorkflowValidator.ModelLevels(definition, providers, (named, owner) => Text(named, owner is null ? directory : DirectoryOf(context.Layout, owner), owner ?? name)),
+                .. Prices(definition, providers, (named, owner) => Text(named, owner is null ? directory : DirectoryOf(context.Layout, owner), owner ?? name)),
                 .. MissingKeys(definition, providers, slot),
             ]
             : [];
@@ -202,6 +213,7 @@ public sealed class WorkflowValidationService(
             name,
             [
                 $"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}{recovery}, {reasons} reasoning)",
+                .. ResolutionsOf(definition),
                 .. agents,
             ])
         {
@@ -211,10 +223,34 @@ public sealed class WorkflowValidationService(
     }
 
     /// <summary>
+    /// One line for each workflow a step of <paramref name="definition"/> uses, in the order the tree declares them:
+    /// what it uses, the called workflow's name, and the fingerprint of its file - beside what the called workflow
+    /// declares that no step applies, so that nothing is applied in silence and nothing left out in silence either.
+    /// </summary>
+    private static IReadOnlyList<string> ResolutionsOf(WorkflowDefinition definition)
+    {
+        var lines = new List<string>();
+
+        foreach (var (path, step) in FlowScope.Declared(definition))
+        {
+            if (step.Use is not { } use)
+            {
+                continue;
+            }
+
+            lines.Add(
+                $"'{path}' uses {use.Source} -> {use.Name} ({use.Inputs.Count} input{(use.Inputs.Count == 1 ? string.Empty : "s")}, fingerprint {use.Fingerprint[..12]})"
+                + (use.NotApplied.Count == 0 ? string.Empty : $"; applies none of the {string.Join(", ", use.NotApplied)} it declares"));
+        }
+
+        return lines;
+    }
+
+    /// <summary>
     /// One line for each provider whose models a step of the definition may run on: whether each of those models has a
     /// price, and when the provider's numbers were read - by the one line the listing says it in.
     /// </summary>
-    private static IEnumerable<string> Prices(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers, Func<string, string?>? files)
+    private static IEnumerable<string> Prices(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers, Func<string, string?, string?>? files)
     {
         var models = WorkflowValidator.ModelsRunOn(definition, providers, files);
 
@@ -324,12 +360,12 @@ public sealed class WorkflowValidationService(
 
     /// <summary>
     /// What only the repository can answer: that the files the definition names are in the
-    /// workflow's own directory, that the legs and runners it names are declared, that a runner
-    /// that writes the tree works in an agent's worktree, that its commit steps fill the
-    /// configuration's commit template, and that the agents it makes are named within
-    /// <c>worktrees.maxNameLength</c>.
+    /// workflow's own directory - a used workflow's in the used one's - that the legs and runners
+    /// it names are declared, that a runner that writes the tree works in an agent's worktree,
+    /// that its commit steps fill the configuration's commit template, and that the agents it
+    /// makes are named within <c>worktrees.maxNameLength</c>.
     /// </summary>
-    private IReadOnlyList<string> Files(WorkflowDefinition definition, string directory, string name, HarnessConfig config)
+    private IReadOnlyList<string> Files(WorkflowDefinition definition, string directory, string name, HarnessContext context, HarnessConfig config)
     {
         var problems = new List<string>();
 
@@ -342,10 +378,12 @@ public sealed class WorkflowValidationService(
         foreach (var (path, step) in WorkflowFiles.Steps(definition))
         {
             var where = $"step '{path}'";
+            var ownerDirectory = step.WorkflowOf is { } owner ? DirectoryOf(context.Layout, owner) : directory;
+            var ownerName = step.WorkflowOf ?? name;
 
             foreach (var named in WorkflowFiles.OfStep(step, where))
             {
-                problems.AddRange(Check(named, directory, name));
+                problems.AddRange(Check(named, ownerDirectory, ownerName));
             }
 
             if (step.Runner is not null && !config.PredefinedRunners.ContainsKey(step.Runner))
@@ -363,10 +401,62 @@ public sealed class WorkflowValidationService(
                     $"{where} names '{leg}', which is neither a leg nor a leg set: "
                         + DeclaredName.NotDeclared(leg, "legs or legSets", [.. config.Legs.Keys, .. config.LegSets.Keys]));
             }
+
+            // A file a use fills an input with is a file of the used workflow's directory, as every file a step of it
+            // names is.
+            if (step.Use is { } use)
+            {
+                foreach (var input in use.Inputs.Where(input => input.Kind == FlowInput.FileKind))
+                {
+                    if (step.With.TryGetValue(input.Name, out var value))
+                    {
+                        Add(problems, _named.Problem(value, ownerDirectory, ownerName, $"the '{input.Name}' it fills '{use.Name}'s input '{input.Name}' with", out _));
+                    }
+                }
+            }
         }
 
         Add(problems, GeneratedAgentNames(definition, config.Worktrees));
         return problems;
+    }
+
+    /// <summary>
+    /// The directory of a workflow a step uses, under the repository's workflows root and every link along it followed
+    /// - the called workflow's files are read there, as the run's own are in its.
+    /// </summary>
+    private string DirectoryOf(HarnessLayout layout, string owner)
+    {
+        try
+        {
+            return _named.Directory(layout, owner);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return Path.Combine([layout.WorkflowsDirectory, .. owner.Split('/')]);
+        }
+    }
+
+    /// <summary>
+    /// Reads a workflow file by its path under the repository's workflows root, forward slashes, held inside it - the
+    /// one reader the resolution of a use reads by, so that a called workflow is found exactly as a run's own is.
+    /// </summary>
+    private string? ReadWorkflowFile(HarnessLayout layout, string relative)
+    {
+        var path = Path.Combine([layout.WorkflowsDirectory, .. relative.Split('/')]);
+
+        if (!PathContainment.IsStrictlyInside(layout.WorkflowsDirectory, path, _platform.PathComparison))
+        {
+            return null;
+        }
+
+        try
+        {
+            return _fileSystem.FileExists(path) ? _fileSystem.ReadAllText(path) : null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

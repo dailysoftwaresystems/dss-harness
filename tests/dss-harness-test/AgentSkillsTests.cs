@@ -570,7 +570,7 @@ public sealed class AgentSkillsTests
         return [.. WorkflowValidator.Validate(
             WorkflowFileParser.Parse("flow.yml", text),
             hasCommitTemplate: false,
-            path => files.GetValueOrDefault(path),
+            (path, owner) => owner is null ? files.GetValueOrDefault(path) : null,
             skills: lookup ?? Skills())];
     }
 

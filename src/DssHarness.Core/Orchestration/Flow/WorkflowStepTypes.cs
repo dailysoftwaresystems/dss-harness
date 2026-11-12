@@ -131,7 +131,9 @@ public static class WorkflowStepTypes
     /// </summary>
     public static IReadOnlyList<KeyDescription> Group =>
     [
-        new("steps", $"the group's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))}") { Required = true },
+        new("steps", $"the group's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))} - a step that says 'use' takes none, for the workflow it uses brings its own"),
+        new("use", "the workflow this step is: a path to its yml file, relative to the calling workflow's directory and resolving inside the workflows root; the step takes the workflow's steps as its own, and its recovery and its declared outputs with them"),
+        new("with", "the values the used workflow's inputs are filled with, each read as the input it fills declares: an expression for a value, a template for a text, a path into the used workflow's directory for a file, and a name its steps say in onFailure or then for a step"),
         new("forEach", "an expression yielding the work items the group runs its steps for, once each"),
         new("repeat", "the group's bound: when its iterations end, and what is left") { Keys = RepeatKeys },
         new("gather", "members gathered from the group's steps into one list, named as its members read them"),

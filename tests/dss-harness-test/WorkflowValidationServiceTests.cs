@@ -1510,6 +1510,62 @@ public sealed class WorkflowValidationServiceTests
             => Path.GetFileName(path) == name ? throw new UnauthorizedAccessException("the disk would not say.") : base.KindOf(path);
     }
 
+    /// <summary>
+    /// A workflow that uses another is checked as the whole resolved tree: a required input of the used one that the
+    /// use names none for is the caller's problem, said under its own name.
+    /// </summary>
+    [Fact]
+    public async Task AWorkflowThatUsesAnother_IsCheckedResolved_AndSaysWhatItReadAndAppliesNot()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+        var pipeline = Path.Combine(directory, "pipeline");
+
+        Directory.CreateDirectory(pipeline);
+        Directory.CreateDirectory(Path.Combine(pipeline, "prompts"));
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
+        File.WriteAllText(Path.Combine(pipeline, "pipeline.yml"), "name: pipeline\ninputs:\n  - name: item\n    kind: value\n    required: true\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
+        File.WriteAllText(Path.Combine(pipeline, "prompts", "implement.md"), "Do the work.\n");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.False(report.Passed);
+        Assert.Contains(
+            $"{Shown("flow")}: step 'items' names no 'item' in with, and the workflow 'flow/pipeline' it uses requires the input",
+            report.Workflows[0].Lines);
+    }
+
+    /// <summary>
+    /// The same use, its input filled, holds and says its resolution: the source, the called workflow's name, its input
+    /// count and its fingerprint's first twelve, beside the budget it declares that no step applies.
+    /// </summary>
+    [Fact]
+    public async Task AUseThatHolds_SaysItsResolution_AndWhatItAppliesNot()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+        var pipeline = Path.Combine(directory, "pipeline");
+
+        Directory.CreateDirectory(pipeline);
+        Directory.CreateDirectory(Path.Combine(pipeline, "prompts"));
+        Directory.CreateDirectory(Path.Combine(pipeline, "agents"));
+        Directory.CreateDirectory(Path.Combine(pipeline, "schemas"));
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    with:\n      item: '\"the work\"'\n");
+        File.WriteAllText(Path.Combine(pipeline, "pipeline.yml"), "name: pipeline\nbudget:\n  usd: 5\ninputs:\n  - name: item\n    kind: value\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
+        File.WriteAllText(Path.Combine(pipeline, "prompts", "implement.md"), "Do {input.item}.\n");
+        File.WriteAllText(Path.Combine(pipeline, "agents", "worker.md"), "---\nname: worker\ndescription: does the work\n---\nYou do the work.\n");
+        File.WriteAllText(Path.Combine(pipeline, "schemas", "implement.json"), """{ "type": "object", "additionalProperties": false, "properties": { "done": { "type": "boolean" } }, "required": ["done"] }""");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.True(report.Passed);
+
+        var resolution = Assert.Single(report.Workflows[0].Lines.Where(line => line.StartsWith("'items' uses", StringComparison.Ordinal)).ToList());
+
+        Assert.StartsWith("'items' uses ./pipeline/pipeline.yml -> flow/pipeline (1 input, fingerprint ", resolution, StringComparison.Ordinal);
+        Assert.EndsWith("; applies none of the budget it declares", resolution, StringComparison.Ordinal);
+    }
+
     private static WorkflowValidationService Service(Repository repository, IFileSystem? fileSystem = null)
         => new(
             repository.Harness.ContextLoader,

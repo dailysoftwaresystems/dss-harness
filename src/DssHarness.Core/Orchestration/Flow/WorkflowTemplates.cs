@@ -143,7 +143,7 @@ public static class WorkflowTemplates
                 .SelectMany(entry => WorkflowFiles.OfStep(entry.Step, $"step '{entry.Path}'"))
                 .Where(named => named.IsSchema && TextOf(named.File) is not null)
                 .SelectMany(named => WorkflowFiles.SchemaProblems(named, TextOf(named.File)!)),
-            .. WorkflowValidator.Validate(parsed, hasCommitTemplate: false, TextOf),
+            .. WorkflowValidator.Validate(parsed, hasCommitTemplate: false, (named, owner) => TextOf(named)),
         ];
 
         if (problems.Count > 0)

@@ -1646,6 +1646,26 @@ says `on` - by the outcome, a failure by exit code - and sends the run back with
 schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own.
 
+A step may be a whole workflow of its own: it says `use` - a path to the workflow's yml file,
+relative to the calling workflow's directory and resolving inside the workflows folder, so a
+workflow lives in a folder of its own beside the one that uses it - and `with`, the values its
+inputs are filled with, each read as the input it fills declares: an expression for a `value`, a
+template for a `text`, a path of the used workflow's directory for a `file`, and a single name
+for a `step`, which a step of the used workflow reads as `{input.<name>}` in its `onFailure` or
+`then`, filled where it runs. The used workflow is read as a definition of its own and resolved
+into the step before anything is checked or run: its steps become the step's members - instances
+named under the use as a group's are - its files are read in its own directory, its declared
+outputs are the step's own once it ends, and its recovery takes a failure inside it before the
+caller's handling of the step. Its steps read only its inputs, its params and its own steps,
+never the calling run's; every fact of the caller they need comes through an input. Its budget,
+limits, advisor, amend and answers are never applied - the calling run's own hold - and
+`validate-workflow` says so beside the fingerprint of the file it read, one line for each use. A
+workflow that uses itself, directly or through others, is refused with the chain of the uses that
+close the circle, and uses nest at most ten deep in all, across the workflows they name. A run
+records each use's resolution - the called workflow's name and the fingerprint of its file - in
+the definition it freezes, and a resume is refused where the called file changed since the run
+began, as the run's own definition's would be.
+
 A definition may declare `recover`: steps written once, which a step gives a failure nothing handles
 to by saying `onFailure: recover`, itself or through a group around it. A member that writes none
 still hands its failure to its block first, so a block's own handler takes what its members found,

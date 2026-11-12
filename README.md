@@ -1758,6 +1758,21 @@ a declared one once it holds (12 where it does not, naming each problem), byte f
 starts. A file that cannot be written takes back what was written before it, with every folder the export
 made, so no folder is left with part of a workflow in it - or the refusal says why it could not.
 
+A step may be a whole workflow: it says `use`, a path to the workflow's yml file relative to the
+calling workflow's own directory and resolving inside the workflows folder, and `with`, the values
+the workflow's inputs are filled with - an expression for a `value` input, a template for a
+`text`, a path of the used workflow's directory for a `file`, and a single name for a `step`,
+which its steps read as `{input.<name>}` in their `onFailure` or `then`. The used workflow runs
+inside the run as a group's members do, its steps named under the use; its files are read in its
+own directory, its declared outputs are the step's own once it ends, and its recovery takes a
+failure inside it before the caller's handling of the step. Its steps read only its inputs, its
+params and its own steps - every fact of the caller they need comes through an input - and its
+budget, limits, advisor, amend and answers are never applied, which `validate-workflow` says
+beside the fingerprint of the file each use read. A workflow that uses itself, directly or
+through others, is refused with the chain, uses nest at most ten deep in all, and a resume is
+refused where a used workflow's file changed since the run began, as the run's own definition's
+would be.
+
 This build checks workflow definitions - the shape of every key, every step, input, param and
 output an expression, a template or a prompt names, every path typed by the schema or the built-in
 output that holds it, every operator and every key held to what it takes (a `when` a boolean, a
