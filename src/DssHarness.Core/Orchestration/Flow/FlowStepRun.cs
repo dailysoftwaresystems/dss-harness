@@ -16,7 +16,7 @@ public sealed record FlowAnswerGiven(string Question, string Answer, string? Tex
 /// <summary>
 /// One issue a reason step's answer reports having met that was there before the run's changes: it reports; it never
 /// fixes one outside its own work. Each issue raises one instance of the step the reporting step's
-/// <c>onPreExisting</c> names, which triages it.
+/// <c>onPreExisting</c> names, which triages it - none where an instance of that step holds the same issue already.
 /// </summary>
 /// <param name="Title">What it is, in a line.</param>
 /// <param name="Description">What it is, in the words the reporting agent gave.</param>

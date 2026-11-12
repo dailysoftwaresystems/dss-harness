@@ -590,7 +590,12 @@ The root is configurable because it is spent before a worktree's own name. The d
 characters of the Windows path budget, and a repository whose build paths are long has no name left
 that fits; a shorter root such as `.worktrees` buys those characters back. The budget is still
 checked against the real path, so a shorter root never hides an overrun — it only makes one
-avoidable. Every build measures the deepest path it left below its build directory against the
+avoidable. What lies below a worktree is reckoned by one owner, `WorktreeRoom`, which a run's
+start asks too, so a run that passed its start never fails on a worktree it needs: the deeper of
+the longest file the repository tracks at the main checkout's HEAD, where every worktree is made,
+and - where a leg builds on this machine - `build/<variant>` for the longest variant with
+`worktrees.pathBudgetReserve` below it; where no leg builds here, the reserve guesses at nothing
+and is not counted. Every build measures the deepest path it left below its build directory against the
 reserve, and warns where it went deeper. A Ninja build leaves out of that the outputs ninja says no
 target of the current build produces any more - asked as a dry run of `ninja -t cleandead`, which
 names them and removes nothing - since a new worktree's build directory, starting from clean, never
@@ -1663,11 +1668,14 @@ folds and reviews its fix as a round's work items are. The flow builds first: it
 in two - a `build` step, which fails red and is taken by the recovery and built again - and the
 `test` step it was, which waits for the build - and it makes its codebase graph after that build,
 beside the baseline's tests and the CI read (`onFailure: continue`, for a run goes on without a map);
-every reason step after it is served from the graph as its type of work needs, its steps saying the
-graph keys only where a type is served otherwise than by default (`graphFrom: changes` on the
-reviewers, the self-audit, the diagnosis and the steps that verify and fix - a step that goes on with
-another's work starting its own pack where it says; `graph: map` on the prioritiser and a review's
-scope; `graph: off` on the scribe's).
+every reason step after it is served from the graph as the twenty-run measurement of 2026-11-11 set
+each type's value, its steps saying the graph keys only where a type is served otherwise than by
+default (`graph: off` on the request triage and the plan audit, whose work is text the map does not
+light, and on the scribe's; `graph: map` on the prioritiser and a review's scope; `graphFrom: changes`
+on the reviewers, the self-audit, the diagnosis and the steps that verify and fix - a step that goes
+on with another's work starting its own pack where it says; the implementer, the planner and the
+pre-existing-issue triage saying nothing, for the tool and their task's seeds are their default - the
+planner's left as it was by the measurement, which found it costlier with the graph).
 
 Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may
 say `timeoutMinutes` (`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole
@@ -1710,7 +1718,17 @@ cut to 4,000 characters, the cut said), `duplicate` (naming in `duplicates` the 
 repeats) or `unproven`; an answer whose course is none of the four, or whose issue to list does not
 read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
 step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
-one) and keeps the list; `issue` is read only by the
+one) - once for an issue: a repeat of the same title at the same place raises nothing while a triage
+of it holds the issue (`FlowCoordinator.HolderOf`: one waiting, running, paused, stopped or ended done,
+but not for a report met after its own fix was done), the run's records saying so, unless it stops the work of a
+step that triage will not run again, for only a triage's own reporter runs again once its fix is done;
+one met again after its fix - by an attempt begun after the fix ended, in the run's own order of
+attempts begun and instances ended that each step record keeps (`attemptBegan`, `endedIn`, and on a
+triage `reportedIn`, the reporting attempt's; `MetAfter`) - is raised anew, its visits of
+the recovery counted against `maxVisits` by the issue, whichever triage sent it (`RecoveryOf`), and a
+configured answer to that bound counted there too, so a fix that never holds ends in `recoveryBound`;
+steps the one issue stopped side by side, each reporting it before its fix, each have it fixed with
+none spending another's bound - and keeps the list; `issue` is read only by the
 triage and the recovery, and `source` by them and by a handler.
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
@@ -3336,8 +3354,8 @@ to as well); then, inside the repository's one section (`FlowSessions.AcrossRuns
 unfinished run with work in the tree - a run whose agent's record cannot be read counts as one,
 said - chooses the name (`r<N>`, one more than the highest there; a name `--run` gives is held to
 `worktrees.maxNameLength` and refused where a record or anything else is there), holds the start
-to the path budget of its agents' worktrees with the copies and workers its leg steps keep inside
-them (`FlowRunPaths`), makes the run's record, its status and its owner
+to the path budget of its agents' worktrees - what each worktree's own check counts below it
+(`WorktreeRoom`), with the copies and workers its leg steps keep inside them (`FlowRunPaths`) - makes the run's record, its status and its owner
 (`.orchestrators/<run>.owner.json`), and leaves the section. A session of a run already made -
 `resume-orchestrator`, or `answer-orchestrator` where no engine runs the run - first sweeps what a
 killed engine's steps left running (`ChildSessions`), refuses a definition the repository's entry

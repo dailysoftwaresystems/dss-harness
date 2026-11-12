@@ -19,6 +19,14 @@ public interface IPathBudget
     /// <see langword="null"/> to use the platform's.
     /// </param>
     PathBudgetResult Check(string directory, int reserve, int margin, int? limit = null);
+
+    /// <summary>
+    /// Whether <see cref="Check"/> holds a path to any limit: <paramref name="limit"/> where one is given, else the
+    /// platform's own - none on a system that sets none, where every check is within budget and nothing need be
+    /// measured for one.
+    /// </summary>
+    /// <param name="limit">Path length to budget against instead of the platform's own limit, or <see langword="null"/> to use the platform's.</param>
+    bool Bounds(int? limit = null);
 }
 
 /// <inheritdoc cref="IPathBudget"/>
@@ -32,7 +40,7 @@ public sealed class PathBudget(IHostPlatform platform) : IPathBudget
         ArgumentOutOfRangeException.ThrowIfNegative(reserve);
         ArgumentOutOfRangeException.ThrowIfNegative(margin);
 
-        if ((limit ?? _platform.MaxPathLength) is not { } effectiveLimit)
+        if (LimitOf(limit) is not { } effectiveLimit)
         {
             return PathBudgetResult.Unbounded();
         }
@@ -53,6 +61,11 @@ public sealed class PathBudget(IHostPlatform platform) : IPathBudget
             ? PathBudgetResult.WithinBudget(required, effectiveLimit, availableNameLength)
             : PathBudgetResult.Exceeded(required, effectiveLimit, availableNameLength);
     }
+
+    public bool Bounds(int? limit = null) => LimitOf(limit) is not null;
+
+    /// <summary>The limit a path is held to: the one given, else the platform's own; null where there is neither.</summary>
+    private int? LimitOf(int? limit) => limit ?? _platform.MaxPathLength;
 
     /// <summary>
     /// Length of everything up to and including the final separator, which is what a

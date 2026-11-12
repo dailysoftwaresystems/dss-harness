@@ -336,9 +336,27 @@ public sealed class WorktreeService(
                 $"'{ReportText.Printable(parent)}' is a worktree, and an orchestrator's agents' worktrees cannot be made inside one; delete it, or name the orchestrator otherwise."));
         }
 
+        // What the worktree holds below it - the deeper of the files the repository tracks at the main checkout's HEAD,
+        // where every worktree is made, and the build a leg of this machine makes in it - reckoned by the one owner a
+        // run's start check asks too, so a run that passed its start never fails here on a worktree it needs. Where no
+        // limit holds a path, nothing is listed for one.
+        int files;
+
+        try
+        {
+            files = _pathBudget.Bounds(settings.PathLimit)
+                && await _gitClient.ResolveCommitAsync(layout.MainCheckoutRoot, "HEAD", cancellationToken).ConfigureAwait(false) is { } head
+                ? await WorktreeRoom.ForFilesAsync(_gitClient, layout.MainCheckoutRoot, head, cancellationToken).ConfigureAwait(false)
+                : 0;
+        }
+        catch (HarnessException ex)
+        {
+            return WorktreeOutcome.Failed(CommandOutcome.Failed(ex.ExitCode, ex.Message));
+        }
+
         var budget = _pathBudget.Check(
             path,
-            BuildDirectoryLength(context.Config) + settings.PathBudgetReserve,
+            Math.Max(files, WorktreeRoom.ForBuilds(context.Config, _platform.PlatformKey)),
             settings.PathBudgetMargin,
             settings.PathLimit);
 
@@ -1091,32 +1109,6 @@ public sealed class WorktreeService(
     /// <summary>Whether <paramref name="name"/> is an orchestrator's: a directory of that name is kept among the orchestrators'.</summary>
     private bool IsOrchestrators(HarnessLayout layout, string name)
         => _fileSystem.DirectoryExists(Orchestration.OrchestratorLayout.Of(layout, name).Directory);
-
-    /// <summary>
-    /// How many characters <c>build/&lt;variant&gt;/</c> adds below a worktree, for the longest
-    /// variant among the legs this machine builds; zero when it builds none.
-    /// </summary>
-    /// <param name="config">The whole configuration.</param>
-    /// <remarks>
-    /// Counted here rather than folded into worktrees.pathBudgetReserve, because the harness knows
-    /// every variant's name and the reserve could only guess at one: when build directories came to
-    /// be keyed by variant, a reserve measured below the build directory stopped covering the
-    /// directory itself, and the check believed it had twenty characters to spare where it had four.
-    /// A leg builds in this machine's worktree when it names no host of its own and its operating
-    /// system is this machine's; one that names a host builds there, whatever its os says.
-    /// </remarks>
-    private int BuildDirectoryLength(Configuration.HarnessConfig config)
-    {
-        var longest = config.Legs.Values
-            .Where(leg => Legs.LegTrees.BuildsHere(leg, _platform.PlatformKey))
-            .Select(leg => Build.VariantKey.For(config, leg, _platform.PlatformKey).DirectoryName.Length)
-            .DefaultIfEmpty(-1)
-            .Max();
-
-        // A separator between 'build' and the variant, and one after the variant. The one before
-        // 'build' joins the worktree to what is reserved below it, which the budget counts itself.
-        return longest < 0 ? 0 : Build.VariantKey.BuildRootName.Length + longest + 2;
-    }
 
     /// <summary>
     /// The refusal for a directory under the root that is not a worktree git can find, which names the way back only

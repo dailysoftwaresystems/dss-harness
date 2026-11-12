@@ -289,6 +289,23 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>The handler whose redirect sent the run back past this visit, by its instance id; null where none did.</summary>
     public string? LeftBy { get; internal set; }
 
+    /// <summary>
+    /// Where the instance's latest attempt began in the run's own order of attempts begun and instances ended (one count
+    /// for both, kept in the step's record and carried across sessions); 0 where none began, or a record written before
+    /// the order was kept says none.
+    /// </summary>
+    internal long AttemptBegan;
+
+    /// <summary>Where the instance ended in the run's own order; 0 where it has not ended, or its record says none.</summary>
+    internal long EndedIn;
+
+    /// <summary>
+    /// A triage instance's: where the attempt that reported its issue began in the run's own order, set as the triage is
+    /// raised and kept in its record, so what its reporter met the issue after is read the same however often that step
+    /// is run again later; 0 for every other instance, or where a record says none.
+    /// </summary>
+    internal long ReportedIn;
+
     /// <summary>What the code alone cannot say of how this attempt ended - a refusal whose only obstacle was a held lock; none for every other ending.</summary>
     public OutcomeCause Cause { get; internal set; }
 
@@ -512,6 +529,14 @@ public sealed class FlowCoordinator
 
     private Scope _top = null!;
     private bool _stopping;
+
+    /// <summary>
+    /// The run's own order of attempts begun and instances ended, one count for both, so which came first is never a
+    /// question of the clock - two times a record keeps to the second may tie, and an attempt run again keeps its first
+    /// start time: each step's record keeps where its latest attempt began and where it ended, and a resume goes on from
+    /// the highest it reads back.
+    /// </summary>
+    private long _order;
     private bool _alwaysPhase;
     private bool _inSession;
     private bool _answeredAtOnce;
@@ -3465,6 +3490,7 @@ public sealed class FlowCoordinator
         instance.EndedByQuestion = null;
         instance.Failure = null;
         instance.FinishedAt = null;
+        instance.EndedIn = 0;
 
         // What the attempt before it said of its tree is its own: the next has let nothing go yet.
         instance.Copied = false;
@@ -5531,6 +5557,7 @@ public sealed class FlowCoordinator
             {
                 around.State = FlowInstanceState.Running;
                 around.FinishedAt = null;
+                around.EndedIn = 0;
                 Record(FlowChangeKind.Step, around, from: FlowInstanceState.Done, to: FlowInstanceState.Running, detail: $"in progress again: update {update} added a round of '{round.Step.Name}'");
             }
         }
@@ -5619,6 +5646,7 @@ public sealed class FlowCoordinator
                 var was = loop.State;
                 loop.State = FlowInstanceState.Running;
                 loop.FinishedAt = null;
+                loop.EndedIn = 0;
                 Record(FlowChangeKind.Step, loop, from: was, to: FlowInstanceState.Running, detail: $"the loop runs again: update {reopening} owes its next iteration work");
             }
 
@@ -6072,6 +6100,7 @@ public sealed class FlowCoordinator
 
         instance.State = FlowInstanceState.Running;
         instance.StartedAt ??= _clock.GetUtcNow();
+        instance.AttemptBegan = ++_order;
         // What an attempt says of its legs is its own: the attempt before it placed its legs where it did.
         instance.HeldClaims.Clear();
         instance.HeldClaims.AddRange(claims);
@@ -6697,7 +6726,11 @@ public sealed class FlowCoordinator
         WriteStepRecordOf(reporter);
     }
 
-    /// <summary>Raises one instance of the triage step for each issue a reporting step's answer reported, with the reporting step as its source - once for each.</summary>
+    /// <summary>
+    /// Raises one instance of the triage step for each issue a reporting step's answer reported, with the reporting step
+    /// as its source - but none for an issue a triage of that step holds already (<see cref="HolderOf"/>), which the
+    /// run's records say instead.
+    /// </summary>
     private void RaiseIssues(FlowInstance reported, string triage, IReadOnlyList<FlowPreExistingReport> issues)
     {
         var declaration = _definition.Steps.FirstOrDefault(step => step.Name == triage);
@@ -6708,7 +6741,7 @@ public sealed class FlowCoordinator
         }
 
         // A triage already raised for an issue - a crash came between raising it and the reporter's record - is that
-        // issue's, each claimed once, so an issue reported twice is still triaged twice.
+        // issue's, each claimed once.
         var raisedAlready = _created.Where(raised => ReferenceEquals(raised.RaisedBy, reported) && raised.Step.Name == triage).ToList();
 
         foreach (var issue in issues)
@@ -6719,13 +6752,111 @@ public sealed class FlowCoordinator
                 continue;
             }
 
+            if (HolderOf(triage, reported, issue) is { } holder)
+            {
+                Record(FlowChangeKind.Step, reported, from: reported.State, to: reported.State, attempt: reported.Attempt,
+                    detail: $"pre-existing issue '{issue.Title}' ({issue.Where}) reported again: {holder.Id} triages it");
+                continue;
+            }
+
             _ = NewVisit(_top, declaration, FlowInstanceState.NotStarted, made: raised =>
             {
                 raised.RaisedBy = reported;
                 raised.Issue = issue;
+                raised.ReportedIn = reported.AttemptBegan;
             });
         }
     }
+
+    /// <summary>
+    /// The instance of <paramref name="triage"/> that holds <paramref name="issue"/> already, as <paramref name="reported"/>
+    /// reports it; null where none does and a triage is raised for it. One holds an issue of the same title at the same
+    /// place (<see cref="FlowPreExistingReport.Title"/>, <see cref="FlowPreExistingReport.Where"/>), raised by any step,
+    /// while it has not given the issue up (<see cref="HoldsIssue"/>) - so each found issue is triaged once, a repeat
+    /// worded differently staying the triage's to merge by the duplicate course - and only where its ending serves the
+    /// reporter too: a report that stops its reporter's own work is held only by a triage that reporter raised for an
+    /// issue that stopped it, for only a triage's own reporter runs again once the issue's fix is done; and never by a
+    /// triage whose own fix was done before the reporter met the issue (<see cref="MetAfter"/>), for the fix did not
+    /// hold, and the issue is triaged anew - by that new triage, which holds it in its turn.
+    /// </summary>
+    private FlowInstance? HolderOf(string triage, FlowInstance reported, FlowPreExistingReport issue)
+        => _created.FirstOrDefault(raised => raised.Step.Name == triage
+            && raised.Issue is { } held
+            && SameIssue(held, issue)
+            && (!issue.Blocks || ReferenceEquals(raised.RaisedBy, reported) && held.Blocks)
+            && HoldsIssue(raised)
+            && !RecoveriesOf(raised).Any(recovery => recovery.State == FlowInstanceState.Done && MetAfter(recovery, reported, reported.AttemptBegan)));
+
+    /// <summary>
+    /// Whether a triage instance holds its issue for a repeat of it: one waiting, running, paused on a question, stopped
+    /// to run again, or ended done, whatever it answered - a repeat met after the issue's fix was done is never offered
+    /// to the triage whose fix that was (<see cref="HolderOf"/>). A triage that failed, was skipped or never ran triaged
+    /// nothing, and holds nothing.
+    /// </summary>
+    private static bool HoldsIssue(FlowInstance triage)
+        => triage.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped or FlowInstanceState.Done;
+
+    /// <summary>
+    /// Whether <paramref name="reporter"/> met <paramref name="issue"/> after a fix of it was done: a visit of the recovery
+    /// taken for the same issue - its title at the same place - ended done before the reporter met it
+    /// (<see cref="MetAfter"/>). Such a report is the fix not holding, and its triage's visits of the recovery are counted
+    /// against the issue's own bound (<see cref="RecoveryOf"/>); one from a visit that started before any fix was done saw
+    /// the tree no fix had yet mended, and its triage is counted on its own.
+    /// </summary>
+    /// <param name="reporter">The step that reported it.</param>
+    /// <param name="issue">The issue, as it reported it.</param>
+    /// <param name="began">Where the attempt that reported it began in the run's own order (<see cref="MetAfter"/>).</param>
+    private bool MetAfterItsFix(FlowInstance reporter, FlowPreExistingReport issue, long began)
+        => _created.Any(recovery => IsRecovery(recovery)
+            && recovery.State == FlowInstanceState.Done
+            && recovery.RaisedBy is { } source
+            && IssueSentToFix(source) is { } mended
+            && SameIssue(mended, issue)
+            && MetAfter(recovery, reporter, began));
+
+    /// <summary>
+    /// Whether <paramref name="reporter"/>'s attempt that met the issue began after <paramref name="recovery"/>, a visit
+    /// of the recovery that ended done - the one reading that decides both whether a report is held by the triage whose
+    /// fix that was (<see cref="HolderOf"/>) and where its triage's visits of the recovery are counted
+    /// (<see cref="RecoveryOf"/>): by the run's own order, which the records keep (<see cref="FlowInstance.AttemptBegan"/>,
+    /// <see cref="FlowInstance.EndedIn"/>), so every session reads it as the one that met it did - an attempt begun before
+    /// the fix ended saw the tree it had not yet mended, whatever second each fell in, and one run again after it is after
+    /// it, though its first start was not. Where a record written before the order was kept says neither, it is read as
+    /// those records allow: a later visit of a step in the same scope whose earlier visit that recovery sent the run back
+    /// past (<see cref="FlowInstance.LeftBy"/>), or one that started in a later second than the recovery ended.
+    /// </summary>
+    /// <param name="recovery">A visit of the recovery that ended done.</param>
+    /// <param name="reporter">The step that reported the issue.</param>
+    /// <param name="began">
+    /// Where the attempt that reported it began in the run's own order: the reporter's own latest as a report comes, and a
+    /// triage's recorded one (<see cref="FlowInstance.ReportedIn"/>) wherever it is read again later.
+    /// </param>
+    private bool MetAfter(FlowInstance recovery, FlowInstance reporter, long began)
+        => recovery.EndedIn > 0 && began > 0
+            ? began > recovery.EndedIn
+            : _created.Any(left => left.LeftBy == recovery.Id
+                    && ReferenceEquals(left.Step, reporter.Step)
+                    && ReferenceEquals(left.DeclaredScope, reporter.DeclaredScope)
+                    && left.Visit < reporter.Visit)
+                || recovery.FinishedAt is { } finished && reporter.StartedAt is { } started && SecondOf(finished) < SecondOf(started);
+
+    /// <summary>The whole second a time falls in, as the run's records keep it (<see cref="FlowTimeConverter.Form"/>).</summary>
+    private static long SecondOf(DateTimeOffset at) => at.UtcTicks / TimeSpan.TicksPerSecond;
+
+    /// <summary>
+    /// The issue a recovery taken for <paramref name="source"/> fixes: the one a triage instance that ended its work sent
+    /// to fix; null for a step's failure - a triage's own among them, which the recovery takes as any step's.
+    /// </summary>
+    private static FlowPreExistingReport? IssueSentToFix(FlowInstance source)
+        => source.State != FlowInstanceState.Failed ? source.Issue : null;
+
+    /// <summary>Whether two reports are of one issue: the same title at the same place, as each was written.</summary>
+    private static bool SameIssue(FlowPreExistingReport one, FlowPreExistingReport other)
+        => string.Equals(one.Title, other.Title, StringComparison.Ordinal) && string.Equals(one.Where, other.Where, StringComparison.Ordinal);
+
+    /// <summary>Every visit of the recovery <paramref name="triage"/> raised for the issue it answered <c>fix</c> for.</summary>
+    private IEnumerable<FlowInstance> RecoveriesOf(FlowInstance triage)
+        => _created.Where(created => IsRecovery(created) && ReferenceEquals(created.RaisedBy, triage));
 
     /// <summary>The courses a triage answers, and the engine takes: <c>fix</c>, <c>list</c>, <c>duplicate</c>, <c>unproven</c>.</summary>
     private static readonly string[] TriageCourses = ["fix", "list", "duplicate", "unproven"];
@@ -7664,16 +7795,29 @@ public sealed class FlowCoordinator
     /// records alone: a failed step's failure, the step itself running again once the recovery is done; or the issue a
     /// triage instance that ended done sent to fix, its reporter running again where the issue blocks it and the run
     /// simply going on where it does not. With where its visits are counted against the recovery's bound: the failed
-    /// step's declaration in its scope, or the triage instance itself.
+    /// step's declaration in its scope; the triage instance itself, for an issue its reporter met before any fix of it
+    /// was done - so steps the one issue stopped side by side each have it fixed for them, and none spends another's
+    /// bound; or the issue - its title and where it is - for one met after its fix was done (<see cref="MetAfterItsFix"/>),
+    /// whichever triage sent it, so a fix that never holds spends the one bound, counted from the fix that did not hold,
+    /// and the run asks rather than going round again.
     /// </summary>
     private (FlowInstance? Rerun, FlowPreExistingReport? Issue, (string Scope, string Step) Key) RecoveryOf(FlowInstance source)
     {
         var scope = (source.DeclaredScope ?? _top).Id;
 
-        return source.State != FlowInstanceState.Failed && source.Issue is { } issue
-            ? (issue.Blocks ? source.RaisedBy : null, issue, (scope, source.Id))
-            : (source, null, (scope, source.Path));
+        if (IssueSentToFix(source) is not { } issue)
+        {
+            return (source, null, (scope, source.Path));
+        }
+
+        // An issue's key starts with a NUL, which no step's path nor instance id holds, so it never meets either.
+        return (issue.Blocks ? source.RaisedBy : null, issue, source.RaisedBy is { } reporter && MetAfterItsFix(reporter, issue, source.ReportedIn)
+            ? (scope, IssueKey(issue))
+            : (scope, source.Id));
     }
+
+    /// <summary>Where the recovery's visits for an issue met again after its fix are counted: the issue, by its title and where it is.</summary>
+    private static string IssueKey(FlowPreExistingReport issue) => $"\0{issue.Title}\0{issue.Where}";
 
     /// <summary>
     /// Takes one thing to the workflow's recovery, as <see cref="RecoveryOf"/> says what it is: a failure, or an issue a
@@ -7688,7 +7832,9 @@ public sealed class FlowCoordinator
         var recover = _definition.Recover!;
         var scope = source.DeclaredScope ?? _top;
         var (_, issue, key) = RecoveryOf(source);
-        var visits = _recoveryVisits.TryGetValue(key, out var taken) ? taken + 1 : 1;
+
+        // An issue met again after its fix has had that fix: its own count starts from the visit that did not hold.
+        var visits = _recoveryVisits.TryGetValue(key, out var taken) ? taken + 1 : issue is { } met && key.Step == IssueKey(met) ? 2 : 1;
         var allowed = recover.VisitsAllowed + _recoveryExtra.GetValueOrDefault(key);
 
         if (visits > allowed)
@@ -8371,6 +8517,21 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
+    /// Where a configured answer to a question of <paramref name="kind"/> on <paramref name="instance"/> is counted
+    /// (<see cref="FlowQuestions.CountedAt"/>) - a recovery's bound by what the recovery's visits are counted for
+    /// (<see cref="RecoveryOf"/>) rather than by the instance that asked: a step that failed again, or an issue met again
+    /// after its fix, asks on a new instance each time, and a count kept by instance would never run out.
+    /// </summary>
+    /// <param name="kind">The question's kind.</param>
+    /// <param name="id">The id of the instance the question is about; null for the run's own.</param>
+    /// <param name="instance">That instance, where the run holds it.</param>
+    /// <param name="subject">The handler a handler's bound is about; null for every other kind.</param>
+    private string CountedAt(string kind, string? id, FlowInstance? instance, string? subject)
+        => kind == "recoveryBound" && instance is not null && RecoveryOf(instance).Key is var (scope, counted)
+            ? FlowQuestions.CountedAt(kind, $"\0{scope}\0{counted}", subject)
+            : FlowQuestions.CountedAt(kind, id, subject);
+
+    /// <summary>
     /// The answer the configuration gives at once to a question of <paramref name="kind"/> on <paramref name="instance"/>
     /// - null for the run's own question - with where it is configured, counted where it is given; null where a person
     /// is asked. An answer that lets the same thing go on is given a counted number of times and no more, and then its
@@ -8387,7 +8548,7 @@ public sealed class FlowCoordinator
 
         var (entry, where) = configured;
 
-        var key = FlowQuestions.CountedAt(kind, instance?.Id, subject);
+        var key = CountedAt(kind, instance?.Id, instance, subject);
         var given = _answerSpent.GetValueOrDefault(key);
         var counted = WorkflowValidator.GoesOn.Contains(entry.Answer, StringComparer.Ordinal) && given < (entry.Times ?? 1);
         var answer = entry.Answer == "direct"
@@ -8466,6 +8627,7 @@ public sealed class FlowCoordinator
         instance.Exit ??= exit;
         instance.Error ??= error;
         instance.FinishedAt ??= _clock.GetUtcNow();
+        instance.EndedIn = ++_order;
 
         if (state is FlowInstanceState.Failed && instance.DeclaredScope is not null)
         {
@@ -10840,7 +11002,10 @@ public sealed class FlowCoordinator
             instance.ScopeOf?.PieceOf,
             instance.ScopeOf?.AgainOf?.GroupInstance?.Id,
             instance.Skills is [_, ..] skills ? [.. skills] : null,
-            instance.Graph?.DeepClone());
+            instance.Graph?.DeepClone(),
+            instance.AttemptBegan == 0 ? null : instance.AttemptBegan,
+            instance.EndedIn == 0 ? null : instance.EndedIn,
+            instance.ReportedIn == 0 ? null : instance.ReportedIn);
 
     /// <summary>
     /// The agent this step works in: the one stored on it (<see cref="FlowInstance.WorksIn"/>), or - before it was stored -
@@ -11447,7 +11612,7 @@ public sealed class FlowCoordinator
                     case "fix":
                         // Fixed where a recovery it raised ended done; being fixed otherwise - and where none was raised
                         // yet, the issue is owed to the recovery, which this session gives it.
-                        var raised = _created.Where(created => IsRecovery(created) && ReferenceEquals(created.RaisedBy, triage)).ToList();
+                        var raised = RecoveriesOf(triage).ToList();
                         _tally.Add(new PreExistingTally(raised.Any(created => created.State == FlowInstanceState.Done) ? "fixed" : "being fixed", $"{TitleOf(triage)} ({WhereOf(triage)})", triage));
 
                         if (raised.Count == 0)
@@ -11609,6 +11774,10 @@ public sealed class FlowCoordinator
             instance.Graph = record.Graph?.DeepClone();
             instance.StartedAt = record.StartedAt;
             instance.FinishedAt = record.FinishedAt;
+            instance.AttemptBegan = record.AttemptBegan ?? 0;
+            instance.EndedIn = record.EndedIn ?? 0;
+            instance.ReportedIn = record.ReportedIn ?? 0;
+            _order = Math.Max(_order, Math.Max(instance.AttemptBegan, instance.EndedIn));
             instance.Made = record.Made;
             instance.MadeModel = record.Model;
             instance.WorksIn = record.Agent;
@@ -11666,7 +11835,7 @@ public sealed class FlowCoordinator
             {
                 if (given.By == "configuration" && WorkflowValidator.GoesOn.Contains(given.Answer, StringComparer.Ordinal))
                 {
-                    var counted = FlowQuestions.CountedAt(asked.Kind, asked.Instance, asked.Handler);
+                    var counted = CountedAt(asked.Kind, asked.Instance, about, asked.Handler);
                     _answerSpent[counted] = _answerSpent.GetValueOrDefault(counted) + 1;
                 }
 

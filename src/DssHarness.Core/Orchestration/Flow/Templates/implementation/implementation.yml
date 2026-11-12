@@ -145,6 +145,7 @@ steps:
         outputs: schemas/priority.schema.json
       - name: triage
         type: reason
+        graph: off
         agent: triage
         tier: high
         effort: high
@@ -196,6 +197,7 @@ steps:
         onFailure: recover
       - name: plan-audit
         type: reason
+        graph: off
         agent: plan-auditor
         tier: high
         effort: xhigh

@@ -38,11 +38,19 @@ public sealed class WorkflowTemplatesTests
     /// 2026-10-23): the baseline is split in two - <c>build</c>, a build step that fails red and is taken by the
     /// recovery, and <c>baseline</c>, the test step it was - and <c>codebase</c> makes the graph after <c>build</c>,
     /// beside the baseline's tests, passed over where it cannot be made; every later step has it upstream, through
-    /// <c>intake</c>. Each type of reason step is served as part 05's table gives it (README value 377): the steps that
-    /// read code for their task say nothing - the tool and the task are their defaults - the reviewers, the diagnosis
-    /// and the steps that verify and fix say <c>graphFrom: changes</c>, the prioritiser and a review's scope are given
-    /// the map, and the scribe's steps, which write the run's records, ask none of it. The round's mutation sweep
-    /// drives only the arms with no recorded pass that still holds (the user's <c>--pending</c>).
+    /// <c>intake</c>. Which type is served what the twenty-run measurement of 2026-11-11 set (README measurement 24),
+    /// by the user's ruling: the graph stays where it costs equal or less, and where what it bought - correction
+    /// rounds avoided, each worth more than the step's own overhead - outweighs its cost. The steps that work on code
+    /// keep the tool - the implementer and everything that resumes it, the six reviewers, the self-audit, the
+    /// diagnosis, and the pre-existing-issue triage (it measured cheaper) - the reviewers, the self-audit, the
+    /// diagnosis and the steps that verify and fix starting their packs from their changes (<c>graphFrom: changes</c>);
+    /// the request triage and the plan audit, whose work is text the map does not light, ask none (each measured
+    /// costlier with no quality gained); the prioritiser and a review's scope keep the map (the scope's whole overhead
+    /// is a fifth of a cent beside the review rounds it steers; the prioritiser is unmeasured, serving only a run with
+    /// no request); the scribes ask none as before. The planner, which resumes itself and so may say a graph key of its
+    /// own, keeps its default, the tool, as it was: the measurement found it costlier with the graph and did not move
+    /// it. The round's mutation sweep drives only the arms with no recorded pass that still holds (the user's
+    /// <c>--pending</c>).
     /// </summary>
     [Fact]
     public void TheShippedFlow_MakesItsGraphAfterTheBaselineBuild_AndServesEachStepTypeAsTheTableGivesIt()
@@ -84,10 +92,10 @@ public sealed class WorkflowTemplatesTests
         var expected = new (string Name, string? Graph, string? From)[]
         {
             ("priority", "map", null),
-            ("triage", null, null),
+            ("triage", "off", null),
             ("plan", null, null),
             ("plan-update", null, null),
-            ("plan-audit", null, null),
+            ("plan-audit", "off", null),
             ("implement", null, null),
             ("unblock", null, null),
             ("redo", null, null),
@@ -563,7 +571,7 @@ public sealed class WorkflowTemplatesTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            $"That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue and never scheduled, as the recovery is not - and "
+            $"That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue: a repeat of the same title at the same place raises nothing while a triage of it holds the issue, the run's records saying so, unless it stops the work of a step that triage will not run again, and one whose triage failed, or met again after its fix was done, is raised anew; and it is never scheduled, as the recovery is not - and "
                 + "onAddress: recover: it reproduces the issue on the run's base commit, gives the recovery one that is in a step's way, related to "
                 + "the work or critical, to fix at its root",
             help,

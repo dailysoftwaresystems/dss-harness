@@ -233,7 +233,7 @@ unreadable, left as links, naming nothing, or left uncopied by a stop, and direc
 could not be read.
 
 **Refuse early, with the arithmetic.** `create-worktree` will not create a worktree
-whose build paths cannot fit inside Windows' path limit, because that failure
+whose files or build paths cannot fit inside Windows' path limit, because that failure
 otherwise appears as compile errors in files the worktree never touched. It says how
 long a name would fit instead. The name limit and both sides of the budget are set
 in `config.json`.
@@ -500,16 +500,26 @@ what still fails is asked (`onFailure: pause`). The implementation workflow says
 ends done or asks only what it must. It builds first: its baseline is split in two - a `build` step, which fails red
 and is taken by the recovery and built again - and the `test` step it was, which waits for the build - and the flow
 makes its codebase graph after that build, beside the baseline's tests and the CI read, passed over where it cannot be
-made. Every reason step after it is served from the graph as its type of work needs: the steps that read code for
-their task say nothing and are given the tool and their task's seeds by default, the reviewers, the self-audit, the
-diagnosis and the steps that verify and fix start their packs from their changes (`graphFrom: changes`), the
-prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the run's records, ask
-none of it (`dssharness help codebase-graph`).
+made. Every reason step after it is served from the graph as the twenty-run measurement of 2026-11-11
+set each type's value (graph arm against `graph: off`, five requests on this repository and five on a
+small C repository, the same models and efforts): the steps that work on code keep the tool - the
+implementer and everything that resumes it, the six reviewers, the self-audit, the diagnosis, and the
+pre-existing-issue triage, which measured cheaper - the reviewers, the self-audit, the diagnosis and
+the steps that verify and fix starting their packs from their changes (`graphFrom: changes`); the
+request triage and the plan audit, whose work is text the map does not light, ask none, each having
+measured costlier with no quality gained; the prioritiser and a review's scope are given the map alone
+(the scope's whole overhead a fifth of a cent beside the review rounds it steers); and the scribe's
+steps, which write the run's records, ask none of it (`dssharness help codebase-graph`). The planner
+keeps the tool, its default, as it was: the measurement found it costlier with the graph and did not
+move it.
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That
-step, at the flow's top level, says `raised: preExisting` - raised once per issue, never scheduled,
-as the recovery is not - and `onAddress: recover`: it reproduces the issue on the run's base commit,
+step, at the flow's top level, says `raised: preExisting` - raised once per issue (a repeat of the
+same title at the same place raises nothing while a triage of it holds the issue, the run's records
+saying so, unless it stops the work of a step that triage will not run again; one whose triage
+failed, or met again after its fix was done, is raised anew), never scheduled, as the recovery is not - and
+`onAddress: recover`: it reproduces the issue on the run's base commit,
 gives the recovery one that is in a step's way, related to the work or critical, to fix at its root,
 and lists the rest, proven, with a title and a description, in the run's `pre-existing-issues.json`,
 shown in the pull request's body and the handoff. Where a workflow has such a step, every other reasoning step names it, so no issue is lost. The

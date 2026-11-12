@@ -358,11 +358,12 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 }
 
 /// <summary>
-/// The path budget at a run's start: the longest worktree path the run makes - counted with each
-/// <c>.legs/&lt;key&gt;</c> copy its legs work in and each <c>.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c> worker its
-/// sweeps keep, each with its variant's build below it as a copy's own check counts it (<see cref="CopyPathBudget"/>) -
-/// stays within this machine's path limit, with the margin to spare. A copy whose build passes the limit fails as
-/// compile errors in files nobody touched, so it is asked before the run makes one.
+/// The path budget at a run's start: the longest worktree path the run makes - counted with what the worktree's own
+/// check counts below it (<see cref="WorktreeRoom"/>), so a run that passes here never fails on a worktree it needs, and
+/// with each <c>.legs/&lt;key&gt;</c> copy its legs work in and each <c>.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>
+/// worker its sweeps keep, each with its variant's build below it as a copy's own check counts it
+/// (<see cref="CopyPathBudget"/>) - stays within this machine's path limit, with the margin to spare. A copy whose build
+/// passes the limit fails as compile errors in files nobody touched, so it is asked before the run makes one.
 /// </summary>
 public static class FlowRunPaths
 {
@@ -380,9 +381,11 @@ public static class FlowRunPaths
     /// <param name="copied">Each variant a leg of the run builds in a copy, <c>.legs/&lt;key&gt;</c> below its tree.</param>
     /// <param name="swept">Each variant a sweep of the run keeps workers of, <c>.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c> below its tree.</param>
     /// <param name="written">
-    /// The longest path, relative to the tree, a work item says it writes - in the tree and in every copy and worker of
-    /// it, which hold the tree's files; 0 where none is said.
+    /// The longest path, relative to the tree, of a file the tree holds - one the repository tracks
+    /// (<see cref="WorktreeRoom.ForFilesAsync"/>), or one a work item says it writes - in the tree and in every copy and
+    /// worker of it, which hold the tree's files; 0 where none is said.
     /// </param>
+    /// <param name="builds">What a build on this machine adds below the tree itself (<see cref="WorktreeRoom.ForBuilds"/>); 0 where none builds there.</param>
     /// <returns>Whether the longest path stays within the budget, with what it needs and what it may have.</returns>
     public static PathBudgetResult Check(
         IPathBudget budget,
@@ -391,7 +394,8 @@ public static class FlowRunPaths
         string agentName,
         IReadOnlyList<VariantKey> copied,
         IReadOnlyList<VariantKey> swept,
-        int written = 0)
+        int written = 0,
+        int builds = 0)
     {
         ArgumentNullException.ThrowIfNull(budget);
         ArgumentNullException.ThrowIfNull(settings);
@@ -403,11 +407,11 @@ public static class FlowRunPaths
         // The deepest tree the run works in: the longest agent's worktree.
         var tree = Path.Combine(worktreesRoot, agentName);
 
-        // The longest thing kept inside a tree the run works in, below the tree: a file a work item writes, or a copy a
-        // leg works in or a mutation worker - each with its variant's build directory below it and the build below
-        // that, or the item's file, which a copy holds as the tree does.
+        // The longest thing kept inside a tree the run works in, below the tree: a file it holds, the build a leg of this
+        // machine makes in the tree itself, or a copy a leg works in or a mutation worker - each with its variant's
+        // build directory below it and the build below that, or the file, which a copy holds as the tree does.
         var file = written;
-        var inside = file;
+        var inside = Math.Max(file, builds);
 
         foreach (var variant in copied)
         {
@@ -434,10 +438,11 @@ public static class FlowRunPaths
     /// <param name="run">The run's name.</param>
     /// <param name="definition">The workflow, as it was read.</param>
     /// <param name="platformKey">This machine's operating system, as a leg names one.</param>
+    /// <param name="written">The longest path, relative to the tree, of a file the tree holds; 0 where none is said (<see cref="Check"/>).</param>
     /// <returns>What a refusal says where the longest path passes the budget; null where it stays within it.</returns>
-    public static string? RefusalAtStart(IPathBudget budget, HarnessContext context, string run, WorkflowDefinition definition, string platformKey)
+    public static string? RefusalAtStart(IPathBudget budget, HarnessContext context, string run, WorkflowDefinition definition, string platformKey, int written = 0)
     {
-        var (result, tree) = AtStart(budget, context, run, definition, platformKey);
+        var (result, tree) = AtStart(budget, context, run, definition, platformKey, written);
 
         return result.IsWithinBudget
             ? null
@@ -451,7 +456,7 @@ public static class FlowRunPaths
     /// <param name="run">The run's name.</param>
     /// <param name="definition">The workflow, as it was read.</param>
     /// <param name="platformKey">This machine's operating system, as a leg names one.</param>
-    /// <param name="written">The longest path, relative to the tree, a work item says it writes; 0 where none is said (<see cref="Check"/>).</param>
+    /// <param name="written">The longest path, relative to the tree, of a file the tree holds; 0 where none is said (<see cref="Check"/>).</param>
     /// <returns>Whether the longest path stays within the budget, with what it needs and what it may have, and the worktree it was reckoned from.</returns>
     public static (PathBudgetResult Result, string Tree) AtStart(IPathBudget budget, HarnessContext context, string run, WorkflowDefinition definition, string platformKey, int written = 0)
     {
@@ -486,7 +491,7 @@ public static class FlowRunPaths
 
         var root = WorktreeAddress.Plain(run).PathUnder(context.Layout.WorktreesDirectoryUnder(settings.Root));
 
-        return (Check(budget, settings, root, agent, copied, swept, written), Path.Combine(root, agent));
+        return (Check(budget, settings, root, agent, copied, swept, written, WorktreeRoom.ForBuilds(config, platformKey)), Path.Combine(root, agent));
     }
 
     /// <summary>
