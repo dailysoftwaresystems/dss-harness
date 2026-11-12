@@ -10,6 +10,16 @@ made them. The probe's driver is `ClaudeCodeProbeTests`, which the suite skips u
 opts in — the live probe is a person's, never a continuous-integration runner's, for a runner has
 no login.
 
+It ran again on 2026-11-11, against the oldest version taken (2.1.287), the `stable` tag's 2.1.311
+and the `latest` tag's 2.1.322: every point below held on all three, and the additions since the
+2026-10-19 run are the ones named below beside their versions. The live proof of part 06 ran beside
+it on the same days - Claude Code 2.1.296 (the machine's own install) and 2.1.287 (the version the
+tool itself installs where none is there) - and nothing it met moves an answer here: the floor held,
+for the tool installed 2.1.287 as it needs while the registry's `latest` was 2.1.322, and on Linux
+and on macOS the package's `bin/claude` is a symlink to a native executable named `claude.exe`
+(an ELF binary on Linux, a Mach-O arm64 one on macOS), started directly by the system - the same
+shape npm makes on Windows, minus the `.cmd` and `.ps1` shims Windows alone needs.
+
 Every answer below held identically on all three versions unless it names one. Each launch was
 made as a person's terminal makes it: the probe ran inside a Claude Code session, and that
 session's own variables were cleared from every launch's environment (one of them changes an
@@ -24,7 +34,11 @@ NotebookEdit, Read, StructuredOutput, WebFetch, WebSearch, Write` — on each. N
 forces a version above 2.1.287: **the oldest Claude Code taken stays 2.1.287.** What differs is
 additive: 2.1.303's `system/init` adds `original_cwd` and `additional_directories`, its
 `capabilities` add `request_marker_lists_v1` and `mcp_call_result_not_for_model_v1`, and its asks
-add `decision_reason_rule_source` and `server_policy_ask_only`.
+add `decision_reason_rule_source` and `server_policy_ask_only`; 2.1.311's `capabilities` add
+`interrupt_requeue_taken_v1` and `lifecycle_wakeup_source_v1`; 2.1.322's `capabilities` add
+`ask_user_question_unanswered_v1` and `mcp_call_check_permissions_v1`, and its `system/init` adds
+`ultrathink_available` and `ultrathink_typed_raises`. Nothing of the protocol the client reads
+changed on any of them (the run of 2026-11-11, above).
 
 ## The control protocol, both ways
 
