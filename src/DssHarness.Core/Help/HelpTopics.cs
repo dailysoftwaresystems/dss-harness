@@ -5278,9 +5278,11 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("An issue a reasoning step meets that was there before the run, it reports in its answer");
         builder.AppendLine($"(preExisting) and never fixes itself; onPreExisting names the step of the flow's top level");
-        builder.AppendLine($"that triages each one. That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue, by");
-        builder.AppendLine("its title, the one line of it the engine holds, so a repeat another step reports raises nothing, and it is never");
-        builder.AppendLine("scheduled, as the recovery is not - and onAddress: recover: it reproduces the issue on the");
+        builder.AppendLine($"that triages each one. That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue: a");
+        builder.AppendLine("repeat of the same title at the same place raises nothing while a triage of it holds the issue, the");
+        builder.AppendLine("run's records saying so, unless it stops the work of a step that triage will not run again, and one");
+        builder.AppendLine("whose triage failed, or met again after its fix was done, is raised anew; and it is never scheduled, as the");
+        builder.AppendLine("recovery is not - and onAddress: recover: it reproduces the issue on the");
         builder.AppendLine("run's base commit, gives the recovery one that is in a step's way, related to the work or");
         builder.AppendLine("critical, to fix at its root (a step it was in the way of runs again from where it stopped),");
         builder.AppendLine("and lists the rest, proven, with a title and a description, in the run's");

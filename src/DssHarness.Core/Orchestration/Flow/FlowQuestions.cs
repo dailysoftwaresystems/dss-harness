@@ -304,8 +304,10 @@ public static class FlowQuestions
     /// Where a counted answer of <paramref name="kind"/> on <paramref name="instance"/> is counted: one instance of a
     /// repeat for a loop's bound, one step instance for the kinds its own work raises - an answer that lets the same
     /// thing go on is counted across the attempts it itself creates, for nothing a configuration answers would
-    /// otherwise ever stop - one handler in its scope for a handler's bound, and the run alone for its budget, the one
-    /// question no step asks. The engine counts by it as it answers, and a resume counts the answers
+    /// otherwise ever stop - one handler in its scope for a handler's bound, the run alone for its budget, the one
+    /// question no step asks, and for the recovery's bound what its visits are counted for, given as
+    /// <paramref name="instance"/> by the coordinator: a step that failed again, or an issue met again after its fix, asks
+    /// on a new instance each time, and a count kept by instance would never run out. The engine counts by it as it answers, and a resume counts the answers
     /// <c>questions.json</c> holds by it again, so a count a configuration spent stays spent across sessions.
     /// </summary>
     /// <param name="kind">The question's kind.</param>

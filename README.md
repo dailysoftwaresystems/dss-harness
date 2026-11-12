@@ -513,9 +513,11 @@ goes on with its own work, and such a step carries no graph key - and is not set
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That
-step, at the flow's top level, says `raised: preExisting` - raised once per issue, by its title, the
-one line of it the engine holds, so a repeat another step reports raises nothing, never scheduled,
-as the recovery is not - and `onAddress: recover`: it reproduces the issue on the run's base commit,
+step, at the flow's top level, says `raised: preExisting` - raised once per issue (a repeat of the
+same title at the same place raises nothing while a triage of it holds the issue, the run's records
+saying so, unless it stops the work of a step that triage will not run again; one whose triage
+failed, or met again after its fix was done, is raised anew), never scheduled, as the recovery is not - and
+`onAddress: recover`: it reproduces the issue on the run's base commit,
 gives the recovery one that is in a step's way, related to the work or critical, to fix at its root,
 and lists the rest, proven, with a title and a description, in the run's `pre-existing-issues.json`,
 shown in the pull request's body and the handoff. Where a workflow has such a step, every other reasoning step names it, so no issue is lost. The

@@ -209,6 +209,16 @@ public sealed record FlowEvent(
 /// What the step's codebase graph gave and what it saved: its mode, its view, what the map and the pack cost,
 /// what the tool served, and what the agent still read whole; null where the step was given no graph.
 /// </param>
+/// <param name="AttemptBegan">
+/// Where the latest attempt began in the run's own order of attempts begun and instances ended - one count for both,
+/// carried across sessions - so which came first is never a question of the clock; null where no attempt began yet.
+/// </param>
+/// <param name="EndedIn">Where the instance ended in that order; null where it has not ended.</param>
+/// <param name="ReportedIn">
+/// A triage instance's: where the attempt that reported its issue began in that order, as it was when the triage was
+/// raised - what the triage's reporter met the issue after reads, however often that step is run again later; null for
+/// every other record.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -255,7 +265,10 @@ public sealed record FlowStepRecord(
     string? PieceOf = null,
     string? AgainOf = null,
     IReadOnlyList<Agents.AgentSkill>? Skills = null,
-    JsonNode? Graph = null)
+    JsonNode? Graph = null,
+    long? AttemptBegan = null,
+    long? EndedIn = null,
+    long? ReportedIn = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -894,6 +907,9 @@ public sealed record FlowSnapshot(
 /// <param name="AgainOf">An instance of the work-item group's: the instance it visits again (<see cref="FlowStepRecord.AgainOf"/>); null where it visits none.</param>
 /// <param name="Skills">Every skill the step's agent was given (<see cref="FlowStepRecord.Skills"/>); null where it was given none.</param>
 /// <param name="Graph">What the step's codebase graph gave and what it saved (<see cref="FlowStepRecord.Graph"/>); null where it was given none.</param>
+/// <param name="AttemptBegan">Where its latest attempt began in the run's own order (<see cref="FlowStepRecord.AttemptBegan"/>); null where none began.</param>
+/// <param name="EndedIn">Where it ended in that order (<see cref="FlowStepRecord.EndedIn"/>); null where it has not ended.</param>
+/// <param name="ReportedIn">A triage instance's: where the attempt that reported its issue began (<see cref="FlowStepRecord.ReportedIn"/>); null for every other.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -940,4 +956,7 @@ public sealed record FlowSnapshotStep(
     string? PieceOf = null,
     string? AgainOf = null,
     IReadOnlyList<Agents.AgentSkill>? Skills = null,
-    JsonNode? Graph = null);
+    JsonNode? Graph = null,
+    long? AttemptBegan = null,
+    long? EndedIn = null,
+    long? ReportedIn = null);

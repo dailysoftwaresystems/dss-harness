@@ -1718,8 +1718,17 @@ cut to 4,000 characters, the cut said), `duplicate` (naming in `duplicates` the 
 repeats) or `unproven`; an answer whose course is none of the four, or whose issue to list does not
 read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
 step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
-one) - once for an issue, by its title, the one line of it the engine holds, so a repeat another step reports
-raises nothing - and keeps the list; `issue` is read only by the
+one) - once for an issue: a repeat of the same title at the same place raises nothing while a triage
+of it holds the issue (`FlowCoordinator.HolderOf`: one waiting, running, paused, stopped or ended done,
+but not for a report met after its own fix was done), the run's records saying so, unless it stops the work of a
+step that triage will not run again, for only a triage's own reporter runs again once its fix is done;
+one met again after its fix - by an attempt begun after the fix ended, in the run's own order of
+attempts begun and instances ended that each step record keeps (`attemptBegan`, `endedIn`, and on a
+triage `reportedIn`, the reporting attempt's; `MetAfter`) - is raised anew, its visits of
+the recovery counted against `maxVisits` by the issue, whichever triage sent it (`RecoveryOf`), and a
+configured answer to that bound counted there too, so a fix that never holds ends in `recoveryBound`;
+steps the one issue stopped side by side, each reporting it before its fix, each have it fixed with
+none spending another's bound - and keeps the list; `issue` is read only by the
 triage and the recovery, and `source` by them and by a handler.
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key

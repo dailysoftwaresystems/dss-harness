@@ -569,7 +569,7 @@ public sealed class WorkflowTemplatesTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            $"That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue, by its title, the one line of it the engine holds, so a repeat another step reports raises nothing, and it is never scheduled, as the recovery is not - and "
+            $"That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue: a repeat of the same title at the same place raises nothing while a triage of it holds the issue, the run's records saying so, unless it stops the work of a step that triage will not run again, and one whose triage failed, or met again after its fix was done, is raised anew; and it is never scheduled, as the recovery is not - and "
                 + "onAddress: recover: it reproduces the issue on the run's base commit, gives the recovery one that is in a step's way, related to "
                 + "the work or critical, to fix at its root",
             help,

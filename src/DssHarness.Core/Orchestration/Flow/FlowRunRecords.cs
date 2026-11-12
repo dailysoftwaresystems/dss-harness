@@ -627,7 +627,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.PieceOf,
             step.AgainOf,
             step.Skills,
-            step.Graph?.DeepClone());
+            step.Graph?.DeepClone(),
+            step.AttemptBegan,
+            step.EndedIn,
+            step.ReportedIn);
     }
 
     /// <summary>
