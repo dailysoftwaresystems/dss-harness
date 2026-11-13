@@ -530,9 +530,12 @@ recover:
       forEach: 'diagnose.latest.items'
       # The item pipeline again, used by the recovery as the rounds use it: each remedy is built in
       # an agent of its own, tested, reviewed, folded and checkpointed. This use builds one with the
-      # remedy prompt, reading the diagnosis this step of the recovery hands it; its redo and undo
-      # are held off, for no plan update reaches the recovery, and its machine steps' failures ask
-      # (failTo: pause), for the recovery cannot call itself.
+      # remedy prompt, reading the diagnosis this step of the recovery hands it, and hands it no plan:
+      # a failure the recovery puts right - a red build, an issue the request's triage met that was
+      # there before the run - may come before anything is planned. Its redo and undo are held off,
+      # for no plan update reaches the recovery, and each of its machine steps that fails asks a
+      # person on its own (failTo: pause), the remedies beside it going on, for the recovery cannot
+      # call itself.
       use: ./item-pipeline/item-pipeline.yml
       with:
         item: 'item'
@@ -540,7 +543,6 @@ recover:
         alternatives: 'false'
         failTo: pause
         orient: 'orient'
-        planSummary: 'planning.plan.latest.summary'
         affectedTests: 'input.affectedTests'
         diagnose: 'diagnose.latest'
     - name: publish

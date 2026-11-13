@@ -584,7 +584,8 @@ directory read in a prompt as `{text.<name>}` the same live way - the used workf
 where the reading step is one of its, and the run's where none between them declares the name - and
 the shipped flow declares its `recommendations` and its `closure` there, `closure.md` being the
 repository's own from the day init writes it: the universe its decisions range over, and what else
-judges them.
+judges them. No prompt the tool ships reads `{text.closure}` yet, and the file says so: what a
+repository writes there reaches an agent once a prompt of its own reads it.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its

@@ -66,6 +66,13 @@ public sealed class WorkflowTemplatesTests
         Assert.DoesNotContain("diagnose", items.With.Keys);
         Assert.Equal("diagnose.latest", remedies.With["diagnose"]);
 
+        // The rounds hand the pipeline the plan's summary their builder reads; the recovery hands it none, for its
+        // remedy reads the diagnosis and a failure it puts right may come before anything is planned - a red build,
+        // an issue the request's triage met that was there before the run - so the pipeline requires no plan of a use.
+        Assert.Equal("planning.plan.latest.summary", items.With["planSummary"]);
+        Assert.DoesNotContain("planSummary", remedies.With.Keys);
+        Assert.False(items.Use.Inputs.Single(input => input.Name == "planSummary").Required);
+
         // The two uses name the one file: its fingerprint is one, and the steps the flow holds are the pipeline's,
         // placed at each use.
         Assert.Equal(items.Use.Fingerprint, remedies.Use.Fingerprint);
@@ -550,6 +557,28 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// <c>closure.md</c> says what reads it, as what ships does: an agent is given it only where its step's prompt reads
+    /// <c>{text.closure}</c>, and no file shipped beside it does yet - so a repository that fills its heading is told
+    /// that its words reach no agent until a prompt of its own reads them, never left to think the shipped flow weighs
+    /// them; the README says the same. A shipped prompt that comes to read it changes both sentences in the same change.
+    /// </summary>
+    [Fact]
+    public void ClosureMd_SaysNoShippedPromptReadsIt_AsNoneDoes()
+    {
+        Assert.DoesNotContain(WorkflowTemplates.Files.Where(file => file != "closure.md"), file => WorkflowTemplates.TextOf(file)!.Contains("{text.closure}", StringComparison.Ordinal));
+        Assert.Contains(
+            "an agent is given it where its step's prompt reads `{text.closure}`, as the file stands when the prompt is given. "
+                + "None of the prompts shipped beside it reads it: what is written here reaches an agent once a prompt of this "
+                + "repository's says `{text.closure}` where its agent is to weigh it.",
+            Prose.Words(WorkflowTemplates.TextOf("closure.md")!),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "No prompt the tool ships reads `{text.closure}` yet, and the file says so: what a repository writes there reaches an agent once a prompt of its own reads it.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The shipped flow never stops for no reason (user, 2026-10-17): a run of it ends done, or asks a person only what
     /// a person must settle. Every step says what its failure does, in the file: onFailure: recover on each step that
     /// builds, tests, folds, checks, commits, pushes or waits - the check steps of a block whose handler takes the
@@ -584,8 +613,9 @@ public sealed class WorkflowTemplatesTests
 
         // Only the reads that are told on, never judged, pass a failure over; every reasoning step asks, every other
         // step of the flow gives its failure to the recovery - through the pipeline's failTo input, filled 'recover'
-        // by the rounds' use - and no step of the recovery does, the pipeline's own filled 'pause' there, which is
-        // what its steps' default was.
+        // by the rounds' use - and no step of the recovery does: the pipeline's machine steps are filled 'pause'
+        // there, so each that fails asks a person on its own, the remedies beside it going on, rather than ending
+        // the remedies with nothing more started.
         Assert.Equal(["codebase", "ci", "rounds.items.reconcile.catch-up", "rounds.items.fix.revise.rereconcile.recatch-up", "recover.remedies.reconcile.catch-up", "recover.remedies.fix.revise.rereconcile.recatch-up"], passedOver);
         Assert.Empty(otherwise);
 

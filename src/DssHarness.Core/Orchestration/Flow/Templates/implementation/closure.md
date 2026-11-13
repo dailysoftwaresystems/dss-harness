@@ -1,10 +1,15 @@
 # The universe this repository decides in
 
 This file is the repository's own, written once by the tool that shipped it and never
-overwritten after. It says, in prose its agents read, the universe each decision here
-ranges over: what a change must cover to be done, and what else judges the same
-behaviour. A defect that comes back was decided in several places; this file is where
+overwritten after. It says, in prose written for the run's agents, the universe each
+decision here ranges over: what a change must cover to be done, and what else judges the
+same behaviour. A defect that comes back was decided in several places; this file is where
 closing a class of defects at its one home begins.
+
+The workflow declares this file as its text `closure`, and an agent is given it where its
+step's prompt reads `{text.closure}`, as the file stands when the prompt is given. None of
+the prompts shipped beside it reads it: what is written here reaches an agent once a prompt
+of this repository's says `{text.closure}` where its agent is to weigh it.
 
 ## The axes
 
