@@ -51,6 +51,13 @@ public static class FlowWaits
     public static string EndedForUpdate(string update) => $"ended for update {update}";
 
     /// <summary>
+    /// The answer to the question a loop that decides at a step of its own asked there, at its bound: nothing of the
+    /// iteration starts until it says whether the loop goes on or ends.
+    /// </summary>
+    /// <param name="question">The question's id.</param>
+    public static string Answer(string question) => $"the answer to {question}";
+
+    /// <summary>
     /// Whether <paramref name="wait"/> is a wait for room - a claim, the run to be quiet, or a counter of the run's
     /// limits - which only the run's own pace ends, and whose length no step's time says.
     /// </summary>

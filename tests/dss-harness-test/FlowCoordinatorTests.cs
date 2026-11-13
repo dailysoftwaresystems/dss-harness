@@ -932,6 +932,91 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
+    /// The question a loop asks at its bound where its deciding step ended holds the handlers that step's ending raised
+    /// as it holds the rest of the iteration: a step handler waits, not started, on the answer, and a handler that is a
+    /// group draws none of its steps. <c>accept</c> ends the loop there and NotRuns them with the rest; <c>more</c> lets
+    /// them run, and the rest of the iteration after them.
+    /// </summary>
+    /// <param name="answer">The answer the bound's question is given.</param>
+    [Theory]
+    [InlineData("accept")]
+    [InlineData("more")]
+    public async Task TheHandlersOfTheDecidingStep_WaitOnTheBoundsQuestionAskedThere_ThenGoOnOrAreNotRunByTheAnswer(string answer)
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: fix
+                repeat:
+                  until: 'review.clean ?? false'
+                  maxIterations: 1
+                  decideAfter: review
+                steps:
+                  - name: review
+                    type: orient
+                  - name: revise
+                    dependsOn: [review]
+                    type: orient
+                  - name: log
+                    on: {step: review, outcome: success}
+                    type: orient
+                  - name: note
+                    on: {step: review, outcome: success}
+                    steps:
+                      - name: write
+                        type: orient
+            """);
+        var runner = new FakeRunner().On("review", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"clean": false}""")));
+        var records = new Snapshots();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var asked = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var bound = Assert.Single(coordinator.OpenQuestions);
+
+        // The question stands where the review ended: neither handler started, the group drew nothing, and the step
+        // handler's record says what it waits on.
+        Assert.Equal(FlowRunStatus.Paused, asked.Status);
+        Assert.Equal("loopBound", bound.Kind);
+        Assert.Equal(["fix#1.review"], runner.Started);
+        Assert.Equal((FlowInstanceState.NotStarted, FlowInstanceState.Running), (coordinator.Instances["fix#1.log"].State, coordinator.Instances["fix#1.note"].State));
+        Assert.DoesNotContain("fix#1.note.write", coordinator.Instances.Keys);
+        Assert.Equal([FlowWaits.Answer(bound.Id)], records.Last!.Steps.Single(step => step.Instance == "fix#1.log").WaitsOn);
+
+        Assert.True(coordinator.TryAnswer(bound.Id, answer, null, out _));
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        if (answer == "accept")
+        {
+            // The loop ended where it decided: the handlers never ran, NotRun with the rest of the iteration.
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["fix#1.review"], runner.Started);
+
+            const string Because = "the loop ended at 'review' (decideAfter) before it started";
+            Assert.Equal(
+                [
+                    ("fix#1.log", FlowInstanceState.NotRun, FlowNotRunCause.LoopDecided, Because),
+                    ("fix#1.note", FlowInstanceState.NotRun, FlowNotRunCause.LoopDecided, Because),
+                    ("fix#1.note.write", FlowInstanceState.NotRun, FlowNotRunCause.LoopDecided, Because),
+                    ("fix#1.revise", FlowInstanceState.NotRun, FlowNotRunCause.LoopDecided, Because),
+                ],
+                coordinator.Instances.Values
+                    .Where(instance => instance.Id is "fix#1.log" or "fix#1.note" or "fix#1.note.write" or "fix#1.revise")
+                    .OrderBy(instance => instance.Id, StringComparer.Ordinal)
+                    .Select(instance => (instance.Id, instance.State, instance.NotRunCause, instance.NotRunBecause)));
+            return;
+        }
+
+        // The loop went on: the handlers ran with the rest of the iteration, and the next iteration asked again at its
+        // own review once the first had ended.
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(5, runner.Started.Count);
+        Assert.Equal("fix#1.review", runner.Started[0]);
+        Assert.Equal(["fix#1.log", "fix#1.note.write", "fix#1.revise"], runner.Started[1..4].Order(StringComparer.Ordinal));
+        Assert.Equal("fix#2.review", runner.Started[4]);
+        Assert.Equal("loopBound", Assert.Single(coordinator.OpenQuestions).Kind);
+    }
+
+    /// <summary>
     /// A loop that ends where it decides spares its iteration's always steps, as a failing group does: the rest of the
     /// iteration is NotRun, and an always step of it runs after the iteration's end, as it runs after every iteration's
     /// end however that iteration ended.
@@ -970,9 +1055,9 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
-    /// The README and the architecture say what a loop that ends at its decision withdraws and spares, that work a plan
-    /// update owes the loop carries it past what it decided, and that a resume makes what followed from a decision, as
-    /// the engine does.
+    /// The README and the architecture say what a loop that asks at its decision holds until the answer, what one that
+    /// ends there withdraws and spares, that work a plan update owes the loop carries it past what it decided, and that a
+    /// resume makes what followed from a decision, as the engine does.
     /// </summary>
     [Fact]
     public void TheReadmeAndTheArchitecture_SayWhatALoopsDecisionWithdraws_AndWhatCarriesTheLoopPastIt()
@@ -980,6 +1065,17 @@ public sealed class FlowCoordinatorTests
         var readme = Prose.Document("README.md");
         var architecture = Prose.Document("docs", "architecture.md");
 
+        Assert.Contains(
+            "What follows that step starts only where the loop goes on: a loop that asks at its bound there holds all the rest of the iteration on its question until the answer - "
+                + "a handler its deciding step's ending raised among it waits on the answer, not started, a group one drawing none of its steps - and the answer has it go on with the loop or end with the iteration;",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a loop that asks at its bound there holds the rest of the iteration, at any depth, on its question until the answer (`HeldByItsLoop`, the one owner of that hold, "
+                + $"which the schedule's drawing and `HoldOf` both read, the wait said as `{nameof(FlowWaits)}.{nameof(FlowWaits.Answer)}`) - a handler its deciding step's ending raised among it "
+                + "waits not started, a group one drawing none of its steps - and the answer has it go on with the loop or end with the iteration;",
+            architecture,
+            StringComparison.Ordinal);
         Assert.Contains(
             "a loop that ends there withdraws what of the iteration has not started - a handler its deciding step's ending raised among it, a group one with all its steps - "
                 + "save its always steps, which run after the iteration's end as after any iteration's,",
@@ -2025,8 +2121,8 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowInstanceState.NotStarted, paused.State);
         Assert.Equal(["the resume"], paused.WaitsOn);
         Assert.Equal(
-            ["the resume", "the always phase", "the stop to end", "an advice to end", "a redirect", "hold p1", "resumes p1", "ended for update u1"],
-            [FlowWaits.Resume, FlowWaits.Always, FlowWaits.Stop, FlowWaits.Advice, FlowWaits.Redirect, FlowWaits.Hold("p1"), FlowWaits.Resumes("p1"), FlowWaits.EndedForUpdate("u1")]);
+            ["the resume", "the always phase", "the stop to end", "an advice to end", "a redirect", "hold p1", "resumes p1", "ended for update u1", "the answer to q1"],
+            [FlowWaits.Resume, FlowWaits.Always, FlowWaits.Stop, FlowWaits.Advice, FlowWaits.Redirect, FlowWaits.Hold("p1"), FlowWaits.Resumes("p1"), FlowWaits.EndedForUpdate("u1"), FlowWaits.Answer("q1")]);
     }
 
     /// <summary>

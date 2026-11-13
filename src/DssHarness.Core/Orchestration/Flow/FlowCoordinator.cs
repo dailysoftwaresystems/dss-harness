@@ -4815,16 +4815,16 @@ public sealed class FlowCoordinator
             // nothing of the rest starts where the loop ends; and where it was read, what follows from it is made
             // where the session that read it did not live to make it.
             changed |= DecideAt(deciding);
-
-            if (deciding.WaitingQuestion is not null)
-            {
-                // The loop stands on its bound's question, read at the deciding step: nothing more of the iteration
-                // starts - on 'accept' the rest is never started at all, and its leftover is what the deciding step
-                // found, none of it acted on.
-                return changed;
-            }
-
             endedAtItsDecision = DecisionOf(deciding, scope) is { EndsTheLoop: true };
+        }
+
+        if (HeldByItsLoop(scope) is not null)
+        {
+            // The loop stands on its bound's question, read at the deciding step: nothing more of the iteration is drawn,
+            // in it or in a group of it - a handler the deciding step's ending raised among them - and nothing drawn
+            // starts (HoldOf). On 'accept' the rest is never started at all, and its leftover is what the deciding step
+            // found, none of it acted on.
+            return changed;
         }
 
         foreach (var declaration in DeclarationsOf(scope))
@@ -5589,6 +5589,31 @@ public sealed class FlowCoordinator
         Decide(body, new FlowLoopDecision(decider.Id, to));
         _ = Follow(instance, body, body.Decision!);
         return true;
+    }
+
+    /// <summary>
+    /// The question that holds <paramref name="scope"/>, by its id: where the scope is the current iteration of a loop
+    /// that decides at a step of its own (<c>decideAfter</c>), or a scope inside it at any depth - a group of the
+    /// iteration, a handler that is a group among them - and the loop stands on the question its bound asked at that
+    /// step. The one owner of that hold: the schedule draws nothing in such a scope (<see cref="Instantiate"/>) and starts
+    /// nothing drawn in it (<see cref="HoldOf"/>) - a handler the deciding step's ending raised waits with the rest - until
+    /// the answer says whether the loop goes on, and the iteration with it, or ends there, its rest NotRun
+    /// (<see cref="EndAtTheDecision"/>). Null where no such question holds it.
+    /// </summary>
+    private static string? HeldByItsLoop(Scope scope)
+    {
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            if (at.LoopOf is { Step.Repeat.DecideAfter: not null, WaitingQuestion: { } question } loop
+                && loop.Children.Count > 0
+                && ReferenceEquals(loop.Children[^1], at)
+                && DecisionOf(loop, at) is { To: FlowLoopDecision.Asks })
+            {
+                return question;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Whether <paramref name="loop"/>'s next iteration would pass its own bound: where it asks, at an iteration's end or at its deciding step.</summary>
@@ -6638,6 +6663,14 @@ public sealed class FlowCoordinator
             // flight in it is ended in order, and its work is done again or taken back in the instance visited in its
             // place.
             return [FlowWaits.EndedForUpdate(ending.Update)];
+        }
+
+        if (HeldByItsLoop(scope) is { } question)
+        {
+            // Nothing of an iteration whose loop stands on its bound's question, read at its deciding step, starts until
+            // the answer: a handler the deciding step's ending raised waits for it, and goes on where the loop does or
+            // is NotRun with the rest of the iteration where it ends there.
+            return [FlowWaits.Answer(question)];
         }
 
         return WaitsOf(place, scope, instance.IsAlways).Waiting;

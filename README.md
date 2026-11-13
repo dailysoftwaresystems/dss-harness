@@ -1926,8 +1926,11 @@ loop decides at, instead of at the iteration's end: where that step's newest vis
 loop's `until`, `blocking` and bound are read there, on the iteration as it then stands, and the
 decision is kept in the iteration's own record with that visit - a resume never reads it again
 over what has run since, and a later visit of the step in the same iteration is decided anew.
-What follows that step starts only where the loop goes on; a loop that ends there withdraws what
-of the iteration has not started - a handler its deciding step's ending raised among it, a group
+What follows that step starts only where the loop goes on: a loop that asks at its bound there
+holds all the rest of the iteration on its question until the answer - a handler its deciding
+step's ending raised among it waits on the answer, not started, a group one drawing none of its
+steps - and the answer has it go on with the loop or end with the iteration; a loop that ends
+there withdraws what of the iteration has not started - a handler its deciding step's ending raised among it, a group
 one with all its steps - save its always steps, which run after the iteration's end as after any
 iteration's, waits for what is in flight, and leaves what its deciding step found, none of it
 acted on; at its bound, work a plan update owes the loop has its iteration added first, as at an

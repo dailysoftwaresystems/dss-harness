@@ -1675,7 +1675,12 @@ that takes the run up from its records), and the decision is kept with that visi
 iteration's own record (`Scope.Decision`, written through `Decide`, persisted as the step record's
 `decided`), so a resume never reads it again over what has run since and a later visit of the step
 in the same iteration is decided anew. The rest of that iteration starts only where the loop goes
-on; a loop that ends there withdraws what of the iteration has begun no work (`EndAtTheDecision`) -
+on: a loop that asks at its bound there holds the rest of the iteration, at any depth, on its
+question until the answer (`HeldByItsLoop`, the one owner of that hold, which the schedule's
+drawing and `HoldOf` both read, the wait said as `FlowWaits.Answer`) - a handler its deciding
+step's ending raised among it waits not started, a group one drawing none of its steps - and the
+answer has it go on with the loop or end with the iteration; a loop that ends there withdraws what
+of the iteration has begun no work (`EndAtTheDecision`) -
 a handler its deciding step's ending raised among it, a group one made running at its raise NotRun
 with all its steps (`NotRunUnbegun`) - save the steps that run after the iteration's end
 (`RunsAfterItsGroup`), its always steps, which run in the always phase as a failing group's do,
