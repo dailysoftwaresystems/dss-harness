@@ -16,6 +16,13 @@ namespace DssHarness.Core.Platform;
 /// </remarks>
 public static class UserState
 {
+    /// <summary>
+    /// This user's own directory for this tool, below the home directory this process was given: every file and folder
+    /// below it that a command of this tool keeps is <see cref="File"/>'s to name, and this names the place they share.
+    /// </summary>
+    /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
+    public static string Directory => Path.Combine(ApplicationData(), ToolPackage.Command);
+
     /// <summary>The file <paramref name="name"/> in this user's own directory for this tool.</summary>
     /// <param name="name">The file's name.</param>
     /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
@@ -23,7 +30,7 @@ public static class UserState
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        return Path.Combine(ApplicationData(), ToolPackage.Command, name);
+        return Path.Combine(Directory, name);
     }
 
     /// <summary>

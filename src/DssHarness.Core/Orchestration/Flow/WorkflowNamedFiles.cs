@@ -9,12 +9,20 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// A file a workflow's definition names - a prompt, a schema, a pull request's body - held to one rule wherever it is
 /// read: spelt as a path inside the workflow's own directory, kept there once every link along it is followed, and there.
 /// What a reviewer reads there is what the workflow runs, as an action's files are to its own directory. The definition's
-/// check reads each file's problem here, and a run the text of one it needs as it runs.
+/// check reads each file's problem here, and a run the text of one it needs as it runs. A workflow resolved from a remote
+/// source keeps its files in the workflow cache, and they are read there under the same rule, their blobs hashed again
+/// as they are.
 /// </summary>
 /// <param name="fileSystem">Follows links and reads the files.</param>
 /// <param name="pathComparison">How this machine compares paths.</param>
-public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison pathComparison)
+/// <param name="cache">
+/// The hash cache of remote workflows, where a remote workflow's files are read; null where the reader serves a
+/// definition whose workflows are local only.
+/// </param>
+public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison pathComparison, WorkflowCache? cache = null)
 {
+    /// <summary>The workflow cache of remote workflows' files; null where none is read here.</summary>
+    private readonly WorkflowCache? _cache = cache;
     /// <summary>The workflow's directory, every link along it followed, as a file it names is held to it.</summary>
     /// <param name="layout">The repository's layout.</param>
     /// <param name="name">The workflow.</param>
@@ -129,6 +137,30 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
     private string? Read(HarnessLayout layout, string name, string named, string what, bool missingIsNone)
     {
         ArgumentNullException.ThrowIfNull(layout);
+
+        if (WorkflowRemote.Is(name))
+        {
+            // A workflow resolved from a remote source: its files are the cache entry's, hashed again as they are
+            // read, and no directory of the repository's own is asked for them.
+            if (_cache?.FindNamed(name) is not { } entry)
+            {
+                return missingIsNone ? null : throw new HarnessException(
+                    HarnessExit.ConfigInvalid,
+                    $"'{named}', {what}, is of the workflow '{name}', which the workflow cache holds no entry for; fetch it again where a use names it");
+            }
+
+            try
+            {
+                return _cache.ReadText(entry, $"{entry.Path}/{named.Replace('\\', '/')}")
+                    ?? (missingIsNone ? null : throw new HarnessException(
+                        HarnessExit.ConfigInvalid,
+                        $"'{named}', {what}, is not in the workflow '{name}': the commit it was fetched at holds no such file in its directory"));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', {what}, could not be read: {exception.Message}");
+            }
+        }
 
         string directory;
 

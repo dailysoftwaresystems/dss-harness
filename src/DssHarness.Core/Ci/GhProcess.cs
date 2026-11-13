@@ -59,6 +59,11 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
     /// may have made before it was ended: "so whether a pull request was opened is not known"; null for a read, which did
     /// not read.
     /// </param>
+    /// <param name="withEnvironment">
+    /// Values the call is given beyond the machine's own environment, set after the variables a repository's own
+    /// tree would put in are cleared: a host's credential, handed to the call and written nowhere else. Null where
+    /// none is given.
+    /// </param>
     /// <exception cref="HarnessException">
     /// <c>GH_REPO</c> is set (13); <c>gh</c> is not there (14); it failed (20); or it passed its limit (21). Each says what
     /// it left undone.
@@ -69,7 +74,8 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
         string notDone,
         TimeSpan? limit,
         CancellationToken cancellationToken,
-        string? late = null)
+        string? late = null,
+        IReadOnlyDictionary<string, string?>? withEnvironment = null)
     {
         ArgumentNullException.ThrowIfNull(repositoryRoot);
         ArgumentNullException.ThrowIfNull(arguments);
@@ -94,6 +100,16 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
         await _localVariables.ClearAsync(environment, cancellationToken).ConfigureAwait(false);
 
         UnattendedCommands.Apply(environment);
+
+        // Given beyond the machine's own, after the clearing: a host's credential is the caller's to hand over, never
+        // something this tool reads or writes anywhere but here.
+        if (withEnvironment is not null)
+        {
+            foreach (var (name, value) in withEnvironment)
+            {
+                environment[name] = value;
+            }
+        }
 
         var budget = limit ?? Limit;
         var result = await _processRunner.RunAsync(

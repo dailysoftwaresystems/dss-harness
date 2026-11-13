@@ -131,6 +131,7 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
 /// <param name="updates">Finds the Claude Code the advisor's and the reporter's orders start, never changing it; null where nothing starts one.</param>
+/// <param name="cache">The hash cache of remote workflows, where a step of one reads its files as it runs; null where none is read.</param>
 public sealed class FlowService(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -151,7 +152,8 @@ public sealed class FlowService(
     Agents.Isolation.IAgentIsolation isolation,
     TimeProvider? clock = null,
     FlowTimings? timings = null,
-    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowService
+    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null,
+    WorkflowCache? cache = null) : IFlowService
 {
     /// <summary>The command that starts a run.</summary>
     public const string RunCommand = "run-orchestrator";
@@ -1244,7 +1246,9 @@ public sealed class FlowService(
 
         try
         {
-            report = await _validation.CheckAsync(definitionTree, frozen.Name, cancellationToken).ConfigureAwait(false);
+            // The frozen definition goes with the check as the run's own record: each remote use it holds is resolved
+            // to the commit the run began with, so a tag or branch that moved since changes no run already started.
+            report = await _validation.CheckAsync(definitionTree, frozen.Name, cancellationToken, frozen).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -1354,9 +1358,9 @@ public sealed class FlowService(
                     ? WorkflowValidator.AgentModels(
                         definition,
                         providers,
-                        (named, owner) => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, owner ?? definition.Name, named, "an agent definition"))
+                        (named, owner) => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison, cache).ReadText(context.Layout, owner ?? definition.Name, named, "an agent definition"))
                     : null,
-                (owner, named) => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, owner ?? definition.Name, named, "a workflow file"),
+                (owner, named) => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison, cache).ReadText(context.Layout, owner ?? definition.Name, named, "a workflow file"),
                 async (run, agent, token) =>
                 {
                     // The engine's own deleting of a read-only agent whose work is over: applied, with nothing to fold
@@ -1394,7 +1398,7 @@ public sealed class FlowService(
                 },
                 new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, updates),
                 updates: () => _store.ReadFlowUpdates(layout),
-                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
+                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison, cache).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
                 runFacts: (instance, fact) => RunFactOf(context, layout, instance, fact),
                 agentLive: agent => _store.ReadAgent(layout, agent) is { State: Orchestration.AgentStates.Live });
             var before = _store.ReadFlowQuestions(layout);

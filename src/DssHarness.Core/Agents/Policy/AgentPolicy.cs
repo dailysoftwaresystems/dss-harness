@@ -263,7 +263,7 @@ public sealed partial class AgentPolicy
         Runners.RunnerRunService.CommandName, Mutations.MutationService.CommandName, RunStopService.CommandName,
         CleanService.CommandName, HostExecService.CommandName, SetUps.SetUpService.UpCommand, SetUps.SetUpService.DownCommand,
         Hosts.HostAgentProtocol.CommandName, Sync.SyncServe.CommandName, Execution.HoldAwakeService.CommandName, Processes.ContainExec.CommandName,
-        Processes.MxcProcessContainer.CommandName,
+        Processes.MxcProcessContainer.CommandName, WorkflowCacheService.CommandName,
     ];
 
     /// <summary>

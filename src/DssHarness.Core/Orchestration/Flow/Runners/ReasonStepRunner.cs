@@ -40,6 +40,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
+/// <param name="cache">The hash cache of remote workflows, where a remote workflow's agent definitions and schemas are read.</param>
 public sealed class ReasonStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -56,7 +57,8 @@ public sealed class ReasonStepRunner(
     Configuration.IConfigStore? configStore = null,
     ClaudeCodeUpdateService? updates = null,
     Codebase.ICodebaseGraphService? graphService = null,
-    TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner
+    TimeProvider? graphClock = null,
+    WorkflowCache? cache = null) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
     /// <inheritdoc/>
     public string Type => "reason";
@@ -74,7 +76,7 @@ public sealed class ReasonStepRunner(
 
         var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
         var layout = OrchestratorLayout.Of(context.Layout, place.Run);
-        var files = new WorkflowNamedFiles(fileSystem, platform.PathComparison);
+        var files = new WorkflowNamedFiles(fileSystem, platform.PathComparison, cache);
         var launch = new ReasonLaunch(fileSystem, platform, keys, updates, isolation);
 
         var promptFile = run.Step.Prompt;
@@ -340,8 +342,11 @@ public sealed class ReasonStepRunner(
             WebSearch = webSearch,
             Spend = spend.RecordingIn(context.Layout),
             Compaction = compaction,
-            Retries = place.Definition.RetriesOf(run.Step),
-            BackoffSeconds = run.Step.BackoffSeconds ?? place.Definition.BackoffSeconds,
+
+            // What the step falls back to where it says neither: the use's that governs it, where a use that governs
+            // itself declares one, else the run's.
+            Retries = run.Step.Retries ?? FlowUse.Around(place.Definition, run.DeclarationPath)?.Use?.Own?.MaxRetries ?? place.Definition.RetriesOf(run.Step),
+            BackoffSeconds = run.Step.BackoffSeconds ?? FlowUse.Around(place.Definition, run.DeclarationPath)?.Use?.Own?.BackoffSeconds ?? place.Definition.BackoffSeconds,
             Program = program.Program,
             ProgramVersion = program.Version,
             Skills = skills,

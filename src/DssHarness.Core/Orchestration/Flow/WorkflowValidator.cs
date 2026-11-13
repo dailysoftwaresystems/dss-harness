@@ -817,6 +817,13 @@ public static class WorkflowValidator
                 }
             }
 
+            // A use that governs itself (useParentLimits: false) applies the used workflow's run-level keys to its
+            // steps - every one but an amend, which is a run's own and is refused here, never silently dropped.
+            if (use.Own is { Amends: true })
+            {
+                _problems.Add($"{where} says useParentLimits: false on the workflow '{use.Name}' it uses, which declares an amend; an amend is a run's own - a request amended, or an answer changed, while it works - and no step of a run applies one");
+            }
+
             // Each declared output of the used workflow, checked as the workflow's own are, inside the use and after
             // every step of it - which is what a later step of the caller reads as the use step's output. Its from is
             // read within the use, as the engine reads it there when the use ends.

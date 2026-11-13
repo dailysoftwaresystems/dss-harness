@@ -65,7 +65,7 @@ public sealed class StoppedDocumentTests
         ["fix-line-endings"] = ["exitCode", "summary", "scope", "check", "considered", "binary", "undeclared", "excluded", "changed"],
         ["check-ci-legs"] = ["exitCode", "summary", "branch", "runs"],
         ["validate-workflow"] = ["exitCode", "summary", "workflows", "passed"],
-        ["export-workflow"] = ["exitCode", "summary", "workflow", "shipped", "destination", "files"],
+        ["export-workflow"] = ["exitCode", "summary", "workflow", "shipped", "destination", "files", "vendored"],
         ["legs"] = ["exitCode", "summary", "legs", "hosts"],
         ["install-missing-tools"] = ["exitCode", "summary", "dryRun", "legs"],
         ["build"] = Ledger,

@@ -838,6 +838,257 @@ public sealed class FlowUseTests
                 """, pipeline), hasCommitTemplate: false));
     }
 
+    /// <summary>
+    /// WF4, the key: a use that says <c>useParentLimits: false</c> governs itself - the workflow it uses declares
+    /// run-level keys of its own, carried whole and said where it declares one - while one that says nothing (or true)
+    /// applies none of them, said as not applied. A step that is no use saying the key is refused, and a use that
+    /// governs itself over a workflow declaring an amend is refused too, for an amend is a run's own.
+    /// </summary>
+    [Fact]
+    public void AUseThatGovernsItself_CarriesTheWorkflowsOwnSettings_AndAnAmendIsRefused()
+    {
+        var withAmend = Swap(Pipeline, "name: pipeline\n", """
+            name: pipeline
+            budget:
+              usd: 5
+            maxReasoningAgents: 3
+            maxRetries: 1
+            answers:
+              loopBound:
+                answer: accept
+            amend:
+              step: plan
+              scope: 'update.pieces'
+              whenAddScope: round.items
+              whenChangeScope: round.items
+              whenRemoveScope: round.items
+
+            """ + "\n");
+
+        // Without the key: everything it declares is said as not applied, and none of it is carried.
+        System.IO.File.WriteAllText("C:\\Users\\rafae\\AppData\\Local\\Temp\\opencode\\wf4-problems.txt", string.Join("\n---\n", ResolvedWithProblems(Caller(), withAmend).Problems) + "\n=====\n" + withAmend);
+        var plain = Resolved(Caller(), withAmend);
+        var use = plain.Steps.Single(step => step.Name == "items").Use!;
+
+        Assert.Equal(["amend", "answers", "budget", "limits"], [.. use.NotApplied.Order(StringComparer.Ordinal)]);
+        Assert.Null(use.Own);
+
+        // With it: carried whole, said where declared, and nothing said as not applied.
+        var governed = Resolved(Caller(useParentLimits: "false"), withAmend);
+        var own = governed.Steps.Single(step => step.Name == "items").Use!.Own;
+
+        Assert.NotNull(own);
+        Assert.Empty(governed.Steps.Single(step => step.Name == "items").Use!.NotApplied);
+        Assert.Equal((5d, 3, 1), (own!.Budget!.Usd, own.MaxReasoningAgents, own.MaxRetries));
+        Assert.Equal("accept", own.Answers!["loopBound"].Answer);
+        Assert.True(own.Amends);
+        Assert.Equal(["budget", "limits", "answers"], own.Declared);
+
+        // And the amend it declares is refused, never silently dropped.
+        Assert.Equal(
+            ["step 'items' says useParentLimits: false on the workflow 'flow/pipeline' it uses, which declares an amend; an amend is a run's own - a request amended, or an answer changed, while it works - and no step of a run applies one"],
+            WorkflowValidator.Validate(governed, hasCommitTemplate: false));
+
+        // A step that is no use saying the key is refused where the file is read.
+        Assert.Contains(ParserProblems("""
+                name: flow
+                steps:
+                  - name: plain
+                    type: orient
+                    useParentLimits: false
+                """), problem => problem.Contains("says useParentLimits and names no workflow to use", StringComparison.Ordinal));
+
+        return;
+
+        static string Caller(string useParentLimits = "")
+            => $$"""
+                name: flow
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml{{(useParentLimits.Length == 0 ? string.Empty : $"\n    useParentLimits: {useParentLimits}")}}
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """;
+    }
+
+    /// <summary>
+    /// WF4: a step of a use that governs itself falls back to the workflow it runs in where it says neither of its own -
+    /// its <c>maxRetries</c> is what its incomplete endings are retried to, beside the run's own.
+    /// </summary>
+    [Fact]
+    public async Task TheStepsOfAUseThatGovernsItself_FallBackToItsRetries()
+    {
+        var pipeline = Swap(Pipeline, "steps:\n  - name: implement\n", "steps:\n  - name: flaky\n    type: orient\n  - name: implement\n");
+
+        var governed = new FakeRunner().On("flaky", () => FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "still incomplete"));
+        var run = new FlowCoordinator(
+            Resolved($"""
+                name: flow
+                maxRetries: 3
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    useParentLimits: false
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """, Swap(pipeline, "name: pipeline\n", "name: pipeline\nmaxRetries: 1\n")),
+            governed,
+            Facts(),
+            new JumpingClock());
+        _ = await run.RunAsync(TestContext.Current.CancellationToken);
+
+        // The pipeline's maxRetries (1) caps it: two attempts, not the run's four.
+        Assert.Equal(2, governed.Started.Count(started => started == "items.flaky"));
+        Assert.Equal(FlowInstanceState.Failed, run.Instances["items.flaky"].State);
+
+        var plain = new FakeRunner().On("flaky", () => FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "still incomplete"));
+        var ungoverned = new FlowCoordinator(
+            Resolved($"""
+                name: flow
+                maxRetries: 3
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """, Swap(pipeline, "name: pipeline\n", "name: pipeline\nmaxRetries: 1\n")),
+            plain,
+            Facts(),
+            new JumpingClock());
+        _ = await ungoverned.RunAsync(TestContext.Current.CancellationToken);
+
+        // Without the key, the pipeline's maxRetries is not applied: the run's (3) holds, four attempts.
+        Assert.Equal(4, plain.Started.Count(started => started == "items.flaky"));
+    }
+
+    /// <summary>
+    /// WF4: the limits of a use that governs itself gate its steps alone, counted across every instance of the use, and
+    /// its steps are counted against the caller's gates no more - a step of the caller's runs beside the use's own,
+    /// held to the run's own gate.
+    /// </summary>
+    [Fact]
+    public async Task TheStepsOfAUseThatGovernsItself_CountAgainstTheirOwnGateAlone()
+    {
+        var pipeline = Swap(Pipeline, "steps:\n  - name: implement\n", "steps:\n  - name: first\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n  - name: second\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n  - name: implement\n");
+
+        var caller = $"""
+            name: flow
+            maxReasoningAgents: 2
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                useParentLimits: false
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            """;
+
+        var governed = new FakeRunner();
+        var gate = governed.Hold("first");
+        var run = new FlowCoordinator(
+            Resolved(caller, Swap(pipeline, "name: pipeline\n", "name: pipeline\nmaxReasoningAgents: 1\n")),
+            governed,
+            Facts(),
+            new JumpingClock());
+        var going = run.RunAsync(TestContext.Current.CancellationToken);
+
+        await gate.StartedAsync();
+
+        // The use's gate (1) holds its second step; the run's (2) is not the one that governs it, for where the use's
+        // steps are counted against their own gate alone, the run's own steps still have the run's.
+        Assert.DoesNotContain("items.second", governed.Started);
+
+        gate.Open(passed: true);
+        _ = await going;
+
+        Assert.Equal(["items.first", "items.second"], [.. governed.Started.Where(started => started.Split('.')[^1] is "first" or "second")]);
+    }
+
+    /// <summary>
+    /// WF4: a question a step of a use that governs itself raises is answered by the workflow it runs in before the
+    /// run's own answers - and where no use governs, the workflow's answers are never asked at all.
+    /// </summary>
+    [Fact]
+    public async Task AQuestionOfAStepOfAUseThatGovernsItself_IsAnsweredByItsAnswersFirst()
+    {
+        var pipeline = Swap(Pipeline, "steps:\n  - name: implement\n", "steps:\n  - name: spin\n    repeat:\n      until: 'false'\n      maxIterations: 2\n    steps:\n      - name: once\n        type: orient\n  - name: implement\n");
+        pipeline = Swap(pipeline, "name: pipeline\n", """
+            name: pipeline
+            answers:
+              loopBound:
+                answer: accept
+
+            """ + "\n");
+
+        string Caller(bool governs)
+            => $$"""
+                name: flow
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml{{(governs ? "\n    useParentLimits: false" : string.Empty)}}
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """;
+
+        var governed = new FakeRunner();
+        var run = new FlowCoordinator(Resolved(Caller(governs: true), pipeline), governed, Facts(), new JumpingClock());
+        _ = await run.RunAsync(TestContext.Current.CancellationToken);
+
+        // The workflow's accept ended the loop at its bound, before the run's abort was ever asked.
+        Assert.Equal(FlowInstanceState.Done, run.Instances["items"].State);
+        Assert.Equal(FlowInstanceState.Done, run.Instances["items.spin"].State);
+
+        var plain = new FakeRunner();
+        var ungovernedDefinition = Resolved(Caller(governs: false), pipeline);
+        var ungoverned = new FlowCoordinator(ungovernedDefinition, plain, Facts(), new JumpingClock());
+        _ = await ungoverned.RunAsync(TestContext.Current.CancellationToken);
+
+        // Without the key, the workflow's answers are not applied: the question is a person's.
+        Assert.Equal(FlowInstanceState.Paused, ungoverned.Instances["items.spin"].State);
+        Assert.Contains(ungoverned.Questions, question => question.Kind == "loopBound" && question.State == "open");
+    }
+
+    /// <summary>
+    /// WF4: a use that governs itself caps the instances its steps may open, beside the run's own cap, counted across
+    /// every instance of the use - a group of it past the cap is refused naming the workflow and its maxInstances.
+    /// </summary>
+    [Fact]
+    public async Task AUseThatGovernsItself_CapsItsOwnInstances()
+    {
+        var pipeline = Swap(Pipeline, "  - name: item\n    kind: value\n", "  - name: item\n    kind: value\n  - name: many\n    kind: value\n    required: true\n");
+        pipeline = Swap(pipeline, "steps:\n  - name: implement\n", "steps:\n  - name: batch\n    forEach: 'input.many'\n    steps:\n      - name: one\n        type: orient\n  - name: implement\n");
+        pipeline = Swap(pipeline, "name: pipeline\n", "name: pipeline\nmaxInstances: 4\n");
+
+        var runner = new FakeRunner();
+        var run = new FlowCoordinator(Resolved($"""
+            name: flow
+            steps:
+              - name: list
+                type: orient
+              - name: items
+                use: ./pipeline/pipeline.yml
+                useParentLimits: false
+                dependsOn: [list]
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+                  many: 'list.items'
+            """, pipeline), runner.On("list", () => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new System.Text.Json.Nodes.JsonObject { ["items"] = new System.Text.Json.Nodes.JsonArray([1, 2, 3]) })), Facts(), new JumpingClock());
+        _ = await run.RunAsync(TestContext.Current.CancellationToken);
+
+        System.IO.File.WriteAllText("C:\\Users\\rafae\\AppData\\Local\\Temp\\opencode\\wf4-instances.txt", string.Join("\n", run.Instances.Select(pair => $"{pair.Key} = {pair.Value.State} :: {pair.Value.Error}")) + "\nstarted: " + string.Join(",", runner.Started));
+
+        Assert.Equal(FlowInstanceState.Failed, run.Instances["items"].State);
+        Assert.Contains(
+            "would bring the workflow 'flow/pipeline' to 7 step instances, and at most 4 are allowed (its maxInstances, beside the run's own cap)",
+            run.Instances["items.batch"].Error,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>The facts a run of these definitions needs, with nothing configured.</summary>
     private static ConfiguredRunnerFacts Facts()
         => new(new HarnessConfig());
@@ -881,6 +1132,37 @@ public sealed class FlowUseTests
             return this;
         }
 
+        /// <summary>
+        /// Holds every run of <paramref name="step"/> open until the hold is opened, for a test that watches what
+        /// starts beside it.
+        /// </summary>
+        public HeldStep Hold(string step)
+        {
+            _holds[step] = new HeldStep();
+            return _holds[step];
+        }
+
+        private readonly Dictionary<string, HeldStep> _holds = new(StringComparer.Ordinal);
+
+        /// <summary>One held-open step, released by the test that held it.</summary>
+        public sealed class HeldStep
+        {
+            private readonly TaskCompletionSource _began = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource<FlowStepResult> _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            /// <summary>Completes when the held step has started.</summary>
+            public Task StartedAsync() => _began.Task;
+
+            /// <summary>Ends the held step, passed or failed as asked.</summary>
+            public void Open(bool passed) => _ended.SetResult(FlowStepResult.Ended(passed, HarnessExit.Success));
+
+            /// <summary>Says the held step began.</summary>
+            public void Begun() => _began.SetResult();
+
+            /// <summary>The step's run, held until <see cref="Open"/> opens it.</summary>
+            public Task<FlowStepResult> EndedAsync() => _ended.Task;
+        }
+
         /// <inheritdoc/>
         public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
@@ -889,6 +1171,12 @@ public sealed class FlowUseTests
             if (run.Prompts is { } asked)
             {
                 Asked[run.Instance] = asked;
+            }
+
+            if (_holds.TryGetValue(run.Step.Name, out var held))
+            {
+                held.Begun();
+                return held.EndedAsync();
             }
 
             return Task.FromResult(_scripts.GetValueOrDefault(run.Step.Name, () => FlowStepResult.Ended(passed: true, HarnessExit.Success))());

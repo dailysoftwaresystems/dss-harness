@@ -300,6 +300,7 @@ public sealed class ArchitectureTests
         ["DssHarness.Core.Ci.CiLegsReports"] = "renders the report the check-ci-legs command's use case answers",
         ["DssHarness.Core.Orchestration.Flow.WorkflowExportReports"] = "renders the report the export-workflow command's use case answers",
         ["DssHarness.Core.Orchestration.Flow.WorkflowValidationReports"] = "renders the report the validate-workflow command's use case answers",
+        ["DssHarness.Core.Orchestration.Flow.WorkflowCacheReports"] = "renders the report the workflow-cache command's use case answers",
         ["DssHarness.Core.Codebase.CodebaseGraphQueryReports"] = "renders the report the query-codebase-graph command's use case answers",
         ["DssHarness.Core.LineEndings.LineEndingReports"] = "renders the report the fix-line-endings command's use case answers",
         ["DssHarness.Core.Orchestration.Flow.FlowReports"] = "renders the report the flow verbs' use case answers",

@@ -316,6 +316,14 @@ public static class ServiceRegistration
             search: provider.GetRequiredService<Web.Search.HarnessWebSearch>()));
         services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
         services.AddSingleton<IWorkflowExportService, WorkflowExportService>();
+        services.AddSingleton<IWorkflowCacheService, WorkflowCacheService>();
+
+        // The hash cache of remote workflows, in this user's own directory for this tool, and the one fetcher that
+        // fills it - read by the workflow check, the runs and the export alike.
+        services.AddSingleton(provider => new WorkflowCache(
+            provider.GetRequiredService<IFileSystem>(),
+            Path.Combine(Platform.UserState.Directory, WorkflowCache.DirectoryName)));
+        services.AddSingleton<WorkflowRemoteFetcher>();
 
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();

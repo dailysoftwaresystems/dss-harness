@@ -1664,7 +1664,19 @@ outputs are the step's own once it ends, and its recovery takes a failure inside
 caller's handling of the step. Its steps read only its inputs, its params and its own steps,
 never the calling run's; every fact of the caller they need comes through an input. Its budget,
 limits, advisor, amend and answers are never applied - the calling run's own hold - and
-`validate-workflow` says so beside the fingerprint of the file it read, one line for each use. A
+`validate-workflow` says so beside the fingerprint of the file it read, one line for each use -
+unless the use says `useParentLimits: false`, and then the used workflow's own settings govern
+its steps, each key it declares replacing the caller's for them and each it declares none for
+staying the caller's (a use cannot widen a run's limits by declaring nothing): its limits and
+its `maxInstances` gate its steps alone, counted across every instance of the use, and the
+caller's gates count them no more (`FlowCoordinator.OwnOf` walks the scope chain for the
+governing use, `CounterFull` counts its gate, `UseBound` holds its cap); the retries and
+backoff its steps fall back to where they say neither (`RetryCap`, and the reason runner's
+`FlowUse.Around`); the handoff bound of its paused reasoning steps; and its answers are
+consulted for its steps' questions after the step's own and the groups around it and before
+the run's (`ConfiguredFor`). An amend is refused where the key says false - an amend is a run's
+own, and no step of a run applies one - said at validation; `preapproved` is a run's input
+alone, whatever the key says. A
 workflow that uses itself, directly or through others, is refused with the chain of the uses that
 close the circle, and uses nest at most ten deep in all, across the workflows they name. A run
 records each use's resolution - the called workflow's name and the fingerprint of its file - in
@@ -1675,6 +1687,41 @@ used by its rounds (`implementPrompt: prompts/implement.md`, `alternatives: 'tru
 `failTo: recover`) and by its recovery (`prompts/remedy.md`, `alternatives: 'false'`,
 `failTo: pause`, for the recovery cannot call itself) alike, and the validator and the tests count
 the resolved tree, every step of every use a step as a group's are.
+
+A use may name a workflow beyond the repository: `owner/repo/path/workflow.yml@ref`, as GitHub
+Actions spells `uses`, or the same under a GitHub Enterprise host the configuration names. The
+ref is resolved to a commit at the run's start - a full commit SHA is its own commit, needing no
+network - through the one runner of `gh` (`WorkflowRemoteFetcher` over `GhProcess`, `gh api`
+calls: the tag's ref, the commit's tree, each blob); every blob under the workflow's directory is
+checked against the hash the tree gives of it (git's own blob hash, SHA-1 of `blob <size>\0` and
+the content), the whole bounded at 2,000 files and 20 MiB, and nothing is cached where a check
+fails. What is cached lives in `workflow-cache/` under this user's own directory for this tool
+(`UserState.Directory`, the root every per-user file of the tool lives under): blobs by their git
+hash at `blobs/<ab>/<sha>`, and one entry per repository, commit and directory at
+`entries/<sha256 of the parts>.json`, read strictly as `config.json` is and each file hashed
+again as it is read, so a cache file changed on disk is refused and the directory fetched again.
+A second run of a pinned SHA reads the cache with no network, and a tag needs one call at each
+run's start; a run records each use's resolution - the remote commit SHA stands in the fingerprint
+a local file's hash holds - and `FlowService` hands the frozen definition to the check a resume
+goes through, so each remote use resolves to the commit the run began with and never resolves
+again: a tag or branch that moved since changes no run already started, and only a changed local
+file refuses it as before. Trust is a person's decision, never a response's: a remote workflow
+directs agents and machine steps in the calling repository, so `workflowSources` in `config.json`
+allows its owner (`allow`, empty by default), names the hosts it may reach with each credential's
+environment variable (`hosts`, the credential handed to the `gh api` call as its environment and
+written nowhere else), pins the refs it takes (`pin`: `tag-or-commit` by default, `commit`, or
+`any`, which allows a branch - told from a tag by the tag's own ref answering nothing - and warns
+of it at every run that uses one), and says what stands in offline (`offline`: `refuse`, or
+`last-resolved`, the cache's last resolution of the ref, which the run records that it did). A
+remote workflow's own name inside the run is its cache place, `remote/<host>/<owner>/<repo>/<commit>/<dir>`:
+its files resolve against its entry as a local workflow's do against its directory - through the
+same `WorkflowNamedFiles` rule, the reader routing the reserved `remote/` place to the cache - a
+use inside it resolves inside the same entry, and no local use resolves under `remote/`, the
+cache's own reserved place in the workflows folder. `export-workflow --from <use> --to <dir>`
+vendors a remote workflow at its resolved commit - every file of its directory and `source.md`, a
+note of where it came from - so a team can review what is written and use it as `./`; the
+`workflow-cache` verb lists the cache's entries and prunes, by the days an entry went unused, the
+entries and the blobs no entry left holds.
 
 A definition may declare `recover`: steps written once, which a step gives a failure nothing handles
 to by saying `onFailure: recover`, itself or through a group around it. A member that writes none

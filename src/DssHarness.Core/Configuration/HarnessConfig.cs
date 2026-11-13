@@ -129,6 +129,13 @@ public sealed class HarnessConfig
     public List<string>? Workflows { get; init; }
 
     /// <summary>
+    /// Where the workflows this repository uses as steps may come from beyond its own directory: the GitHub owners and
+    /// repositories a remote <c>use:</c> may name, the hosts it may reach, the refs it may name, and what happens
+    /// offline. Left out, a remote <c>use:</c> is refused, for none is allowed.
+    /// </summary>
+    public WorkflowSourcesConfig? WorkflowSources { get; init; }
+
+    /// <summary>
     /// Named set-ups, each the command line that brings up what the repository's work needs on this machine and the one
     /// that brings it down: run by <c>up &lt;name&gt;</c> and <c>down &lt;name&gt;</c>, and around a leg's work where
     /// what the leg runs names one and the run is asked to set up.

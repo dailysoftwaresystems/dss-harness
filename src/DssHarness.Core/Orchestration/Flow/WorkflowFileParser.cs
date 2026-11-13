@@ -882,6 +882,12 @@ public static class WorkflowFileParser
             problems.Add(YamlReading.At(node, $"{where} hands values with 'with', and names no workflow to use; the values are what a used workflow's inputs are filled with."));
         }
 
+        // A use's own key, refused on any step that is not one - the with rule's own shape.
+        if (keys.Any(entry => entry.Key == "useParentLimits") && !keys.Any(entry => entry.Key == "use"))
+        {
+            problems.Add(YamlReading.At(node, $"{where} says useParentLimits and names no workflow to use; the key says which run's settings govern the workflow a use runs."));
+        }
+
         // A group's own keys, checked against the group's table; a typed step's against its type's.
         IReadOnlyList<string> allowed = typed is null
             ? [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group)]
@@ -1006,6 +1012,7 @@ public static class WorkflowFileParser
                 {
                     UseSource = ScalarIn(keys, $"{where}.use", problems),
                     With = StringMapIn(keys, $"{where}.with", problems),
+                    UseParentLimits = BooleanIn(keys, $"{where}.useParentLimits", problems),
                 };
             }
 

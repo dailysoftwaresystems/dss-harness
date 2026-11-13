@@ -16,7 +16,12 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// typed in.
 /// </param>
 /// <param name="Shipped">Whether the workflow is the one this tool ships, read from the tool itself rather than from the repository.</param>
-public sealed record WorkflowExportRequest(string Workflow, string To, bool Shipped);
+/// <param name="From">
+/// A remote workflow to vendor into the repository, as a use names it - <c>owner/repo/path/workflow.yml@ref</c> - fetched at
+/// its resolved commit with every file of its directory and a note of where it came from, so a team can review it and use it
+/// as <c>./</c>; null where a workflow of the repository's own is exported.
+/// </param>
+public sealed record WorkflowExportRequest(string Workflow, string To, bool Shipped, string? From = null);
 
 /// <summary>What export-workflow wrote: the typed answer a front end reads, the same the lines say.</summary>
 /// <param name="Workflow">The workflow exported.</param>
@@ -26,7 +31,8 @@ public sealed record WorkflowExportRequest(string Workflow, string To, bool Ship
 /// Each file written, relative to <paramref name="Destination"/> with '/', in the order it was written: every file the
 /// definition names, then the definition.
 /// </param>
-public sealed record WorkflowExport(string Workflow, bool Shipped, string Destination, IReadOnlyList<string> Files);
+/// <param name="Vendored">Where a vendored remote workflow came from: its repository, its ref, and the commit it resolved to.</param>
+public sealed record WorkflowExport(string Workflow, bool Shipped, string Destination, IReadOnlyList<string> Files, string? Vendored = null);
 
 /// <summary>
 /// Copies a workflow - its yml and every file it names - into a folder of its own, so a person or a repository has it to
@@ -60,14 +66,23 @@ public interface IWorkflowExportService : DssHarness.Core.Application.IUseCase
 public sealed class WorkflowExportService(
     IWorkflowValidationService validation,
     IFileSystem fileSystem,
-    IProcessContext process) : IWorkflowExportService
+    IProcessContext process,
+    DssHarness.Core.Repository.IHarnessContextLoader? contextLoader = null,
+    WorkflowRemoteFetcher? remotes = null,
+    WorkflowCache? cache = null) : IWorkflowExportService
 {
     /// <summary>The command this service reports under.</summary>
     public const string CommandName = "export-workflow";
 
+    /// <summary>The name of the note a vendored remote workflow carries, saying where it came from.</summary>
+    public const string VendoredNote = "source.md";
+
     private readonly IWorkflowValidationService _validation = validation;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IProcessContext _process = process;
+    private readonly DssHarness.Core.Repository.IHarnessContextLoader? _contextLoader = contextLoader;
+    private readonly WorkflowRemoteFetcher? _remotes = remotes;
+    private readonly WorkflowCache? _cache = cache;
 
     /// <inheritdoc/>
     public async Task<WorkflowExport> ExportAsync(
@@ -83,10 +98,26 @@ public sealed class WorkflowExportService(
             throw new HarnessException(HarnessExit.UsageError, "--to names no folder; the workflow is written into a folder of its own under the one it names.");
         }
 
+        if (request.From is { } vendored)
+        {
+            var from = await VendoredAsync(startDirectory, vendored, cancellationToken).ConfigureAwait(false);
+
+            return await WriteAsync(new WorkflowExportRequest(from.Folder, request.To, Shipped: false, From: vendored), from.Files, from.Said, cancellationToken).ConfigureAwait(false);
+        }
+
         var files = request.Shipped
             ? Shipped(request.Workflow)
             : await DeclaredAsync(startDirectory, request.Workflow, cancellationToken).ConfigureAwait(false);
 
+        return await WriteAsync(request, files, vendored: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>What vendoring a remote workflow read: where it came from, said as one line; its folder's name; and its files.</summary>
+    private sealed record Vendored(string Said, string Folder, IReadOnlyList<(string File, Func<string, Task> Write)> Files);
+
+    /// <summary>Writes <paramref name="files"/> into the folder of the workflow's own the request asks for, taking back what a failure leaves.</summary>
+    private async Task<WorkflowExport> WriteAsync(WorkflowExportRequest request, IReadOnlyList<(string File, Func<string, Task> Write)> files, string? vendored, CancellationToken cancellationToken)
+    {
         var destination = Path.Combine(Path.GetFullPath(request.To, _process.CurrentDirectory), request.Workflow);
         string made;
 
@@ -139,7 +170,60 @@ public sealed class WorkflowExportService(
             written.Add(file);
         }
 
-        return new WorkflowExport(request.Workflow, request.Shipped, destination, written);
+        return new WorkflowExport(request.Workflow, request.Shipped, destination, written, vendored);
+    }
+
+    /// <summary>
+    /// The remote workflow <paramref name="source"/> names, fetched at its resolved commit: every file of its directory,
+    /// read from the workflow cache, and the note that says where it came from - a team can review what is written and
+    /// use it as <c>./</c>.
+    /// </summary>
+    private async Task<Vendored> VendoredAsync(string startDirectory, string source, CancellationToken cancellationToken)
+    {
+        if (_contextLoader is null || _remotes is null || _cache is null)
+        {
+            throw new HarnessException(HarnessExit.Refused, $"'{source}' names a remote workflow, and this export reaches no fetcher for one");
+        }
+
+        if (WorkflowRemote.Source(source) is not { } parsed)
+        {
+            throw new HarnessException(HarnessExit.UsageError, $"'{source}' is no remote workflow source: an owner, a repository, a workflow file's path in it, and a ref after @");
+        }
+
+        var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
+        var resolution = await _remotes.ResolveAsync(parsed, context.Config.WorkflowSources, context.Layout.MainCheckoutRoot, Environment.GetEnvironmentVariable, recorded: null, cancellationToken).ConfigureAwait(false);
+        var entry = resolution.Entry;
+        var folder = parsed.Directory[(parsed.Directory.LastIndexOf('/') + 1)..];
+        var files = new List<(string, Func<string, Task>)>();
+
+        foreach (var file in entry.Files)
+        {
+            var text = _cache.ReadText(entry, file.Path) ?? throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{source}' resolved to the commit '{entry.Commit}', whose cache entry names no '{file.Path}'");
+            var relative = file.Path[entry.Path.Length..].TrimStart('/');
+
+            files.Add((relative, path =>
+            {
+                _fileSystem.CreateDirectory(Path.GetDirectoryName(path)!);
+                _fileSystem.WriteAllTextAtomic(path, text);
+                return Task.CompletedTask;
+            }));
+        }
+
+        var said = $"{parsed.Repository}/{parsed.File}@{parsed.Ref} at commit {entry.Commit}";
+
+        files.Add((VendoredNote, path =>
+        {
+            _fileSystem.CreateDirectory(Path.GetDirectoryName(path)!);
+            _fileSystem.WriteAllTextAtomic(
+                path,
+                $"Vendored from {parsed.Repository}/{parsed.File}@{parsed.Ref}, which resolved to the commit {entry.Commit} and was fetched on {entry.FetchedAt.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}.\n"
+                    + $"Use it as ./{folder}/{parsed.File[(parsed.File.LastIndexOf('/') + 1)..]} from a workflow of this repository, and take this note away when you have made it your own.\n");
+            return Task.CompletedTask;
+        }));
+
+        return new Vendored(said, folder, [.. files]);
     }
 
     /// <summary>
@@ -280,8 +364,9 @@ public static class WorkflowExportReports
         ArgumentNullException.ThrowIfNull(export);
 
         var shipped = export.Shipped ? ", as this tool ships it," : string.Empty;
+        var vendored = export.Vendored is { } from ? $", vendored from {from}," : string.Empty;
 
-        return CommandOutcome.Ok($"'{export.Workflow}'{shipped} exported to '{export.Destination}': {ReportText.Counted(export.Files.Count, "file")}") with
+        return CommandOutcome.Ok($"'{export.Workflow}'{shipped}{vendored} exported to '{export.Destination}': {ReportText.Counted(export.Files.Count, "file")}") with
         {
             Data = json ? [Document(export, export.Shipped).ToJsonString(ReportJson.Options)] : [],
             Quiet = json,
@@ -307,5 +392,6 @@ public static class WorkflowExportReports
             ["shipped"] = shipped,
             ["destination"] = export?.Destination,
             ["files"] = new JsonArray([.. (export?.Files ?? []).Select(file => (JsonNode)file!)]),
+            ["vendored"] = export?.Vendored,
         };
 }

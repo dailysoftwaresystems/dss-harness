@@ -1508,8 +1508,10 @@ public sealed class FlowCoordinator
             NewAttempt(wake.Instance);
         }
 
-        var bound = _definition.HandoffSeconds ?? 180;
         var handingOff = new List<(FlowInstance Instance, bool Asked)>();
+
+        // A step's handoff is bounded by the handoffSeconds that governs it: the use's where a use that governs itself
+        // declares one, else the run's.
 
         // A step its time limit has stopped already is left to end as that stop ends it - incomplete, whatever its runner
         // answers or once the drain's bound passes, and recorded as the pause records an ending: failed, or stopped where
@@ -1543,7 +1545,7 @@ public sealed class FlowCoordinator
         {
             // All the turns at once, each bounded; what each spent is counted, for the budget counts a handoff turn
             // as it counts the attempt it ends.
-            var turns = handingOff.Select(each => HandoffTurnAsync(each.Instance, bound, each.Asked)).ToList();
+            var turns = handingOff.Select(each => HandoffTurnAsync(each.Instance, OwnOf(each.Instance)?.HandoffSeconds ?? _definition.HandoffSeconds ?? 180, each.Asked)).ToList();
             var accounts = await Task.WhenAll(turns).ConfigureAwait(false);
 
             for (var at = 0; at < handingOff.Count; at++)
@@ -4555,7 +4557,7 @@ public sealed class FlowCoordinator
 
         if (handingOff.Count > 0)
         {
-            var accounts = await Task.WhenAll(handingOff.Select(each => HandoffTurnAsync(each.Member, _definition.HandoffSeconds ?? 180, each.Asked))).ConfigureAwait(false);
+            var accounts = await Task.WhenAll(handingOff.Select(each => HandoffTurnAsync(each.Member, OwnOf(each.Member)?.HandoffSeconds ?? _definition.HandoffSeconds ?? 180, each.Asked))).ConfigureAwait(false);
 
             for (var at = 0; at < handingOff.Count; at++)
             {
@@ -5169,6 +5171,12 @@ public sealed class FlowCoordinator
                 return;
             }
 
+            if (UseBound(instance.Id, scope, declaration, list.Count * (1 + members)) is { } useBound)
+            {
+                FailGroup(instance, HarnessExit.Refused, useBound, instance.Path);
+                return;
+            }
+
             for (var index = 0; index < list.Count; index++)
             {
                 var item = NewScope($"{instance.Id}[{index}]", PathOf(scope, declaration), scope, declaration, list[index], index, null, instance);
@@ -5349,6 +5357,12 @@ public sealed class FlowCoordinator
         if (wouldBring > Limit().MaxInstances)
         {
             FailGroup(instance, HarnessExit.Refused, InstanceBound(instance.Id, wouldBring, Limit().MaxInstances), instance.Path);
+            return true;
+        }
+
+        if (UseBound(instance.Id, scope, declaration, 1 + SubtreeSize(PathOf(scope, declaration))) is { } iterationBound)
+        {
+            FailGroup(instance, HarnessExit.Refused, iterationBound, instance.Path);
             return true;
         }
 
@@ -6299,7 +6313,7 @@ public sealed class FlowCoordinator
             // conversation it is in, and the handoff where one ends the step in order - posted and raised through
             // this, one per attempt: a telling of an attempt that is over says nothing about the one the run is on
             // now.
-            instance.Telling = new FlowTelling(instance.Attempt, TimeSpan.FromSeconds(_definition.HandoffSeconds ?? 180));
+            instance.Telling = new FlowTelling(instance.Attempt, TimeSpan.FromSeconds(OwnOf(instance)?.HandoffSeconds ?? _definition.HandoffSeconds ?? 180));
 
             // What a plan update that told this work said, read in the part of its own this attempt's first message
             // holds: recorded once of each update, however many attempts read it.
@@ -6655,7 +6669,7 @@ public sealed class FlowCoordinator
         if (!passed
             && instance.Step.Type != "reason"
             && FlowRetry.Wait(exit, cause, attempts - 1) is { } wait
-            && attempts <= RetryCap(instance.Step))
+            && attempts <= RetryCap(instance))
         {
             if (_pausing)
             {
@@ -8760,7 +8774,7 @@ public sealed class FlowCoordinator
     /// then the workflow's - and none where the kind is a person's alone, or answered by the step's own key
     /// (<c>failure</c> by <c>onFailure</c>, <c>ask</c> by <c>ask</c>), or a <c>pause</c> step answered anywhere but on
     /// the step itself and never one that says <c>person</c>, or the run's budget answered anywhere but on the
-    /// workflow.
+    /// workflow. A step of a use that governs itself is answered by the workflow it runs in before the run's own.
     /// </summary>
     private (FlowAnswer Entry, string Where)? ConfiguredFor(FlowInstance? instance, string kind)
     {
@@ -8796,6 +8810,15 @@ public sealed class FlowCoordinator
             if (at.Group?.Answers.TryGetValue(kind, out var group) == true)
             {
                 return (group, $"group '{at.Group.Name}'");
+            }
+        }
+
+        // The workflow a use that governs itself runs, consulted for its steps' questions before the run's own.
+        for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
+        {
+            if (at.Group?.Use is { Own.Answers: { } own } use && own.TryGetValue(kind, out var answer))
+            {
+                return (answer, $"the workflow '{use.Name}'");
             }
         }
 
@@ -9037,17 +9060,30 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The limit of the run that leaves no room for <paramref name="instance"/> beside <paramref name="running"/>, as its
     /// record names it - reasoning agents, parallel processes, open agents - or null where every limit it counts against
-    /// leaves room: all-or-nothing, so a step short of one of its resources starts with none of them.
+    /// leaves room: all-or-nothing, so a step short of one of its resources starts with none of them. A step of a use
+    /// that governs itself counts against that use's own gates alone, across every instance of the use, and the run's
+    /// no more.
     /// </summary>
     private string? CounterFull(FlowInstance instance, IReadOnlyList<FlowInstance> running)
-        => instance.Step.Type switch
+    {
+        var governing = GoverningUseOf(instance.DeclaredScope);
+        var own = governing?.Own;
+
+        // The steps of a use that governs itself count against that use's gates alone, across every instance of it;
+        // the run's steps count against the run's, as they always did.
+        List<FlowInstance> counted = governing is null
+            ? [.. running.Where(other => GoverningUseOf(other.DeclaredScope) is null)]
+            : [.. running.Where(other => Equals(GoverningUseOf(other.DeclaredScope)?.Use, governing?.Use))];
+
+        return instance.Step.Type switch
         {
-            "reason" when running.Count(step => step.Step.Type == "reason") >= Limit().MaxReasoningAgents => FlowWaits.ReasoningAgents,
+            "reason" when counted.Count(step => step.Step.Type == "reason") >= (own?.MaxReasoningAgents ?? Limit().MaxReasoningAgents) => FlowWaits.ReasoningAgents,
             "build" or "test" or "run" or "check-mutations"
-                when running.Count(step => step.Step.Type is "build" or "test" or "run" or "check-mutations") >= Limit().MaxParallelProcesses => FlowWaits.ParallelProcesses,
-            "create-agent" when running.Count(step => step.Step.Type == "create-agent") + _agentsOpen.Count >= Limit().MaxOpenAgents => FlowWaits.OpenAgents,
+                when counted.Count(step => step.Step.Type is "build" or "test" or "run" or "check-mutations") >= (own?.MaxParallelProcesses ?? Limit().MaxParallelProcesses) => FlowWaits.ParallelProcesses,
+            "create-agent" when counted.Count(step => step.Step.Type == "create-agent") + _agentsOpen.Values.Count(open => Equals(GoverningUseOf(open.DeclaredScope)?.Use, governing?.Use)) >= (own?.MaxOpenAgents ?? Limit().MaxOpenAgents) => FlowWaits.OpenAgents,
             _ => null,
         };
+    }
 
     /// <summary>Starts the always steps of the run, once, where the rest is quiescent in any state; a session runs them after everything else has ended.</summary>
     private bool TryEnterAlwaysPhase()
@@ -11061,7 +11097,8 @@ public sealed class FlowCoordinator
         => scope.GroupPath.Length == 0 ? declaration.Name : $"{scope.GroupPath}.{declaration.Name}";
 
     /// <summary>The retries a step is given: its own where it says, the workflow's where it does not, and three where neither does.</summary>
-    private int RetryCap(WorkflowStep step) => _definition.RetriesOf(step);
+    private int RetryCap(FlowInstance instance)
+        => instance.Step.Retries ?? OwnOf(instance)?.MaxRetries ?? _definition.RetriesOf(instance.Step);
 
     /// <summary>The limits of this run, as the definition says them and as the plan defaults them.</summary>
     private (int MaxReasoningAgents, int MaxParallelProcesses, int MaxOpenAgents, int MaxInstances) Limit()
@@ -11071,10 +11108,86 @@ public sealed class FlowCoordinator
             _definition.MaxOpenAgents ?? _definition.MaxReasoningAgents ?? 2,
             _definition.MaxInstances ?? WorkflowDefinition.DefaultMaxInstances);
 
+    /// <summary>
+    /// The run-level settings that govern <paramref name="instance"/>'s steps: the nearest use around it that says
+    /// <c>useParentLimits: false</c>, each key it declares replacing the run's and each it declares none for staying the
+    /// run's - a use cannot widen a run's limits by declaring nothing. Null where the run's own hold, as they always did.
+    /// </summary>
+    private FlowUseOwn? OwnOf(FlowInstance instance)
+    {
+        for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
+        {
+            if (at.Group?.Use?.Own is { } own)
+            {
+                return own;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The use that governs <paramref name="scope"/>'s steps and its declared settings: the nearest use around the scope
+    /// that says <c>useParentLimits: false</c>. Null where the run's own settings hold.
+    /// </summary>
+    private (WorkflowStep Use, FlowUseOwn Own)? GoverningUseOf(Scope? scope)
+    {
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            if (at.Group?.Use is { Own: { } own } use)
+            {
+                return (at.Group, own);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether <paramref name="created"/> is a step of the workflow <paramref name="use"/> runs - a member of any instance of it.</summary>
+    private static bool UnderUse(FlowInstance created, WorkflowStep use)
+    {
+        for (var at = created.DeclaredScope; at is not null; at = at.Parent)
+        {
+            if (ReferenceEquals(at.Group, use))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>The refusal at the instance bound, worded once.</summary>
     private static string InstanceBound(string group, int wouldBring, int most)
         => $"group '{group}' would bring this run to {wouldBring} step instances, and at most {most} are allowed (maxInstances). "
             + "A step instance is one run of a step: one for each work item, each iteration and each visit. Raise maxInstances, or lower a loop's bounds";
+
+    /// <summary>
+    /// The refusal at a use's own instance bound: a use that governs itself caps the instances its steps may open,
+    /// beside the run's own cap, counted across every instance of the use. Null where no use governs or its cap leaves
+    /// room for the <paramref name="bringing"/> the group would open.
+    /// </summary>
+    /// <param name="group">The group being opened, as its refusal names it.</param>
+    /// <param name="scope">The scope the group is declared in.</param>
+    /// <param name="declaration">The group being opened - a loop, a forEach, or the use itself.</param>
+    /// <param name="bringing">The instances the group would open.</param>
+    private string? UseBound(string group, Scope scope, WorkflowStep declaration, int bringing)
+    {
+        // The use that governs the group's steps: the use itself where it is one, else the nearest one around it.
+        var governing = declaration.Use is { Own: { } declared } ? (Use: declaration, Own: declared) : GoverningUseOf(scope);
+
+        if (governing is not { Use.Use.Name: { } name, Own.MaxInstances: { } cap })
+        {
+            return null;
+        }
+
+        var wouldBring = _created.Count(created => UnderUse(created, governing.Value.Use)) + bringing;
+
+        return wouldBring > cap
+            ? $"group '{group}' would bring the workflow '{name}' to {wouldBring} step instances, and at most {cap} are allowed (its maxInstances, beside the run's own cap). "
+                + "Raise the workflow's maxInstances, or lower a loop's bounds"
+            : null;
+    }
 
     /// <summary>Records one change of the run where its records are, whole: the snapshot is the run as it stands, and the records own the order they are written in.</summary>
     private void Record(FlowChangeKind kind, FlowInstance? instance = null, FlowInstanceState? from = null, FlowInstanceState? to = null, int? attempt = null, string? detail = null)

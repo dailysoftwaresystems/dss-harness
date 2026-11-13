@@ -372,6 +372,92 @@ public sealed record WorkflowOutput(
     string From);
 
 /// <summary>
+/// The run-level settings of a workflow another uses as a step, applied to its steps where the use says
+/// <c>useParentLimits: false</c>: each key it declares replaces the caller's for them, and each it declares none for
+/// stays the caller's - a use cannot widen a run's limits by declaring nothing. An amend is never carried here, for an
+/// amend is a run's own and is refused where the key says false.
+/// </summary>
+/// <param name="Budget">What the used workflow's steps' reasoning may cost, and the reserve that pauses them first.</param>
+/// <param name="MaxReasoningAgents">Reasoning agents its steps may have at once, where the file says.</param>
+/// <param name="MaxParallelProcesses">Steps running legs its steps may have at once, where the file says.</param>
+/// <param name="MaxOpenAgents">Agents with a worktree its steps may have open at once, where the file says.</param>
+/// <param name="MaxRetries">Retries its steps fall back to where they say none.</param>
+/// <param name="BackoffSeconds">The seconds its steps wait before another try, doubling.</param>
+/// <param name="MaxInstances">The most step instances its steps may open, beside the run's own cap.</param>
+/// <param name="HandoffSeconds">How long a paused reasoning step of it is given to write its handoff.</param>
+/// <param name="Advisor">The agent that recommends an answer to a question its steps raise.</param>
+/// <param name="Reporter">The agent that words what its steps are doing for a person who asks.</param>
+/// <param name="Answers">The answers the used workflow gives to question kinds, consulted for its steps' questions before the run's.</param>
+/// <param name="CodebaseGraph">The shape of the graph its reason steps' serving falls back to.</param>
+/// <param name="Amends">Whether the used workflow declares an amend - never applied, for an amend is a run's own, and refused where the use says false.</param>
+public sealed record FlowUseOwn(
+    FlowBudget? Budget = null,
+    int? MaxReasoningAgents = null,
+    int? MaxParallelProcesses = null,
+    int? MaxOpenAgents = null,
+    int? MaxRetries = null,
+    int? BackoffSeconds = null,
+    int? MaxInstances = null,
+    int? HandoffSeconds = null,
+    FlowAdvisor? Advisor = null,
+    FlowReporter? Reporter = null,
+    IReadOnlyDictionary<string, FlowAnswer>? Answers = null,
+    FlowCodebaseGraph? CodebaseGraph = null,
+    bool Amends = false)
+{
+    /// <summary>Whether the used workflow declares nothing of its own, so every key stays the caller's.</summary>
+    [JsonIgnore]
+    public bool DeclaresNothing => Declared.Count == 0;
+
+    /// <summary>The keys it declares, in the order a line says them; empty where it declares none.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Declared
+    {
+        get
+        {
+            var declared = new List<string>();
+
+            if (Budget is not null)
+            {
+                declared.Add("budget");
+            }
+
+            if (MaxReasoningAgents is not null || MaxParallelProcesses is not null || MaxOpenAgents is not null || MaxRetries is not null || BackoffSeconds is not null || HandoffSeconds is not null)
+            {
+                declared.Add("limits");
+            }
+
+            if (MaxInstances is not null)
+            {
+                declared.Add("maxInstances");
+            }
+
+            if (Advisor is not null)
+            {
+                declared.Add("advisor");
+            }
+
+            if (Reporter is not null)
+            {
+                declared.Add("reporter");
+            }
+
+            if ((Answers?.Count ?? 0) > 0)
+            {
+                declared.Add("answers");
+            }
+
+            if (CodebaseGraph is not null)
+            {
+                declared.Add("codebaseGraph");
+            }
+
+            return declared;
+        }
+    }
+}
+
+/// <summary>
 /// The workflow a step that says <c>use:</c> is, as resolution found it: everything of its own the step needs to run it
 /// - its inputs, its declared outputs, its recovery - beside the fingerprint of its file, which the run records so a
 /// resume is refused where the file changed, and the run-level keys of its own that no step applies.
@@ -388,7 +474,12 @@ public sealed record WorkflowOutput(
 /// <param name="Recover">The called workflow's recovery, which a failure inside the step reaches first; null where it declares none.</param>
 /// <param name="NotApplied">
 /// The run-level keys the called workflow declares that no step applies - its budget, limits, advisor, amend and
-/// answers are the calling run's own - said by <c>validate-workflow</c> so nothing is applied in silence.
+/// answers are the calling run's own - said by <c>validate-workflow</c> so nothing is applied in silence. Empty where
+/// the use says <c>useParentLimits: false</c>, for then they are applied.
+/// </param>
+/// <param name="Own">
+/// The called workflow's run-level settings, carried where the use says <c>useParentLimits: false</c> and applied to
+/// its steps; null where the calling run's settings govern.
 /// </param>
 public sealed record FlowUse(
     string Source,
@@ -398,7 +489,44 @@ public sealed record FlowUse(
     IReadOnlyList<FlowParam> Params,
     IReadOnlyList<WorkflowOutput> Outputs,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowRecover? Recover,
-    IReadOnlyList<string> NotApplied);
+    IReadOnlyList<string> NotApplied,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowUseOwn? Own = null)
+{
+    /// <summary>
+    /// The nearest use around the step at <paramref name="path"/> that governs itself - says
+    /// <c>useParentLimits: false</c> - in the resolved <paramref name="definition"/>; null where none does, so the
+    /// run's own settings hold. What a step's runner reads of the run's settings asks this, where the step is a member
+    /// of a workflow a use runs.
+    /// </summary>
+    /// <param name="definition">The resolved definition the run holds.</param>
+    /// <param name="path">The step's declaration path, dotted, from the flow's root.</param>
+    public static WorkflowStep? Around(WorkflowDefinition definition, string path)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        WorkflowStep? governing = null;
+        var steps = definition.Steps;
+        var parts = path.Split('.');
+
+        for (var at = 0; at + 1 < parts.Length && steps.Count > 0; at++)
+        {
+            if (steps.FirstOrDefault(step => step.Name == parts[at]) is not { } found)
+            {
+                break;
+            }
+
+            if (found.Use?.Own is not null)
+            {
+                governing = found;
+            }
+
+            steps = found.Steps;
+        }
+
+        return governing;
+    }
+}
 
 /// <summary>
 /// One step of a workflow: a definition, of one <c>type</c>, or a group holding <c>steps</c> of its own.
@@ -438,6 +566,14 @@ public sealed record WorkflowStep
 
     /// <summary>The values the step hands the workflow it uses, as written: one scalar for each of its inputs.</summary>
     public IReadOnlyDictionary<string, string> With { get; init; } = NoWith;
+
+    /// <summary>
+    /// Which run's settings govern the workflow this step uses: <see langword="null"/> or <see langword="true"/> the calling
+    /// run's, as from the first release of <c>use</c>, with each run-level key the used workflow declares said as not
+    /// applied; <see langword="false"/> the used workflow's own, each key it declares replacing the caller's for its
+    /// steps. An amend is refused there, for an amend is a run's own.
+    /// </summary>
+    public bool? UseParentLimits { get; init; } = null;
 
     /// <summary>
     /// The called workflow, once the step is resolved: its name among the repository's workflows, the fingerprint of its

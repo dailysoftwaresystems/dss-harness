@@ -24,6 +24,11 @@ internal static class ExportWorkflowCommand
         Description = $"Export the workflow this tool ships ({WorkflowTemplates.ShippedWorkflowName}), to make a version of your own.",
     };
 
+    private static readonly Option<string> FromOption = new("--from")
+    {
+        Description = "Vendor a remote workflow into the repository, as a use names it (owner/repo/path/workflow.yml@ref): every file of its directory at its resolved commit, and a note of where it came from, written for review so a team can use it as ./",
+    };
+
     private static readonly Option<bool> JsonOption = new("--json")
     {
         Description = "Write where the workflow went and each file as JSON.",
@@ -33,18 +38,23 @@ internal static class ExportWorkflowCommand
     {
         var command = new Command(
             Name,
-            "Copy a workflow - its yml and every file it names - into a folder of its own: a declared one once it holds, or the shipped one with --shipped.");
+            "Copy a workflow - its yml and every file it names - into a folder of its own: a declared one once it holds, the shipped one with --shipped, or a remote one vendored with --from.");
 
         command.Arguments.Add(WorkflowArgument);
         command.Options.Add(ToOption);
         command.Options.Add(ShippedOption);
+        command.Options.Add(FromOption);
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
         CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
-            var request = new WorkflowExportRequest(arguments.GetValue(WorkflowArgument)!, arguments.GetValue(ToOption)!, arguments.GetValue(ShippedOption));
+            var request = new WorkflowExportRequest(
+                arguments.GetValue(WorkflowArgument)!,
+                arguments.GetValue(ToOption)!,
+                arguments.GetValue(ShippedOption),
+                arguments.GetValue(FromOption));
 
             var export = await context.Get<IWorkflowExportService>()
                 .ExportAsync(context.Directory, request, cancellationToken)

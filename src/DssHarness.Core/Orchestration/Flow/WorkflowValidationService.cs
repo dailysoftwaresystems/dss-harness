@@ -33,13 +33,18 @@ public interface IWorkflowValidationService : DssHarness.Core.Application.IUseCa
     /// <param name="startDirectory">A directory inside the repository.</param>
     /// <param name="named">A workflow's name, as <c>workflows</c> declares it; <see langword="null"/> for every one.</param>
     /// <param name="cancellationToken">Stops the check.</param>
+    /// <param name="recorded">
+    /// The definition a run already began with, where the check is one that goes on with it: each remote use it
+    /// holds is resolved to the commit the run recorded, so a tag or branch that moved since changes no run already
+    /// started. Null where no run's own record stands behind the check.
+    /// </param>
     /// <exception cref="HarnessException">
     /// <paramref name="named"/> is a workflow the configuration does not declare
     /// (<see cref="HarnessExit.UsageError"/>); or the configuration does not load, or the tree cannot
     /// be resolved. A workflow with problems is reported, not thrown, and so is a configuration that
     /// declares none.
     /// </exception>
-    Task<WorkflowValidationReport> CheckAsync(string startDirectory, string? named, CancellationToken cancellationToken = default);
+    Task<WorkflowValidationReport> CheckAsync(string startDirectory, string? named, CancellationToken cancellationToken = default, WorkflowDefinition? recorded = null);
 }
 
 /// <summary>What checking one declared workflow found.</summary>
@@ -84,7 +89,9 @@ public sealed class WorkflowValidationService(
     IFileSystem fileSystem,
     IHostPlatform platform,
     DssHarness.Core.Secrets.AgentKeyStore keys,
-    Codebase.CodeGraphExtractors extractors) : IWorkflowValidationService
+    Codebase.CodeGraphExtractors extractors,
+    WorkflowRemoteFetcher? remotes = null,
+    WorkflowCache? cache = null) : IWorkflowValidationService
 {
     /// <summary>The command this service reports under.</summary>
     public const string CommandName = "validate-workflow";
@@ -93,6 +100,18 @@ public sealed class WorkflowValidationService(
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
     private readonly DssHarness.Core.Secrets.AgentKeyStore _keys = keys;
+
+    /// <summary>
+    /// Fetches the remote workflows a definition uses, into the cache this reads them from; null where the check
+    /// serves a definition whose workflows are local only, and a remote use is refused saying that.
+    /// </summary>
+    private readonly WorkflowRemoteFetcher? _remotes = remotes;
+
+    /// <summary>
+    /// The hash cache of remote workflows, in this user's own directory for this tool; null where the check serves a
+    /// definition whose workflows are local only.
+    /// </summary>
+    private readonly WorkflowCache? _cache = cache;
 
     /// <summary>The rule every file a definition names is held to, which a run reads its files by too.</summary>
     private readonly WorkflowNamedFiles _named = new(fileSystem, platform.PathComparison);
@@ -104,7 +123,8 @@ public sealed class WorkflowValidationService(
     public async Task<WorkflowValidationReport> CheckAsync(
         string startDirectory,
         string? named,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        WorkflowDefinition? recorded = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
 
@@ -119,14 +139,17 @@ public sealed class WorkflowValidationService(
                     + $" A workflow is defined by '{WorkflowName.Expected(named)}'.");
         }
 
-        var workflows = (named is null ? config.Workflows ?? [] : [named])
-            .Select(name => Check(context, name))
-            .ToList();
+        var workflows = new List<WorkflowCheck>();
+
+        foreach (var name in named is null ? config.Workflows ?? [] : [named])
+        {
+            workflows.Add(await CheckAsync(context, name, recorded, cancellationToken).ConfigureAwait(false));
+        }
 
         return new WorkflowValidationReport(context.Layout.RepositoryRoot, workflows);
     }
 
-    private WorkflowCheck Check(HarnessContext context, string name)
+    private async Task<WorkflowCheck> CheckAsync(HarnessContext context, string name, WorkflowDefinition? recorded, CancellationToken cancellationToken)
     {
         var file = context.Layout.WorkflowFile(name);
 
@@ -159,7 +182,36 @@ public sealed class WorkflowValidationService(
 
         // Every use is resolved before the definition is checked: the called workflows are read, parsed and placed, so
         // that the definition under the check is the one a run runs - and what a resume is refused by is what was read.
-        var (withUses, useProblems) = WorkflowResolver.Resolve(definition!, name.Replace('\\', '/'), relative => ReadWorkflowFile(context.Layout, relative));
+        // A remote one is fetched into the workflow cache, or read from it at the commit this run's own record holds,
+        // where the check goes on with a run that began at one.
+        var (withUses, useProblems, remoteResolutions) = await WorkflowResolver.ResolveAsync(
+            definition!,
+            name.Replace('\\', '/'),
+            new WorkflowResolution(
+                relative => ReadWorkflowFile(context.Layout, relative),
+                RecordedCommit(recorded),
+                _remotes is null
+                    ? null
+                    : async source => await _remotes.ResolveAsync(
+                        WorkflowRemote.Source(source) ?? throw new HarnessException(HarnessExit.UsageError, $"'{source}' is no remote workflow source"),
+                        context.Config.WorkflowSources,
+                        context.Layout.MainCheckoutRoot,
+                        Environment.GetEnvironmentVariable,
+                        RecordedCommit(recorded)?.Invoke(source),
+                        cancellationToken).ConfigureAwait(false),
+                (owner, path) =>
+                {
+                    try
+                    {
+                        return _cache?.FindNamed(owner) is { } entry ? _cache.ReadText(entry, path) : null;
+                    }
+                    catch (HarnessException)
+                    {
+                        // A cache file changed on disk is not read as though it were the workflow's: the use of it is
+                        // said as one no file answers.
+                        return null;
+                    }
+                })).ConfigureAwait(false);
 
         if (useProblems.Count > 0)
         {
@@ -175,7 +227,7 @@ public sealed class WorkflowValidationService(
         var problems = new List<string>(WorkflowValidator.Validate(
             definition,
             context.Config.Commit.Template is not null,
-            (named, owner) => Text(named, owner is null ? directory : DirectoryOf(context.Layout, owner), owner ?? name),
+            (named, owner) => TextOf(named, owner, name, directory, context),
             resolved.Providers,
             _extractors.Languages,
             Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild),
@@ -204,8 +256,8 @@ public sealed class WorkflowValidationService(
         var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
         IReadOnlyList<string> agents = resolved.Providers is { } providers
             ? [
-                .. WorkflowValidator.ModelLevels(definition, providers, (named, owner) => Text(named, owner is null ? directory : DirectoryOf(context.Layout, owner), owner ?? name)),
-                .. Prices(definition, providers, (named, owner) => Text(named, owner is null ? directory : DirectoryOf(context.Layout, owner), owner ?? name)),
+                .. WorkflowValidator.ModelLevels(definition, providers, (named, owner) => TextOf(named, owner, name, directory, context)),
+                .. Prices(definition, providers, (named, owner) => TextOf(named, owner, name, directory, context)),
                 .. MissingKeys(definition, providers, slot),
             ]
             : [];
@@ -213,7 +265,7 @@ public sealed class WorkflowValidationService(
             name,
             [
                 $"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}{recovery}, {reasons} reasoning)",
-                .. ResolutionsOf(definition),
+                .. ResolutionsOf(definition, remoteResolutions),
                 .. agents,
             ])
         {
@@ -223,11 +275,37 @@ public sealed class WorkflowValidationService(
     }
 
     /// <summary>
-    /// One line for each workflow a step of <paramref name="definition"/> uses, in the order the tree declares them:
-    /// what it uses, the called workflow's name, and the fingerprint of its file - beside what the called workflow
-    /// declares that no step applies, so that nothing is applied in silence and nothing left out in silence either.
+    /// The commit a run's own recorded definition holds for each remote source a use names, where the check goes on
+    /// with a run that began at one: a source resolves to that commit again, however its ref has moved, so a resume is
+    /// refused by nothing it cannot help. Null where no run's own record stands behind the check.
     /// </summary>
-    private static IReadOnlyList<string> ResolutionsOf(WorkflowDefinition definition)
+    /// <param name="recorded">The definition the run began with.</param>
+    private static Func<string, string?>? RecordedCommit(WorkflowDefinition? recorded)
+    {
+        if (recorded is null)
+        {
+            return null;
+        }
+
+        var commits = FlowScope.Declared(recorded)
+            .Select(entry => entry.Step.Use)
+            .OfType<FlowUse>()
+            .Where(use => WorkflowRemote.Is(use.Name))
+            .GroupBy(use => use.Source, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Fingerprint, StringComparer.Ordinal);
+
+        return commits.Count == 0 ? null : source => commits.GetValueOrDefault(source);
+    }
+
+    /// <summary>
+    /// One line for each workflow a step of <paramref name="definition"/> uses, in the order the tree declares them:
+    /// what it uses, the called workflow's name, and the fingerprint of its file - a remote one's repository, path,
+    /// ref and resolved commit - beside what the called workflow declares that no step applies, so that nothing is
+    /// applied in silence and nothing left out in silence either, and beside how a remote one was resolved where that
+    /// is worth a word: a moving ref, allowed by the pin, and a resolution the cache stood in for, the network not
+    /// being there.
+    /// </summary>
+    private static IReadOnlyList<string> ResolutionsOf(WorkflowDefinition definition, IReadOnlyList<WorkflowRemoteResolution> remotes)
     {
         var lines = new List<string>();
 
@@ -238,9 +316,20 @@ public sealed class WorkflowValidationService(
                 continue;
             }
 
+            var resolution = remotes.FirstOrDefault(resolved => WorkflowRemote.Name(resolved.Source, resolved.Commit) == use.Name);
+            var said = WorkflowRemote.Is(use.Name)
+                ? $"{resolution?.Source.Repository ?? use.Source} at commit {use.Fingerprint[..12]}"
+                : use.Name;
+
             lines.Add(
-                $"'{path}' uses {use.Source} -> {use.Name} ({use.Inputs.Count} input{(use.Inputs.Count == 1 ? string.Empty : "s")}, fingerprint {use.Fingerprint[..12]})"
-                + (use.NotApplied.Count == 0 ? string.Empty : $"; applies none of the {string.Join(", ", use.NotApplied)} it declares"));
+                $"'{path}' uses {use.Source} -> {said} ({use.Inputs.Count} input{(use.Inputs.Count == 1 ? string.Empty : "s")}, fingerprint {use.Fingerprint[..12]})"
+                + (use.Own is { } own
+                    ? own.Declared.Count == 0
+                        ? "; useParentLimits: false, and it declares no key of its own, so the calling run's settings hold"
+                        : $"; useParentLimits: false, governed by its own {string.Join(", ", own.Declared)}"
+                    : use.NotApplied.Count == 0 ? string.Empty : $"; applies none of the {string.Join(", ", use.NotApplied)} it declares")
+                + (resolution?.Moving == true ? "; the ref is a branch, which moves - pin it by its commit where what a run ran must be what it said" : string.Empty)
+                + (resolution?.FromLastResolved == true ? "; resolved from the workflow cache's last resolution, the network not being there" : string.Empty));
         }
 
         return lines;
@@ -378,12 +467,14 @@ public sealed class WorkflowValidationService(
         foreach (var (path, step) in WorkflowFiles.Steps(definition))
         {
             var where = $"step '{path}'";
-            var ownerDirectory = step.WorkflowOf is { } owner ? DirectoryOf(context.Layout, owner) : directory;
+            var ownerDirectory = step.WorkflowOf is { } owner && !WorkflowRemote.Is(owner) ? DirectoryOf(context.Layout, owner) : directory;
             var ownerName = step.WorkflowOf ?? name;
 
             foreach (var named in WorkflowFiles.OfStep(step, where))
             {
-                problems.AddRange(Check(named, ownerDirectory, ownerName));
+                problems.AddRange(step.WorkflowOf is { } ownerOf && WorkflowRemote.Is(ownerOf)
+                    ? Remote(named.File, ownerOf)
+                    : Check(named, ownerDirectory, ownerName));
             }
 
             if (step.Runner is not null && !config.PredefinedRunners.ContainsKey(step.Runner))
@@ -403,14 +494,22 @@ public sealed class WorkflowValidationService(
             }
 
             // A file a use fills an input with is a file of the used workflow's directory, as every file a step of it
-            // names is - read there, under the used workflow's own name.
+            // names is - read there, under the used workflow's own name: the repository's own directory for a local
+            // workflow, the cache entry for a remote one.
             if (step.Use is { } use)
             {
                 foreach (var input in use.Inputs.Where(input => input.Kind == FlowInput.FileKind))
                 {
                     if (step.With.TryGetValue(input.Name, out var value))
                     {
-                        Add(problems, _named.Problem(value, DirectoryOf(context.Layout, use.Name), use.Name, $"the '{input.Name}' it fills '{use.Name}'s input '{input.Name}' with", out _));
+                        if (WorkflowRemote.Is(use.Name))
+                        {
+                            problems.AddRange(Remote(value, use.Name, $"the '{input.Name}' it fills '{use.Name}'s input '{input.Name}' with"));
+                        }
+                        else
+                        {
+                            Add(problems, _named.Problem(value, DirectoryOf(context.Layout, use.Name), use.Name, $"the '{input.Name}' it fills '{use.Name}'s input '{input.Name}' with", out _));
+                        }
                     }
                 }
             }
@@ -418,6 +517,40 @@ public sealed class WorkflowValidationService(
 
         Add(problems, GeneratedAgentNames(definition, config.Worktrees));
         return problems;
+    }
+
+    /// <summary>
+    /// The problems with one file a step of a remote workflow names: spelt as a path inside the workflow's own
+    /// directory, as a local workflow's files are, and there in the cache entry the resolution fetched - read from it
+    /// with the entry's blobs hashed again as they are.
+    /// </summary>
+    /// <param name="named">The file, as the definition names it.</param>
+    /// <param name="owner">The remote workflow's name, as the run resolved it.</param>
+    /// <param name="what">What names the file, as a problem says it; the step's own where it is left out.</param>
+    private IReadOnlyList<string> Remote(string named, string owner, string? what = null)
+    {
+        var said = what ?? $"'{named}'";
+
+        if (PlatformPaths.IsRootedOnAnyPlatform(named) || named.Split('/', '\\').Any(segment => segment is ".." or "." or ""))
+        {
+            return [$"'{named}', {said}, does not name a file inside the workflow's own directory; every file a workflow names is relative to it, without '.', '..' or an empty part"];
+        }
+
+        if (_cache?.FindNamed(owner) is not { } entry)
+        {
+            return [$"'{named}', {said}, is of the workflow '{owner}', which the workflow cache holds no entry for"];
+        }
+
+        try
+        {
+            return _cache.ReadText(entry, $"{entry.Path}/{named.Replace('\\', '/')}") is null
+                ? [$"'{named}', {said}, is not in the workflow '{owner}': the commit it was fetched at holds no such file in its directory"]
+                : [];
+        }
+        catch (HarnessException refused)
+        {
+            return [refused.Message];
+        }
     }
 
     /// <summary>
@@ -550,6 +683,35 @@ public sealed class WorkflowValidationService(
         var problems = new List<string>();
         Add(problems, _named.Problem(named.File, directory, name, named.What, out _));
         return problems;
+    }
+
+    /// <summary>
+    /// The text of a file the definition names, for the validator to type a schema's paths and check a prompt's
+    /// placeholders by, read where the workflow that names it keeps its files: the repository's own directory for a
+    /// local workflow, the cache entry a remote one's resolution fetched for a remote one. <see langword="null"/> where
+    /// it is not a file of the workflow's own place there to read - or a changed cache file refused to give it, which
+    /// the check of its files says - so the problem is said once, where the file is checked.
+    /// </summary>
+    private string? TextOf(string named, string? owner, string name, string directory, HarnessContext context)
+    {
+        if (owner is null || !WorkflowRemote.Is(owner))
+        {
+            return Text(named, owner is null ? directory : DirectoryOf(context.Layout, owner), name);
+        }
+
+        if (_cache?.FindNamed(owner) is not { } entry)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _cache.ReadText(entry, $"{entry.Path}/{named}");
+        }
+        catch (HarnessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

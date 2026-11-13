@@ -298,17 +298,19 @@ public sealed class WorkflowExportServiceTests
         Assert.Null(json.Details);
         Assert.Equal("'mine' exported to '/x': 0 file(s)", WorkflowExportReports.Render(new WorkflowExport("mine", false, "/x", []), json: false).Message);
 
-        Assert.Equal(["workflow", "shipped", "destination", "files"], document.Select(member => member.Key));
+        Assert.Equal(["workflow", "shipped", "destination", "files", "vendored"], document.Select(member => member.Key));
         Assert.Equal(Shipped, document["workflow"]!.GetValue<string>());
         Assert.True(document["shipped"]!.GetValue<bool>());
         Assert.Equal("/x/out/implementation", document["destination"]!.GetValue<string>());
         Assert.Equal(["agents/a.md", "implementation.yml"], document["files"]!.AsArray().Select(file => file!.GetValue<string>()));
+        Assert.Null(document["vendored"]);
 
-        Assert.Equal(["exitCode", "summary", "workflow", "shipped", "destination", "files"], stopped.Select(member => member.Key));
+        Assert.Equal(["exitCode", "summary", "workflow", "shipped", "destination", "files", "vendored"], stopped.Select(member => member.Key));
         Assert.Null(stopped["workflow"]);
         Assert.True(stopped["shipped"]!.GetValue<bool>());
         Assert.Null(stopped["destination"]);
         Assert.Empty(stopped["files"]!.AsArray());
+        Assert.Null(stopped["vendored"]);
     }
 
     /// <summary>
