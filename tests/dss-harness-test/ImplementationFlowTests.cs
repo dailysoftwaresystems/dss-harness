@@ -867,6 +867,55 @@ public sealed class ImplementationFlowTests
     }
 
     /// <summary>
+    /// A failure that comes before anything is planned is put right as one after it is: the build fails red at the head
+    /// of the run - before the intake, before the planning - the diagnosis says fix, and its remedy is built through the
+    /// item pipeline as a work item is, on the remedy prompt, folded, committed and reviewed, though the run has no plan
+    /// yet: the recovery's use hands the pipeline nothing of a plan, for its remedy reads the diagnosis and never the
+    /// plan, which may not exist. The build then runs again, green, and the run goes on to its end.
+    /// </summary>
+    [Fact]
+    public async Task ABuildRedBeforeAnythingIsPlanned_IsPutRightByARemedyBuiltAsAnItemIs_AndTheBuildRunsAgain()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            ground: new Ground(Legs: true),
+            script: agents => agents.Queue(
+                "diagnostician",
+                Completed(Diagnosis(course: "fix", items: [Remedy("frame", "src/frame/**")], summary: "The build is red: the tool names a type that is gone"))),
+            machine: steps => steps.Queue("build", MachineSteps.Red(HarnessExit.CommandFailed, "the build is red: Tool.Frame is not defined")));
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+        Assert.Empty(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+        // The diagnosis was asked before the planner was: the recovery ran with no plan in the run.
+        var asked = kit.Agents.Asked.Select(step => step.AgentDefinition).ToList();
+
+        Assert.True(asked.IndexOf("diagnostician") < asked.IndexOf("planner"), string.Join(", ", asked));
+
+        // The remedy was built on the remedy prompt, before the round's item was built on the implement prompt.
+        var builders = kit.Agents.Of("implementer");
+
+        Assert.Equal(2, builders.Count);
+        Assert.StartsWith("Build this work item. It puts right a failure of this run", builders[0].Prompt, StringComparison.Ordinal);
+        Assert.Contains("The build is red: the tool names a type that is gone", builders[0].Prompt, StringComparison.Ordinal);
+        Assert.StartsWith("Build this work item.\n\n## The item", builders[1].Prompt, StringComparison.Ordinal);
+
+        // The remedy was folded, committed and reviewed as a work item is, and the build ran again, green.
+        var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps;
+
+        Assert.Equal(
+            [("recover.remedies.checkpoint", nameof(FlowInstanceState.Done)), ("recover.remedies.fix.review.correctness", nameof(FlowInstanceState.Done)), ("recover.remedies.fold", nameof(FlowInstanceState.Done))],
+            [.. flow.Where(step => step.Step is "recover.remedies.fold" or "recover.remedies.checkpoint" or "recover.remedies.fix.review.correctness").Select(step => (step.Step, step.State)).OrderBy(step => step.Step, StringComparer.Ordinal)]);
+        Assert.Equal(
+            [("build", nameof(FlowInstanceState.Failed)), ("build+2", nameof(FlowInstanceState.Done))],
+            [.. flow.Where(step => step.Step == "build").Select(step => (step.Instance, step.State)).OrderBy(step => step.Instance, StringComparer.Ordinal)]);
+    }
+
+    /// <summary>
     /// A step the recovery took five times, and failed again, is asked of the person at the next - with the
     /// advisor's recommendation of a fix - the diagnoses after the first on the resume prompt that says the last one
     /// did not put it right.
@@ -5208,6 +5257,22 @@ public sealed class ImplementationFlowTests
         static bool Serving(AgentRun run, string model)
             => string.Equals(run.Model, model, StringComparison.Ordinal) && run.Output?.Name == "implement";
 
+        // The implement step alone names its model outright, in place of its own tier - the first after its name, in
+        // the item pipeline that declares it; the flow's own file declares no implement step and is left as it is.
+        static string[] ImplementNamingGlm(string[] lines)
+        {
+            var step = Array.FindIndex(lines, line => line.Trim() == "- name: implement");
+
+            if (step < 0)
+            {
+                return lines;
+            }
+
+            var at = Array.FindIndex(lines, step, line => line.Trim() == "tier: balanced");
+
+            return [.. lines[..at], $"{lines[at][..^lines[at].TrimStart().Length]}model: glm-5.3", .. lines[(at + 1)..]];
+        }
+
         // A request the step's model declines: the step goes on with its fallback, and its record names both models.
         using (var declined = new TempDirectory())
         {
@@ -5318,11 +5383,7 @@ public sealed class ImplementationFlowTests
                 named,
                 run => Completed(Implement()),
                 keys: "ZAI_API_KEY=sk-test-two\n",
-                edit: lines =>
-                {
-                    var at = Array.FindIndex(lines, line => line.Trim() == "tier: balanced");
-                    return [.. lines[..at], $"{lines[at][..^lines[at].TrimStart().Length]}model: glm-5.3", .. lines[(at + 1)..]];
-                });
+                edit: ImplementNamingGlm);
 
             var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -5342,11 +5403,7 @@ public sealed class ImplementationFlowTests
                 keyless,
                 run => Completed(Implement()),
                 keys: "ANTHROPIC_API_KEY=sk-test-one\n",
-                edit: lines =>
-                {
-                    var at = Array.FindIndex(lines, line => line.Trim() == "tier: balanced");
-                    return [.. lines[..at], $"{lines[at][..^lines[at].TrimStart().Length]}model: glm-5.3", .. lines[(at + 1)..]];
-                });
+                edit: ImplementNamingGlm);
 
             var refused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -5553,7 +5610,17 @@ public sealed class ImplementationFlowTests
                 script: agents => agents.Queue("implementer", Completed(Implement())),
                 machine: steps => steps.Queue("fold", Conflicting(), Folded("DS-2")));
 
-            await EditWorkflowAsync(kit, Path.Combine("item-pipeline", "item-pipeline.yml"), lines => [.. lines.Where(line => !line.Trim().Equals("foldConflicts: fail", StringComparison.Ordinal))]);
+            // The item's fold alone loses its line: the catch-ups' and the refold's keep theirs.
+            await EditWorkflowAsync(
+                kit,
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
+                lines =>
+                {
+                    var fold = Array.FindIndex(lines, line => line.Trim() == "- name: fold");
+                    var at = Array.FindIndex(lines, fold, line => line.Trim() == "foldConflicts: fail");
+
+                    return [.. lines[..at], .. lines[(at + 1)..]];
+                });
 
             var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 

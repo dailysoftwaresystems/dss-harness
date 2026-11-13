@@ -3,14 +3,15 @@
 # by its rounds and by its recovery alike ('use: ./item-pipeline/item-pipeline.yml').
 #
 # Every fact its steps read beyond their own they are handed as inputs, filled by each use: the
-# item itself, the run's orientation, the plan's summary, the run's affectedTests - and, where
-# the recovery uses the pipeline, the diagnosis its remedy puts right. The prompt its builder is
-# asked with and the name a machine step's failure goes to are handed the same way: implementPrompt
-# and failTo, for a round builds an item with prompts/implement.md and gives its failures to the
-# run's recovery, and the recovery builds one with prompts/remedy.md and asks with its own failures,
-# as it cannot call itself. redo and undo - the alternatives a plan update runs in the builder's
-# place - are held off by the alternatives input where the recovery uses the pipeline, which no
-# update reaches.
+# item itself, the run's orientation and the run's affectedTests - and, where a round uses the
+# pipeline, the plan's summary its builder reads, or, where the recovery uses it, the diagnosis
+# its remedy puts right and no plan, for a failure the recovery takes may come before any plan
+# is made. The prompt its builder is asked with and the name a machine step's failure goes to are
+# handed the same way: implementPrompt and failTo, for a round builds an item with
+# prompts/implement.md and gives its failures to the run's recovery, and the recovery builds one
+# with prompts/remedy.md and asks with its own failures, each where it fails, as it cannot call
+# itself. redo and undo - the alternatives a plan update runs in the builder's place - are held off
+# by the alternatives input where the recovery uses the pipeline, which no update reaches.
 name: item-pipeline
 description: One work item built in an agent of its own, tested, reviewed, folded and checkpointed - the pipeline the implementation workflow's rounds and recovery both use.
 inputs:
@@ -36,8 +37,7 @@ inputs:
     description: The run's orientation - hasLegs, anchors, startCommit, hasRemote, tests - which the pipeline's verify, its checks and its pushes read.
   - name: planSummary
     kind: value
-    required: true
-    description: The plan's summary of what it set out to do, which the builder reads.
+    description: The plan's summary of what it set out to do, which the builder reads where a round uses the pipeline, and redo and undo with it; absent where the recovery uses the pipeline, whose remedy reads the diagnosis instead, for a failure the recovery puts right may come before anything is planned.
   - name: affectedTests
     kind: value
     required: true
@@ -45,15 +45,18 @@ inputs:
   - name: diagnose
     kind: value
     description: The recovery's diagnosis, whose cause and summary the remedy prompt reads; absent where a round uses the pipeline.
+# What the pipeline gives the step that uses it, read when the use ends. An item a person answered
+# skip has no fold and no review, and each of these reads nothing for it: the use ends done with
+# none of them, as an output that reads nothing is no failure of the use.
 outputs:
   - name: written
-    description: The paths the item's fold wrote.
+    description: The paths the item's fold wrote; none where the item was skipped.
     from: fold.written
   - name: rows
-    description: The anchor rows the item's fold carried.
+    description: The anchor rows the item's fold carried; none where the item was skipped.
     from: fold.rows
   - name: leftover
-    description: The review findings still standing at the review loop's bound.
+    description: The review findings still standing where the review loop ended at its bound, none of them acted on - empty where it ended clean, and none where the item was skipped.
     from: fix.review.findings
 steps:
   - name: item-agent
