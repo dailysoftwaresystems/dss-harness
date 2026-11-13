@@ -57,8 +57,9 @@ public sealed record WorkflowResolution(
 /// recovery is kept beside them for the engine to reach first, its declared outputs become the step's own once it ends,
 /// and its inputs are the names the step's <c>with:</c> values fill. Its run-level keys are said as not applied where
 /// no step applies them (<see cref="FlowUse.NotApplied"/>): its budget, reporter, <c>pushCheckpoints</c> and
-/// <c>recommendations</c> always, and its advisor, amend, answers, limits and <c>codebaseGraph</c> unless the use says
-/// <c>useParentLimits: false</c>, which carries them (<see cref="FlowUse.Own"/>) for its steps - an amend refused there.
+/// <c>recommendations</c> always, its advisor, amend, answers, limits and <c>codebaseGraph</c> unless the use says
+/// <c>useParentLimits: false</c>, which carries them (<see cref="FlowUse.Own"/>) for its steps - an amend refused there -
+/// and its <c>codebaseGraph</c> even then where the run's own workflow declares one, whose shape the run's one graph has.
 /// </para>
 /// <para>
 /// A use names a path relative to the calling workflow's directory - inside the repository's workflows directory for a
@@ -130,7 +131,7 @@ public static class WorkflowResolver
 
         var problems = new List<string>();
         var remotes = new List<WorkflowRemoteResolution>();
-        var walk = new Walk(reads, problems, remotes);
+        var walk = new Walk(reads, problems, remotes, definition.CodebaseGraph is not null);
 
         // The circle a use closes is found by files, the calling workflow's own the first: a use of it from anywhere
         // in the tree is a use of itself.
@@ -157,7 +158,11 @@ public static class WorkflowResolver
     /// <param name="Reads">Where every file a resolution reads comes from.</param>
     /// <param name="Problems">Every problem found, whole, in the order the tree declares what they concern.</param>
     /// <param name="Remotes">Each remote resolution made on the way, in the order the tree declared the uses.</param>
-    private sealed record Walk(WorkflowResolution Reads, List<string> Problems, List<WorkflowRemoteResolution> Remotes);
+    /// <param name="RunShapesTheGraph">
+    /// Whether the run's own workflow declares a <c>codebaseGraph</c>, whose shape the run's one graph then has
+    /// (<see cref="FlowUse.GraphOf"/>), whatever a use that governs itself declares.
+    /// </param>
+    private sealed record Walk(WorkflowResolution Reads, List<string> Problems, List<WorkflowRemoteResolution> Remotes, bool RunShapesTheGraph);
 
     /// <summary>
     /// Where a level of steps is resolved: the directory its workflow sits in, forward slashes - under the repository's
@@ -445,7 +450,7 @@ public static class WorkflowResolver
             called.Params,
             called.Outputs,
             calledRecover,
-            NotAppliedOf(called, governed),
+            NotAppliedOf(called, governed, walk.RunShapesTheGraph),
             governed ? OwnOf(called) : null,
             called.Texts);
 
@@ -462,10 +467,15 @@ public static class WorkflowResolver
     /// its budget and its reporter, which a use that governs itself carries but nothing applies yet - the run's own
     /// budget counts its steps, and the run's own reporter words them - its <c>pushCheckpoints</c> and its
     /// <c>recommendations</c>, which are a run's own, and, unless the use governs itself, its advisor, amend, answers,
-    /// limits and <c>codebaseGraph</c>, the calling run's own holding. An amend under a use that governs itself is
-    /// refused by the definition's check, never said here.
+    /// limits and <c>codebaseGraph</c>, the calling run's own holding - its <c>codebaseGraph</c> under a use that governs
+    /// itself too, where the run's own workflow declares one, for the run's one graph has the run's shape then
+    /// (<see cref="FlowUse.GraphOf"/>). An amend under a use that governs itself is refused by the definition's check,
+    /// never said here.
     /// </summary>
-    private static IReadOnlyList<string> NotAppliedOf(WorkflowDefinition called, bool governed)
+    /// <param name="called">The called workflow.</param>
+    /// <param name="governed">Whether the use says <c>useParentLimits: false</c>.</param>
+    /// <param name="runShapesTheGraph">Whether the run's own workflow declares a <c>codebaseGraph</c>.</param>
+    private static IReadOnlyList<string> NotAppliedOf(WorkflowDefinition called, bool governed, bool runShapesTheGraph)
     {
         var notApplied = new List<string>();
 
@@ -499,7 +509,7 @@ public static class WorkflowResolver
             notApplied.Add("limits");
         }
 
-        if (!governed && called.CodebaseGraph is not null)
+        if ((!governed || runShapesTheGraph) && called.CodebaseGraph is not null)
         {
             notApplied.Add("codebaseGraph");
         }

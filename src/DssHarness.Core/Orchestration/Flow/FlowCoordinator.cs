@@ -3522,7 +3522,7 @@ public sealed class FlowCoordinator
     {
         // The question a loop that decides at a step of its own asked there, where it did: the iteration's own record says
         // what the answer made of the decision, so a resume goes on from it rather than asking again.
-        var atTheStep = instance.Children.Count > 0 && instance.Children[^1].Decision is { To: FlowLoopDecision.Asks } asked
+        var atTheStep = instance.Children.Count > 0 && DecisionOf(instance, instance.Children[^1]) is { To: FlowLoopDecision.Asks } asked
             ? (Body: instance.Children[^1], Asked: asked)
             : ((Scope Body, FlowLoopDecision Asked)?)null;
 
@@ -3530,23 +3530,19 @@ public sealed class FlowCoordinator
         {
             case "more":
                 // The loop was granted one more iteration (Grant): it goes on to make it - asked at its deciding step,
-                // the rest of the iteration runs first, and its end makes the next with no second reading.
+                // its decision goes on now that its bound allows the next iteration (Follow), the rest of the iteration
+                // runs first, and its end makes the next with no second reading.
                 instance.State = FlowInstanceState.Running;
-
-                if (atTheStep is { } goingOn)
-                {
-                    Decide(goingOn.Body, goingOn.Asked with { To = FlowLoopDecision.GoesOn });
-                }
-
                 break;
             case "accept":
                 if (atTheStep is { } ending)
                 {
                     // The loop asked at its deciding step, with the rest of the iteration never started: it ends there,
-                    // the rest NotRun, and what its leftover names is what that step found, none of it acted on.
+                    // the rest NotRun, and what its leftover names is what that step found, none of it acted on. The
+                    // iteration's end ends the loop, the work left to this question let go with it.
                     instance.State = FlowInstanceState.Running;
                     Decide(ending.Body, ending.Asked with { To = FlowLoopDecision.EndsLeaving });
-                    EndAtTheDecision(instance, ending.Body);
+                    _ = EndAtTheDecision(instance, ending.Body);
                     break;
                 }
 
@@ -4807,6 +4803,8 @@ public sealed class FlowCoordinator
             return false;
         }
 
+        var endedAtItsDecision = false;
+
         if (scope.LoopOf is { Step.Repeat.DecideAfter: not null } deciding
             && deciding.Children.Count > 0
             && ReferenceEquals(deciding.Children[^1], scope))
@@ -4814,24 +4812,30 @@ public sealed class FlowCoordinator
             // The loop around this iteration decides at a step of it (decideAfter): where that step's newest visit has
             // ended done and its decision is not yet read, it is read before anything after it is drawn - a step
             // skipped as it was drawn, a session that took the run up between the step's ending and its decision - so
-            // nothing of the rest starts where the loop ends.
+            // nothing of the rest starts where the loop ends; and where it was read, what follows from it is made
+            // where the session that read it did not live to make it.
             changed |= DecideAt(deciding);
+            endedAtItsDecision = DecisionOf(deciding, scope) is { EndsTheLoop: true };
+        }
 
-            if (deciding.WaitingQuestion is not null || scope.Decision is { EndsTheLoop: true })
-            {
-                // The loop stands on its bound's question, read at the deciding step, or ended there: nothing more of
-                // the iteration starts - on 'accept' the rest is never started at all, and its leftover is what the
-                // deciding step found, none of it acted on.
-                return changed;
-            }
+        if (HeldByItsLoop(scope) is not null)
+        {
+            // The loop stands on its bound's question, read at the deciding step: nothing more of the iteration is drawn,
+            // in it or in a group of it - a handler the deciding step's ending raised among them - and nothing drawn
+            // starts (HoldOf). On 'accept' the rest is never started at all, and its leftover is what the deciding step
+            // found, none of it acted on.
+            return changed;
         }
 
         foreach (var declaration in DeclarationsOf(scope))
         {
-            if (scope.Instantiated.Contains(declaration.Name) || !Draws(scope, declaration))
+            if (scope.Instantiated.Contains(declaration.Name)
+                || !Draws(scope, declaration)
+                || endedAtItsDecision && !RunsAfterItsGroup(declaration, scope))
             {
                 // A scope a redirect or a failure left draws nothing more: its group's visit is over - save the always
-                // steps of a visit that ended done or failed, which its ending never waited on.
+                // steps of a visit that ended done or failed, which its ending never waited on. An iteration its loop
+                // ended at its decision draws nothing more but those always steps either.
                 continue;
             }
 
@@ -5502,7 +5506,10 @@ public sealed class FlowCoordinator
     /// iteration's end would - and its question holds the iteration from starting anything more until it is answered. A
     /// deciding step that ends any way but done - skipped, failed and passed over, never run - decides nothing here: the
     /// iteration runs to its end, and the loop reads its until, its blocking and its bound there, as a loop that names no
-    /// deciding step does, so no loop runs to its bound without its until read.
+    /// deciding step does, so no loop runs to its bound without its until read. A decision read for that visit already is
+    /// never read again, and what follows from it is made where it is not yet made (<see cref="Follow"/>): a session that
+    /// takes the run up between the decision's record and what followed it - the rest of an ending iteration not yet
+    /// NotRun, the bound's question not yet asked - goes on as the session that read it went on.
     /// </summary>
     /// <param name="instance">The repeat.</param>
     /// <returns>Whether anything changed.</returns>
@@ -5522,13 +5529,19 @@ public sealed class FlowCoordinator
 
         if (body.GroupInstance is not { State: FlowInstanceState.Running }
             || body.Members.GetValueOrDefault(after) is not { State: FlowInstanceState.Done } decider
-            || string.Equals(body.Decision?.At, decider.Id, StringComparison.Ordinal)
             || BeingEndedAround(body) is not null)
         {
             // The deciding step's newest visit has not ended done - the iteration still works towards the decision, or
-            // reads it at its end - or its decision was read, or the iteration is being brought to rest for a plan
-            // update, which no decision is read over.
+            // reads it at its end - or the iteration is being brought to rest for a plan update, which no decision is
+            // read over.
             return false;
+        }
+
+        if (DecisionOf(instance, body) is { } decided)
+        {
+            // Read for this visit already: never read again over what has run since, and what follows from it is made
+            // where the session that read it did not live to make it.
+            return Follow(instance, body, decided);
         }
 
         var until = Holds(repeat.Until, body, out var problem);
@@ -5568,25 +5581,96 @@ public sealed class FlowCoordinator
                 AddIterationsOwedTo(instance);
             }
 
-            to = instance.Children.Count + 1 > BoundOf(instance.Step, instance) ? FlowLoopDecision.Asks : FlowLoopDecision.GoesOn;
+            to = AtItsBound(instance) ? FlowLoopDecision.Asks : FlowLoopDecision.GoesOn;
         }
 
-        // The decision is the iteration's own, in its record, before anything follows from it.
+        // The decision is the iteration's own, in its record, before anything follows from it: what follows is made
+        // again by a session that finds the decision with nothing of it made.
         Decide(body, new FlowLoopDecision(decider.Id, to));
+        _ = Follow(instance, body, body.Decision!);
+        return true;
+    }
 
-        switch (to)
+    /// <summary>
+    /// The question that holds <paramref name="scope"/>, by its id: where the scope is the current iteration of a loop
+    /// that decides at a step of its own (<c>decideAfter</c>), or a scope inside it at any depth - a group of the
+    /// iteration, a handler that is a group among them - and the loop stands on the question its bound asked at that
+    /// step. The one owner of that hold: the schedule draws nothing in such a scope (<see cref="Instantiate"/>) and starts
+    /// nothing drawn in it (<see cref="HoldOf"/>) - a handler the deciding step's ending raised waits with the rest - until
+    /// the answer says whether the loop goes on, and the iteration with it, or ends there, its rest NotRun
+    /// (<see cref="EndAtTheDecision"/>). Null where no such question holds it.
+    /// </summary>
+    private static string? HeldByItsLoop(Scope scope)
+    {
+        for (var at = scope; at is not null; at = at.Parent)
         {
+            if (at.LoopOf is { Step.Repeat.DecideAfter: not null, WaitingQuestion: { } question } loop
+                && loop.Children.Count > 0
+                && ReferenceEquals(loop.Children[^1], at)
+                && DecisionOf(loop, at) is { To: FlowLoopDecision.Asks })
+            {
+                return question;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether <paramref name="loop"/>'s next iteration would pass its own bound: where it asks, at an iteration's end or at its deciding step.</summary>
+    private static bool AtItsBound(FlowInstance loop)
+        => loop.Children.Count + 1 > BoundOf(loop.Step, loop);
+
+    /// <summary>
+    /// Makes what follows from <paramref name="decision"/>, the decision the current iteration of a repeat that decides at
+    /// a step of its own (<c>decideAfter</c>) was read at, where it is not yet made - as the decision is read, and again by
+    /// any session that finds the decision recorded with nothing of it made, so a resume goes on as the session that read
+    /// it went on. One that ends the loop ends the iteration there (<see cref="EndAtTheDecision"/>), its end ending the
+    /// loop (<see cref="Iterate"/>). One that asks at the loop's bound asks its question, where the loop stands on none -
+    /// or, where the bound now allows the next iteration, goes on (<see cref="GoOnPast"/>), as a decision read then would
+    /// have: the answer <c>more</c> granted that iteration, or one was added for work a plan update owes the loop, its
+    /// question withdrawn for it. One that goes on makes nothing.
+    /// </summary>
+    /// <param name="instance">The repeat, running and waiting on no question.</param>
+    /// <param name="body">The iteration's body scope.</param>
+    /// <param name="decision">The decision its deciding step's newest visit was read at.</param>
+    /// <returns>Whether anything changed.</returns>
+    private bool Follow(FlowInstance instance, Scope body, FlowLoopDecision decision)
+    {
+        switch (decision.To)
+        {
+            case FlowLoopDecision.Asks when !AtItsBound(instance):
+                GoOnPast(instance);
+                return true;
             case FlowLoopDecision.Asks:
                 AskAtTheBound(
                     instance,
-                    $"'{instance.Id}' has run {instance.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} iterations, its '{after}' ended among them, and its until still reads false");
-                break;
+                    $"'{instance.Id}' has run {instance.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} iterations, its '{instance.Step.Repeat!.DecideAfter}' ended among them, and its until still reads false");
+                return true;
             case FlowLoopDecision.Ends or FlowLoopDecision.EndsLeaving:
-                EndAtTheDecision(instance, body);
-                break;
+                return EndAtTheDecision(instance, body);
+            default:
+                return false;
         }
+    }
 
-        return true;
+    /// <summary>
+    /// The one owner of a repeat going on past what it decided at its deciding step (<c>decideAfter</c>): a decision that
+    /// asked at its bound goes on once the bound allows the next iteration (<see cref="Follow"/>) - the answer <c>more</c>
+    /// granted it, or an iteration was added at the bound for work a plan update owes the loop, the question withdrawn for
+    /// it (<see cref="CarryWhatTheLoopsOwe"/>) - and one that ended the loop goes on where an update owes the loop work
+    /// that runs it again, as it runs a loop that ended (<see cref="Reopening"/>, read in <see cref="Iterate"/>). The
+    /// decision is rewritten <c>goesOn</c> in the iteration's own record (<see cref="Decide"/>): the rest of the iteration
+    /// runs, and its end makes the next iteration with no second reading, at every session after. Nothing where no
+    /// decision of the deciding step's newest visit stands, or one that goes on already.
+    /// </summary>
+    /// <param name="loop">The repeat going on.</param>
+    private void GoOnPast(FlowInstance loop)
+    {
+        if (loop.Children.Count > 0
+            && DecisionOf(loop, loop.Children[^1]) is { To: not FlowLoopDecision.GoesOn } decided)
+        {
+            Decide(loop.Children[^1], decided with { To = FlowLoopDecision.GoesOn });
+        }
     }
 
     /// <summary>
@@ -5620,35 +5704,87 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Ends the current iteration of a repeat where its decision ended the loop (<c>decideAfter</c>): every step of it the
-    /// schedule had not drawn is NotRun, saying the loop ended where it decided, and so is every one drawn that has not
-    /// started - a handler the deciding step's ending raised among them. What is in flight runs to its end, and the
-    /// iteration and the loop end once nothing of it is (<see cref="FinishTheDecision"/>): no step goes on working in an
-    /// iteration that has ended.
+    /// schedule had not drawn is NotRun, saying the loop ended where it decided, and so is every one drawn that has begun
+    /// no work (<see cref="BegunNothing"/>) - a step not started, and a handler the deciding step's ending raised among
+    /// them, a group one made running at its raise with every step of it (<see cref="NotRunUnbegun"/>). Its steps that run
+    /// after the iteration's end (<see cref="RunsAfterItsGroup"/>) are spared, as a failing group spares them: they run
+    /// in the always phase however the iteration ended. What is in flight runs to its end, and the iteration's end ends
+    /// the loop once nothing of it is (<see cref="Iterate"/>, <see cref="FinishTheDecision"/>): no step goes on working in
+    /// an iteration that has ended. Made again by a session that finds the decision with nothing of it made, it ends only
+    /// what it has not ended.
     /// </summary>
     /// <param name="instance">The repeat ending.</param>
     /// <param name="body">The iteration's body scope, its deciding step ended.</param>
-    private void EndAtTheDecision(FlowInstance instance, Scope body)
+    /// <returns>Whether anything was ended.</returns>
+    private bool EndAtTheDecision(FlowInstance instance, Scope body)
     {
         var because = $"the loop ended at '{instance.Step.Repeat!.DecideAfter}' (decideAfter) before it started";
+        var changed = false;
 
-        foreach (var declaration in DeclarationsOf(body).Where(declaration => !body.Instantiated.Contains(declaration.Name)))
+        foreach (var declaration in DeclarationsOf(body).Where(declaration => !body.Instantiated.Contains(declaration.Name) && !RunsAfterItsGroup(declaration, body)).ToList())
         {
             body.Instantiated.Add(declaration.Name);
             CreateNotRun(body, declaration, FlowNotRunCause.LoopDecided, because);
+            changed = true;
         }
 
-        foreach (var drawn in body.Members.Values.Where(member => member.State is FlowInstanceState.NotStarted).ToList())
+        foreach (var drawn in body.Members.Values.Where(member => !RunsAfterItsGroup(member.Step, body) && BegunNothing(member)).ToList())
         {
-            NotRun(drawn, FlowNotRunCause.LoopDecided, because);
+            NotRunUnbegun(drawn, FlowNotRunCause.LoopDecided, because);
+            changed = true;
         }
 
-        _ = FinishTheDecision(instance, body);
+        return changed;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="instance"/>, drawn, has begun no work: a step not started, or a group made running as it
+    /// was drawn - a handler that is a group is made running at its raise - none of whose steps has begun any.
+    /// </summary>
+    private static bool BegunNothing(FlowInstance instance)
+        => instance.State is FlowInstanceState.NotStarted
+            || instance is { Step.IsGroup: true, State: FlowInstanceState.Running }
+                && ScopesOf(instance).All(scope => scope.Members.Values.All(BegunNothing));
+
+    /// <summary>
+    /// Ends NotRun, saying <paramref name="because"/>, what has begun no work (<see cref="BegunNothing"/>): a step not
+    /// started, or a group with every step of it - those its scopes never drew, as a failing group's are
+    /// (<see cref="FailGroup"/>), those drawn, and the record of each item or iteration it holds - so nothing of it starts
+    /// once it has ended. A group that never began has no end to run its always steps after, and they are NotRun with it,
+    /// as those of a group NotRun before it was drawn never run.
+    /// </summary>
+    private void NotRunUnbegun(FlowInstance instance, FlowNotRunCause cause, string because)
+    {
+        if (instance is { Step.IsGroup: true, State: FlowInstanceState.Running })
+        {
+            foreach (var scope in ScopesOf(instance))
+            {
+                foreach (var declaration in DeclarationsOf(scope).Where(declaration => !scope.Instantiated.Contains(declaration.Name)).ToList())
+                {
+                    scope.Instantiated.Add(declaration.Name);
+                    CreateNotRun(scope, declaration, cause, because);
+                }
+
+                foreach (var member in scope.Members.Values.Where(BegunNothing).ToList())
+                {
+                    NotRunUnbegun(member, cause, because);
+                }
+
+                if (scope.GroupInstance is { State: FlowInstanceState.Running } record && !ReferenceEquals(record, instance))
+                {
+                    NotRun(record, cause, because);
+                }
+            }
+        }
+
+        NotRun(instance, cause, because);
     }
 
     /// <summary>
     /// Ends the loop its decision ended, once nothing of its current iteration is in flight: the iteration's own record
     /// ends done, and the loop ends - done where its until read true, with its leftover said where it ended with its
-    /// until still false (<see cref="EndLoop"/>). Whether it ended.
+    /// until still false (<see cref="EndLoop"/>). Read where the iteration ends (<see cref="Iterate"/>), after work a plan
+    /// update owes the loop has carried it past the decision where it does. Whether it ended.
     /// </summary>
     private bool FinishTheDecision(FlowInstance instance, Scope body)
     {
@@ -5742,17 +5878,35 @@ public sealed class FlowCoordinator
         // step's newest visit ended done: what the decision said holds at the iteration's end, which reads none of them
         // again. Where that step ended any other way nothing was decided, and they are read here as for a loop that
         // names no deciding step.
-        var decision = DecisionOf(instance, instance.Children[^1]);
-
-        if (decision is { EndsTheLoop: true })
-        {
-            return FinishTheDecision(instance, instance.Children[^1]);
-        }
+        var last = instance.Children[^1];
+        var decision = DecisionOf(instance, last);
 
         if (decision is { To: FlowLoopDecision.Asks })
         {
-            // The loop stands on its bound's question, read at its deciding step: the answer says what follows.
-            return false;
+            // A loop that asked at its deciding step stands paused on the question, and is iterated only once the answer
+            // carried it on. One running over that decision never had its question written - a session ended between
+            // the two - and asks it now, or goes on where its bound now allows the next iteration.
+            _ = Follow(instance, last, decision);
+
+            if (instance.WaitingQuestion is not null)
+            {
+                return true;
+            }
+
+            decision = DecisionOf(instance, last);
+        }
+
+        if (decision is { EndsTheLoop: true })
+        {
+            if (Reopening(instance) is null)
+            {
+                return FinishTheDecision(instance, last);
+            }
+
+            // Work a plan update owes the loop, that its bound's question was never asked for, carries it on past the
+            // decision that ended it - as it runs a loop that ended again - to the iteration it is owed.
+            GoOnPast(instance);
+            decision = DecisionOf(instance, last);
         }
 
         var decided = decision is not null;
@@ -5853,6 +6007,14 @@ public sealed class FlowCoordinator
     /// </summary>
     private bool ReopensFor(string update, FlowInstance loop)
         => IterationOwedBy(update, loop) && _updates.Updates.First(held => held.Id == update).AskedAtBound is null;
+
+    /// <summary>
+    /// The first update, by its id, whose work runs <paramref name="loop"/> again where the loop has ended - done, left
+    /// by a stop, or ended by what it decided at its deciding step (<see cref="GoOnPast"/>) - as <see cref="ReopensFor"/>
+    /// says it; null where none does.
+    /// </summary>
+    private string? Reopening(FlowInstance loop)
+        => loop.OwedIterationBy.FirstOrDefault(update => ReopensFor(update, loop));
 
     /// <summary>
     /// Says, in the entry of each update that owes <paramref name="loop"/> work and has added no iteration for it, that the
@@ -6053,8 +6215,11 @@ public sealed class FlowCoordinator
     /// Carries what the updates done owe their loops, whatever their <c>until</c> says: a loop that ended - done, or
     /// left by a stop - stands to run again, save for work its bound's question was asked for, which that question's
     /// answer carried or let go (<see cref="ReopensFor"/>); one paused on the question its bound asked has that question
-    /// withdrawn, for the update's work is carried there by an iteration added for it, where one is left to add; and where
-    /// the loop is at its bound the iteration is added (<see cref="AddIterationsOwedTo"/>).
+    /// withdrawn, for the update's work is carried there by an iteration added for it, where one is left to add - asked at
+    /// the loop's deciding step, its decision goes on once that iteration is added (<see cref="Follow"/>) and the rest of
+    /// the iteration runs; and where the loop is at its bound the iteration is added (<see cref="AddIterationsOwedTo"/>). A
+    /// loop whose decision at its deciding step ended it goes on past that decision where it runs again
+    /// (<see cref="Iterate"/>).
     /// </summary>
     private void CarryWhatTheLoopsOwe()
     {
@@ -6069,7 +6234,9 @@ public sealed class FlowCoordinator
             {
                 // The loop stands paused on the question its bound asks: the iteration an update adds is what goes on
                 // from there, so the question is withdrawn - it is asked again if the added iteration ends at the bound
-                // with the until still false - and the iteration is added below, counted as every added one is.
+                // with the until still false - and the iteration is added below, counted as every added one is. One
+                // asked at the loop's deciding step goes on past its decision once the iteration is added, the bound
+                // then allowing the next iteration (Follow).
                 Withdraw(waiting);
                 loop.State = FlowInstanceState.Running;
                 Record(FlowChangeKind.Step, loop, from: FlowInstanceState.Paused, to: FlowInstanceState.Running, detail: $"its bound's question '{waiting}' is withdrawn: update {owing} owes its next iteration work, and an iteration is added for it");
@@ -6079,7 +6246,7 @@ public sealed class FlowCoordinator
                 // A loop that ended - its until read true, or a stop left it - runs again: what an update owes it
                 // carries, whatever its until says. Work its bound was asked for is left as the answer left it: a loop
                 // the answer ended stays ended for it, at every session after.
-                if (loop.OwedIterationBy.FirstOrDefault(update => ReopensFor(update, loop)) is not { } reopening)
+                if (Reopening(loop) is not { } reopening)
                 {
                     continue;
                 }
@@ -6496,6 +6663,14 @@ public sealed class FlowCoordinator
             // flight in it is ended in order, and its work is done again or taken back in the instance visited in its
             // place.
             return [FlowWaits.EndedForUpdate(ending.Update)];
+        }
+
+        if (HeldByItsLoop(scope) is { } question)
+        {
+            // Nothing of an iteration whose loop stands on its bound's question, read at its deciding step, starts until
+            // the answer: a handler the deciding step's ending raised waits for it, and goes on where the loop does or
+            // is NotRun with the rest of the iteration where it ends there.
+            return [FlowWaits.Answer(question)];
         }
 
         return WaitsOf(place, scope, instance.IsAlways).Waiting;
@@ -10285,10 +10460,6 @@ public sealed class FlowCoordinator
     /// <summary>The declarations a scope holds, in the order the definition declared them.</summary>
     private IReadOnlyList<WorkflowStep> DeclarationsOf(Scope scope)
         => scope.Group?.Steps ?? (scope.Parent is null ? _definition.Steps : []);
-
-    /// <summary>How many step instances one item or iteration of the group at <paramref name="path"/> makes besides its own: every step it declares, however deep.</summary>
-    private int SubtreeSize(string path)
-        => FlowScope.Declared(_definition).Count(declared => declared.Path.StartsWith(path + ".", StringComparison.Ordinal));
 
     /// <summary>
     /// What a path's root yields, read in <paramref name="scope"/>: a step's output or one of its facts, an input, a

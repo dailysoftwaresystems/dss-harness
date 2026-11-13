@@ -887,7 +887,8 @@ public sealed class FlowUseTests
 
         Assert.Contains(
             "Its budget, reporter, pushCheckpoints and recommendations are never applied, nor - unless the use says useParentLimits: false - its "
-                + "advisor, amend, answers, limits and codebaseGraph: the calling run's own hold, and validate-workflow says so beside the fingerprint of what it read.",
+                + "advisor, amend, answers, limits and codebaseGraph, nor its codebaseGraph where the run's own workflow declares one: the calling run's own hold, "
+                + "and validate-workflow says so beside the fingerprint of what it read.",
             help,
             StringComparison.Ordinal);
         Assert.Contains("Its budget and its reporter are carried and not applied: the run's budget counts its steps' spend, and the run's reporter words the run as a whole.", help, StringComparison.Ordinal);
@@ -899,7 +900,8 @@ public sealed class FlowUseTests
         Assert.Contains("a relative use inside it resolves inside the same entry - one that leaves the entry refused -", help, StringComparison.Ordinal);
 
         Assert.Contains(
-            "budget, reporter, `pushCheckpoints` and `recommendations` are never applied, nor - unless the use says `useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`",
+            "budget, reporter, `pushCheckpoints` and `recommendations` are never applied, nor - unless the use says `useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`, "
+                + "nor its `codebaseGraph` where the run's own workflow declares one, which `validate-workflow` says",
             readme,
             StringComparison.Ordinal);
         Assert.Contains("Its budget and its reporter are carried and not applied: the run's budget counts its steps' spend, and the run's reporter words the run as a whole.", readme, StringComparison.Ordinal);
@@ -908,6 +910,11 @@ public sealed class FlowUseTests
 
         Assert.Contains(
             $"Its budget and its reporter are carried and not applied (`{nameof(FlowUse)}.{nameof(FlowUse.NotApplied)}`): the run's budget counts its steps' spend and the run's reporter words the run as a whole",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "its advisor, amend, answers, limits and `codebaseGraph`, nor its `codebaseGraph` where the run's own workflow declares one, whose shape the run's one graph then has: "
+                + $"the calling run's own hold, and `validate-workflow` says so beside the fingerprint of what it read, one line for each use (`{nameof(FlowUse)}.{nameof(FlowUse.NotApplied)}`)",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1636,6 +1643,43 @@ public sealed class FlowUseTests
         var own = governed with { Definition = governed.Definition with { CodebaseGraph = new FlowCodebaseGraph(Include: ["tests/**"]) } };
         Assert.Equal(["tests/**"], Included(FlowGraphSyncs.RequestOf(context, own, "why")));
         Assert.Empty(Included(FlowGraphSyncs.RequestOf(context, PlaceOf(Resolved(Caller(governs: false), pipeline)), "why")));
+    }
+
+    /// <summary>
+    /// WF4b: a use that governs itself and shapes the graph applies its shape only where the run's own workflow declares
+    /// none - where the run declares one, the run's graph has the run's shape, and the use's <c>codebaseGraph</c> is said
+    /// as not applied with the rest of what it declares and nothing applies, never dropped in silence.
+    /// </summary>
+    [Fact]
+    public void AGoverningUsesGraphShape_IsSaidAsNotApplied_WhereTheRunsOwnWorkflowShapesTheGraph()
+    {
+        var pipeline = Swap(Pipeline, "name: pipeline\n", "name: pipeline\ncodebaseGraph:\n  include: ['src/**']\n");
+
+        WorkflowDefinition Resolve(bool runShapes)
+            => Resolved(
+                $$"""
+                name: flow{{(runShapes ? "\ncodebaseGraph:\n  include: ['tests/**']" : string.Empty)}}
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    useParentLimits: false
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """,
+                pipeline);
+
+        var shaped = Resolve(runShapes: true);
+        var use = shaped.Steps.Single(step => step.Name == "items").Use!;
+
+        Assert.Equal(["codebaseGraph"], use.NotApplied);
+        Assert.Equal(["codebaseGraph"], use.Own!.Declared);
+        Assert.Equal(["tests/**"], FlowUse.GraphOf(shaped)!.Include);
+
+        // Where the run declares no shape the use's is the run's graph's, applied and so never said as not applied.
+        var unshaped = Resolve(runShapes: false);
+        Assert.Empty(unshaped.Steps.Single(step => step.Name == "items").Use!.NotApplied);
+        Assert.Equal(["src/**"], FlowUse.GraphOf(unshaped)!.Include);
     }
 
     /// <summary>

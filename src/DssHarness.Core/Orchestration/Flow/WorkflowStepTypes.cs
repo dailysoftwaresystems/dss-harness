@@ -103,7 +103,7 @@ public static class WorkflowStepTypes
         new("type", "what runs: one of the types 'help workflows' lists; absent, the step is a group"),
         new("dependsOn", "steps this one waits for, by name, each declared before it among its siblings"),
         new("when", "an expression that says whether the step runs at all"),
-        new("onFailure", "what a failure nothing handles does: stop, pause, continue, or recover - give it to the workflow's recover; absent, its group's, and at the top stop; never back to the step itself, which says retries"),
+        new("onFailure", "what a failure nothing handles does: stop, pause, continue, or recover - give it to the workflow's recover; absent, its group's, and at the top pause where the run's workflow declares a recover, else stop; never back to the step itself, which says retries"),
         new("retries", "retries the step is given where it ends incomplete - a reasoning step also where its agent failed, on each model it may use; absent, maxRetries"),
         new("always", "run even where the dependencies did not reach this step"),
         new("alone", "run with nothing beside it"),

@@ -1819,11 +1819,12 @@ input - a recovery's steps read those of the workflow that declares the recovery
 failure it was taken for happened, and a `{text.<name>}` is the used workflow's own where it
 declares the name, else the next one out's, else the run's. Its budget, reporter, `pushCheckpoints`
 and `recommendations` are never applied, nor - unless the use says `useParentLimits: false` - its
-advisor, amend, answers, limits and `codebaseGraph`, which `validate-workflow` says beside the
-fingerprint of what each use read. With `useParentLimits: false` the workflow's own settings
-govern its steps key by key: a key is governed by the nearest such use around a step that declares
-it, in a recovery as anywhere, and a key no such use declares stays the run's, for a use cannot
-widen a run's limits by declaring nothing. Its `maxReasoningAgents`, `maxParallelProcesses` and
+advisor, amend, answers, limits and `codebaseGraph`, nor its `codebaseGraph` where the run's own
+workflow declares one, which `validate-workflow` says beside the fingerprint of what each use
+read. With `useParentLimits: false` the workflow's own settings govern its steps key by key: a key
+is governed by the nearest such use around a step that declares it, in a recovery as anywhere, and
+a key no such use declares stays the run's, for a use cannot widen a run's limits by declaring
+nothing. Its `maxReasoningAgents`, `maxParallelProcesses` and
 `maxOpenAgents` gate its steps as pools of their own in the place of the run's, counted across
 every instance of the use; its `maxInstances` caps the step instances its steps open, across every
 instance of the use and in the place of the run's own cap for them; its `maxRetries` and
@@ -1925,15 +1926,24 @@ loop decides at, instead of at the iteration's end: where that step's newest vis
 loop's `until`, `blocking` and bound are read there, on the iteration as it then stands, and the
 decision is kept in the iteration's own record with that visit - a resume never reads it again
 over what has run since, and a later visit of the step in the same iteration is decided anew.
-What follows that step starts only where the loop goes on; a loop that ends there withdraws what
-of the iteration has not started, waits for what is in flight, and leaves what its deciding step
-found, none of it acted on; and at its bound, work a plan update owes the loop has its iteration
-added first, as at an iteration's end. Where that step ends any other way - skipped, failed and
-passed over, never run - nothing is decided there, and the iteration's end reads them as for a
-loop that names no deciding step. Its `until`, `blocking` and `leftover` read of the iteration
-only the deciding step and the steps it waits for, and every other step of the iteration runs
-before it or after it. The shipped review loop decides at its `review`, so its last rework is
-always reviewed and its leftover is what its last review found.
+What follows that step starts only where the loop goes on: a loop that asks at its bound there
+holds all the rest of the iteration on its question until the answer - a handler its deciding
+step's ending raised among it waits on the answer, not started, a group one drawing none of its
+steps - and the answer has it go on with the loop or end with the iteration; a loop that ends
+there withdraws what of the iteration has not started - a handler its deciding step's ending raised among it, a group
+one with all its steps - save its always steps, which run after the iteration's end as after any
+iteration's, waits for what is in flight, and leaves what its deciding step found, none of it
+acted on; at its bound, work a plan update owes the loop has its iteration added first, as at an
+iteration's end; and work an update owes the loop carries it past what it decided there - a loop
+that ended at its decision runs again for it, as one that ended at an iteration's end does, and
+one that asked at its bound has the question withdrawn for the iteration added and goes on. A
+resume makes what followed from a decision where the session that read it ended before it had.
+Where that step ends any other way - skipped, failed and passed over, never run - nothing is
+decided there, and the iteration's end reads them as for a loop that names no deciding step. Its
+`until`, `blocking` and `leftover` read of the iteration only the deciding step and the steps it
+waits for, and every other step of the iteration runs before it or after it. The shipped review
+loop decides at its `review`, so its last rework is always reviewed and its leftover is what its
+last review found.
 What only a prompt reads stands where its agent is asked it:
 `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote,
 read live each time it is given - `{text.<name>}` beside it, a workflow's texts, and

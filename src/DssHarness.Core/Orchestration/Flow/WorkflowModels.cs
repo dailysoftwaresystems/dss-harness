@@ -510,7 +510,8 @@ public sealed record FlowUseOwn(
 /// applied in silence: its budget and reporter, which a use that governs itself carries but nothing applies yet, its
 /// <c>pushCheckpoints</c> and <c>recommendations</c>, a run's own alone, and - unless the use says
 /// <c>useParentLimits: false</c> - its advisor, amend, answers, limits and <c>codebaseGraph</c>, the calling run's own
-/// holding.
+/// holding; its <c>codebaseGraph</c> even then where the run's own workflow declares one, whose shape the run's one graph
+/// has (<see cref="FlowUse.GraphOf"/>).
 /// </param>
 /// <param name="Own">
 /// The called workflow's run-level settings, carried where the use says <c>useParentLimits: false</c> and applied to
@@ -625,10 +626,12 @@ public sealed record FlowUse(
 
     /// <summary>
     /// The shape of the run's one codebase graph, settled once for the run: the run's own workflow's where it declares
-    /// one, else the first a use that governs itself declares, in declaration order - the uses in recoveries among them
-    /// - and null where none does, every default then holding. Every sync, every serving and every graphify step of the
-    /// run reads this one shape, for one graph synced under two shapes would list and drop files between its syncs - so
-    /// where two governing uses declare shapes, the first in declaration order stands for the whole run.
+    /// one - a governing use's then said as not applied (<see cref="NotApplied"/>) - else the first a use that governs
+    /// itself declares, in declaration order - the uses in recoveries among them - and null where none does, every
+    /// default then holding. Every sync, every serving and every graphify step of the run reads this one shape, for one
+    /// graph synced under two shapes would list and drop files between its syncs - so where two governing uses declare a
+    /// shape and the run's own workflow none, they give the graph one, for two that differ are refused (V66), and the
+    /// first in declaration order is the shape they all give.
     /// </summary>
     /// <param name="definition">The resolved definition the run holds.</param>
     public static FlowCodebaseGraph? GraphOf(WorkflowDefinition definition)

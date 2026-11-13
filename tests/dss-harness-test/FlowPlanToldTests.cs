@@ -1053,6 +1053,134 @@ public sealed class FlowPlanToldTests
     }
 
     /// <summary>
+    /// The flow of <see cref="Flow"/> whose round of work items sits in a repeat that decides at a review after its work
+    /// items: <paramref name="until"/> is its until, read there, and <paramref name="bound"/> its maxIterations; with
+    /// <paramref name="audited"/> an audit follows the loop, where a plan update finds it ended.
+    /// </summary>
+    private static string DecidedAtItsReview(string until, int bound, bool audited)
+        => Flow.Replace(
+            "  - name: rounds\n    dependsOn: [planning]\n    steps:",
+            $"  - name: rounds\n    dependsOn: [planning]\n    repeat:\n      until: '{until}'\n      maxIterations: {bound.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n      decideAfter: review\n    steps:",
+            StringComparison.Ordinal)
+            + "\n      - name: review\n        type: pause\n        question: reviewed?\n        options: [stay, go]\n        dependsOn: [items]"
+            + (audited ? "\n  - name: audit\n    type: pause\n    question: anything else?\n    options: [stay, go]\n    dependsOn: [rounds]" : string.Empty);
+
+    /// <summary>The runner of the deciding-review tests: one item planned, and an update that adds a third, each check passing what it reads.</summary>
+    private static FakeRunner AddingAThirdItem()
+        => new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Piece("added", Item("three"), "the registry is a third work item")),
+                Item("one"),
+                Item("three"))))
+            .On("check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }));
+
+    /// <summary>
+    /// Work a plan update owes a loop that ended at its decision - its until read true at its review - is carried all the
+    /// same, as it is for a loop that ended at an iteration's end: the decision gives way to the work, which runs the loop
+    /// again to its next iteration, and the iteration's own record says the loop went on there. Never a loop that runs
+    /// again only to end at the decision it had already read, the piece owed for ever.
+    /// </summary>
+    [Fact]
+    public async Task WorkOwedToALoopThatEndedAtItsDecision_IsCarriedToItsNextIteration()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(DecidedAtItsReview("true", bound: 3, audited: true));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, AddingAThirdItem(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            // The round runs, its review ends the loop where it decides, and the audit after the loop asks: the
+            // amendment is taken there.
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var audit = await UntilAskedAsync(coordinator, "anything else?");
+            var ended = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Done), FlowLoopDecision.Ends), (ended["rounds"].State, ended["rounds#1"].Decided?.To));
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            // The piece joined the loop's next iteration, below its bound, with no iteration added; the first
+            // iteration's decision gave way to it, and the second iteration ended the loop at its own review.
+            var update = UpdatesOf(harness, layout).Updates.Single();
+            var piece = update.ThePieces.Single();
+            Assert.Equal(("the next iteration of 'rounds'", "rounds#2.items[1]"), (piece.OwedTo, piece.Placed));
+            Assert.Null(update.AddedIteration);
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal((nameof(FlowInstanceState.Done), "three"), (steps["rounds#2.items[1].build"].State, (steps["rounds#2.items[1].build"].Item as JsonObject)?["name"]?.GetValue<string>()));
+            Assert.Equal([FlowLoopDecision.GoesOn, FlowLoopDecision.Ends], new[] { "rounds#1", "rounds#2" }.Select(iteration => steps[iteration].Decided?.To));
+            Assert.Equal(nameof(FlowInstanceState.Done), steps["rounds"].State);
+            Assert.DoesNotContain("rounds#3", steps.Keys, StringComparer.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Work a plan update owes a loop that asked at its bound where its review decided is carried by the iteration added
+    /// for it: the question is withdrawn, the decision it was asked for goes on in the iteration's own record, and the loop
+    /// makes the added iteration - never one left running with its question gone and nothing to carry it on.
+    /// </summary>
+    [Fact]
+    public async Task WorkOwedToALoopThatAskedAtItsDecision_WithdrawsTheQuestion_AndIsCarriedByAnIterationAdded()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(DecidedAtItsReview("false", bound: 1, audited: false));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, AddingAThirdItem(), new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            // The first round runs, its review ends at the loop's bound of one, and the loop asks there: the amendment
+            // is taken with that question open.
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await DriveAsync(coordinator, held: "loopBound");
+            var bound = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal("loopBound", bound.Kind);
+            Assert.Equal(FlowLoopDecision.Asks, harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "rounds#1").Decided?.To);
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            _ = await DriveAsync(coordinator, held: "loopBound");
+            _ = await UntilAsync(harness, layout, FlowUpdateStates.Done);
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            // The question was withdrawn for the iteration added and never asked again of the first iteration: the
+            // only other bound question is the added iteration's own, at its review. The first iteration's decision
+            // went on, and the owed item was built in the added iteration.
+            var bounds = harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions.Where(question => question.Kind == "loopBound").ToList();
+            Assert.Equal(
+                [("withdrawn", string.Empty), ("answered", "accept")],
+                bounds.Select(question => (question.State, string.Join("/", question.Answers.Select(answer => answer.Answer)))));
+            Assert.Equal(bound.Id, bounds[0].Id);
+            Assert.Equal("rounds#2", UpdatesOf(harness, layout).Updates.Single().AddedIteration);
+
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps.ToDictionary(step => step.Instance, StringComparer.Ordinal);
+            Assert.Equal([FlowLoopDecision.GoesOn, FlowLoopDecision.EndsLeaving], new[] { "rounds#1", "rounds#2" }.Select(iteration => steps[iteration].Decided?.To));
+            Assert.Contains(steps.Values, step => step.Instance.StartsWith("rounds#2.", StringComparison.Ordinal) && step.Step == "rounds.items.build" && step.State == nameof(FlowInstanceState.Done) && (step.Item as JsonObject)?["name"]?.GetValue<string>() == "three");
+        }
+    }
+
+    /// <summary>
     /// A reason step that a piece of an update ends in order is told its piece first, as the lead of the handoff
     /// question it is asked: what changed the plan, the piece's lines, and the sentence that its step ends here and
     /// another goes on from where it leaves the work.
