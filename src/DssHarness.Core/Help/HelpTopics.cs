@@ -5375,8 +5375,9 @@ public static class HelpTopics
         builder.AppendLine("nearest recovery declared around the failing step, however many uses out, before the run's;");
         builder.AppendLine("that recovery's onFailure is pause or stop, as the run's own is. Its budget, reporter,");
         builder.AppendLine("pushCheckpoints and recommendations are never applied, nor - unless the use says");
-        builder.AppendLine("useParentLimits: false - its advisor, amend, answers, limits and codebaseGraph: the calling");
-        builder.AppendLine("run's own hold, and validate-workflow says so beside the fingerprint of what it read. With");
+        builder.AppendLine("useParentLimits: false - its advisor, amend, answers, limits and codebaseGraph, nor its");
+        builder.AppendLine("codebaseGraph where the run's own workflow declares one: the calling run's own hold, and");
+        builder.AppendLine("validate-workflow says so beside the fingerprint of what it read. With");
         builder.AppendLine("useParentLimits: false the workflow's own settings govern its steps key by key: a key is");
         builder.AppendLine("governed by the nearest such use around a step that declares it, in a recovery as anywhere,");
         builder.AppendLine("and a key no such use declares stays the run's, for a use cannot widen a run's limits by");

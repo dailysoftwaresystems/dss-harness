@@ -3703,6 +3703,105 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// A decision read at a loop's deciding step is written before what follows from it, and a session that ends between
+    /// the two - the decision on disk, the rest of the ending iteration not yet NotRun, or the bound's question not yet
+    /// asked - is gone on from by a resume that makes what follows as the session that read it would have: the rest
+    /// NotRun and the loop ended, or the question asked with nothing more of the iteration started. Never a loop that
+    /// hangs over an iteration nothing ends, nor one that runs the rest its decision held and then stalls on a question
+    /// never asked.
+    /// </summary>
+    /// <param name="decided">The decision the crash comes right after: <c>ends</c>, the review clean; <c>asks</c>, at the loop's bound of one.</param>
+    [Theory]
+    [InlineData(FlowLoopDecision.Ends)]
+    [InlineData(FlowLoopDecision.Asks)]
+    public async Task ADecisionWrittenBeforeWhatFollowsFromIt_IsFollowedByTheResume_AsTheRunUncutWouldHave(string decided)
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: fix
+                repeat:
+                  until: 'review.clean ?? false'
+                  maxIterations: 1
+                  decideAfter: review
+                steps:
+                  - name: review
+                    type: orient
+                  - name: revise
+                    type: orient
+                    dependsOn: [review]
+              - name: after
+                type: orient
+                dependsOn: [fix]
+            """);
+
+        Runner Scripted()
+            => new Runner().On("review", run => FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["clean"] = decided == FlowLoopDecision.Ends }));
+
+        // Each step as it stands, in instance order, with the run's questions and the status its session ended with.
+        static string Standing(FlowSessionEnd end, IReadOnlyList<FlowStepRecord> steps, IReadOnlyList<FlowQuestionEntry> questions)
+            => $"{end.Status} | "
+                + string.Join(", ", steps.OrderBy(step => step.Instance, StringComparer.Ordinal).Select(step => $"{step.Instance} {step.State} {step.NotRunCause}"))
+                + " | " + string.Join(", ", questions.Select(question => $"{question.Id} {question.Kind} {question.State}"));
+
+        string uncut;
+        using (var whole = new TempDirectory())
+        {
+            var (store, place, records) = Records("r1", whole.Path, definition);
+
+            using (records)
+            {
+                var end = await new FlowCoordinator(definition, Scripted(), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+                uncut = Standing(end, store.OrchestrationStore.ReadFlow(place)!.Steps, store.OrchestrationStore.ReadFlowQuestions(place)?.Questions ?? []);
+            }
+        }
+
+        Assert.Equal(
+            decided == FlowLoopDecision.Ends
+                ? "Done | after Done , fix Done , fix#1 Done , fix#1.review Done , fix#1.revise NotRun LoopDecided | "
+                : "Paused | fix Paused , fix#1 Running , fix#1.review Done  | q1 loopBound open",
+            uncut);
+
+        int written;
+        using (var counted = new TempDirectory())
+        {
+            // Where the decision first reaches the disk: the run that wrote it, every write counted, to find that one.
+            var (_, _, records) = Records("r1", counted.Path, definition);
+            var counting = new Cut(records, int.MaxValue, marks: (_, snapshot) => snapshot.Steps.Any(step => step.Decided?.To == decided));
+
+            using (records)
+            {
+                _ = await new FlowCoordinator(definition, Scripted(), new RunnerFacts(), records: counting).RunAsync(Token).WaitAsync(Bound, Token);
+            }
+
+            written = counting.Marked ?? throw new InvalidOperationException($"no write held the decision '{decided}'");
+        }
+
+        using var crashed = new TempDirectory();
+        var (harness, layout, cutRecords) = Records("r1", crashed.Path, definition);
+
+        using (cutRecords)
+        {
+            // The run again, its records cut right after the decision's write: what followed it never reached the disk.
+            _ = await new FlowCoordinator(definition, Scripted(), new RunnerFacts(), records: new Cut(cutRecords, written)).RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        Assert.Equal(decided, harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "fix#1").Decided?.To);
+
+        var next = Scripted();
+        var (_, _, again) = Records("r1", crashed.Path, definition);
+
+        using (again)
+        {
+            var end = await new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token);
+
+            // The resume made what followed from the decision, and nothing the decision held started.
+            Assert.Equal(uncut, Standing(end, harness.OrchestrationStore.ReadFlow(layout)!.Steps, harness.OrchestrationStore.ReadFlowQuestions(layout)?.Questions ?? []));
+            Assert.Equal(decided == FlowLoopDecision.Ends ? ["after"] : [], next.Started);
+        }
+    }
+
+    /// <summary>
     /// The inputs a use's with filled are the use's own from the session that filled them: a resume takes them back from
     /// the use's record, never fills them again from what the with reads now - a text that changed since, here, which a
     /// step of the use still to run would otherwise read in their place.

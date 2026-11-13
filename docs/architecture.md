@@ -1675,16 +1675,29 @@ that takes the run up from its records), and the decision is kept with that visi
 iteration's own record (`Scope.Decision`, written through `Decide`, persisted as the step record's
 `decided`), so a resume never reads it again over what has run since and a later visit of the step
 in the same iteration is decided anew. The rest of that iteration starts only where the loop goes
-on; a loop that ends there withdraws what of the iteration has not started, waits for what is in
-flight (`FinishTheDecision`) and leaves what its deciding step found, none of it acted on; at its
-bound, work a plan update owes the loop has its iteration added first, as at an iteration's end;
-and no iteration's end re-reads a decision made. Where the deciding step ends any other way -
-skipped, failed and passed over, never run - nothing is decided there, and the iteration's end
-reads them as for a loop that names no deciding step. Since the decision is read where the deciding
-step ends, its `until`, `blocking` and `leftover` read of the iteration only that step and the steps
-it waits for (V64), and every other step of the iteration runs before it - one it waits for - or
-after it, waiting for it as a handler of its ending does (V65), so none is left running unseen in
-an iteration the loop ended at its decision (`WorkflowValidator`'s `DecisionRules`). The shipped
+on; a loop that ends there withdraws what of the iteration has begun no work (`EndAtTheDecision`) -
+a handler its deciding step's ending raised among it, a group one made running at its raise NotRun
+with all its steps (`NotRunUnbegun`) - save the steps that run after the iteration's end
+(`RunsAfterItsGroup`), its always steps, which run in the always phase as a failing group's do,
+waits for what is in flight and ends the loop at the iteration's end (`FinishTheDecision`), leaving
+what its deciding step found, none of it acted on; at its bound, work a plan update owes the loop
+has its iteration added first, as at an iteration's end; and no iteration's end re-reads a
+decision made. A decision goes on past what it said in one place (`GoOnPast`), its `goesOn`
+rewritten in the iteration's record: one that asked at the bound goes on once the bound allows the
+next iteration - the answer `more` granted it, or work an update owes the loop had the question
+withdrawn for the iteration added (`CarryWhatTheLoopsOwe`) - and one that ended the loop goes on
+where an update owes it work its bound's question was never asked for, which runs again a loop that
+ended at an iteration's end too (`Reopening`). The decision is written before what follows from
+it, and a session that finds it with nothing of that made makes it (`Follow`, from `DecideAt` and
+the iteration's end): the rest NotRun, or the bound's question asked - or, where the bound now
+allows the next iteration, the loop going on - as the session that read it would have. Where the
+deciding step ends any other way - skipped, failed and passed over, never run - nothing is decided
+there, and the iteration's end reads them as for a loop that names no deciding step. Since the
+decision is read where the deciding step ends, its `until`, `blocking` and `leftover` read of the
+iteration only that step and the steps it waits for (V64), and every other step of the iteration
+runs before it - one it waits for - or after it, waiting for it as a handler of its ending does
+(V65), so none is left running unseen in an iteration the loop ended at its decision
+(`WorkflowValidator`'s `DecisionRules`). The shipped
 review loop decides at its `review`, so the last rework of a loop that ends at its bound is
 reviewed by the round after it and what it leaves is what its last review found. A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
@@ -1757,9 +1770,10 @@ that declares the name, else the next one out's, else the run's (`TextsAt`, the 
 templates, the bar and the advisor's prompt read by).
 
 Its budget, reporter, `pushCheckpoints` and `recommendations` are never applied, nor - unless the
-use says `useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`: the
-calling run's own hold, and `validate-workflow` says so beside the fingerprint of what it read, one
-line for each use (`FlowUse.NotApplied`). With `useParentLimits: false` the used workflow's own
+use says `useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`, nor its
+`codebaseGraph` where the run's own workflow declares one, whose shape the run's one graph then has:
+the calling run's own hold, and `validate-workflow` says so beside the fingerprint of what it read,
+one line for each use (`FlowUse.NotApplied`). With `useParentLimits: false` the used workflow's own
 settings govern its steps key by key: a key is governed by the nearest such use around a step, by
 its declaration path, that declares it - one that declares none of it governs nothing of it, so the
 next one out that declares it does - and a key no such use declares stays the run's, for a use
@@ -1770,10 +1784,10 @@ engine asks through `GoverningOf` and each runner by the step's declaration path
 own in the place of the run's, counted across every instance of the use (`CounterFull`); its
 `maxInstances` caps the instances its steps open, across every instance of the use and in the
 place of the run's own cap for them (`InstanceBoundOf`); its `maxRetries` and `backoffSeconds` are
-what its steps fall back to where they say neither (`FlowUse.RetriesOf` and `BackoffSecondsOf`,
-which `RetryCap` and the reason runner both read); its `handoffSeconds` bounds the handoff of its
-paused reasoning steps; and its advisor recommends for its steps' questions in the place of the
-run's (`SeekAdvice`): its agent and prompt files read in its own directory, its prompt handed the
+what its steps fall back to where they say neither (`FlowUse.RetriesOf`, which `RetryCap` and the
+reason runner both read, and `BackoffSecondsOf`, which the reason runner reads); its
+`handoffSeconds` bounds the handoff of its paused reasoning steps; and its advisor recommends for
+its steps' questions in the place of the run's (`SeekAdvice`): its agent and prompt files read in its own directory, its prompt handed the
 inputs the use filled and the texts its steps see, its bar the workflow's own `texts.recommendations`
 where it declares one (`BarOf`, reading `texts.recommendations` first, then the run's
 `recommendations`, then `recommendations.md`), and each recommendation credited to the advisor that
