@@ -242,6 +242,41 @@ public sealed class InitServiceTests
     }
 
     /// <summary>
+    /// A file of the old layout still there - a prompt the repository wrote its own before the item pipeline became a
+    /// workflow of its own - that the definition reads no more is said by init, naming the file read now, and left as it
+    /// is: a change made to it reaches no step, and is carried over rather than lost unseen.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_SaysAFileOfTheOldLayoutTheDefinitionReadsNoMore()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(WorkflowFile(temp, "prompts/implement.md"))!);
+        await File.WriteAllTextAsync(WorkflowFile(temp, "prompts/implement.md"), "the repository's own words\n", token);
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded, outcome.Message);
+        Assert.Equal(
+            [
+                $"note    {WorkflowTemplates.LeftNote("prompts/implement.md")}",
+                $"kept    .harness-config/workflows/{name}/ ({WorkflowTemplates.Files.Count} file(s) already present)",
+            ],
+            WorkflowLines(outcome.Details!));
+        Assert.Equal(
+            $".harness-config/workflows/{name}/prompts/implement.md is of the layout before the item pipeline became a workflow of its own, and the repository's own "
+                + $"definition of the {name} workflow reads it no more - it reads .harness-config/workflows/{name}/item-pipeline/prompts/implement.md - so a change "
+                + "made to it reaches no step: carry what it says over to the file read now, then take it out",
+            WorkflowTemplates.LeftNote("prompts/implement.md"));
+        Assert.Equal("the repository's own words\n", await File.ReadAllTextAsync(WorkflowFile(temp, "prompts/implement.md"), token));
+    }
+
+    /// <summary>
     /// A repository's own definition that does not read, where a shipped file is missing, refuses init as configuration
     /// that does not hold (12), naming the definition and every problem in it: which files it names cannot be told, so
     /// the missing file is not written in its place. With every shipped file there, nothing is asked of the definition.
@@ -420,13 +455,17 @@ public sealed class InitServiceTests
         Assert.Contains(
             "A file a repository's own definition names that this tool ships elsewhere now - one of the item pipeline's, moved into its own folder, which an "
                 + "older release shipped beside the definition - is not brought back, for this build's copy is written for the new layout, and `init` says so in a note, "
-                + "naming where it ships it now.",
+                + "naming where it ships it now. A file of that older layout still there that the definition reads no more - a prompt the repository "
+                + "made its own before the move - is read by nothing, so a change made to it reaches no step, and `init` says so in a note, naming the "
+                + "file read now.",
             Prose.Document("README.md"),
             StringComparison.Ordinal);
         Assert.Contains(
             $"A file the repository's own definition names that this tool ships elsewhere now (`{nameof(WorkflowTemplates)}.{nameof(WorkflowTemplates.Moved)}`, the item "
                 + "pipeline's files an older release shipped beside the definition, read forever and never written) is not brought back, for this build's copy is written "
-                + "for the new layout, and init says so in a note naming where it ships it now.",
+                + "for the new layout, and init says so in a note naming where it ships it now; and a file of the old layout still there that the "
+                + $"definition names no more (`{nameof(ShippedWorkflowFiles)}.{nameof(ShippedWorkflowFiles.Left)}`) is read by nothing, so a change a "
+                + "repository made to it reaches no step, and init says so in a note naming the file read now.",
             Prose.Document("docs", "architecture.md"),
             StringComparison.Ordinal);
     }

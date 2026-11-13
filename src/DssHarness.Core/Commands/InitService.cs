@@ -296,6 +296,7 @@ public sealed class InitService(
 
             actions.AddRange(workflow.Created.Select(file => $"created {file}"));
             actions.AddRange(workflow.Moved.Select(file => $"note    {WorkflowTemplates.MovedNote(file)}"));
+            actions.AddRange(workflow.Left.Select(file => $"note    {WorkflowTemplates.LeftNote(file)}"));
 
             if (workflow.Kept > 0)
             {

@@ -45,6 +45,9 @@ inputs:
   - name: diagnose
     kind: value
     description: The recovery's diagnosis, whose cause and summary the remedy prompt reads; absent where a round uses the pipeline.
+  - name: failed
+    kind: value
+    description: The step whose failure the recovery puts right - the recovery's source, handed in as every fact of the caller is - which the remedy prompt names; absent where a round uses the pipeline.
 # What the pipeline gives the step that uses it, read when the use ends. An item a person answered
 # skip has no fold and no review, and each of these reads nothing for it: the use ends done with
 # none of them, as an output that reads nothing is no failure of the use.

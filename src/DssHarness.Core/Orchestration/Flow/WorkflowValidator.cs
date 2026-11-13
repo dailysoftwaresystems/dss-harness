@@ -2476,23 +2476,27 @@ public static class WorkflowValidator
                 case "source":
                     // The step whose ending raised a handler around the reader, inside the world it reads in: a step of a
                     // used workflow reads its own handlers' sources, never that of a handler of the workflow that called
-                    // it (V61). The failure a recovery around it puts right is the recovery's to hand on, and is read
-                    // from inside a use the recovery holds.
-                    if (Inside(entry, scope => scope.On is not null) || InRecovery(entry) || entry.Step.Raised is not null)
+                    // it (V61). The failure a recovery puts right is read by the recovery's own steps alone - a use the
+                    // recovery holds is handed it through an input, as every fact of the caller.
+                    if (Inside(entry, scope => scope.On is not null) || InOwnRecovery(entry) || entry.Step.Raised is not null)
                     {
                         return;
                     }
 
                     _problems.Add(Nearest(entry, scope => scope.On is not null) is { } handler
                         ? Beyond(what, read, $"the step whose ending raised '{handler.Path}' is")
-                        : $"'{what}' reads '{read.Whole}', whose 'source' names the step whose ending raised a handler, and '{entry.Path}' is neither a handler, nor in one, nor a step of the recovery, nor one raised by a pre-existing issue");
+                        : InRecovery(entry)
+                            ? Beyond(what, read, "the failure the recovery around it puts right is")
+                            : $"'{what}' reads '{read.Whole}', whose 'source' names the step whose ending raised a handler, and '{entry.Path}' is neither a handler, nor in one, nor a step of the recovery, nor one raised by a pre-existing issue");
 
                     return;
 
                 case "issue":
-                    if (!InRecovery(entry) && entry.Step.Raised is null)
+                    if (!InOwnRecovery(entry) && entry.Step.Raised is null)
                     {
-                        _problems.Add($"'{what}' reads '{read.Whole}', whose 'issue' is the pre-existing issue a step reported, and '{entry.Path}' is neither raised by one nor a step of the recovery that fixes one");
+                        _problems.Add(InRecovery(entry)
+                            ? Beyond(what, read, "the pre-existing issue the recovery around it fixes is")
+                            : $"'{what}' reads '{read.Whole}', whose 'issue' is the pre-existing issue a step reported, and '{entry.Path}' is neither raised by one nor a step of the recovery that fixes one");
                     }
 
                     return;
@@ -2663,6 +2667,19 @@ public static class WorkflowValidator
         /// <summary>Whether <paramref name="entry"/> is one of the recovery's steps, or inside one - the flow's own, or a used workflow's.</summary>
         private bool InRecovery(Entry entry)
             => (_recover is not null && _recover.Owns(entry)) || _useRecoveries.Any(place => place.Owns(entry));
+
+        /// <summary>
+        /// Whether <paramref name="entry"/> is a step of a recovery inside the world it reads in (V61): the recovery its own
+        /// workflow declares, or one nested in it - never the recovery of a workflow that calls it, whose source and issue
+        /// a use the recovery holds is handed through its inputs.
+        /// </summary>
+        private bool InOwnRecovery(Entry entry)
+        {
+            var boundary = UseOf(entry);
+
+            return (_recover is not null ? [_recover, .. _useRecoveries] : _useRecoveries)
+                .Any(place => place.Owns(entry) && (boundary is null || boundary.Owns(place)));
+        }
 
         /// <summary>
         /// The group holding <paramref name="entry"/> - or <paramref name="entry"/> itself - that is declared beside

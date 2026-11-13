@@ -18,7 +18,12 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// for this build's copy of it is written for another layout, and said, so the person is not left with a definition
 /// that names a file init never brings back.
 /// </param>
-public sealed record ShippedWorkflowFiles(IReadOnlyList<string> Created, int Kept, IReadOnlyList<string> Moved);
+/// <param name="Left">
+/// Each file of the old layout (<see cref="WorkflowTemplates.Moved"/>) still there that the repository's own definition
+/// names no more, relative to the workflow's directory with forward separators: read by nothing, so a change made to it -
+/// a prompt the repository wrote its own - reaches no step, and said, so it is carried over rather than lost unseen.
+/// </param>
+public sealed record ShippedWorkflowFiles(IReadOnlyList<string> Created, int Kept, IReadOnlyList<string> Moved, IReadOnlyList<string> Left);
 
 /// <summary>
 /// The implementation workflow this tool ships: the definition <c>init</c> writes where a repository's
@@ -135,6 +140,20 @@ public static class WorkflowTemplates
             .Select(file => (Old: file[(file.IndexOf('/') + 1)..], New: file))
             .Where(pair => !Files.Contains(pair.Old, StringComparer.Ordinal))
             .ToDictionary(pair => pair.Old, pair => pair.New, StringComparer.Ordinal);
+
+    /// <summary>
+    /// What init says of a file of the old layout still there that the repository's own definition names no more
+    /// (<see cref="ShippedWorkflowFiles.Left"/>): read by nothing, so a change made to it reaches no step.
+    /// </summary>
+    /// <param name="file">The file, relative to the workflow's directory.</param>
+    public static string LeftNote(string file)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(file);
+
+        return $"{Shown(file)} is of the layout before the item pipeline became a workflow of its own, and the repository's own definition of the "
+            + $"{ShippedWorkflowName} workflow reads it no more - it reads {Shown(Moved[file])} - so a change made to it reaches no step: carry what it says "
+            + "over to the file read now, then take it out";
+    }
 
     /// <summary>What init says of a file the repository's own definition names that this tool ships elsewhere now (<see cref="Moved"/>).</summary>
     /// <param name="file">The file as the definition names it, relative to the workflow's directory.</param>
@@ -299,14 +318,19 @@ public static class WorkflowTemplates
         var directory = Path.Combine(workflowsDirectory, ShippedWorkflowName);
         var kept = Files.Count(file => fileSystem.FileExists(PathOf(directory, file)));
 
-        // Every shipped file there leaves nothing to write, whatever the definition names; only where one is missing is
-        // the definition asked which of them it wants back.
-        if (kept == Files.Count)
+        // A file of the old layout still there is asked of the definition, as is every shipped file's absence: one it
+        // names no more is read by nothing, and said.
+        var stale = Moved.Keys.Where(file => fileSystem.FileExists(PathOf(directory, file))).Order(StringComparer.Ordinal).ToList();
+
+        // Every shipped file there and none of the old layout leaves nothing to write or say, whatever the definition
+        // names; only then is the definition not asked.
+        if (kept == Files.Count && stale.Count == 0)
         {
-            return new ShippedWorkflowFiles([], kept, []);
+            return new ShippedWorkflowFiles([], kept, [], []);
         }
 
         var named = Wanted(directory, fileSystem, pathComparison);
+        var left = stale.Where(file => !named.Contains(file, StringComparer.Ordinal)).ToList();
         var missing = Files.Where(file => named.Contains(file, StringComparer.Ordinal) && !fileSystem.FileExists(PathOf(directory, file))).ToList();
 
         // A file the definition names that this tool shipped at that path before and ships elsewhere now is said, never
@@ -315,7 +339,7 @@ public static class WorkflowTemplates
 
         if (missing.Count == 0)
         {
-            return new ShippedWorkflowFiles([], kept, moved);
+            return new ShippedWorkflowFiles([], kept, moved, left);
         }
 
         // Read whole before anything is written, so a build with a broken set writes nothing rather
@@ -352,7 +376,7 @@ public static class WorkflowTemplates
             created.Add(Shown(file));
         }
 
-        return new ShippedWorkflowFiles(created, kept, moved);
+        return new ShippedWorkflowFiles(created, kept, moved, left);
     }
 
     /// <summary>

@@ -6037,6 +6037,48 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// V61 holds for the failure a recovery puts right, and the issue it fixes: a used workflow the run's recovery holds
+    /// reads neither as source or issue - they are the recovery's, handed in through an input - while the recovery's own
+    /// steps, and a used workflow's own recovery's, read them.
+    /// </summary>
+    [Fact]
+    public void AUseTheRecoveryHolds_ReadsNotTheFailureItPutsRight_ButThroughAnInput()
+    {
+        const string Caller =
+            """
+            name: flow
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: look
+                  type: orient
+                  when: "!empty(source.step)"
+                - name: remedy
+                  use: ./fix/fix.yml
+                  dependsOn: [look]
+                  with:
+                    failed: 'source.step'
+            """;
+
+        Assert.Equal(
+            [
+                "'recover.remedy.mend.when' reads 'source.step', and a workflow used as a step reads only its own steps and its own names: the failure the recovery around it puts right is of the workflow that called it. Give the fact to the called workflow as one of its inputs",
+                "'recover.remedy.mend.when' reads 'issue.title', and a workflow used as a step reads only its own steps and its own names: the pre-existing issue the recovery around it fixes is of the workflow that called it. Give the fact to the called workflow as one of its inputs",
+            ],
+            UsedProblems(Caller, ("flow/fix/fix.yml", Fix("!empty(source.step) || !empty(issue.title)"))));
+
+        Assert.Empty(UsedProblems(Caller, ("flow/fix/fix.yml", Fix("!empty(input.failed)"))));
+
+        static string Fix(string when)
+            => $"name: fix\ninputs:\n  - name: failed\n    kind: value\nsteps:\n  - name: mend\n    type: orient\n    when: \"{when}\"\n";
+    }
+
+    /// <summary>
     /// A pull request's base inside a used workflow reads none of its inputs: the base is filled from the run's own
     /// inputs before any use is opened, and an input there is the use's.
     /// </summary>
@@ -6066,6 +6108,41 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>Every problem of a caller resolved over the workflows it uses, under a configuration that declares no commit template.</summary>
+    /// <summary>
+    /// A used workflow's recovery is part of the run's step graph as the run's own recovery is: a cycle among its steps
+    /// is refused, named by their paths under the use, never passed over for sitting in a recovery a use brings.
+    /// </summary>
+    [Fact]
+    public void ACycleInAUsedWorkflowsRecovery_IsRefusedAsTheRunsOwnRecoverysIs()
+    {
+        Assert.Contains(
+            "the workflow has a dependency cycle: fix.recover.heal -> fix.recover.mend -> fix.recover.heal",
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: fix
+                    use: ./fix/fix.yml
+                """,
+                ("flow/fix/fix.yml", """
+                    name: fix
+                    steps:
+                      - name: look
+                        type: orient
+                        onFailure: recover
+                    recover:
+                      onSuccess: failed-step
+                      onFailure: pause
+                      steps:
+                        - name: heal
+                          type: orient
+                          dependsOn: [mend]
+                        - name: mend
+                          type: orient
+                          dependsOn: [heal]
+                    """)));
+    }
+
     private static IReadOnlyList<string> UsedProblems(string caller, params (string Path, string Text)[] used)
         => [.. WorkflowValidator.Validate(Resolved(caller, used), hasCommitTemplate: false)];
 }

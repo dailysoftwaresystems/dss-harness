@@ -59,21 +59,17 @@ public sealed class FlowGraphSyncs(
 
     /// <summary>
     /// The request a sync or a read of the run's graph is made with, the one place it is built: the run's own graph in the
-    /// shape its workflow says, the configured worktrees root, and - where the view is an agent's worktree
+    /// one shape the run settles (<see cref="FlowUse.GraphOf"/>) - the same for every sync at a step's start and end, every
+    /// serving and every graphify step - the configured worktrees root, and - where the view is an agent's worktree
     /// (<see cref="WorktreeOf"/>) - that worktree, so every call of the graph service made through it acts on the tree the
     /// view is of and never on the main checkout in its place.
     /// </summary>
     /// <param name="context">The repository's context.</param>
-    /// <param name="place">The run's place, whose workflow says the graph's shape.</param>
+    /// <param name="place">The run's place, whose resolved workflow settles the graph's shape.</param>
     /// <param name="why">What asked for it, as the graph's sync log says it.</param>
     /// <param name="worktree">The agent's worktree whose view is asked; null for the base.</param>
     /// <param name="rebuild">Whether every file of the tree is extracted again, no extract reused.</param>
-    /// <param name="governing">
-    /// The shape a use that governs itself declares, where the step this is asked for is one of its steps and the run's
-    /// own workflow says none: its reason steps' serving and its graphify steps fall back to it. Null where no use
-    /// governs the step or it declares none.
-    /// </param>
-    public static CodebaseGraphSync RequestOf(HarnessContext context, FlowRunPlace place, string why, CodebaseGraphWorktree? worktree = null, bool rebuild = false, FlowCodebaseGraph? governing = null)
+    public static CodebaseGraphSync RequestOf(HarnessContext context, FlowRunPlace place, string why, CodebaseGraphWorktree? worktree = null, bool rebuild = false)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(place);
@@ -81,7 +77,7 @@ public sealed class FlowGraphSyncs(
         return new CodebaseGraphSync(
             context.Layout,
             OrchestratorLayout.Of(context.Layout, place.Run),
-            (place.Definition.CodebaseGraph ?? governing)?.Shape ?? CodebaseGraphShape.Default,
+            FlowUse.GraphOf(place.Definition)?.Shape ?? CodebaseGraphShape.Default,
             context.Config.Worktrees.Root,
             rebuild,
             why)

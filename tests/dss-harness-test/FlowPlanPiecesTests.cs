@@ -2094,4 +2094,98 @@ public sealed class FlowPlanPiecesTests
                 File.ReadAllLines(layout.ReportFile).Where(line => line.StartsWith("  - added", StringComparison.Ordinal) || line.StartsWith("  - removed", StringComparison.Ordinal)));
         }
     }
+
+    /// <summary>
+    /// A work item an update places in a round whose items use a workflow has the use's inputs filled from the piece's
+    /// item, once the item's own record is made: a with value that reads nothing of it fails the round, said with the
+    /// input and the item - as one of the round's own items would - and the run ends failed over records a resume can
+    /// place, never ended by the engine itself.
+    /// </summary>
+    [Fact]
+    public async Task AnItemAnUpdatePlaces_WhoseWithReadsNothing_FailsTheRound_SayingWhy()
+    {
+        using var temp = new TempDirectory();
+        var item = """
+            name: item
+            inputs:
+              - name: owned
+                kind: value
+                required: true
+            steps:
+              - name: make
+                type: create-agent
+                agent: builder
+              - name: build
+                type: reason
+                agent: builder
+                in: make
+                dependsOn: [make]
+                prompt: build.md
+                outputs: out.json
+              - name: rebuild
+                type: reason
+                agent: builder
+                in: make
+                prompt: rebuild.md
+                outputs: out.json
+              - name: withdraw
+                type: reason
+                agent: builder
+                in: make
+                prompt: withdraw.md
+                outputs: out.json
+              - name: probe
+                type: pause
+                question: 'the probe'
+                options: [go, stop]
+                dependsOn: [build]
+              - name: drop
+                type: delete-agent
+                of: make
+                dependsOn: [probe]
+            """;
+        // The round's items are the item workflow, used as a step: the flow up to the items' own steps, which it holds.
+        var lines = Flow.ReplaceLineEndings("\n");
+        var flow = lines[..lines.IndexOf("        forEach: 'item-check.items'\n", StringComparison.Ordinal)]
+            + "        forEach: 'item-check.items'\n        use: ./item/item.yml\n        with:\n          owned: 'item.ownedPaths[0]'\n";
+        var definition = WorkflowResolver.Resolve(WorkflowFileParser.Parse("workflows/flow/flow.yml", flow), "flow", path => path == "flow/item/item.yml" ? item : null).Definition
+            with
+            {
+                Amend = new FlowAmend("request", 5, null, "planning.planupdate", "check", "planning.plan.latest.scope", "rounds.items.build", "rounds.items.rebuild", "rounds.items.withdraw", null),
+            };
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var owning = new JsonObject { ["name"] = "two", ["title"] = "The two item" };
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Piece("added", owning, "a second work item that owns no path")),
+                Item("one"),
+                owning.DeepClone())));
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+            Assert.Equal("the probe", coordinator.OpenQuestions.Single().Problem);
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("build a second item too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Failed == end.Status, end.Summary);
+
+            var round = coordinator.Instances["rounds.items"];
+            Assert.Equal(FlowInstanceState.Failed, round.State);
+            Assert.StartsWith("expression 'with.owned' of 'rounds.items[1]': ", round.Error, StringComparison.Ordinal);
+        }
+    }
 }

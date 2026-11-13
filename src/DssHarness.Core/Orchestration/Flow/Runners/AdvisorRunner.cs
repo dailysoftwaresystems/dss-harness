@@ -373,8 +373,10 @@ public sealed class AdvisorRunner(
 
     /// <summary>
     /// The advisor's prompt, filled with what it reads: the question - the step that asks, its kind, the problem as the
-    /// engine states it, each answer with what it does, and what the run stored of the asking step - the run's inputs,
-    /// and the bar.
+    /// engine states it, each answer with what it does, and what the run stored of the asking step - the inputs of the
+    /// workflow it recommends for (the run's, or those the use that governs the asking step filled), the bar, and each
+    /// text the call names, read in the directory of the workflow that declares it. A text the call names none for is
+    /// refused saying so, never read as nothing.
     /// </summary>
     /// <param name="files">Reads the files the workflow names.</param>
     /// <param name="layout">The repository's layout.</param>
@@ -390,9 +392,11 @@ public sealed class AdvisorRunner(
                 "question" => new(QuestionOf(call), 0),
                 "input" => new(FlowValue.Of(call.Inputs), 0),
                 "recommendations" => new(FlowValue.Of(call.Bar), 0),
-                "text" => path.Steps is [{ Key: { } named }] && call.Texts?.TryGetValue(named, out var file) is true
-                    ? new(FlowValue.Of(files.ReadText(layout, call.Workflow, file, $"the text '{named}'")), 1)
-                    : new(FlowValue.Missing, 1),
+                "text" => path.Steps is [{ Key: { } named }]
+                    ? call.Texts?.TryGetValue(named, out var text) is true
+                        ? new(FlowValue.Of(files.ReadText(layout, text.Workflow, text.File, $"the text '{named}'")), 1)
+                        : throw new UnresolvedReadException($"the workflow '{call.Workflow}' declares no text '{named}', and the run declares none either")
+                    : throw new UnresolvedReadException("a text is read by its name alone: {text.<name>} with nothing under it"),
                 "run" => new(call.RunValues is { } run ? FlowValue.Of(run) : FlowValue.Missing, 0),
                 _ => new(FlowValue.Missing, 0),
             },

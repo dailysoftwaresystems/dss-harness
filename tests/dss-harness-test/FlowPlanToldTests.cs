@@ -990,6 +990,69 @@ public sealed class FlowPlanToldTests
     }
 
     /// <summary>
+    /// Work a plan update owes to a loop that decides after a step of its own is carried the same way where that step
+    /// ends at the loop's bound: the decision read there has the iteration the work is owed added first, as an
+    /// iteration's end would, and the loop goes on to it - never asking its bound over work the update owes it.
+    /// </summary>
+    [Fact]
+    public async Task WorkOwedToALoopThatDecidesAtItsReview_AtItsBound_IsCarriedByAnIterationAdded()
+    {
+        using var temp = new TempDirectory();
+        var flow = Flow.ReplaceLineEndings("\n");
+        const string Rounds = "  - name: rounds\n    dependsOn: [planning]\n    steps:";
+        Assert.Contains(Rounds, flow, StringComparison.Ordinal);
+        var definition = Parse(
+            flow.Replace(Rounds, "  - name: rounds\n    dependsOn: [planning]\n    repeat:\n      until: 'false'\n      maxIterations: 1\n      decideAfter: review\n    steps:", StringComparison.Ordinal)
+                + "\n      - name: review\n        type: pause\n        question: reviewed?\n        options: [stay, go]\n        dependsOn: [items]");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"))))
+            .On("planupdate", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(
+                new JsonArray(Piece("added", Item("three"), "the registry is a third work item")),
+                Item("one"),
+                Item("three"))))
+            .On("check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            }));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            // The first round runs and ends, and the iteration's review - its deciding step - asks: the amendment is
+            // taken there, and planned whole while the review waits, its piece owed to the loop's next iteration.
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var review = await UntilAskedAsync(coordinator, "reviewed?");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            _ = await DriveAsync(coordinator, held: "pause");
+
+            var owed = await UntilAsync(harness, layout, FlowUpdateStates.Done);
+            Assert.Equal("the next iteration of 'rounds'", owed.ThePieces.Single().OwedTo);
+
+            // The review ends at the loop's bound: the iteration the work is owed is added, and the loop goes on to it.
+            Assert.True(coordinator.TryAnswer(review.Id, "go", null, out _));
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+
+            Assert.Equal("rounds#2", UpdatesOf(harness, layout).Updates.Single().AddedIteration);
+            var steps = harness.OrchestrationStore.ReadFlow(layout)!.Steps;
+            Assert.Contains(steps, step => step.Step == "rounds.items.build" && step.State == nameof(FlowInstanceState.Done) && (step.Item as JsonObject)?["name"]?.GetValue<string>() == "three");
+        }
+    }
+
+    /// <summary>
     /// A reason step that a piece of an update ends in order is told its piece first, as the lead of the handoff
     /// question it is asked: what changed the plan, the piece's lines, and the sentence that its step ends here and
     /// another goes on from where it leaves the work.

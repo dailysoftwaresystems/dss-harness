@@ -545,6 +545,7 @@ recover:
         orient: 'orient'
         affectedTests: 'input.affectedTests'
         diagnose: 'diagnose.latest'
+        failed: 'source.step'
     - name: publish
       type: push
       dependsOn: [remedies]

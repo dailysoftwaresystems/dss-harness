@@ -3,7 +3,7 @@ runs again.
 
 ## The failure
 
-The step `{source.step}` failed; where it is `triage-pre-existing-issue`, nothing failed, and what you put right is an
+The step `{input.failed}` failed; where it is `triage-pre-existing-issue`, nothing failed, and what you put right is an
 issue that was there before the run. What the diagnosis found:
 
 {input.diagnose.summary}
