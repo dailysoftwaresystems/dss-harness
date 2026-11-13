@@ -65,11 +65,17 @@ public sealed class FlowUseTests
         => ResolvedWithProblems(caller, pipeline).Definition;
 
     /// <summary>
-    /// One change to the pipeline's text, as the file's own line endings are: a change written with single newlines
-    /// meets a fixture written with carriage returns beside them, and nothing changes.
+    /// One change to the pipeline's text, read with single newlines whatever endings the checkout gave this file, and
+    /// refused where the text holds no <paramref name="from"/>: a swap that changed nothing would let a test pass or
+    /// wait over the fixture it meant to change.
     /// </summary>
     private static string Swap(string text, string from, string to)
-        => text.Replace(from.Replace("\n", "\r\n"), to.Replace("\n", "\r\n"));
+    {
+        var lines = text.ReplaceLineEndings("\n");
+        var found = from.ReplaceLineEndings("\n");
+        Assert.Contains(found, lines, StringComparison.Ordinal);
+        return lines.Replace(found, to.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+    }
 
     /// <summary>The resolution and its problems, for the tests that refuse.</summary>
     private static (WorkflowDefinition Definition, IReadOnlyList<string> Problems) ResolvedWithProblems(string caller, string? pipeline = null)
@@ -939,7 +945,6 @@ public sealed class FlowUseTests
             """ + "\n");
 
         // Without the key: everything it declares is said as not applied, and none of it is carried.
-        System.IO.File.WriteAllText("C:\\Users\\rafae\\AppData\\Local\\Temp\\opencode\\wf4-problems.txt", string.Join("\n---\n", ResolvedWithProblems(Caller(), withAmend).Problems) + "\n=====\n" + withAmend);
         var plain = Resolved(Caller(), withAmend);
         var use = plain.Steps.Single(step => step.Name == "items").Use!;
 
@@ -1068,7 +1073,8 @@ public sealed class FlowUseTests
             new JumpingClock());
         var going = run.RunAsync(TestContext.Current.CancellationToken);
 
-        await gate.StartedAsync();
+        // A run that ends without starting the held step fails here rather than waiting on a start that cannot come.
+        Assert.Same(gate.StartedAsync(), await Task.WhenAny(gate.StartedAsync(), going));
 
         // The use's gate (1) holds its second step; the run's (2) is not the one that governs it, for where the use's
         // steps are counted against their own gate alone, the run's own steps still have the run's.
@@ -1232,7 +1238,6 @@ public sealed class FlowUseTests
             """, pipeline), runner.On("list", () => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new System.Text.Json.Nodes.JsonObject { ["items"] = new System.Text.Json.Nodes.JsonArray([1, 2, 3]) })), Facts(), new JumpingClock());
         _ = await run.RunAsync(TestContext.Current.CancellationToken);
 
-        System.IO.File.WriteAllText("C:\\Users\\rafae\\AppData\\Local\\Temp\\opencode\\wf4-instances.txt", string.Join("\n", run.Instances.Select(pair => $"{pair.Key} = {pair.Value.State} :: {pair.Value.Error}")) + "\nstarted: " + string.Join(",", runner.Started));
 
         Assert.Equal(FlowInstanceState.Failed, run.Instances["items"].State);
         Assert.Contains(
