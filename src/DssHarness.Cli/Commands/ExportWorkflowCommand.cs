@@ -8,9 +8,11 @@ internal static class ExportWorkflowCommand
 {
     internal const string Name = WorkflowExportService.CommandName;
 
-    private static readonly Argument<string> WorkflowArgument = new("workflow")
+    // Optional on the line, for --from names the workflow it vendors; Core refuses a line that names none, or one beside --from.
+    private static readonly Argument<string?> WorkflowArgument = new("workflow")
     {
-        Description = "The workflow to export, as workflows in config.json declares it; with --shipped, the one this tool ships.",
+        Description = "The workflow to export, as workflows in config.json declares it; with --shipped, the one this tool ships; none with --from.",
+        Arity = ArgumentArity.ZeroOrOne,
     };
 
     private static readonly Option<string> ToOption = new("--to")
@@ -51,7 +53,7 @@ internal static class ExportWorkflowCommand
         {
             var arguments = context.ParseResult;
             var request = new WorkflowExportRequest(
-                arguments.GetValue(WorkflowArgument)!,
+                arguments.GetValue(WorkflowArgument),
                 arguments.GetValue(ToOption)!,
                 arguments.GetValue(ShippedOption),
                 arguments.GetValue(FromOption));

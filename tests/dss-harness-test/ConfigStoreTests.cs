@@ -1628,7 +1628,8 @@ public sealed class ConfigStoreTests
     /// saying that leaving the key out declares no workflow; a name a workflow's directory cannot carry - a separator, a
     /// drive, a character some file system refuses, a dot or a space at either end - is refused naming the one-word spelling; one
     /// named twice is said to be, and two that differ only by case are refused as one directory on a file system that
-    /// does not tell them apart; and the slot the run's keys are read from is no workflow's name.
+    /// does not tell them apart; and neither the slot the run's keys are read from nor the workflow cache's place is a
+    /// workflow's name.
     /// </summary>
     [Theory]
     [InlineData("""{ "workflows": [] }""", "workflows is given empty, which is never read as no workflow: name a workflow, or leave the key out for no workflow")]
@@ -1636,6 +1637,7 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "workflows": ["default", "Default"] }""", "workflows names 'Default' and 'default', which differ only by case; a workflow directory is the file system's to tell apart, and not every file system does")]
     [InlineData("""{ "workflows": ["release", "release"] }""", "workflows names 'release' twice; declare each workflow once")]
     [InlineData("""{ "workflows": [".env"] }""", "workflows: '.env' is the name the workflows directory keeps for the slot the run's keys are read from; call the workflow something else, as '.harness-config/workflows/<name>/<name>.yml'")]
+    [InlineData("""{ "workflows": ["remote"] }""", "workflows: 'remote' is the name the workflows directory keeps for the workflow cache's place, where a remote workflow's files are read; call the workflow something else, as '.harness-config/workflows/<name>/<name>.yml'")]
     [InlineData("""{ "workflows": [".."] }""", "workflows: '..' starts or ends with a dot or a space; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml'")]
     [InlineData("""{ "workflows": ["release."] }""", "workflows: 'release.' starts or ends with a dot or a space; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml'")]
     [InlineData("""{ "workflows": [" release"] }""", "workflows: ' release' starts or ends with a dot or a space; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml'")]

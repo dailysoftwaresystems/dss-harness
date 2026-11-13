@@ -246,7 +246,9 @@ public sealed class FlowService(
         }
         catch (HarnessException ex)
         {
-            return CommandOutcome.Refused(ex.Message);
+            // A configuration or a request the check refuses refuses the start; a check that could not run - a remote
+            // use's fetch with the forge's tool missing, the network not there, a call that failed - keeps its own code.
+            return HarnessExit.RefusesTheRun(ex.ExitCode) ? CommandOutcome.Refused(ex.Message) : CommandOutcome.Failed(ex.ExitCode, ex.Message);
         }
 
         var check = report.Workflows.FirstOrDefault();
@@ -1252,7 +1254,11 @@ public sealed class FlowService(
         }
         catch (HarnessException ex)
         {
-            return (null, CommandOutcome.Refused($"run '{layout.Name}' began of workflow '{frozen.Name}', and the repository's config cannot be read for it now: {ex.Message.TrimEnd('.')}. Nothing of the run was changed."));
+            // A check that could not run - a remote use's fetch with the forge's tool missing, the network not there, a
+            // call that failed - is said as that, with its own code, never as a configuration that cannot be read.
+            return (null, HarnessExit.RefusesTheRun(ex.ExitCode)
+                ? CommandOutcome.Refused($"run '{layout.Name}' began of workflow '{frozen.Name}', and the repository's config cannot be read for it now: {ex.Message.TrimEnd('.')}. Nothing of the run was changed.")
+                : CommandOutcome.Failed(ex.ExitCode, $"run '{layout.Name}' began of workflow '{frozen.Name}', and its definition could not be checked now: {ex.Message.TrimEnd('.')}. Nothing of the run was changed."));
         }
 
         if (report.Workflows.FirstOrDefault() is not { Holds: true, Definition: { } entry })

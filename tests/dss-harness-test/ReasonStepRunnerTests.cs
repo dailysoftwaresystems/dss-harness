@@ -2042,7 +2042,7 @@ public sealed class ReasonStepRunnerTests
         var (kit, agents) = await ReadyAsync(temp);
         await GraphedTreeAsync(kit);
         var workflows = Path.Combine(kit.Main, ".harness-config", "workflows");
-        WorkflowTemplates.EnsureShipped(workflows, kit.Harness.FileSystem);
+        WorkflowTemplates.EnsureShipped(workflows, kit.Harness.FileSystem, kit.Harness.Platform.PathComparison);
         var definition = WorkflowResolver.Resolve(
             WorkflowFileParser.Parse("workflows/implementation/implementation.yml", File.ReadAllText(Path.Combine(workflows, "implementation", "implementation.yml"))),
             "implementation",

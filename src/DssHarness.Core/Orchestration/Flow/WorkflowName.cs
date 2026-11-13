@@ -66,6 +66,16 @@ public static class WorkflowName
                 + $"'{Expected("<name>")}'";
         }
 
+        // The workflows directory keeps this name for the workflow cache's place, where a remote workflow's name and
+        // files are read (WorkflowRemote.Prefix): no local workflow is read under it, so every use a workflow of this
+        // name made of its own directory would be refused.
+        if (string.Equals(name, WorkflowRemote.Prefix, StringComparison.Ordinal))
+        {
+            return $"'{name}' is the name the workflows directory keeps for the workflow cache's place, where a remote "
+                + "workflow's files are read; call the workflow something else, as "
+                + $"'{Expected("<name>")}'";
+        }
+
         if (name.EndsWith(".", StringComparison.Ordinal) || name.EndsWith(" ", StringComparison.Ordinal)
             || name.StartsWith(".", StringComparison.Ordinal) || name.StartsWith(" ", StringComparison.Ordinal))
         {

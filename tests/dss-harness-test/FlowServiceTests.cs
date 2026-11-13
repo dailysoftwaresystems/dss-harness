@@ -90,7 +90,8 @@ public sealed class FlowServiceTests
         ChildSessions? children = null,
         DssHarness.Core.Agents.IAgentRunner? agentRunner = null,
         DssHarness.Core.Secrets.AgentKeyStore? keyStore = null,
-        IAgentService? agents = null)
+        IAgentService? agents = null,
+        IWorkflowValidationService? validation = null)
     {
         var files = fileSystem ?? harness.FileSystem;
         var store = fileSystem is null ? harness.OrchestrationStore : new OrchestrationStore(files, harness.Output);
@@ -103,7 +104,7 @@ public sealed class FlowServiceTests
             store,
             engines,
             new FlowSessions(store, files, engines, harness.GitClient),
-            new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
+            validation ?? new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             runner,
             harness.OrchestrationLog,
             children ?? harness.ChildSessions,
@@ -3295,6 +3296,41 @@ public sealed class FlowServiceTests
 
         Assert.Equal(HarnessExit.Success, resumed.ExitCode);
         Assert.Equal("Done", repository.Harness.OrchestrationStore.ReadFlow(RunOf(repository))!.Status);
+    }
+
+    /// <summary>
+    /// A check of the definition that could not run - a remote use's fetch with the network not there - keeps its own
+    /// code at a run's start and at its resume, said as a check that could not be made, never as a configuration that
+    /// refuses the run or cannot be read; nothing of the run is made or changed.
+    /// </summary>
+    [Fact]
+    public async Task ACheckThatCouldNotRun_KeepsItsOwnCode_AtAStartAndAResume()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+        var unreached = Substitute.For<IWorkflowValidationService>();
+
+        unreached.CheckAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<WorkflowDefinition?>())
+            .Returns(Task.FromException<WorkflowValidationReport>(new HarnessException(HarnessExit.Incomplete, "the forge could not be reached.")));
+
+        var started = await Service(repository.Harness, runner, validation: unreached).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal((HarnessExit.Incomplete, "the forge could not be reached."), (started.ExitCode, started.Message));
+        Assert.Null(repository.Harness.OrchestrationStore.ReadFlow(RunOf(repository)));
+
+        runner.On("one", FlowStepResult.Ended(passed: true, 0));
+        runner.Holds("two", new TaskCompletionSource().Task);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+
+        await runner.WaitStartedAsync("two");
+        _ = await service.StopAsync(repository.Path, "r1", now: false, json: false, Token).WaitAsync(Bound, Token);
+        _ = await driving.WaitAsync(Bound, Token);
+
+        var resumed = await Service(repository.Harness, runner, validation: unreached).ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, resumed.ExitCode);
+        Assert.Equal("run 'r1' began of workflow 'flow', and its definition could not be checked now: the forge could not be reached. Nothing of the run was changed.", resumed.Message);
     }
 
     /// <summary>

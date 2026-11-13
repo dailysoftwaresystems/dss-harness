@@ -364,7 +364,6 @@ public sealed class RemoteWorkflowUseTests
             "flow",
             new WorkflowResolution(
                 _ => null,
-                Recorded: null,
                 Fetch: _ => Task.FromResult(new WorkflowRemoteResolution(parsed, Commit, Entry(), Definition))));
 
         Assert.Empty(problems);
@@ -430,6 +429,130 @@ public sealed class RemoteWorkflowUseTests
     }
 
     /// <summary>
+    /// A relative use inside a remote workflow resolves inside the same cache entry: the workflow it names is read from
+    /// the entry the remote one was fetched into - never from the repository, though a reader of the repository's files
+    /// would answer for the same path - named under the remote place by its own directory, its fingerprint the commit,
+    /// and its files read from that entry at run time; a changed blob of it is refused as it is read, and so is a name
+    /// the cache holds no entry for.
+    /// </summary>
+    [Fact]
+    public async Task AUseInsideARemoteWorkflow_ResolvesInsideItsCacheEntry_AndIsReadThereAsItRuns()
+    {
+        using var temp = new TempDirectory();
+        const string Outer = "name: security-review\nsteps:\n  - name: review\n    use: ./inner/inner.yml\n";
+        const string Inner = "name: inner\nsteps:\n  - name: check\n    type: reason\n    agent: reviewer\n    prompt: prompts/check.md\n    outputs: schemas/check.json\n";
+        const string Check = "Check the paths.\n";
+        var (_, root, cache, fetcher) = Fixture(
+            temp,
+            Tag(),
+            TreeOf(
+                ("workflows/security-review/security-review.yml", Outer),
+                ("workflows/security-review/inner/inner.yml", Inner),
+                ("workflows/security-review/inner/prompts/check.md", Check)),
+            Blob(Outer),
+            Blob(Inner),
+            Blob(Check));
+        var resolution = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var local = new List<string>();
+
+        var (definition, problems, _) = await WorkflowResolver.ResolveAsync(
+            WorkflowFileParser.Parse("workflows/flow/flow.yml", $"name: flow\nsteps:\n  - name: scan\n    use: {Source}\n"),
+            "flow",
+            new WorkflowResolution(
+                path =>
+                {
+                    local.Add(path);
+                    return Inner;
+                },
+                Fetch: _ => Task.FromResult(resolution),
+                ReadCached: (owner, path) => cache.FindNamed(owner) is { } entry ? cache.ReadText(entry, path) : null));
+
+        var name = $"remote/github.com/dailysoftwaresystems/shared/{Commit}/workflows/security-review/inner";
+        var nested = definition.Steps.Single().Steps.Single();
+
+        Assert.Empty(problems);
+        Assert.Empty(local);
+        Assert.Equal(("review", name, Commit), (nested.Name, nested.Use!.Name, nested.Use.Fingerprint));
+        Assert.Equal(name, nested.Steps.Single().WorkflowOf);
+
+        // At run time the nested workflow's files are read from the entry that holds it, by its own directory.
+        var named = new WorkflowNamedFiles(new PhysicalFileSystem(new HarnessFactory().FilePermissions), StringComparison.Ordinal, cache);
+        var layout = new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path);
+
+        Assert.Equal(Check, named.ReadText(layout, name, "prompts/check.md", "step 'scan.review.check''s prompt"));
+
+        // A blob changed on disk is refused as it is read, never run.
+        await File.WriteAllTextAsync(Path.Combine(root, "blobs", WorkflowCache.BlobSha(Check)[..2], WorkflowCache.BlobSha(Check)[2..]), "Something else.\n", Token);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, Assert.Throws<HarnessException>(() => named.ReadText(layout, name, "prompts/check.md", "step 'scan.review.check''s prompt")).ExitCode);
+
+        // A name the cache holds no entry for is said so.
+        var gone = $"remote/github.com/dailysoftwaresystems/shared/{Moved}/workflows/security-review/inner";
+
+        Assert.Equal(
+            $"'prompts/check.md', step 'scan.review.check''s prompt, is of the workflow '{gone}', which the workflow cache holds no entry for; fetch it again where a use names it",
+            Assert.Throws<HarnessException>(() => named.ReadText(layout, gone, "prompts/check.md", "step 'scan.review.check''s prompt")).Message);
+    }
+
+    /// <summary>
+    /// A relative use inside a remote workflow that leaves its cache entry is refused, as a local one that leaves the
+    /// workflows directory is; and where the resolution reads no cache entry, the use is refused saying so - neither is
+    /// ever read from the repository.
+    /// </summary>
+    [Fact]
+    public async Task AUseInsideARemoteWorkflow_ThatLeavesItsEntry_OrWhereNoEntryIsRead_IsRefused()
+    {
+        var parsed = Parsed();
+        var caller = WorkflowFileParser.Parse("workflows/flow/flow.yml", $"name: flow\nsteps:\n  - name: scan\n    use: {Source}\n");
+
+        async Task<IReadOnlyList<string>> ProblemsOf(string outer, Func<string, string, string?>? cached)
+        {
+            var (_, problems, _) = await WorkflowResolver.ResolveAsync(
+                caller,
+                "flow",
+                new WorkflowResolution(
+                    path => throw new InvalidOperationException($"'{path}' was read from the repository."),
+                    Fetch: _ => Task.FromResult(new WorkflowRemoteResolution(parsed, Commit, Entry(), outer)),
+                    ReadCached: cached));
+
+            return problems;
+        }
+
+        Assert.Equal(
+            ["step 'scan.review' uses '../other/other.yml', which leaves 'workflows/security-review', the directory the remote workflow of 'github.com/dailysoftwaresystems/shared' was fetched as: a use inside a remote workflow resolves inside the same cache entry, as a use inside a local one resolves inside the repository's workflows directory"],
+            await ProblemsOf("name: security-review\nsteps:\n  - name: review\n    use: ../other/other.yml\n", (_, _) => null));
+        Assert.Equal(
+            [$"step 'scan.review' uses './inner/inner.yml', which could not be read: it is a workflow inside the remote workflow 'remote/github.com/dailysoftwaresystems/shared/{Commit}/workflows/security-review', and no resolution of this kind reads the cache entry that holds it"],
+            await ProblemsOf("name: security-review\nsteps:\n  - name: review\n    use: ./inner/inner.yml\n", cached: null));
+    }
+
+    /// <summary>
+    /// A fetch refused for what the source is - not allowed, a ref the pin refuses - is the definition's problem, said
+    /// with the use; a fetch that could not run - the forge's tool missing, the network not there, a call that failed -
+    /// is no problem of the definition's, and the resolution goes on with its own code.
+    /// </summary>
+    [Fact]
+    public async Task AFetchThatCouldNotRun_KeepsItsOwnCode_WhereARefusalOfTheSourceIsAProblem()
+    {
+        var caller = WorkflowFileParser.Parse("workflows/flow/flow.yml", $"name: flow\nsteps:\n  - name: scan\n    use: {Source}\n");
+
+        Task<(WorkflowDefinition, IReadOnlyList<string>, IReadOnlyList<WorkflowRemoteResolution>)> Resolving(int exitCode)
+            => WorkflowResolver.ResolveAsync(
+                caller,
+                "flow",
+                new WorkflowResolution(_ => null, Fetch: _ => throw new HarnessException(exitCode, "the fetch said no")));
+
+        var (_, refused, _) = await Resolving(HarnessExit.Refused);
+
+        Assert.Equal([$"step 'scan' uses '{Source}', which could not be resolved: the fetch said no"], refused);
+
+        foreach (var code in new[] { HarnessExit.ToolMissing, HarnessExit.CommandFailed, HarnessExit.Incomplete })
+        {
+            Assert.Equal(code, (await Assert.ThrowsAsync<HarnessException>(() => Resolving(code))).ExitCode);
+        }
+    }
+
+    /// <summary>
     /// The cache's list says each entry, and its pruning removes the entries no run used for its days and the blobs no
     /// entry left holds.
     /// </summary>
@@ -475,7 +598,7 @@ public sealed class RemoteWorkflowUseTests
             Fetcher(cache, Tag(), Tree(), Blob(Definition), Blob(Prompt)),
             cache).ExportAsync(
             temp.Path,
-            new WorkflowExportRequest("security-review", temp.Combine("vendor"), Shipped: false, From: Source),
+            new WorkflowExportRequest(Workflow: null, temp.Combine("vendor"), Shipped: false, From: Source),
             Token);
 
         var destination = temp.Combine("vendor", "security-review");
@@ -493,6 +616,46 @@ public sealed class RemoteWorkflowUseTests
         Assert.Equal(
             $"github.com/dailysoftwaresystems/shared/workflows/security-review/security-review.yml@v1 at commit {Commit}",
             export.Vendored);
+    }
+
+    /// <summary>
+    /// export-workflow --from says how the commit came about where it is worth a word - a branch, which moves - in what
+    /// it prints and in the note; and a remote directory holding a file of the note's own name is refused, nothing
+    /// written, for the note is never written over a workflow's file.
+    /// </summary>
+    [Fact]
+    public async Task ExportSaysABranchMoves_AndRefusesADirectoryHoldingTheNotesName()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (_, _, cache, _) = Fixture(temp, Tag());
+        var anyRef = new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "any" };
+
+        await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig { WorkflowSources = anyRef });
+
+        WorkflowExportService Export(params ProcessResult[] answers)
+            => new(Substitute.For<IWorkflowValidationService>(), harness.FileSystem, new FixedProcessContext { Fixed = temp.Path }, harness.ContextLoader, Fetcher(cache, answers), cache);
+
+        var branch = await Export(Missing(), CommitOf(), Tree(), Blob(Definition), Blob(Prompt))
+            .ExportAsync(temp.Path, new WorkflowExportRequest(Workflow: null, temp.Combine("vendor"), Shipped: false, From: Source), Token);
+
+        Assert.Equal(
+            $"github.com/dailysoftwaresystems/shared/workflows/security-review/security-review.yml@v1 at commit {Commit}, where the branch 'v1' stood then - a branch moves",
+            branch.Vendored);
+        Assert.StartsWith(
+            $"Vendored from github.com/dailysoftwaresystems/shared/workflows/security-review/security-review.yml@v1, which resolved to the commit {Commit}, where the branch 'v1' stood then - a branch moves, and was fetched on ",
+            await File.ReadAllTextAsync(temp.Combine("vendor", "security-review", WorkflowExportService.VendoredNote), Token),
+            StringComparison.Ordinal);
+
+        const string Note = "A note the workflow keeps of its own.\n";
+        var colliding = await Assert.ThrowsAsync<HarnessException>(() => Export(Tag(), TreeOf(("workflows/other/other.yml", Definition), ("workflows/other/source.md", Note)), Blob(Definition), Blob(Note))
+            .ExportAsync(temp.Path, new WorkflowExportRequest(Workflow: null, temp.Combine("elsewhere"), Shipped: false, From: "dailysoftwaresystems/shared/workflows/other/other.yml@v2"), Token));
+
+        Assert.Equal(HarnessExit.Refused, colliding.ExitCode);
+        Assert.Equal(
+            "'dailysoftwaresystems/shared/workflows/other/other.yml@v2' holds a 'source.md' of its own in its directory, the name the note of where a vendored workflow came from is written as; export-workflow writes that note beside a workflow's files and never over one of them. Nothing was written.",
+            colliding.Message);
+        Assert.False(Directory.Exists(temp.Combine("elsewhere")));
     }
 
     /// <summary>

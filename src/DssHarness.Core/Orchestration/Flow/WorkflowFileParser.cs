@@ -933,6 +933,11 @@ public static class WorkflowFileParser
             {
                 problems.Add(YamlReading.At(node, $"{where}.use is not a single value; it is the path of the workflow this step is."));
             }
+
+            if (NodeIn(keys, "use") is YamlScalarNode { Value: var used } && string.IsNullOrWhiteSpace(used))
+            {
+                problems.Add(YamlReading.At(node, $"{where}.use is empty; it is the path of the workflow this step is, relative to this workflow's directory, or owner/repo/path/workflow.yml@ref."));
+            }
         }
 
         if (keys.Any(entry => entry.Key == "with") && !keys.Any(entry => entry.Key == "use"))

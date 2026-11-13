@@ -140,9 +140,11 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
 
         if (WorkflowRemote.Is(name))
         {
-            // A workflow resolved from a remote source: its files are the cache entry's, hashed again as they are
-            // read, and no directory of the repository's own is asked for them.
-            if (_cache?.FindNamed(name) is not { } entry)
+            // A workflow resolved from a remote source: its files are those of the cache entry that holds it, read
+            // under its own directory in its repository - a workflow a relative use inside a remote one names sits in
+            // a directory of that one's entry - hashed again as they are read, and no directory of the repository's own
+            // is asked for them.
+            if (_cache?.FindNamed(name) is not { } entry || WorkflowRemote.PartsOf(name) is not { } parts)
             {
                 return missingIsNone ? null : throw new HarnessException(
                     HarnessExit.ConfigInvalid,
@@ -151,7 +153,7 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
 
             try
             {
-                return _cache.ReadText(entry, $"{entry.Path}/{named.Replace('\\', '/')}")
+                return _cache.ReadText(entry, $"{parts.Directory}/{named.Replace('\\', '/')}")
                     ?? (missingIsNone ? null : throw new HarnessException(
                         HarnessExit.ConfigInvalid,
                         $"'{named}', {what}, is not in the workflow '{name}': the commit it was fetched at holds no such file in its directory"));

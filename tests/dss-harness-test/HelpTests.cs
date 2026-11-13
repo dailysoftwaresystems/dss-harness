@@ -5331,11 +5331,14 @@ public sealed partial class HelpTests
                 + "run's records, ask none of it. Where config.json declares "
                 + $"{WorkflowTemplates.ShippedWorkflowName}, init writes each of its "
                 + "files that is missing - the whole set where the repository has no definition of it yet, and where it has one only "
-                + "the shipped files that definition names, so a file taken out with its step stays out - and keeps each one that is "
-                + "there, whatever it holds, so an init that stopped part way is "
-                + "finished by the next - where a file is missing and the definition there does not read, init refuses (12; 13 where it "
+                + "the shipped files that definition names, the workflows it uses among them - a shipped one taken out whole read from "
+                + "the copy init writes, so it comes back whole in one run - so a file taken out with its step stays out - and keeps each "
+                + "one that is there, whatever it holds, so an init that stopped part way is "
+                + "finished by the next - where a file is missing and the definition there does not read, or uses a workflow of the "
+                + "repository's that does not resolve, init refuses (12, naming each problem; 13 where it "
                 + "cannot be read), since which files it names cannot be told; nothing that exists is ever overwritten, and a config that "
-                + "does not declare it gets none of it.",
+                + "does not declare it gets none of it. A file such a definition names that this tool ships elsewhere now - one of the item "
+                + "pipeline's, moved into its own folder - is not brought back, and init says so.",
             prose,
             StringComparison.Ordinal);
 
