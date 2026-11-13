@@ -10,27 +10,40 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </summary>
 /// <param name="Read">
 /// Reads a workflow file by its path under the repository's workflows root, forward slashes, <c>a/b/b.yml</c> - null
-/// where no file is there.
-/// </param>
-/// <param name="Recorded">
-/// The commit this run's own record holds for a remote source as written, where one does; null where nothing is
-/// recorded. A resolution that has one never resolves the ref again, so a tag or branch that moved since changes no
-/// run already started.
+/// where no file is there; a <see cref="HarnessException"/> saying why where the file is not one the resolution may
+/// read (its directory or itself leading out of the workflows directory once links are followed) or could not be looked
+/// at or read, which the resolution says as the use's problem, never as a file that is not there.
 /// </param>
 /// <param name="Fetch">
 /// Fetches a remote source as written to a commit and a cached directory; null where the resolution reads local
-/// workflows only, so a remote source is refused saying that.
+/// workflows only, so a remote source is refused saying that - or left as written, where
+/// <paramref name="RemoteLeftAsWritten"/> says so. A refusal of the source itself (<see cref="HarnessExit.Refused"/>,
+/// <see cref="HarnessExit.ConfigInvalid"/>) is the use's problem; any other failure - the forge's tool missing, the
+/// network not there, a call that failed - is no problem of the definition's, and goes on with its own code.
 /// </param>
 /// <param name="ReadCached">
-/// Reads a workflow file by its path under a remote workflow's root, keyed by the remote workflow's own name; null
-/// where none reads. A nested use inside a remote workflow resolves inside its cache entry, as a local one resolves
-/// inside the repository.
+/// Reads a file of a remote workflow's cache entry by its path in the remote repository, keyed by the name of the
+/// remote workflow the entry was fetched as; null where the entry names no such file, a
+/// <see cref="HarnessException"/> where its blob changed on disk; and null as a whole where the resolution reads no
+/// cache entry. A relative use inside a remote workflow resolves inside its cache entry through it, as a local one
+/// resolves inside the repository.
+/// </param>
+/// <param name="PathComparison">
+/// How the files the resolution reads are told apart, which a use that closes a circle is found by: the machine's path
+/// comparison where they are a disk's, ordinal - the default - where they are a set read by its exact names, as this
+/// build's embedded one is.
+/// </param>
+/// <param name="RemoteLeftAsWritten">
+/// Whether a remote use is left as written, unresolved and no problem, where <paramref name="Fetch"/> is null: the
+/// resolution asks only which of the repository's own files a definition names - <c>init</c>'s question, which no
+/// remote workflow's file answers - so a remote use is neither fetched nor refused.
 /// </param>
 public sealed record WorkflowResolution(
     Func<string, string?> Read,
-    Func<string, string?>? Recorded = null,
     Func<string, Task<WorkflowRemoteResolution>>? Fetch = null,
-    Func<string, string, string?>? ReadCached = null);
+    Func<string, string, string?>? ReadCached = null,
+    StringComparison PathComparison = StringComparison.Ordinal,
+    bool RemoteLeftAsWritten = false);
 
 /// <summary>
 /// The one owner of what a step that says <c>use:</c> is: it resolves every such step of a parsed definition into the
@@ -42,29 +55,37 @@ public sealed record WorkflowResolution(
 /// <para>
 /// A used workflow is read as a definition of its own and embedded whole: its steps become the step's members, its
 /// recovery is kept beside them for the engine to reach first, its declared outputs become the step's own once it ends,
-/// and its inputs are the names the step's <c>with:</c> values fill. Its run-level keys - its budget, limits, advisor,
-/// amend and answers - are never applied, and are said as not applied, for the calling run's own are what hold.
+/// and its inputs are the names the step's <c>with:</c> values fill. Its run-level keys are said as not applied where
+/// no step applies them (<see cref="FlowUse.NotApplied"/>): its budget, reporter, <c>pushCheckpoints</c> and
+/// <c>recommendations</c> always, and its advisor, amend, answers, limits and <c>codebaseGraph</c> unless the use says
+/// <c>useParentLimits: false</c>, which carries them (<see cref="FlowUse.Own"/>) for its steps - an amend refused there.
 /// </para>
 /// <para>
-/// A use names a remote workflow as <c>owner/repo/path/workflow.yml@ref</c>, fetched into the workflow cache and read
-/// from it; a remote workflow's own name under <c>remote/</c> is the cache's reserved place, so a local use that
-/// resolves there is refused. V58, the cycle rule: a workflow that uses itself, directly or through others, is refused
-/// with the whole chain of the uses that close the circle. V59, the depth rule: nesting counts across workflows as it
-/// counts within one, the reader's own bound of <see cref="WorkflowFileParser.MaxDepth"/> levels in all.
+/// A use names a path relative to the calling workflow's directory - inside the repository's workflows directory for a
+/// local workflow, inside the cache entry for one inside a remote workflow - or a remote workflow as
+/// <c>owner/repo/path/workflow.yml@ref</c>, fetched into the workflow cache and read from it; a remote workflow's own
+/// name under <c>remote/</c> is the cache's reserved place, so a local use that resolves there is refused, and a used
+/// workflow lives in a directory of its own, as every workflow does. V58, the cycle rule: a workflow file that uses
+/// itself, directly or through others, is refused with the circle of the files that close it, told apart by the
+/// machine's path comparison, the calling workflow's own file the first. V59, the depth rule: steps nest at most
+/// <see cref="WorkflowFileParser.MaxDepth"/> levels deep in all, a used workflow's own counted below the step that uses
+/// it - the reader's own bound held across the uses of others, so that no definition that holds is deeper than the
+/// run's records can be written.
 /// </para>
 /// </remarks>
 public static class WorkflowResolver
 {
     /// <summary>
-    /// Resolves every <c>use:</c> step of <paramref name="definition"/> that names a local workflow: the definition it
-    /// returns holds the called workflows' steps in the places the engine runs them, and no
-    /// <see cref="WorkflowStep.UseSource"/> of its own. A step it cannot resolve is a problem, said with the step's
-    /// path; a definition with problems is returned beside them, its use steps left as written.
+    /// Resolves every <c>use:</c> step of <paramref name="definition"/> that names a local workflow, from a set read by
+    /// its exact names - this build's own, or one held in memory: the definition it returns holds the called
+    /// workflows' steps in the places the engine runs them, and no <see cref="WorkflowStep.UseSource"/> of its own. A
+    /// step it cannot resolve is a problem, said with the step's path; a definition with problems is returned beside
+    /// them, its use steps left as written.
     /// </summary>
     /// <param name="definition">The workflow as it was parsed, its use steps still paths.</param>
     /// <param name="directory">
-    /// The calling workflow's own directory, relative to the repository's workflows root and written with forward
-    /// slashes - empty where the workflow sits in the root itself.
+    /// The calling workflow's own directory under the workflows root - its name, whose file is
+    /// <c>&lt;name&gt;/&lt;name&gt;.yml</c> there.
     /// </param>
     /// <param name="readFile">
     /// Reads a workflow file by its path under the repository's workflows root, forward slashes, <c>a/b/b.yml</c> -
@@ -85,17 +106,19 @@ public static class WorkflowResolver
 
     /// <summary>
     /// Resolves every <c>use:</c> step of <paramref name="definition"/>: the local ones as <see cref="Resolve"/> does,
-    /// and the remote ones through <paramref name="reads"/>'s fetch, whose commit is the recorded one where the run
-    /// has recorded it. The definition it returns holds the called workflows' steps in the places the engine runs
-    /// them, and no <see cref="WorkflowStep.UseSource"/> of its own; the remote resolutions it made are said beside
-    /// the problems, for the lines that report how each came about.
+    /// and the remote ones through <paramref name="reads"/>'s fetch. The definition it returns holds the called
+    /// workflows' steps in the places the engine runs them, and no <see cref="WorkflowStep.UseSource"/> of its own; the
+    /// remote resolutions it made are said beside the problems, for the lines that report how each came about.
     /// </summary>
     /// <param name="definition">The workflow as it was parsed, its use steps still sources.</param>
     /// <param name="directory">
-    /// The calling workflow's own directory, relative to the repository's workflows root and written with forward
-    /// slashes - empty where the workflow sits in the root itself.
+    /// The calling workflow's own directory under the workflows root - its name, whose file is
+    /// <c>&lt;name&gt;/&lt;name&gt;.yml</c> there.
     /// </param>
     /// <param name="reads">Where every file a resolution reads comes from.</param>
+    /// <exception cref="HarnessException">
+    /// A remote source could not be fetched for a reason that is no refusal of the source itself: the fetch's own code.
+    /// </exception>
     public static async Task<(WorkflowDefinition Definition, IReadOnlyList<string> Problems, IReadOnlyList<WorkflowRemoteResolution> Remotes)> ResolveAsync(
         WorkflowDefinition definition,
         string directory,
@@ -107,12 +130,18 @@ public static class WorkflowResolver
 
         var problems = new List<string>();
         var remotes = new List<WorkflowRemoteResolution>();
-        var resolved = await ResolveStepsAsync(definition.Steps, directory, [], depth: 1, reads, problems, remotes).ConfigureAwait(false);
+        var walk = new Walk(reads, problems, remotes);
+
+        // The circle a use closes is found by files, the calling workflow's own the first: a use of it from anywhere
+        // in the tree is a use of itself.
+        IReadOnlyList<string> chain = [$"{directory}/{directory[(directory.LastIndexOf('/') + 1)..]}{HarnessLayout.WorkflowFileExtension}"];
+        var place = new Place(directory, Remote: null);
+        var resolved = await ResolveStepsAsync(definition.Steps, place, scope: null, depth: 1, chain, walk).ConfigureAwait(false);
         var recovery = definition.Recover is null
             ? null
             : definition.Recover with
             {
-                Steps = [.. await ResolveStepsAsync(definition.Recover.Steps, directory, [], depth: 1, reads, problems, remotes).ConfigureAwait(false)],
+                Steps = [.. await ResolveStepsAsync(definition.Recover.Steps, place, FlowScope.Recovery, depth: 1, chain, walk).ConfigureAwait(false)],
             };
         var root = definition with { Steps = [.. resolved], Recover = recovery };
 
@@ -124,38 +153,53 @@ public static class WorkflowResolver
         return (root, problems, remotes);
     }
 
+    /// <summary>What one resolution reads by and gathers: where files come from, every problem and every remote resolution.</summary>
+    /// <param name="Reads">Where every file a resolution reads comes from.</param>
+    /// <param name="Problems">Every problem found, whole, in the order the tree declares what they concern.</param>
+    /// <param name="Remotes">Each remote resolution made on the way, in the order the tree declared the uses.</param>
+    private sealed record Walk(WorkflowResolution Reads, List<string> Problems, List<WorkflowRemoteResolution> Remotes);
+
+    /// <summary>
+    /// Where a level of steps is resolved: the directory its workflow sits in, forward slashes - under the repository's
+    /// workflows root, or in a remote repository - and, for a workflow of a remote one, the resolution whose cache entry
+    /// holds it.
+    /// </summary>
+    /// <param name="Directory">The workflow's directory, relative to the root it resolves in.</param>
+    /// <param name="Remote">The remote resolution whose cache entry the workflow is read from; null for the repository's own.</param>
+    private sealed record Place(string Directory, WorkflowRemoteResolution? Remote);
+
     /// <summary>
     /// Resolves the use steps among <paramref name="steps"/>, leaving every other step as it is but for the workflow
     /// mark a used workflow's members carry; a group's own steps are walked whatever the group is, so a use nested in a
     /// group of the caller's resolves as a top-level one does.
     /// </summary>
     /// <param name="steps">The steps as parsed.</param>
-    /// <param name="directory">The directory the steps' workflow sits in, relative to the root it resolves in.</param>
-    /// <param name="chain">The workflows already entered, outermost first, to refuse a use that closes a circle.</param>
-    /// <param name="depth">How many workflows deep this level sits, the calling workflow's own file the first.</param>
-    /// <param name="reads">Where every file a resolution reads comes from.</param>
-    /// <param name="problems">Every problem found, whole, in the order the tree declares what they concern.</param>
-    /// <param name="remotes">Each remote resolution made on the way, in the order the tree declared the uses.</param>
+    /// <param name="place">Where the steps' workflow sits.</param>
+    /// <param name="scope">The path of the group the steps are members of, dotted from the flow's root; null at the top.</param>
+    /// <param name="depth">How deep the steps sit, counting every level from the flow's top, the top's own the first.</param>
+    /// <param name="chain">The workflow files already entered, outermost first, to refuse a use that closes a circle.</param>
+    /// <param name="walk">What the resolution reads by and gathers.</param>
     private static async Task<List<WorkflowStep>> ResolveStepsAsync(
         IReadOnlyList<WorkflowStep> steps,
-        string directory,
-        IReadOnlyList<string> chain,
+        Place place,
+        string? scope,
         int depth,
-        WorkflowResolution reads,
-        List<string> problems,
-        List<WorkflowRemoteResolution> remotes)
+        IReadOnlyList<string> chain,
+        Walk walk)
     {
         var resolved = new List<WorkflowStep>();
 
         foreach (var step in steps)
         {
+            var path = scope is null ? step.Name : $"{scope}.{step.Name}";
+
             if (step.UseSource is not null)
             {
-                resolved.Add(await ResolveUseAsync(step, directory, chain, depth, reads, problems, remotes).ConfigureAwait(false) ?? step);
+                resolved.Add(await ResolveUseAsync(step, path, place, depth, chain, walk).ConfigureAwait(false) ?? step);
                 continue;
             }
 
-            resolved.Add(step.Steps.Count == 0 ? step : step with { Steps = [.. await ResolveStepsAsync(step.Steps, directory, chain, depth, reads, problems, remotes).ConfigureAwait(false)] });
+            resolved.Add(step.Steps.Count == 0 ? step : step with { Steps = [.. await ResolveStepsAsync(step.Steps, place, path, depth + 1, chain, walk).ConfigureAwait(false)] });
         }
 
         return resolved;
@@ -164,58 +208,97 @@ public static class WorkflowResolver
     /// <summary>Resolves one use step: its workflow read, parsed, resolved in its turn and placed in the step.</summary>
     private static async Task<WorkflowStep?> ResolveUseAsync(
         WorkflowStep step,
-        string directory,
-        IReadOnlyList<string> chain,
+        string where,
+        Place place,
         int depth,
-        WorkflowResolution reads,
-        List<string> problems,
-        List<WorkflowRemoteResolution> remotes)
+        IReadOnlyList<string> chain,
+        Walk walk)
     {
-        var where = step.Name;
+        var source = step.UseSource!;
 
-        if (WorkflowRemote.Source(step.UseSource!) is { } remote)
+        if (string.IsNullOrWhiteSpace(source))
         {
-            return await ResolveRemoteAsync(step, remote, chain, depth, reads, problems, remotes).ConfigureAwait(false);
+            walk.Problems.Add($"step '{where}' uses no workflow: its use is empty, and it is a path relative to the calling workflow's directory, or owner/repo/path/workflow.yml@ref");
+            return null;
         }
 
-        if (ResolvedPath(directory, step.UseSource!) is not { } path)
+        if (WorkflowRemote.Source(source) is { } remote)
         {
-            problems.Add($"step '{where}' uses '{step.UseSource}', which is no path to a workflow file: a use is a path relative to the calling workflow's directory, written with forward slashes, that resolves inside the repository's workflows directory");
+            return await ResolveRemoteAsync(step, where, remote, depth, chain, walk).ConfigureAwait(false);
+        }
+
+        if (SpellingProblem(source) is { } misspelt)
+        {
+            walk.Problems.Add($"step '{where}' uses '{source}', {misspelt}");
+            return null;
+        }
+
+        var path = ResolvedPath(place.Directory, source);
+        var entry = place.Remote?.Source.Directory;
+
+        if (entry is not null && (path is null || !path.StartsWith($"{entry}/", StringComparison.Ordinal)))
+        {
+            walk.Problems.Add($"step '{where}' uses '{source}', which leaves '{entry}', the directory the remote workflow of '{place.Remote!.Source.Repository}' was fetched as: a use inside a remote workflow resolves inside the same cache entry, as a use inside a local one resolves inside the repository's workflows directory");
+            return null;
+        }
+
+        if (path is null)
+        {
+            walk.Problems.Add($"step '{where}' uses '{source}', which is no path to a workflow file: a use is a path relative to the calling workflow's directory, written with forward slashes, that resolves inside the repository's workflows directory");
             return null;
         }
 
         if (!path.EndsWith(HarnessLayout.WorkflowFileExtension, StringComparison.Ordinal))
         {
-            problems.Add($"step '{where}' uses '{step.UseSource}', which does not name a '{HarnessLayout.WorkflowFileExtension}' file");
+            walk.Problems.Add($"step '{where}' uses '{source}', which does not name a '{HarnessLayout.WorkflowFileExtension}' file");
             return null;
         }
 
-        if (path.StartsWith($"{WorkflowRemote.Prefix}/", StringComparison.Ordinal))
+        if (place.Remote is null && path.StartsWith($"{WorkflowRemote.Prefix}/", StringComparison.Ordinal))
         {
-            problems.Add($"step '{where}' uses '{step.UseSource}', which resolves to '{path}' under the workflows directory: '{WorkflowRemote.Prefix}/' is the workflow cache's own reserved place, where a remote workflow's files are read, and no local use resolves there");
+            walk.Problems.Add($"step '{where}' uses '{source}', which resolves to '{path}' under the workflows directory: '{WorkflowRemote.Prefix}/' is the workflow cache's own reserved place, where a remote workflow's files are read, and no local use resolves there");
             return null;
         }
 
-        var name = path[..path.LastIndexOf('/')].Replace('\\', '/');
-
-        if (chain.Contains(name, StringComparer.Ordinal))
+        if (!path.Contains('/', StringComparison.Ordinal))
         {
-            // V58, said with the whole chain: each workflow by its name, the first said twice to close the circle.
-            problems.Add($"step '{where}' uses '{step.UseSource}', the workflow '{name}', which is already in use around it: {string.Join(" -> ", [.. chain, name, chain[0]])}. A workflow that uses itself, directly or through others, would run its own steps without end");
+            walk.Problems.Add($"step '{where}' uses '{source}', which resolves to '{path}', a file of the workflows directory itself: a workflow lives in a directory of its own under it, where every file it names is read");
             return null;
         }
 
-        if (chain.Count + 1 >= WorkflowFileParser.MaxDepth)
+        var name = place.Remote is { } fetched
+            ? WorkflowRemote.Name(fetched.Source with { File = path }, fetched.Commit)
+            : path[..path.LastIndexOf('/')];
+        var file = place.Remote is null ? path : $"{name}/{path[(path.LastIndexOf('/') + 1)..]}";
+
+        if (Circle(chain, file, walk.Reads.PathComparison) is { } circle)
         {
-            // V59: nesting counts across workflows, the reader's own bound, so that no definition reaches the engine
-            // deeper than its reader takes.
-            problems.Add($"step '{where}' uses '{step.UseSource}' {chain.Count + 2} workflows deep, counting the calling one's own; workflows nest at most {WorkflowFileParser.MaxDepth} deep in all, within one file and across the uses of others");
+            // V58, said with the circle: each workflow file from the first that is used again, closed by that one.
+            walk.Problems.Add($"step '{where}' uses '{source}', the workflow '{name}', which is already in use around it: {circle}. A workflow that uses itself, directly or through others, would run its own steps without end");
             return null;
         }
 
-        if (Read(reads, string.Empty, path) is not { } text)
+        string? text;
+
+        try
         {
-            problems.Add($"step '{where}' uses '{step.UseSource}', and no workflow file is at '{path}' under the repository's workflows directory");
+            text = place.Remote is { } held
+                ? walk.Reads.ReadCached is { } cached
+                    ? cached(WorkflowRemote.Name(held.Source, held.Commit), path)
+                    : throw new HarnessException(HarnessExit.ConfigInvalid, $"it is a workflow inside the remote workflow '{WorkflowRemote.Name(held.Source, held.Commit)}', and no resolution of this kind reads the cache entry that holds it")
+                : walk.Reads.Read(path);
+        }
+        catch (HarnessException refused)
+        {
+            walk.Problems.Add($"step '{where}' uses '{source}', which could not be read: {refused.Message.TrimEnd('.')}");
+            return null;
+        }
+
+        if (text is null)
+        {
+            walk.Problems.Add(place.Remote is { } absent
+                ? $"step '{where}' uses '{source}', and the commit '{absent.Commit}' of '{absent.Source.Repository}' holds no workflow file at '{path}'"
+                : $"step '{where}' uses '{source}', and no workflow file is at '{path}' under the repository's workflows directory");
             return null;
         }
 
@@ -227,28 +310,40 @@ public static class WorkflowResolver
         }
         catch (HarnessException refused)
         {
-            problems.Add($"step '{where}' uses '{step.UseSource}', whose file does not read: {refused.Message}");
+            walk.Problems.Add($"step '{where}' uses '{source}', whose file does not read: {refused.Message}");
             return null;
         }
 
-        return await PlaceAsync(step, called, text, name, string.Empty, path, chain, depth, reads, problems, remotes, fingerprint: null).ConfigureAwait(false);
+        if (DepthProblem(where, source, called, depth) is { } deep)
+        {
+            walk.Problems.Add(deep);
+            return null;
+        }
+
+        // A local workflow's fingerprint is its parsed definition's digest, taken as the run's own definition's is, so
+        // a change no reader can see - a comment, the line endings an editor or a checkout wrote - refuses a resume of
+        // neither; a workflow of a remote one is its commit's, which names every byte of it.
+        var fingerprint = place.Remote?.Commit ?? FlowRunContext.DigestOf(called);
+
+        return await PlaceAsync(step, where, called, name, new Place(path[..path.LastIndexOf('/')], place.Remote), depth, [.. chain, file], walk, fingerprint).ConfigureAwait(false);
     }
 
     /// <summary>Resolves one use step that names a remote workflow: fetched, or read from the cache at its recorded commit.</summary>
     private static async Task<WorkflowStep?> ResolveRemoteAsync(
         WorkflowStep step,
+        string where,
         WorkflowRemoteSource source,
-        IReadOnlyList<string> chain,
         int depth,
-        WorkflowResolution reads,
-        List<string> problems,
-        List<WorkflowRemoteResolution> remotes)
+        IReadOnlyList<string> chain,
+        Walk walk)
     {
-        var where = step.Name;
-
-        if (reads.Fetch is null)
+        if (walk.Reads.Fetch is null)
         {
-            problems.Add($"step '{where}' uses '{step.UseSource}', a workflow in the repository '{source.Repository}', and no resolution of this kind fetches one: the workflows this reads are the repository's own");
+            if (!walk.Reads.RemoteLeftAsWritten)
+            {
+                walk.Problems.Add($"step '{where}' uses '{step.UseSource}', a workflow in the repository '{source.Repository}', and no resolution of this kind fetches one: the workflows this reads are the repository's own");
+            }
+
             return null;
         }
 
@@ -256,28 +351,23 @@ public static class WorkflowResolver
 
         try
         {
-            resolution = await reads.Fetch(step.UseSource!).ConfigureAwait(false);
+            resolution = await walk.Reads.Fetch(step.UseSource!).ConfigureAwait(false);
         }
-        catch (HarnessException refused)
+        catch (HarnessException refused) when (refused.ExitCode is HarnessExit.Refused or HarnessExit.ConfigInvalid)
         {
-            problems.Add($"step '{where}' uses '{step.UseSource}', which could not be resolved: {refused.Message}");
+            // Only a refusal of the source itself is the definition's problem; a fetch that could not run - the forge's
+            // tool missing, the network not there, a call that failed - goes on with its own code.
+            walk.Problems.Add($"step '{where}' uses '{step.UseSource}', which could not be resolved: {refused.Message}");
             return null;
         }
 
         var name = WorkflowRemote.Name(source, resolution.Commit);
+        var file = $"{name}/{source.File[(source.File.LastIndexOf('/') + 1)..]}";
 
-        if (chain.Contains(name, StringComparer.Ordinal))
+        if (Circle(chain, file, walk.Reads.PathComparison) is { } circle)
         {
-            // V58, said with the whole chain: each workflow by its name, the first said twice to close the circle.
-            problems.Add($"step '{where}' uses '{step.UseSource}', the workflow '{source.Repository}' at '{resolution.Commit}', which is already in use around it: {string.Join(" -> ", [.. chain, name, chain[0]])}. A workflow that uses itself, directly or through others, would run its own steps without end");
-            return null;
-        }
-
-        if (chain.Count + 1 >= WorkflowFileParser.MaxDepth)
-        {
-            // V59: nesting counts across workflows, the reader's own bound, so that no definition reaches the engine
-            // deeper than its reader takes.
-            problems.Add($"step '{where}' uses '{step.UseSource}' {chain.Count + 2} workflows deep, counting the calling one's own; workflows nest at most {WorkflowFileParser.MaxDepth} deep in all, within one file and across the uses of others");
+            // V58, said with the circle: each workflow file from the first that is used again, closed by that one.
+            walk.Problems.Add($"step '{where}' uses '{step.UseSource}', the workflow '{source.Repository}' at '{resolution.Commit}', which is already in use around it: {circle}. A workflow that uses itself, directly or through others, would run its own steps without end");
             return null;
         }
 
@@ -289,119 +379,74 @@ public static class WorkflowResolver
         }
         catch (HarnessException refused)
         {
-            problems.Add($"step '{where}' uses '{step.UseSource}', whose file does not read: {refused.Message}");
+            walk.Problems.Add($"step '{where}' uses '{step.UseSource}', whose file does not read: {refused.Message}");
             return null;
         }
 
-        remotes.Add(resolution);
+        if (DepthProblem(where, step.UseSource!, called, depth) is { } deep)
+        {
+            walk.Problems.Add(deep);
+            return null;
+        }
 
-        return await PlaceAsync(step, called, resolution.Definition, name, name, source.File, chain, depth, reads, problems, remotes, resolution.Commit).ConfigureAwait(false);
+        walk.Remotes.Add(resolution);
+
+        return await PlaceAsync(step, where, called, name, new Place(source.Directory, resolution), depth, [.. chain, file], walk, resolution.Commit).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Places a called workflow's steps in the use step's own: its members resolved in their turn - inside its root,
-    /// a remote one's cache entry or the repository's own directory - marked with the workflow their files are read
-    /// under, and the <see cref="FlowUse"/> the step becomes holding everything of it the run keeps.
+    /// Places a called workflow's steps in the use step's own: its members resolved in their turn - inside the
+    /// repository's own workflows directory, or inside a remote one's cache entry - marked with the workflow their
+    /// files are read under, and the <see cref="FlowUse"/> the step becomes holding everything of it the run keeps.
     /// </summary>
     /// <param name="step">The use step as parsed.</param>
+    /// <param name="where">The use step's path, dotted from the flow's root.</param>
     /// <param name="called">The called workflow, parsed.</param>
-    /// <param name="text">The called workflow's own yml.</param>
     /// <param name="name">The called workflow's name: its directory under the repository's root, or its cache place.</param>
-    /// <param name="root">
-    /// The root the called workflow's own uses resolve in: empty for the repository's own, the remote workflow's own
-    /// name for one read from the cache.
-    /// </param>
-    /// <param name="file">The called workflow's file, as its root spells it.</param>
-    /// <param name="chain">The workflows already entered, outermost first.</param>
-    /// <param name="depth">How many workflows deep this level sits.</param>
-    /// <param name="reads">Where every file a resolution reads comes from.</param>
-    /// <param name="problems">Every problem found, whole.</param>
-    /// <param name="remotes">Each remote resolution made on the way.</param>
+    /// <param name="place">Where the called workflow sits, which its own uses resolve against.</param>
+    /// <param name="depth">How deep the use step sits; its members sit one level below it.</param>
+    /// <param name="chain">The workflow files already entered, outermost first, the called one's last.</param>
+    /// <param name="walk">What the resolution reads by and gathers.</param>
     /// <param name="fingerprint">
-    /// The SHA-256 of a local called workflow's file, or the commit a remote one resolved to; null where the local
-    /// file has not been read yet.
+    /// The digest of a local called workflow's parsed definition, or the commit a remote one resolved to.
     /// </param>
     private static async Task<WorkflowStep?> PlaceAsync(
         WorkflowStep step,
+        string where,
         WorkflowDefinition called,
-        string text,
         string name,
-        string root,
-        string file,
-        IReadOnlyList<string> chain,
+        Place place,
         int depth,
-        WorkflowResolution reads,
-        List<string> problems,
-        List<WorkflowRemoteResolution> remotes,
-        string? fingerprint)
+        IReadOnlyList<string> chain,
+        Walk walk,
+        string fingerprint)
     {
-        var where = step.Name;
-        var inner = new List<string>(chain) { name };
-        var calledSteps = (await ResolveStepsAsync(called.Steps, DirectoryOf(called, file), inner, depth + 1, reads, problems, remotes).ConfigureAwait(false))
+        var calledSteps = (await ResolveStepsAsync(called.Steps, place, where, depth + 1, chain, walk).ConfigureAwait(false))
             .Select(member => Marked(member, name))
             .ToList();
         var calledRecover = called.Recover is null ? null : called.Recover with
         {
-            Steps = [.. (await ResolveStepsAsync(called.Recover.Steps, DirectoryOf(called, file), inner, depth + 1, reads, problems, remotes).ConfigureAwait(false))
+            Steps = [.. (await ResolveStepsAsync(called.Recover.Steps, place, $"{where}.{FlowScope.Recovery}", depth + 1, chain, walk).ConfigureAwait(false))
                 .Select(member => Marked(member, name))],
         };
 
         foreach (var parameter in called.Params.Where(parameter => parameter.Required && parameter.Default is null))
         {
-            problems.Add($"step '{where}' uses the workflow '{name}', whose param '{parameter.Name}' is required and declares no default: a used workflow is given nothing but its inputs, so it holds the param's own value or none");
+            walk.Problems.Add($"step '{where}' uses the workflow '{name}', whose param '{parameter.Name}' is required and declares no default: a used workflow is given nothing but its inputs, so it holds the param's own value or none");
         }
 
-        var notApplied = new List<string>();
-        var own = step.UseParentLimits == false ? OwnOf(called) : null;
-
-        if (own is null)
-        {
-            if (called.Budget is not null)
-            {
-                notApplied.Add("budget");
-            }
-
-            if (called.Advisor is not null)
-            {
-                notApplied.Add("advisor");
-            }
-
-            if (called.Reporter is not null)
-            {
-                notApplied.Add("reporter");
-            }
-
-            if (called.Amend is not null)
-            {
-                notApplied.Add("amend");
-            }
-
-            if (called.Answers.Count > 0)
-            {
-                notApplied.Add("answers");
-            }
-
-            if (new[] { called.MaxReasoningAgents, called.MaxParallelProcesses, called.MaxOpenAgents, called.MaxRetries, called.MaxInstances, called.HandoffSeconds, called.BackoffSeconds }.Any(limit => limit is not null))
-            {
-                notApplied.Add("limits");
-            }
-
-            if (called.CodebaseGraph is not null)
-            {
-                notApplied.Add("codebaseGraph");
-            }
-        }
+        var governed = step.UseParentLimits == false;
 
         var use = new FlowUse(
             step.UseSource!,
             name,
-            fingerprint ?? FingerprintOf(text),
+            fingerprint,
             called.Inputs,
             called.Params,
             called.Outputs,
             calledRecover,
-            notApplied,
-            own,
+            NotAppliedOf(called, governed),
+            governed ? OwnOf(called) : null,
             called.Texts);
 
         return step with
@@ -413,9 +458,70 @@ public static class WorkflowResolver
     }
 
     /// <summary>
-    /// The called workflow's run-level settings, carried for a use that says <c>useParentLimits: false</c> and applied
-    /// to its steps. An amend is never carried, for an amend is a run's own - the definition's check refuses the use
-    /// that would apply one.
+    /// The run-level keys the called workflow declares that no step of the run applies, in the order a line says them:
+    /// its budget and its reporter, which a use that governs itself carries but nothing applies yet - the run's own
+    /// budget counts its steps, and the run's own reporter words them - its <c>pushCheckpoints</c> and its
+    /// <c>recommendations</c>, which are a run's own, and, unless the use governs itself, its advisor, amend, answers,
+    /// limits and <c>codebaseGraph</c>, the calling run's own holding. An amend under a use that governs itself is
+    /// refused by the definition's check, never said here.
+    /// </summary>
+    private static IReadOnlyList<string> NotAppliedOf(WorkflowDefinition called, bool governed)
+    {
+        var notApplied = new List<string>();
+
+        if (called.Budget is not null)
+        {
+            notApplied.Add("budget");
+        }
+
+        if (!governed && called.Advisor is not null)
+        {
+            notApplied.Add("advisor");
+        }
+
+        if (called.Reporter is not null)
+        {
+            notApplied.Add("reporter");
+        }
+
+        if (!governed && called.Amend is not null)
+        {
+            notApplied.Add("amend");
+        }
+
+        if (!governed && called.Answers.Count > 0)
+        {
+            notApplied.Add("answers");
+        }
+
+        if (!governed && new[] { called.MaxReasoningAgents, called.MaxParallelProcesses, called.MaxOpenAgents, called.MaxRetries, called.MaxInstances, called.HandoffSeconds, called.BackoffSeconds }.Any(limit => limit is not null))
+        {
+            notApplied.Add("limits");
+        }
+
+        if (!governed && called.CodebaseGraph is not null)
+        {
+            notApplied.Add("codebaseGraph");
+        }
+
+        if (called.PushCheckpoints is not null)
+        {
+            notApplied.Add("pushCheckpoints");
+        }
+
+        if (called.Recommendations is not null)
+        {
+            notApplied.Add("recommendations");
+        }
+
+        return notApplied;
+    }
+
+    /// <summary>
+    /// The called workflow's run-level settings, carried for a use that says <c>useParentLimits: false</c>: its limits,
+    /// <c>maxInstances</c>, advisor, answers and <c>codebaseGraph</c> applied to its steps, and its budget and reporter
+    /// carried but applied by nothing yet, which <see cref="NotAppliedOf"/> says. An amend is never carried, for an
+    /// amend is a run's own - the definition's check refuses the use that would apply one.
     /// </summary>
     private static FlowUseOwn OwnOf(WorkflowDefinition called)
         => new(
@@ -434,15 +540,40 @@ public static class WorkflowResolver
             called.Amend is not null);
 
     /// <summary>
-    /// Reads a workflow file by its path under <paramref name="root"/>: the repository's own workflows root where the
-    /// root is empty, a remote workflow's cache entry where it names one.
+    /// V59: why a use at <paramref name="depth"/> places the steps of <paramref name="called"/> deeper than steps nest at
+    /// all - its members a level below it, and every level of its own below them, its recovery's as much as its flow's -
+    /// or null where they fit. Each use is held to it where it is placed, so the whole resolved tree is, and no
+    /// definition that holds reaches the run's records deeper than they can be written.
     /// </summary>
-    private static string? Read(WorkflowResolution reads, string root, string path)
-        => root.Length == 0 ? reads.Read(path) : reads.ReadCached?.Invoke(root, path);
+    private static string? DepthProblem(string where, string source, WorkflowDefinition called, int depth)
+    {
+        var levels = Math.Max(DepthOf(called.Steps), DepthOf(called.Recover?.Steps ?? []));
 
-    /// <summary>The directory the called workflow's own uses resolve from: its file's path minus its own name.</summary>
-    private static string DirectoryOf(WorkflowDefinition called, string file)
-        => file.LastIndexOf('/') is var at && at > 0 ? file[..at] : string.Empty;
+        return depth + levels > WorkflowFileParser.MaxDepth
+            ? $"step '{where}' uses '{source}' {depth} level{(depth == 1 ? string.Empty : "s")} deep, and the workflow it uses nests its steps {levels} level{(levels == 1 ? string.Empty : "s")} below it, {depth + levels} in all; steps nest at most {WorkflowFileParser.MaxDepth} deep in all, a used workflow's own counted below the step that uses it"
+            : null;
+    }
+
+    /// <summary>How many levels <paramref name="steps"/> nest, the steps themselves the first; none where there are none.</summary>
+    private static int DepthOf(IReadOnlyList<WorkflowStep> steps)
+        => steps.Count == 0 ? 0 : 1 + steps.Max(step => DepthOf(step.Steps));
+
+    /// <summary>
+    /// The circle <paramref name="file"/> closes where the chain already holds it - each file from the first time it was
+    /// entered, then the file again - or null where it holds none: compared as the files are, by the machine's paths.
+    /// </summary>
+    private static string? Circle(IReadOnlyList<string> chain, string file, StringComparison comparison)
+    {
+        for (var at = 0; at < chain.Count; at++)
+        {
+            if (string.Equals(chain[at], file, comparison))
+            {
+                return string.Join(" -> ", [.. chain.Skip(at), file]);
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// A member of a used workflow, marked with the workflow its files are read under - it and every step nested in
@@ -457,20 +588,36 @@ public static class WorkflowResolver
         };
 
     /// <summary>
-    /// The path a use names, under the repository's workflows root and written with forward slashes: the caller's
-    /// directory joined to the source, <c>.</c> and <c>..</c> resolved, and null where the path leaves the root or is
-    /// no relative path at all.
+    /// Why <paramref name="source"/> is no relative path a use may name, or null where it is one: a path that every
+    /// machine reads as the same file - forward slashes only, never rooted or holding a drive, and no part that starts
+    /// or ends with a space, which one machine's file system keeps and another's drops.
+    /// </summary>
+    private static string? SpellingProblem(string source)
+    {
+        if (source.Contains('\\', StringComparison.Ordinal))
+        {
+            return "which holds a backslash: a use is written with forward slashes, so that every machine reads the one path it names";
+        }
+
+        if (source.Contains(':', StringComparison.Ordinal) || source.StartsWith('/'))
+        {
+            return "which is no path to a workflow file: a use is a path relative to the calling workflow's directory, written with forward slashes, that resolves inside the repository's workflows directory";
+        }
+
+        return source.Split('/').FirstOrDefault(part => part.Length > 0 && !string.Equals(part, part.Trim(), StringComparison.Ordinal)) is { } padded
+            ? $"whose part '{padded}' starts or ends with a space, which one machine's file system keeps and another's drops: a use names each part as the directory or file is named"
+            : null;
+    }
+
+    /// <summary>
+    /// The path a use names, written with forward slashes: the caller's directory joined to the source, <c>.</c> and
+    /// <c>..</c> resolved, and null where the path leaves the root it resolves in.
     /// </summary>
     private static string? ResolvedPath(string directory, string source)
     {
-        if (source.Length == 0 || source.Contains(':') || source.StartsWith('/') || source.StartsWith('\\'))
-        {
-            return null;
-        }
-
         var parts = new List<string>();
 
-        foreach (var part in (directory.Length == 0 ? source : $"{directory}/{source}").Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var part in $"{directory}/{source}".Split('/', StringSplitOptions.RemoveEmptyEntries))
         {
             switch (part)
             {
@@ -490,10 +637,6 @@ public static class WorkflowResolver
             }
         }
 
-        return parts.Count == 0 || parts.Any(part => part is "." or "..") ? null : string.Join("/", parts);
+        return parts.Count == 0 ? null : string.Join("/", parts);
     }
-
-    /// <summary>The SHA-256 of a workflow file's text, as the run records the resolution of the workflow it uses.</summary>
-    private static string FingerprintOf(string text)
-        => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
 }

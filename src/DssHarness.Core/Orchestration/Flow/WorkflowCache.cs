@@ -200,13 +200,30 @@ public sealed class WorkflowCache
     }
 
     /// <summary>
-    /// The entry a remote workflow's name - <c>remote/&lt;host&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;commit&gt;/&lt;dir&gt;</c> - resolves to,
-    /// where the cache holds one; null where the name is no remote workflow's, or the cache holds none.
+    /// The entry that holds a remote workflow by its name - <c>remote/&lt;host&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;commit&gt;/&lt;dir&gt;</c>:
+    /// the entry of its own directory, else of the nearest directory above it at the same commit, which holds every
+    /// file under it - the place a workflow a relative use inside a remote one names is read in. Null where the name is
+    /// no remote workflow's, or the cache holds none.
     /// </summary>
     /// <param name="workflow">A remote workflow's name, as the run resolved it.</param>
     /// <exception cref="HarnessException">The entry is there and could not be read (<see cref="Find"/>).</exception>
     public WorkflowCacheEntry? FindNamed(string workflow)
-        => WorkflowRemote.PartsOf(workflow) is { } parts ? Find(parts.Host, parts.Owner, parts.Repo, parts.Commit, parts.Directory) : null;
+    {
+        if (WorkflowRemote.PartsOf(workflow) is not { } parts)
+        {
+            return null;
+        }
+
+        for (var directory = parts.Directory; directory.Length > 0; directory = directory.LastIndexOf('/') is var at && at > 0 ? directory[..at] : string.Empty)
+        {
+            if (Find(parts.Host, parts.Owner, parts.Repo, parts.Commit, directory) is { } entry)
+            {
+                return entry;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// The newest resolution the cache recorded of <paramref name="ref"/> for the directory <paramref name="path"/> of

@@ -10,7 +10,10 @@ using DssHarness.Core.Results;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>What export-workflow is asked.</summary>
-/// <param name="Workflow">The workflow: one config.json declares, or, with <paramref name="Shipped"/>, the one this tool ships.</param>
+/// <param name="Workflow">
+/// The workflow: one config.json declares, or, with <paramref name="Shipped"/>, the one this tool ships; null where
+/// <paramref name="From"/> names the workflow, and with it none is given.
+/// </param>
 /// <param name="To">
 /// The folder the workflow's own folder is made in, as it was given: absolute, or relative to the directory the command was
 /// typed in.
@@ -21,17 +24,21 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// its resolved commit with every file of its directory and a note of where it came from, so a team can review it and use it
 /// as <c>./</c>; null where a workflow of the repository's own is exported.
 /// </param>
-public sealed record WorkflowExportRequest(string Workflow, string To, bool Shipped, string? From = null);
+public sealed record WorkflowExportRequest(string? Workflow, string To, bool Shipped, string? From = null);
 
 /// <summary>What export-workflow wrote: the typed answer a front end reads, the same the lines say.</summary>
-/// <param name="Workflow">The workflow exported.</param>
+/// <param name="Workflow">The workflow exported: its name, or a vendored one's directory's.</param>
 /// <param name="Shipped">Whether it was the one this tool ships.</param>
 /// <param name="Destination">The folder made for it, absolute: the folder asked for, and the workflow's name under it.</param>
 /// <param name="Files">
 /// Each file written, relative to <paramref name="Destination"/> with '/', in the order it was written: every file the
-/// definition names, then the definition.
+/// definition names, then the definition; for a vendored one, every file of its directory, then the note of where it
+/// came from.
 /// </param>
-/// <param name="Vendored">Where a vendored remote workflow came from: its repository, its ref, and the commit it resolved to.</param>
+/// <param name="Vendored">
+/// Where a vendored remote workflow came from: its repository, its ref, and the commit it resolved to - said where that
+/// commit is the cache's last resolution standing in, or the ref a branch, which moves.
+/// </param>
 public sealed record WorkflowExport(string Workflow, bool Shipped, string Destination, IReadOnlyList<string> Files, string? Vendored = null);
 
 /// <summary>
@@ -39,9 +46,10 @@ public sealed record WorkflowExport(string Workflow, bool Shipped, string Destin
 /// read and make their own version of: one a repository declares, once it holds, or the one this tool ships.
 /// </summary>
 /// <remarks>
-/// The files are the ones the definition names (<see cref="WorkflowFiles.All"/>), the one list <c>validate-workflow</c>
+/// The files are the ones the definition names (<see cref="WorkflowFiles.AllUnder"/>), the one list <c>validate-workflow</c>
 /// and <c>init</c> read, so a file a repository took out with its step is not exported, and one the definition names is
-/// never left behind. A declared workflow's files are copied byte for byte and each proved where it lands
+/// never left behind; a use of a workflow outside the workflow's folder, or of a remote one, is refused, for the folder
+/// does not hold it. A declared workflow's files are copied byte for byte and each proved where it lands
 /// (<see cref="VerifiedFileCopy"/>); the shipped one's are written as <c>init</c> writes them.
 /// </remarks>
 public interface IWorkflowExportService : DssHarness.Core.Application.IUseCase
@@ -52,10 +60,12 @@ public interface IWorkflowExportService : DssHarness.Core.Application.IUseCase
     /// <param name="cancellationToken">Stops the export, taking back what it wrote.</param>
     /// <returns>Where the workflow was written, and each file.</returns>
     /// <exception cref="HarnessException">
-    /// A workflow nobody declared, the shipped one asked for under a name it does not have, or no folder to write to
-    /// (<see cref="HarnessExit.UsageError"/>); a declared workflow that does not hold (<see cref="HarnessExit.ConfigInvalid"/>,
-    /// naming each problem); a folder for it that is there already or could not be looked at, or a file that could not be
-    /// written (<see cref="HarnessExit.Refused"/>); stopped while it wrote (<see cref="HarnessExit.Cancelled"/>, where
+    /// A workflow nobody declared, the shipped one asked for under a name it does not have, no workflow named, a workflow
+    /// name or <c>--shipped</c> given beside <c>--from</c>, or no folder to write to (<see cref="HarnessExit.UsageError"/>);
+    /// a declared workflow that does not hold (<see cref="HarnessExit.ConfigInvalid"/>, naming each problem); a workflow
+    /// that uses one outside its folder or a remote one, a vendored directory holding a file named as the note, a folder
+    /// for it that is there already or could not be looked at, or a file that could not be written
+    /// (<see cref="HarnessExit.Refused"/>); stopped while it wrote (<see cref="HarnessExit.Cancelled"/>, where
     /// what it wrote could not be taken back; otherwise the cancellation itself). What was written before a failure is
     /// taken back, every folder the export made with it, or the refusal says why it could not be.
     /// </exception>
@@ -100,9 +110,26 @@ public sealed class WorkflowExportService(
 
         if (request.From is { } vendored)
         {
+            // The remote workflow --from names is the one exported, into a folder named for its directory: a workflow
+            // name or --shipped beside it would name another, and is never passed over in silence.
+            if (request.Workflow is not null || request.Shipped)
+            {
+                throw new HarnessException(
+                    HarnessExit.UsageError,
+                    $"--from names the workflow it vendors, and it is given with {(request.Workflow is not null ? $"the workflow '{request.Workflow}'" : "--shipped")} as well; "
+                        + $"'{ToolPackage.Command} {CommandName} --from <use> --to <dir>' vendors a remote one, and '{ToolPackage.Command} {CommandName} <workflow> --to <dir> [--shipped]' exports one of the repository's or this tool's. Nothing was written.");
+            }
+
             var from = await VendoredAsync(startDirectory, vendored, cancellationToken).ConfigureAwait(false);
 
             return await WriteAsync(new WorkflowExportRequest(from.Folder, request.To, Shipped: false, From: vendored), from.Files, from.Said, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Workflow))
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                $"no workflow is named; '{ToolPackage.Command} {CommandName} <workflow> --to <dir> [--shipped]' exports one of the repository's or this tool's, and '{ToolPackage.Command} {CommandName} --from <use> --to <dir>' vendors a remote one. Nothing was written.");
         }
 
         var files = request.Shipped
@@ -118,7 +145,7 @@ public sealed class WorkflowExportService(
     /// <summary>Writes <paramref name="files"/> into the folder of the workflow's own the request asks for, taking back what a failure leaves.</summary>
     private async Task<WorkflowExport> WriteAsync(WorkflowExportRequest request, IReadOnlyList<(string File, Func<string, Task> Write)> files, string? vendored, CancellationToken cancellationToken)
     {
-        var destination = Path.Combine(Path.GetFullPath(request.To, _process.CurrentDirectory), request.Workflow);
+        var destination = Path.Combine(Path.GetFullPath(request.To, _process.CurrentDirectory), request.Workflow!);
         string made;
 
         try
@@ -170,7 +197,7 @@ public sealed class WorkflowExportService(
             written.Add(file);
         }
 
-        return new WorkflowExport(request.Workflow, request.Shipped, destination, written, vendored);
+        return new WorkflowExport(request.Workflow!, request.Shipped, destination, written, vendored);
     }
 
     /// <summary>
@@ -198,27 +225,41 @@ public sealed class WorkflowExportService(
 
         foreach (var file in entry.Files)
         {
-            var text = _cache.ReadText(entry, file.Path) ?? throw new HarnessException(
+            // As the bytes the forge gave, hashed again as they are read: a vendored file is the commit's, byte for byte,
+            // whatever it holds - a byte order mark, or bytes that are no text at all.
+            var bytes = _cache.ReadBytes(entry, file.Path) ?? throw new HarnessException(
                 HarnessExit.Refused,
                 $"'{source}' resolved to the commit '{entry.Commit}', whose cache entry names no '{file.Path}'");
             var relative = file.Path[entry.Path.Length..].TrimStart('/');
 
+            // The note of where the workflow came from is written beside its files, never over one of them.
+            if (string.Equals(relative, VendoredNote, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"'{source}' holds a '{relative}' of its own in its directory, the name the note of where a vendored workflow came from is written as; {CommandName} writes that note beside a workflow's files and never over one of them. Nothing was written.");
+            }
+
             files.Add((relative, path =>
             {
                 _fileSystem.CreateDirectory(Path.GetDirectoryName(path)!);
-                _fileSystem.WriteAllTextAtomic(path, text);
-                return Task.CompletedTask;
+                return _fileSystem.WriteAllBytesAtomicAsync(path, bytes, cancellationToken);
             }));
         }
 
-        var said = $"{parsed.Repository}/{parsed.File}@{parsed.Ref} at commit {entry.Commit}";
+        // How the commit came about, where it is worth a word: the cache's last resolution standing in for a ref that
+        // could not be resolved, or a branch, which names another commit tomorrow.
+        var how = resolution.FromLastResolved
+            ? $", the workflow cache's last resolution of '{parsed.Ref}', standing in where the ref could not be resolved"
+            : resolution.Moving ? $", where the branch '{parsed.Ref}' stood then - a branch moves" : string.Empty;
+        var said = $"{parsed.Repository}/{parsed.File}@{parsed.Ref} at commit {entry.Commit}{how}";
 
         files.Add((VendoredNote, path =>
         {
             _fileSystem.CreateDirectory(Path.GetDirectoryName(path)!);
             _fileSystem.WriteAllTextAtomic(
                 path,
-                $"Vendored from {parsed.Repository}/{parsed.File}@{parsed.Ref}, which resolved to the commit {entry.Commit} and was fetched on {entry.FetchedAt.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}.\n"
+                $"Vendored from {parsed.Repository}/{parsed.File}@{parsed.Ref}, which resolved to the commit {entry.Commit}{how}, and was fetched on {entry.FetchedAt.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}.\n"
                     + $"Use it as ./{folder}/{parsed.File[(parsed.File.LastIndexOf('/') + 1)..]} from a workflow of this repository, and take this note away when you have made it your own.\n");
             return Task.CompletedTask;
         }));
@@ -315,12 +356,28 @@ public sealed class WorkflowExportService(
     /// Every file the definition names, each with '/', and the definition last: a folder that has its yml has every
     /// file it names - a used workflow's own yml among them, and each file under the used workflow's place in the set.
     /// </summary>
+    /// <exception cref="HarnessException">
+    /// A use names a workflow outside the workflow's folder, or a remote one (<see cref="HarnessExit.Refused"/>): the
+    /// folder does not hold it, so a copy of the folder would name a workflow it has not got - said for each, a remote
+    /// one with the <c>--from</c> that vendors it.
+    /// </exception>
     private static IReadOnlyList<string> Named(WorkflowDefinition definition, string name)
-        =>
-        [
-            .. WorkflowFiles.AllUnder(definition).Select(file => file.Replace('\\', '/')).Distinct(StringComparer.Ordinal),
-            $"{name}{HarnessLayout.WorkflowFileExtension}",
-        ];
+    {
+        var placed = WorkflowFiles.AllUnder(definition);
+
+        if (placed.Beyond.Count > 0)
+        {
+            var said = placed.Beyond.Select(use => use.Remote
+                ? $"step '{use.Path}' uses '{use.Source}', a remote workflow, which '{ToolPackage.Command} {CommandName} --from {use.Source} --to <dir>' vendors into the repository"
+                : $"step '{use.Path}' uses '{use.Source}', a workflow outside its folder, which is exported on its own");
+
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"the workflow '{name}' uses what its folder does not hold - {string.Join("; ", said)} - and {CommandName} copies the workflow's own folder, which would then name a workflow it has not got. Nothing was written.");
+        }
+
+        return [.. placed.Files, $"{name}{HarnessLayout.WorkflowFileExtension}"];
+    }
 
     /// <summary>
     /// Removes the workflow's own folder, and all it holds, then each folder the export made above it, up to

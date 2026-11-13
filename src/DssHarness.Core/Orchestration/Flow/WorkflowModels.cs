@@ -378,12 +378,13 @@ public sealed record WorkflowOutput(
     string From);
 
 /// <summary>
-/// The run-level settings of a workflow another uses as a step, applied to its steps where the use says
-/// <c>useParentLimits: false</c>: each key it declares replaces the caller's for them, and each it declares none for
-/// stays the caller's - a use cannot widen a run's limits by declaring nothing. An amend is never carried here, for an
-/// amend is a run's own and is refused where the key says false.
+/// The run-level settings of a workflow another uses as a step, carried where the use says
+/// <c>useParentLimits: false</c> and applied to its steps: each key it declares replaces the caller's for them, and each
+/// it declares none for stays the caller's - a use cannot widen a run's limits by declaring nothing. Its budget and its
+/// reporter are carried and applied by nothing yet, which <see cref="FlowUse.NotApplied"/> says. An amend is never
+/// carried here, for an amend is a run's own and is refused where the key says false.
 /// </summary>
-/// <param name="Budget">What the used workflow's steps' reasoning may cost, and the reserve that pauses them first.</param>
+/// <param name="Budget">What the used workflow's steps' reasoning may cost, and the reserve that pauses them first - carried, applied by nothing yet: the run's own budget counts its steps.</param>
 /// <param name="MaxReasoningAgents">Reasoning agents its steps may have at once, where the file says.</param>
 /// <param name="MaxParallelProcesses">Steps running legs its steps may have at once, where the file says.</param>
 /// <param name="MaxOpenAgents">Agents with a worktree its steps may have open at once, where the file says.</param>
@@ -392,7 +393,7 @@ public sealed record WorkflowOutput(
 /// <param name="MaxInstances">The most step instances its steps may open, beside the run's own cap.</param>
 /// <param name="HandoffSeconds">How long a paused reasoning step of it is given to write its handoff.</param>
 /// <param name="Advisor">The agent that recommends an answer to a question its steps raise.</param>
-/// <param name="Reporter">The agent that words what its steps are doing for a person who asks.</param>
+/// <param name="Reporter">The agent that words what its steps are doing for a person who asks - carried, applied by nothing yet: the run's own reporter words them.</param>
 /// <param name="Answers">The answers the used workflow gives to question kinds, consulted for its steps' questions before the run's.</param>
 /// <param name="CodebaseGraph">The shape of the graph its reason steps' serving falls back to.</param>
 /// <param name="Amends">Whether the used workflow declares an amend - never applied, for an amend is a run's own, and refused where the use says false.</param>
@@ -465,23 +466,30 @@ public sealed record FlowUseOwn(
 
 /// <summary>
 /// The workflow a step that says <c>use:</c> is, as resolution found it: everything of its own the step needs to run it
-/// - its inputs, its declared outputs, its recovery - beside the fingerprint of its file, which the run records so a
-/// resume is refused where the file changed, and the run-level keys of its own that no step applies.
+/// - its inputs, its declared outputs, its recovery - beside the fingerprint of what it says, which the run records so a
+/// resume is refused where that changed, and the run-level keys of its own that no step applies.
 /// </summary>
 /// <param name="Source">The path as written, <c>./pipeline/pipeline.yml</c> among the callers.</param>
 /// <param name="Name">
-/// The called workflow's name: its path under the repository's workflows directory, <c>implementation/pipeline</c> for a
-/// pipeline the implementation workflow uses, under whose directory its files are read.
+/// The called workflow's name, under whose directory its files are read: its directory under the repository's workflows
+/// directory, <c>implementation/pipeline</c> for a pipeline the implementation workflow uses; for a remote one, or one
+/// a relative use inside a remote one names, its cache place, <c>remote/&lt;host&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;commit&gt;/&lt;dir&gt;</c>.
 /// </param>
-/// <param name="Fingerprint">The SHA-256 of the called workflow's file, as the run records its resolution.</param>
+/// <param name="Fingerprint">
+/// What the run records of the called workflow's resolution: for a local one the digest of its parsed definition, taken
+/// as the run's own definition's is, so a comment or line endings change nothing; for a remote one, or one inside it,
+/// the commit it was read at.
+/// </param>
 /// <param name="Inputs">The called workflow's declared inputs, which the step's <c>with:</c> values fill.</param>
 /// <param name="Params">The called workflow's own params, read as <c>param.&lt;name&gt;</c> inside it.</param>
 /// <param name="Outputs">The called workflow's declared outputs: the step's own outputs once it ends.</param>
 /// <param name="Recover">The called workflow's recovery, which a failure inside the step reaches first; null where it declares none.</param>
 /// <param name="NotApplied">
-/// The run-level keys the called workflow declares that no step applies - its budget, limits, advisor, amend and
-/// answers are the calling run's own - said by <c>validate-workflow</c> so nothing is applied in silence. Empty where
-/// the use says <c>useParentLimits: false</c>, for then they are applied.
+/// The run-level keys the called workflow declares that no step applies, said by <c>validate-workflow</c> so nothing is
+/// applied in silence: its budget and reporter, which a use that governs itself carries but nothing applies yet, its
+/// <c>pushCheckpoints</c> and <c>recommendations</c>, a run's own alone, and - unless the use says
+/// <c>useParentLimits: false</c> - its advisor, amend, answers, limits and <c>codebaseGraph</c>, the calling run's own
+/// holding.
 /// </param>
 /// <param name="Own">
 /// The called workflow's run-level settings, carried where the use says <c>useParentLimits: false</c> and applied to

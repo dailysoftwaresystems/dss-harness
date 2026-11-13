@@ -596,48 +596,131 @@ public sealed class FlowUseTests
                 """, broken), hasCommitTemplate: false));
     }
 
-    /// <summary>V58: a workflow that uses itself, directly or through others, is refused with the whole chain.</summary>
+    /// <summary>
+    /// V58: a workflow file that uses itself, directly or through others, is refused with the circle of the files that
+    /// close it - from the first that is used again, the use named by its whole path - and a use back to the calling
+    /// workflow's own file closes one too, found at once.
+    /// </summary>
     [Fact]
-    public void AWorkflowThatUsesItself_IsRefusedWithTheChain()
+    public void AWorkflowThatUsesItself_IsRefusedWithTheCircle()
     {
         var files = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["flow/inner/inner.yml"] = "name: inner\nsteps:\n  - name: outer\n    use: ../outer/outer.yml\n",
             ["flow/outer/outer.yml"] = "name: outer\nsteps:\n  - name: inner\n    use: ../inner/inner.yml\n",
+            ["flow/back/back.yml"] = "name: back\nsteps:\n  - name: again\n    use: ../flow.yml\n",
         };
 
-        var (definition, problems) = WorkflowResolver.Resolve(
-            Parse("name: flow\nsteps:\n  - name: outer\n    use: ./outer/outer.yml\n"),
+        var (_, problems) = WorkflowResolver.Resolve(
+            Parse("name: flow\nsteps:\n  - name: outer\n    use: ./outer/outer.yml\n  - name: back\n    use: ./back/back.yml\n"),
             "flow",
             path => files.GetValueOrDefault(path));
 
-        var problem = Assert.Single(problems);
-
-        Assert.StartsWith("step 'outer' uses '../outer/outer.yml', the workflow 'flow/outer', which is already in use around it: flow/outer -> flow/inner -> flow/outer -> flow/outer.", problem, StringComparison.Ordinal);
+        Assert.Equal(
+            [
+                "step 'outer.inner.outer' uses '../outer/outer.yml', the workflow 'flow/outer', which is already in use around it: flow/outer/outer.yml -> flow/inner/inner.yml -> flow/outer/outer.yml. A workflow that uses itself, directly or through others, would run its own steps without end",
+                "step 'back.again' uses '../flow.yml', the workflow 'flow', which is already in use around it: flow/flow.yml -> flow/back/back.yml -> flow/flow.yml. A workflow that uses itself, directly or through others, would run its own steps without end",
+            ],
+            problems);
     }
 
-    /// <summary>V59: nesting counts across workflows, the reader's own bound of ten levels in all.</summary>
+    /// <summary>
+    /// V58 goes by files, never by directories: two workflows of one directory, the one using the other, close no
+    /// circle; and the files are told apart as the machine's paths are, so on a file system that folds case a use that
+    /// spells a workflow's directory in another case is the same file, and closes the circle it would.
+    /// </summary>
     [Fact]
-    public void NestingCountsAcrossWorkflows_UnderTheReadersOwnBound()
+    public async Task TheCircleRule_GoesByFiles_ComparedAsTheMachinesPathsAre()
+    {
+        var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["flow/shared/first.yml"] = "name: first\nsteps:\n  - name: second\n    use: ./second.yml\n",
+            ["flow/shared/second.yml"] = "name: second\nsteps:\n  - name: leaf\n    type: orient\n",
+            ["flow/inner/inner.yml"] = "name: inner\nsteps:\n  - name: outer\n    use: ../Outer/outer.yml\n",
+            ["flow/outer/outer.yml"] = "name: outer\nsteps:\n  - name: inner\n    use: ../inner/inner.yml\n",
+        };
+
+        var (sharing, shared) = WorkflowResolver.Resolve(
+            Parse("name: flow\nsteps:\n  - name: items\n    use: ./shared/first.yml\n"),
+            "flow",
+            path => files.GetValueOrDefault(path));
+
+        Assert.Empty(shared);
+        Assert.Equal(("flow/shared", "flow/shared"), (sharing.Steps[0].Use!.Name, sharing.Steps[0].Steps[0].Use!.Name));
+        Assert.Equal("items.second.leaf", $"{sharing.Steps[0].Name}.{sharing.Steps[0].Steps[0].Name}.{sharing.Steps[0].Steps[0].Steps[0].Name}");
+
+        var (_, folded, _) = await WorkflowResolver.ResolveAsync(
+            Parse("name: flow\nsteps:\n  - name: outer\n    use: ./outer/outer.yml\n"),
+            "flow",
+            new WorkflowResolution(path => files.GetValueOrDefault(path), PathComparison: StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(
+            ["step 'outer.inner.outer' uses '../Outer/outer.yml', the workflow 'flow/Outer', which is already in use around it: flow/outer/outer.yml -> flow/inner/inner.yml -> flow/Outer/outer.yml. A workflow that uses itself, directly or through others, would run its own steps without end"],
+            folded);
+    }
+
+    /// <summary>
+    /// V59: steps nest at most ten deep in all - a used workflow's own steps counted below the step that uses it, its
+    /// recovery's as much as its flow's - so a use placed under groups of the caller's nests no deeper than one file may.
+    /// </summary>
+    [Fact]
+    public void StepsNestTenDeepInAll_AUsedWorkflowsCountedBelowTheStepThatUsesIt()
+    {
+        // A group of the caller's eight levels deep, the use at the ninth, and the used workflow's steps at the tenth.
+        var caller = new System.Text.StringBuilder("name: flow\nsteps:\n");
+
+        for (var level = 1; level < WorkflowFileParser.MaxDepth - 1; level++)
+        {
+            caller.Append(new string(' ', (level - 1) * 4)).Append($"  - name: g{level}\n").Append(new string(' ', (level - 1) * 4)).Append("    steps:\n");
+        }
+
+        caller.Append(new string(' ', (WorkflowFileParser.MaxDepth - 2) * 4)).Append("  - name: items\n").Append(new string(' ', (WorkflowFileParser.MaxDepth - 2) * 4)).Append("    use: ./w/w.yml\n");
+
+        var flat = "name: w\nsteps:\n  - name: leaf\n    type: orient\n";
+        var grouped = "name: w\nsteps:\n  - name: leaf\n    type: orient\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  steps:\n    - name: block\n      steps:\n        - name: heal\n          type: orient\n";
+
+        var (_, fits) = WorkflowResolver.Resolve(Parse(caller.ToString()), "flow", path => path == "flow/w/w.yml" ? flat : null);
+        var (_, deeper) = WorkflowResolver.Resolve(Parse(caller.ToString()), "flow", path => path == "flow/w/w.yml" ? grouped : null);
+
+        Assert.Empty(fits);
+        Assert.Equal(
+            [$"step 'g1.g2.g3.g4.g5.g6.g7.g8.items' uses './w/w.yml' 9 levels deep, and the workflow it uses nests its steps 2 levels below it, 11 in all; steps nest at most {WorkflowFileParser.MaxDepth} deep in all, a used workflow's own counted below the step that uses it"],
+            deeper);
+    }
+
+    /// <summary>
+    /// V59 holds the run's records to what they can be written as: the deepest definition the bound lets through - each
+    /// level reached through a used workflow's recovery, the deepest the frozen definition nests - is frozen, digested
+    /// and read back whole.
+    /// </summary>
+    [Fact]
+    public void TheDeepestDefinitionTheBoundLetsThrough_IsFrozenAndReadBackWhole()
     {
         var files = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        for (var depth = 0; depth <= WorkflowFileParser.MaxDepth; depth++)
+        for (var level = 1; level < WorkflowFileParser.MaxDepth; level++)
         {
-            files[$"flow/w{depth}/w{depth}.yml"] = depth == WorkflowFileParser.MaxDepth
-                ? "name: w\nsteps:\n  - name: leaf\n    type: orient\n"
-                : $"name: w\nsteps:\n  - name: inner\n    use: ../w{depth + 1}/w{depth + 1}.yml\n";
+            var heal = level + 1 < WorkflowFileParser.MaxDepth
+                ? $"    - name: heal\n      use: ../r{level + 1}/r{level + 1}.yml\n"
+                : "    - name: heal\n      type: orient\n";
+
+            files[$"flow/r{level}/r{level}.yml"] = $"name: r{level}\nsteps:\n  - name: work\n    type: orient\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  steps:\n{heal}";
         }
 
-        var (_, problems) = WorkflowResolver.Resolve(
-            Parse("name: flow\nsteps:\n  - name: outer\n    use: ./w0/w0.yml\n"),
+        var (definition, problems) = WorkflowResolver.Resolve(
+            Parse("name: flow\nsteps:\n  - name: work\n    type: orient\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  steps:\n    - name: heal\n      use: ./r1/r1.yml\n"),
             "flow",
             path => files.GetValueOrDefault(path));
 
-        var problem = Assert.Single(problems);
+        Assert.Empty(problems);
 
-        Assert.StartsWith("step 'inner' uses", problem, StringComparison.Ordinal);
-        Assert.Contains($"workflows nest at most {WorkflowFileParser.MaxDepth} deep in all", problem, StringComparison.Ordinal);
+        var frozen = System.Text.Json.JsonSerializer.Serialize(definition, DssHarness.Core.FileSystem.JsonStateFile.Options);
+        var read = System.Text.Json.JsonSerializer.Deserialize<WorkflowDefinition>(frozen, DssHarness.Core.FileSystem.JsonStateFile.Options)!;
+
+        Assert.Equal(FlowRunContext.DigestOf(definition), FlowRunContext.DigestOf(read));
+        Assert.Equal(
+            $"recover.heal{string.Concat(Enumerable.Repeat(".recover.heal", WorkflowFileParser.MaxDepth - 1))}",
+            FlowScope.Declared(read).Last().Path);
     }
 
     /// <summary>
@@ -715,6 +798,122 @@ public sealed class FlowUseTests
         var (_, unfillable) = ResolvedWithProblems("name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n", pipeline);
 
         Assert.Equal(["step 'items' uses the workflow 'flow/pipeline', whose param 'tone' is required and declares no default: a used workflow is given nothing but its inputs, so it holds the param's own value or none"], unfillable);
+    }
+
+    /// <summary>
+    /// WF1: a use names a path every machine reads as the same file, in a directory of its own - a use that is empty,
+    /// holds a backslash, has a part that starts or ends with a space, or resolves to a file of the workflows directory
+    /// itself is refused saying which, never read as some other file or ended in a crash.
+    /// </summary>
+    [Fact]
+    public void AUseEveryMachineWouldNotReadAlike_OrOfNoDirectoryOfItsOwn_IsRefusedSayingWhy()
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["shared.yml"] = "name: shared\nsteps:\n  - name: leaf\n    type: orient\n",
+            ["shared/shared.yml"] = "name: shared\nsteps:\n  - name: leaf\n    type: orient\n",
+        };
+        var parsed = Parse("""
+            name: flow
+            steps:
+              - name: blank
+                use: ./x/x.yml
+              - name: backslash
+                use: ..\shared\shared.yml
+              - name: padded
+                use: '../shared /shared.yml'
+              - name: loose
+                use: ../shared.yml
+            """);
+
+        // Empty is refused where the file is read; a definition made in code reaches the resolution, and is refused there too.
+        var definition = parsed with { Steps = [parsed.Steps[0] with { UseSource = " " }, .. parsed.Steps.Skip(1)] };
+
+        var (resolved, problems) = WorkflowResolver.Resolve(definition, "flow", path => files.GetValueOrDefault(path));
+
+        Assert.Equal(
+            [
+                "step 'blank' uses no workflow: its use is empty, and it is a path relative to the calling workflow's directory, or owner/repo/path/workflow.yml@ref",
+                "step 'backslash' uses '..\\shared\\shared.yml', which holds a backslash: a use is written with forward slashes, so that every machine reads the one path it names",
+                "step 'padded' uses '../shared /shared.yml', whose part 'shared ' starts or ends with a space, which one machine's file system keeps and another's drops: a use names each part as the directory or file is named",
+                "step 'loose' uses '../shared.yml', which resolves to 'shared.yml', a file of the workflows directory itself: a workflow lives in a directory of its own under it, where every file it names is read",
+            ],
+            problems);
+        Assert.All(resolved.Steps, step => Assert.Null(step.Use));
+        Assert.Contains(
+            "line 3, column 5: blank.use is empty; it is the path of the workflow this step is, relative to this workflow's directory, or owner/repo/path/workflow.yml@ref.",
+            ParserProblems("name: flow\nsteps:\n  - name: blank\n    use: ''\n"));
+    }
+
+    /// <summary>
+    /// WF1: a used workflow's fingerprint is its parsed definition's digest, taken as the run's own definition's is - so a
+    /// change no reader can see, a comment or the line endings a checkout wrote, changes neither it nor the digest a
+    /// resume is refused by, and a change to what it says changes both.
+    /// </summary>
+    [Fact]
+    public void AUsedWorkflowsFingerprint_IsOfWhatItSays_NotOfItsBytes()
+    {
+        var caller = """
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            """;
+
+        var before = Resolved(caller);
+        var reworded = Resolved(caller, pipeline: "# the pipeline, said again\r\n" + Pipeline.ReplaceLineEndings("\r\n"));
+        var changed = Resolved(caller, pipeline: Swap(Pipeline, "- name: diagnose", "- name: healing"));
+
+        Assert.Equal(before.Steps[0].Use!.Fingerprint, reworded.Steps[0].Use!.Fingerprint);
+        Assert.Equal(FlowRunContext.DigestOf(before), FlowRunContext.DigestOf(reworded));
+        Assert.NotEqual(before.Steps[0].Use!.Fingerprint, changed.Steps[0].Use!.Fingerprint);
+    }
+
+    /// <summary>
+    /// The help, the README and the architecture say what a used workflow applies not - its budget and reporter carried
+    /// and applied by nothing yet under useParentLimits: false - how a use that closes a circle and one nested too deep
+    /// are refused, and where a relative use inside a remote workflow resolves, as the resolution does.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhatAUseAppliesNot_AndHowItResolves()
+    {
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "Its budget, reporter, pushCheckpoints and recommendations are never applied, nor - unless the use says useParentLimits: false - its "
+                + "advisor, amend, answers, limits and codebaseGraph: the calling run's own hold, and validate-workflow says so beside the fingerprint of what it read.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains("Its budget and reporter it carries, applied by nothing yet: the run's own budget counts its steps, and the run's own reporter words them.", help, StringComparison.Ordinal);
+        Assert.Contains(
+            $"A workflow file that uses itself, directly or through others, is refused with the circle of the files that close it, and steps nest at most {WorkflowFileParser.MaxDepth} "
+                + "deep in all, a used workflow's own counted below the step that uses it;",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains("a relative use inside it resolves inside the same entry - one that leaves the entry refused -", help, StringComparison.Ordinal);
+
+        Assert.Contains(
+            "budget, reporter, `pushCheckpoints` and `recommendations` are never applied, nor - unless the use says `useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("Its budget and reporter it carries, applied by nothing yet: the run's own budget counts its steps, and the run's own reporter words them.", readme, StringComparison.Ordinal);
+        Assert.Contains("steps nest at most ten deep in all - a used workflow's own counted below the step that uses it -", readme, StringComparison.Ordinal);
+        Assert.Contains("a relative use inside it resolves inside the same entry - one that leaves the entry is refused -", readme, StringComparison.Ordinal);
+
+        Assert.Contains(
+            $"Its budget and reporter it carries (`{nameof(FlowUseOwn)}`), applied by nothing yet: the run's own budget counts its steps, and the run's own reporter words them",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"relative use inside it resolves inside the same entry (`{nameof(WorkflowResolution)}.{nameof(WorkflowResolution.ReadCached)}`, the resolution carrying the remote one's place down, a use that leaves the fetched directory refused)",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains("and steps nest at most ten deep in all, a used workflow's own counted below the step that uses it, its recovery's as much as its flow's", architecture, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -920,8 +1119,10 @@ public sealed class FlowUseTests
     /// <summary>
     /// WF4, the key: a use that says <c>useParentLimits: false</c> governs itself - the workflow it uses declares
     /// run-level keys of its own, carried whole and said where it declares one - while one that says nothing (or true)
-    /// applies none of them, said as not applied. A step that is no use saying the key is refused, and a use that
-    /// governs itself over a workflow declaring an amend is refused too, for an amend is a run's own.
+    /// applies none of them, said as not applied. What nothing applies yet - its budget and reporter - and what is a
+    /// run's own alone - its <c>pushCheckpoints</c> and <c>recommendations</c> - is said as not applied either way. A
+    /// step that is no use saying the key is refused, and a use that governs itself over a workflow declaring an amend
+    /// is refused too, for an amend is a run's own.
     /// </summary>
     [Fact]
     public void AUseThatGovernsItself_CarriesTheWorkflowsOwnSettings_AndAnAmendIsRefused()
@@ -932,6 +1133,8 @@ public sealed class FlowUseTests
               usd: 5
             maxReasoningAgents: 3
             maxRetries: 1
+            pushCheckpoints: true
+            recommendations: bar.md
             answers:
               loopBound:
                 answer: accept
@@ -948,15 +1151,16 @@ public sealed class FlowUseTests
         var plain = Resolved(Caller(), withAmend);
         var use = plain.Steps.Single(step => step.Name == "items").Use!;
 
-        Assert.Equal(["amend", "answers", "budget", "limits"], [.. use.NotApplied.Order(StringComparer.Ordinal)]);
+        Assert.Equal(["budget", "amend", "answers", "limits", "pushCheckpoints", "recommendations"], use.NotApplied);
         Assert.Null(use.Own);
 
-        // With it: carried whole, said where declared, and nothing said as not applied.
+        // With it: carried whole and said where declared - the budget, which nothing applies yet, and what is a run's
+        // own alone still said as not applied.
         var governed = Resolved(Caller(useParentLimits: "false"), withAmend);
         var own = governed.Steps.Single(step => step.Name == "items").Use!.Own;
 
         Assert.NotNull(own);
-        Assert.Empty(governed.Steps.Single(step => step.Name == "items").Use!.NotApplied);
+        Assert.Equal(["budget", "pushCheckpoints", "recommendations"], governed.Steps.Single(step => step.Name == "items").Use!.NotApplied);
         Assert.Equal((5d, 3, 1), (own!.Budget!.Usd, own.MaxReasoningAgents, own.MaxRetries));
         Assert.Equal("accept", own.Answers!["loopBound"].Answer);
         Assert.True(own.Amends);

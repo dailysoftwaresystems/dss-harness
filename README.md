@@ -86,9 +86,9 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `ask-orchestrator <run> "<question>" [--json]` | A person's question about a run, answered from its records by the workflow's `reporter` over the engine's facts; reads only, as `ask-orchestrator-status` does. Refused where no model can answer: 12 where the workflow names no reporter or the reporter's own files do not read, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model failed, 21 where it could not be reached or its account is at its limit; neither command installs Claude Code or brings one up to date |
 | `run-side-task [--prompt <text> \| --prompt-file <path>] [--resume <task>] [--name <task>] [--model <code> \| --tier <tier>] [--client <client>] [--effort <level> \| --effort <code>=<level>]... [--json]` | An agent outside every workflow: a conversation with a person over the repository's main tree, with no step and no limit of a run's - every action still decided by the engine before it runs and recorded, the built-in refusals kept (root actions, every credential slot, Claude Code directory and place the user keeps credentials in - to its file tools, and to every word of its commands, a directory that holds one but the main tree it works in among them - git's own files, the tool's state, a git or `gh` command called by an alias or an extension, `run-side-task` itself where a word of a command or of a script the policy reads names it or a verb the shell expands may, which also refuses itself started under any agent - told by its mark and by the process tree, a process of this tool's among the ones that started it, parent by parent, a process that took a freed id never read as a parent, the tool's own runtime told by the file it runs where the table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by its name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is none; one detached from the agent's tree (`at`, a `tmux` server, a double fork) told by the mark alone, and a tree that could not be read refused saying why - and a command that sets the mark, takes it away, or may take it away or names it but as data), the tool's own verbs open to it as the person's are, but those that read a credential slot or write its state - a policy of what a command names, not a sandbox: a command over the whole main tree, `.` or no path, reaches the slots' files beneath it, and code an interpreter runs (`python -c`, `perl -e`, awk's `system`) or a process apart from the agent's tree does what no word the policy reads says, where the operating system's isolation beneath it (below) does not hide every slot from each command and keep it from git's code-running files and the tool's state; its `web_search` asks every configured source turned on and one more - `native`, the provider's own search: a request of the harness's own on the Claude API, asked with the model and key serving the side-task when the agent asks and through that key's gate as every request is, its cost counted then to that model and key and a failure of it - a gate held past the longest wait among them - one failed part saying why, Claude Code's own `WebSearch` kept in its tools, none on Z.AI. A chat in the terminal by default - the agent's text streamed, each action one line as it is decided, Ctrl+C interrupting a turn where it stands - on a client that stores its conversations what was said kept up to its last whole turn and what the cut request used kept as the turn's - and a second ending the chat as `/exit` does - a turn under way cut and its result read within 10 s, the lines the agent had not taken dropped, so what the turn used, cost and spent is kept, and a launch still waiting its turn at the gate, its wait said, never begun - each interrupt saying whether a turn of the agent's was under way to cut, or none was and nothing is cut - a first one while a launch waits at the gate among them, the launch begun once the wait passes - a move to a later model of its tier going on from the conversation so far - a one shot's turn and each message to a client that stores its conversations tried again 3 times on its model first, as a step's, a chat's launch held open never tried again but moved at its first failure, decline, limit, refused key or model that cannot be started - and where no turn runs, while it is set up or a model made ready, an interrupt stopping it, a one shot's first and a chat's second - a line ending in `\` going on to the next, `/exit`, `/model`, `/effort` (a level, `<code>=<level>`, or `default`) - a new model keeping only the levels that name it and the one for the rest, a launch at work giving way as the person leaving does and the lines it never took going on to the new one - `/records`, `/help` - or one message with `--prompt`/`--prompt-file`, answered once with the agent's final text (`--json` its one document, and a usage error without a prompt), Ctrl+C there cutting its turn - a Claude Code launch's at that turn's result, an API client's request left where it stands, what the provider had said it used counted and a cost it had said nothing of unknown - what it used kept, and ending it interrupted (130), a launch still waiting its turn at the gate or to be tried again never begun. Named by when it began - with its first words in one shot; a chat, named before its first message is typed, by the time alone - unless `--name` names it, a name another side-task holds refused (13) and that one's records named as its. `--resume` opens one again, going on with its stored conversation - or from the conversation so far where its model's client is handed none - on what the person last set it to run on, its tier with the tier's later models or the model named outright, unless `--model` or `--tier` names another; refused (13) where it names no side-task or another process holds it open, and `--name` beside it a usage error; what it spends is counted against its key. Exits 0 ended as asked - a chat 0 however the person leaves it once it has begun, 130 where interrupts stop it before it began, while it is set up or opened again - 10 usage (an effort a model does not take among them), 12 the configuration (in one shot an agent the configuration keeps from starting among it), 13 refused (a name taken, an unignored `.side-tasks`, started under an agent or its starting processes unread, an update of Claude Code refused, and in one shot a key missing or the tool running elevated), 14 a client that cannot start where the entry that would serve first is on it - a later entry on it passed over - or, under `agentPolicy.isolation` `required`, a machine that cannot isolate the agent's commands, 21 the install of Claude Code timed out or could not reach the registry; in one shot besides, 20 the model failed past its retries and fallback, 21 cut short by the account's limit, a stall or the clock, 130 interrupted; the records under `.side-tasks/<task>/` are named on every exit - or said to be none where it stopped before any were written - and kept until a person removes them (`help side-tasks`) |
 | `list-side-tasks [--json]` | The repository's side-tasks, newest first: each by its name, when it began and last spoke, its model, its turns and cost, and whether it is open now |
-| `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there, each step's schema one the engine reads (`help workflows`). A remote use is resolved - fetched into the workflow cache, or read from it at the commit the run recorded - and each resolution printed with its source. Nothing is run |
-| `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
-| `export-workflow --from <use> --to <dir> [--json]` | Vendor a remote workflow, as a use names it (`owner/repo/path/workflow.yml@ref`), at its resolved commit: every file of its directory and a note of where it came from, for review, so a team can use it as `./` |
+| `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there, each step's schema one the engine reads (`help workflows`). A remote use is resolved - its ref to a commit, read from the workflow cache where it holds that commit and fetched into it where not - and each resolution printed with its source and, for a remote one, the workflow cache's directory it was read from or fetched into. Nothing is run |
+| `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names, a used workflow's where it sits under the folder - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there, or where the workflow uses one outside its folder or a remote one; a file that cannot be written takes back what was written |
+| `export-workflow --from <use> --to <dir> [--json]` | Vendor a remote workflow, as a use names it (`owner/repo/path/workflow.yml@ref`), at its resolved commit: every file of its directory and a note of where it came from, for review, so a team can use it as `./`; a workflow name or `--shipped` beside it is a usage error (10) |
 | `workflow-cache list [--json]` / `workflow-cache prune --unused-days N [--json]` | The hash cache of remote workflows, its directory named in text and `--json`: each entry it holds - where it came from, its commit, its files and bytes, the refs whose newest resolution it is - and every file of its own it could not read; and the removal of the entries no run used for N days (required, 0 to 36,500), the resolutions that named them and the blobs no entry left holds, ending incomplete (21) where a file could not be removed or read |
 | `list-agent-providers [--template] [--json]` | List the agent sections config.json declares: each provider, its keys' names in the order they are tried with whether the slot holds each - `present` or `missing`, never a value - its models and whether each is priced, the tiers, the clients and each web-search source's key; exit 0 whatever is missing; `--template` prints the sections as `init` writes them into a new config, to paste into an existing one (`help agent-clients`) |
 | `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once no agent of it stands in the way - a live one with no worktree goes with it - and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence, transcripts, steps and sessions go only with `--delete-evidence` |
@@ -483,11 +483,17 @@ file the definition names: its agent files, its prompts, its schemas. `init` wri
 implementation workflow, and declares it in the config it creates. Where `config.json` declares
 `implementation`, `init` writes each of its files that is missing - the whole set where the
 repository has no definition of it yet, and where it has one only the shipped files that definition
-names, so a file taken out with its step stays out - and keeps each one that is there, whatever it holds, so an `init` that stopped part way is finished by the next - where a file is
-missing and the definition there does not read, init refuses (12; 13 where it cannot be read), since
+names, the workflows it uses among them - a shipped one taken out whole read from the copy `init`
+writes, so it comes back whole in one run - so a file taken out with its step stays out - and keeps each one that is there, whatever it holds, so an `init` that stopped part way is finished by the next - where a file is
+missing and the definition there does not read, or uses a workflow of the repository's that does not
+resolve, init refuses (12, naming each problem; 13 where it cannot be read), since
 which files it names cannot be told; nothing that exists is ever
 overwritten, and a config that does not declare it gets none of it. A config written before
-workflows declares none: add `"workflows": ["implementation"]` and run `init` to have it.
+workflows declares none: add `"workflows": ["implementation"]` and run `init` to have it. A file a
+repository's own definition names that this tool ships elsewhere now - one of the item pipeline's,
+moved into its own folder, which an older release shipped beside the definition - is not brought
+back, for this build's copy is written for the new layout, and `init` says so in a note, naming
+where it ships it now.
 
 A step gives a failure nothing handles to the workflow's `recover` by saying `onFailure: recover`,
 itself or through a group around it: steps written once that find what went wrong and put it right.
@@ -1768,10 +1774,15 @@ no other - into `<dir>/<workflow>/`, a folder of its own that must not be there 
 a declared one once it holds (12 where it does not, naming each problem), byte for byte, or, with
 `--shipped`, the implementation workflow as this tool ships it, which is how a version of your own
 starts. A file that cannot be written takes back what was written before it, with every folder the export
-made, so no folder is left with part of a workflow in it - or the refusal says why it could not.
+made, so no folder is left with part of a workflow in it - or the refusal says why it could not. A
+used workflow's files go where it sits under the folder, a hidden folder keeping its dot, and a
+workflow that uses one outside its folder, or a remote one, is refused (13) with nothing written,
+for the folder alone would name a workflow it has not got - `--from` vendors a remote one.
 
-A step may be a whole workflow: it says `use`, a path to the workflow's yml file relative to the
-calling workflow's own directory and resolving inside the workflows folder, and `with`, the values
+A step may be a whole workflow: it says `use`, a path to the workflow's yml file in a folder of its
+own, relative to the calling workflow's own directory, written with forward slashes and no part that
+starts or ends with a space, and held inside the workflows folder once links are followed, as the
+run's own workflow is, and `with`, the values
 the workflow's inputs are filled with - an expression for a `value` input, a template for a
 `text`, a path of the used workflow's directory for a `file`, and a single name for a `step`,
 which its steps read as `{input.<name>}` in their `onFailure` or `then`. The file a step is asked
@@ -1783,21 +1794,26 @@ inside the run as a group's members do, its steps named under the use; its files
 own directory, its declared outputs are the step's own once it ends, and its recovery takes a
 failure inside it before the caller's handling of the step. Its steps read only its inputs, its
 params and its own steps - every fact of the caller they need comes through an input - and its
-budget, limits, advisor, amend and answers are never applied, which `validate-workflow` says
-beside the fingerprint of the file each use read - unless the use says `useParentLimits: false`,
-and then the workflow's own settings govern its steps: each key it declares replacing the
-caller's for them (its budget, its limits and `maxInstances` gating its steps alone, counted
+budget, reporter, `pushCheckpoints` and `recommendations` are never applied, nor - unless the use
+says `useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`, which
+`validate-workflow` says beside the fingerprint of what each use read. With `useParentLimits: false`
+the workflow's own settings govern its steps: each key it declares replacing the
+caller's for them (its limits and `maxInstances` gating its steps alone, counted
 across every instance of the use and the caller's gates counting them no more; the retries and
 backoff its steps fall back to; the handoff bound of its paused reasoning steps; its answers
 consulted for its steps' questions before the run's) and each key it declares none for staying
 the caller's, for a use cannot widen a run's limits by declaring nothing. Its advisor serves
 its steps' questions - its files read in its own directory - and the run's one graph takes the
-shape it declares where the run's own workflow says none. An amend is refused
+shape it declares where the run's own workflow says none. Its budget and reporter it carries,
+applied by nothing yet: the run's own budget counts its steps, and the run's own reporter words
+them. An amend is refused
 there, said at validation, for an amend is a run's own, and `preapproved` is a run's input
-alone, whatever the key says. A workflow that uses itself, directly or
-through others, is refused with the chain, uses nest at most ten deep in all, and a resume is
-refused where a used workflow's file changed since the run began, as the run's own definition's
-would be. The shipped implementation workflow uses the mechanism for itself: its item pipeline -
+alone, whatever the key says. A workflow file that uses itself, directly or through others, is
+refused with the circle of the files that close it, steps nest at most ten deep in all - a used
+workflow's own counted below the step that uses it - and a resume is refused where what a used
+workflow says changed since the run began - the digest of its parsed definition, taken as the
+run's own definition's is, so a comment or line endings change nothing - as the run's own
+definition's would be. The shipped implementation workflow uses the mechanism for itself: its item pipeline -
 an item built in an agent of its own, tested, reviewed, folded and checkpointed - is one workflow,
 `item-pipeline/item-pipeline.yml`, used by its rounds and by its recovery alike, each use handing
 it its prompt, its failure's name and the facts of the run its steps read.
@@ -1822,7 +1838,7 @@ resolution with its time; every blob is hashed again as it is read, so a blob ch
 refused and its directory fetched again. A second run of a pinned SHA reads the cache with no
 network, a tag needs one call to resolve at each run's start, and a run records each use's
 resolution: a resume uses the recorded commit and never resolves again, so a tag or branch that
-moved since changes no run already started, and only a changed local file refuses it as before. A
+moved since changes no run already started, and only a change to what a local file says refuses it as before. A
 remote workflow is trusted by configuration alone: `workflowSources.allow` names the owners and
 repositories a use may name - empty by default, so a remote use is refused until the repository
 allows its owner - `workflowSources.hosts` names each GitHub Enterprise host with its one
@@ -1836,15 +1852,19 @@ where the network keeps the forge from being reached: `refuse` (the default) or 
 cache's newest resolution of the ref standing in, warned of where it does. A forge that answered -
 refusing the credential, or naming a repository or ref that is not there - is refused with what
 `gh` said, and nothing stands in for it. Its files resolve against its cache entry as a local
-workflow's do against its directory, a use inside it resolves inside the same entry, and a local
-use never resolves under the workflows folder's `remote/`, which is the cache's own reserved place.
+workflow's do against its directory, a relative use inside it resolves inside the same entry - one
+that leaves the entry is refused - and a local use never resolves under the workflows folder's
+`remote/`, which is the cache's own reserved place, as no workflow is named `remote`.
 A command an agent runs never reaches the forge nor writes the cache: `validate-workflow` and
 `export-workflow` under an agent read the cache alone, and are refused naming
 `dssharness validate-workflow`, which a person runs to fetch what they need.
 
 `export-workflow --from <source> --to <dir>` vendors a remote workflow into the repository at its
-resolved commit: every file of its directory, byte for byte, and `source.md`, a note of where it
-came from - so a team can review what is written and use it as `./`. `workflow-cache list` says
+resolved commit - a workflow named beside it, or `--shipped`, is a usage error (10): every file of
+its directory, byte for byte, and `source.md`, a note of where it came from and, where that is
+worth a word, how the commit came about - the cache's last resolution standing in, or a branch,
+which moves - a directory holding a `source.md` of its own refused (13) - so a team can review
+what is written and use it as `./`. `workflow-cache list` says
 each entry the cache holds - where it came from, its commit, its files and bytes, when it was
 fetched and last used, and the refs whose newest resolution it is - and every file of the cache's
 own that could not be read. `workflow-cache prune --unused-days N`, the days required and from 0 to

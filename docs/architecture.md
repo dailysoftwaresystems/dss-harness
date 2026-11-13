@@ -1645,9 +1645,18 @@ missing - the whole set where the repository has no definition of it yet, and wh
 the shipped files that definition names, so a file taken out with its step stays out - and keeps
 each one that is there, whatever it holds, saying how many it kept: an init that stopped part way is
 finished by the next, and a file a repository edited is never written over. A configuration that
-does not declare it gets none of it. A file the disk will not write refuses init (13), naming the files written before it, which stay;
-and where a file is missing and the repository's own definition does not read, init refuses (12; 13
-where it cannot be read) and writes none, since which files it names cannot be told. The shipped set is held to every rule a repository's workflow
+does not declare it gets none of it. The files a definition names are those of the tree it runs, its
+uses resolved as a run resolves them (`WorkflowResolver`, a remote use left as written, for it names
+no file of the repository's), and a shipped used workflow's yml the repository has not got is read
+from the embedded copy init is about to write, so a pipeline taken out whole comes back whole in one
+run. A file the disk will not write refuses init (13), naming the files written before it, which stay;
+and where a file is missing and the repository's own definition does not read, or uses a workflow of
+the repository's that does not resolve, init refuses (12, naming each problem; 13 where it cannot be
+read) and writes none, since which files it names cannot be told. A file the repository's own
+definition names that this tool ships elsewhere now (`WorkflowTemplates.Moved`, the item pipeline's
+files an older release shipped beside the definition, read forever and never written) is not
+brought back, for this build's copy is written for the new layout, and init says so in a note
+naming where it ships it now. The shipped set is held to every rule a repository's workflow
 is by this build's own tests, so a build whose own workflow does not hold fails before it ships.
 
 A definition declares `inputs` - the values a run is started with, each with a kind, a default and
@@ -1670,7 +1679,10 @@ unique among its siblings and never a word a definition reads for its own.
 
 A step may be a whole workflow of its own: it says `use` - a path to the workflow's yml file,
 relative to the calling workflow's directory and resolving inside the workflows folder, so a
-workflow lives in a folder of its own beside the one that uses it - and `with`, the values its
+workflow lives in a folder of its own beside the one that uses it, refused where it resolves to a
+file of the workflows folder itself, holds a backslash or a part that starts or ends with a space -
+the path every machine reads alike - and held to the workflows folder once links are followed by
+the rule the run's own workflow is (`WorkflowValidationService.Contained`) - and `with`, the values its
 inputs are filled with, each read as the input it fills declares: an expression for a `value`, a
 template for a `text`, a path of the used workflow's directory for a `file`, and a single name
 for a `step`, which a step of the used workflow reads as `{input.<name>}` in its `onFailure` or
@@ -1681,14 +1693,18 @@ one input of it alone, its own gate, held off where a use fills that input so - 
 shipped flow's item pipeline holds its `redo` and `undo` off where its recovery uses it. The used
 workflow is read as a definition of its own and resolved
 into the step before anything is checked or run: its steps become the step's members - instances
-named under the use as a group's are - its files are read in its own directory, its declared
+named under the use as a group's are - its files are read in its own directory, and checked there
+by `validate-workflow` as the run's own are (each its steps and its recovery's steps name, its
+texts, the file an input of the kind `file` is filled with or defaults to, and the advisor's and
+reporter's files of a use that governs itself: `WorkflowFiles.OfUse`), its declared
 outputs are the step's own once it ends, and its recovery takes a failure inside it before the
 caller's handling of the step. Its steps read only its inputs, its params and its own steps,
 never the calling run's; every fact of the caller they need comes through an input. Its budget,
-limits, advisor, amend and answers are never applied - the calling run's own hold - and
-`validate-workflow` says so beside the fingerprint of the file it read, one line for each use -
-unless the use says `useParentLimits: false`, and then the used workflow's own settings govern
-its steps, each key it declares replacing the caller's for them and each it declares none for
+reporter, `pushCheckpoints` and `recommendations` are never applied, nor - unless the use says
+`useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`: the calling
+run's own hold, and `validate-workflow` says so beside the fingerprint of what it read, one line
+for each use (`FlowUse.NotApplied`). With `useParentLimits: false` the used workflow's own
+settings govern its steps, each key it declares replacing the caller's for them and each it declares none for
 staying the caller's (a use cannot widen a run's limits by declaring nothing): its limits and
 its `maxInstances` gate its steps alone, counted across every instance of the use, and the
 caller's gates count them no more (`FlowCoordinator.OwnOf` walks the scope chain for the
@@ -1701,14 +1717,22 @@ files read in its own directory (`SeekAdvice` picks it and routes the call's wor
 `AdvisorRunner` reading by the name it names); and the run's one graph takes the shape it
 declares where the run's own workflow says none (`FlowGraphSyncs.RequestOf`'s governing
 shape, passed by the reason steps' serving and the graphify runner through `FlowUse.Around`).
+Its budget and reporter it carries (`FlowUseOwn`), applied by nothing yet: the run's own budget
+counts its steps, and the run's own reporter words them, which the validate-workflow line says.
 An amend is refused where the key says false - an amend is a run's
 own, and no step of a run applies one - said at validation; `preapproved` is a run's input
 alone, whatever the key says. A
-workflow that uses itself, directly or through others, is refused with the chain of the uses that
-close the circle, and uses nest at most ten deep in all, across the workflows they name. A run
-records each use's resolution - the called workflow's name and the fingerprint of its file - in
-the definition it freezes, and a resume is refused where the called file changed since the run
-began, as the run's own definition's would be. The shipped implementation workflow uses the
+workflow file that uses itself, directly or through others, is refused with the circle of the
+files that close it - told apart by the machine's path comparison, the calling workflow's own file
+the first, so two workflows of one folder close none and a use back to the run's own file is found
+at once - and steps nest at most ten deep in all, a used workflow's own counted below the step that
+uses it, its recovery's as much as its flow's: the reader's own bound held across the uses of
+others, so no definition that holds is deeper than the run's frozen `definition.json` can be
+written. A run records each use's resolution - the called workflow's name and its fingerprint, for
+a local one the digest of its parsed definition taken as the run's own definition's is, so a
+comment or line endings change nothing, and for a remote one, or one inside it, its commit - in the
+definition it freezes, and a resume is refused where what the called workflow says changed since
+the run began, as the run's own definition's would be. The shipped implementation workflow uses the
 mechanism for itself: its item pipeline - written once in `item-pipeline/item-pipeline.yml` - is
 used by its rounds (`implementPrompt: prompts/implement.md`, `alternatives: 'true'`,
 `failTo: recover`) and by its recovery (`prompts/remedy.md`, `alternatives: 'false'`,
@@ -1750,10 +1774,10 @@ a blob changed on disk is refused and its directory fetched again, and every wri
 a use and every pruning is made under one machine-wide lock (`MachineWideFile`), so a pruning never
 takes the blobs a fetch is writing. A second run of a pinned SHA reads the cache with no network, and
 a tag needs one call at each run's start; a run records each use's resolution - the remote commit SHA
-stands in the fingerprint a local file's hash holds - and `FlowService` hands the frozen definition to
+stands in the fingerprint a local workflow's parsed digest holds - and `FlowService` hands the frozen definition to
 the check a resume goes through, so each remote use resolves to the commit the run began with and
 never resolves again: a tag or branch that moved since changes no run already started, and only a
-changed local file refuses it as before. Trust is a person's decision, never a response's: a remote
+change to what a local file says refuses it as before. Trust is a person's decision, never a response's: a remote
 workflow directs agents and machine steps in the calling repository, so `workflowSources` in
 `config.json` allows its owner (`allow`, empty by default); names each GitHub Enterprise host with its
 one credential (`hosts.<host>.credential`, `{"from": "env", "name": "<VARIABLE>"}`, required), handed
@@ -1771,16 +1795,25 @@ credential or naming a repository or ref that is not there, is refused with what
 nothing stands in for it. A remote workflow's own name inside the run is its cache place,
 `remote/<host>/<owner>/<repo>/<commit>/<dir>`: its files resolve against its entry as a local
 workflow's do against its directory - through the same `WorkflowNamedFiles` rule, the reader routing
-the reserved `remote/` place to the cache - a use inside it resolves inside the same entry, and no
-local use resolves under `remote/`, the cache's own reserved place in the workflows folder. A command
+the reserved `remote/` place to the cache - a relative use inside it resolves inside the same entry
+(`WorkflowResolution.ReadCached`, the resolution carrying the remote one's place down, a use that
+leaves the fetched directory refused), named under `remote/` by its own directory and read at run
+time from the entry of the nearest directory above it that the cache holds at that commit
+(`WorkflowCache.FindNamed`); no local use resolves under `remote/`, the cache's own reserved place in
+the workflows folder, and no workflow is named `remote` (`WorkflowName`). A fetch refused for what
+the source is - not allowed, a ref the pin refuses - is the definition's problem, said with the use;
+a fetch that could not run - `gh` missing, the network not there, a call that failed - is none, and
+goes on with its own code (14, 21, 20). A command
 an agent runs never reaches the forge nor writes the cache: the fetcher reads the agent's mark
 (`DSSHARNESS_UNDER_AGENT`) and resolves from the cache alone - a ref by its newest resolution - writing
 nothing, not even the use's date, and refuses what the cache does not hold naming
 `dssharness validate-workflow`, which a person runs to fetch it; so `validate-workflow` and
 `export-workflow` stay among the verbs open to an agent (`AgentPolicy.OpenVerbs`).
 `export-workflow --from <use> --to <dir>` vendors a remote workflow at its resolved commit - every
-file of its directory and `source.md`, a note of where it came from - so a team can review what is
-written and use it as `./`; the `workflow-cache` verb lists the cache's entries and the files of its
+file of its directory and `source.md`, a note of where it came from and how the commit came about
+where that is worth a word (the cache's last resolution standing in, or a branch), a directory
+holding a `source.md` of its own refused (13); a workflow name or `--shipped` beside `--from` is a
+usage error (10) - so a team can review what is written and use it as `./`; the `workflow-cache` verb lists the cache's entries and the files of its
 own it could not read, and prunes, by the days an entry went unused and unfetched (`--unused-days`,
 required, 0 to 36,500), the entries, the resolutions that named them and the blobs no entry left
 holds - keeping every blob an entry it keeps holds (`WorkflowCache.BlobOf`, the inverse of the blob's
@@ -3483,7 +3516,12 @@ it is the implementation workflow as this build ships it, held to `WorkflowValid
 configuration with no `commit.template`, written as
 `init` writes it. The yml is written last, and a file that cannot be written takes back what was
 written before it, with every folder the export made, so a folder with part of a workflow in it is never
-left behind - or the refusal says why it could not be taken back.
+left behind - or the refusal says why it could not be taken back. A used workflow's files are placed
+where it sits under the workflow's folder (`WorkflowFiles.PlaceOf`, the one placing init and the
+build's own set read too), never by how a use spelt it, so a hidden folder keeps its dot; a use of a
+workflow outside the folder, or of a remote one, is refused (13) with nothing written, for the
+folder alone would name a workflow it has not got - the refusal names each, a remote one with the
+`--from` that vendors it.
 
 ### Running a workflow
 

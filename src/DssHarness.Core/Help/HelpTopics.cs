@@ -5236,8 +5236,9 @@ public static class HelpTopics
             + $"({WorkflowSourceRules.OfflineRefuse}, or {WorkflowSourceRules.OfflineLastResolved}, the cache's newest resolution of the ref, warned of where "
             + "it stands in) - a forge that answered, refusing the credential or naming a thing not there, is refused with what gh "
             + "said, and nothing stands in for it. Its files resolve against its cache entry as a local workflow's do against its "
-            + "directory, a use inside it resolves inside the same entry, and no local use resolves under remote/, the cache's own "
-            + "reserved place in the workflows folder. A command an agent runs never reaches the forge nor writes the cache: "
+            + "directory, a relative use inside it resolves inside the same entry - one that leaves the entry refused - and no local "
+            + "use resolves under remote/, the cache's own reserved place in the workflows folder, as no workflow is named remote. "
+            + "A command an agent runs never reaches the forge nor writes the cache: "
             + $"{WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} under an agent read the cache alone, and are refused "
             + $"naming '{ToolPackage.Command} {WorkflowValidationService.CommandName}', which a person runs to fetch what they need.";
 
@@ -5287,11 +5288,16 @@ public static class HelpTopics
         builder.AppendLine($"config.json declares {WorkflowTemplates.ShippedWorkflowName},");
         builder.AppendLine("init writes each of its files that is missing - the whole set where the repository has no");
         builder.AppendLine("definition of it yet, and where it has one only the shipped files that definition names,");
-        builder.AppendLine("so a file taken out with its step stays out - and keeps each one that is there,");
+        builder.AppendLine("the workflows it uses among them - a shipped one taken out whole read from the copy init");
+        builder.AppendLine("writes, so it comes back whole in one run - so a file taken out with its step stays out -");
+        builder.AppendLine("and keeps each one that is there,");
         builder.AppendLine("whatever it holds, so an init that stopped part way is finished by the next - where a");
-        builder.AppendLine("file is missing and the definition there does not read, init refuses (12; 13 where it");
+        builder.AppendLine("file is missing and the definition there does not read, or uses a workflow of the");
+        builder.AppendLine("repository's that does not resolve, init refuses (12, naming each problem; 13 where it");
         builder.AppendLine("cannot be read), since which files it names cannot be told; nothing that exists is ever");
-        builder.AppendLine("overwritten, and a config that does not declare it gets none of it.");
+        builder.AppendLine("overwritten, and a config that does not declare it gets none of it. A file such a definition");
+        builder.AppendLine("names that this tool ships elsewhere now - one of the item pipeline's, moved into its own");
+        builder.AppendLine("folder - is not brought back, and init says so.");
         builder.AppendLine("The name is the folder's, the file's and the name: key's alike, one word, and a");
         builder.AppendLine("disagreement among the three is refused when the file is read.");
         builder.AppendLine();
@@ -5300,7 +5306,9 @@ public static class HelpTopics
         builder.AppendLine("there (13 where it is): a declared one once it holds (12 where it does not), byte for");
         builder.AppendLine($"byte, or, with --shipped, the {WorkflowTemplates.ShippedWorkflowName} workflow as this tool ships it, to make a");
         builder.AppendLine("version of your own. A file that cannot be written takes back what was written before it, or");
-        builder.AppendLine("says why it could not.");
+        builder.AppendLine("says why it could not. A used workflow's files go where it sits under the folder, and a");
+        builder.AppendLine("workflow that uses one outside its folder, or a remote one, is refused (13), nothing written,");
+        builder.AppendLine("for the folder alone would name a workflow it has not got; --from vendors a remote one.");
         builder.AppendLine();
         builder.AppendLine("A workflow declares inputs - the values a run is started with, each with a kind, a");
         builder.AppendLine("default and the options it takes; params - its own knobs, defaulted in the file and read");
@@ -5328,8 +5336,10 @@ public static class HelpTopics
         builder.AppendLine("more, one more recovery; direct, with the fix in words, for the next one; skip, where the");
         builder.AppendLine("step is skippable; or abort.");
         builder.AppendLine();
-        builder.AppendLine("A step may be a whole workflow of its own: it says use - a path to the workflow's yml,");
-        builder.AppendLine("relative to the calling workflow's directory and resolving inside the workflows folder -");
+        builder.AppendLine("A step may be a whole workflow of its own: it says use - a path to the workflow's yml in a");
+        builder.AppendLine("folder of its own, relative to the calling workflow's directory, written with forward");
+        builder.AppendLine("slashes and no part that starts or ends with a space, and held inside the workflows folder");
+        builder.AppendLine("once links are followed, as the run's own workflow is -");
         builder.AppendLine("and the workflow it names is read as a definition of its own and runs inside the run, its");
         builder.AppendLine("steps the step's own, its files read in its own directory and its declared outputs the");
         builder.AppendLine("step's once it ends. Its with fills the workflow's inputs, each value read as the input");
@@ -5344,29 +5354,35 @@ public static class HelpTopics
         builder.AppendLine("workflow read only its inputs, its params and its own steps, never the calling run's -");
         builder.AppendLine("every fact of the caller they need comes through an input - and a failure inside it goes");
         builder.AppendLine("to the workflow's own recovery first, then to the caller's handling of the step. Its");
-        builder.AppendLine("budget, limits, advisor, amend and answers are never applied - the calling run's own hold -");
-        builder.AppendLine("and validate-workflow says so beside the fingerprint of the file it read, unless the use says");
-        builder.AppendLine("useParentLimits: false, and then the workflow's own settings govern its steps: each key it");
-        builder.AppendLine("declares replacing the caller's for them - its budget, its limits and maxInstances gating its");
+        builder.AppendLine("budget, reporter, pushCheckpoints and recommendations are never applied, nor - unless the");
+        builder.AppendLine("use says useParentLimits: false - its advisor, amend, answers, limits and codebaseGraph: the");
+        builder.AppendLine("calling run's own hold, and validate-workflow says so beside the fingerprint of what it read.");
+        builder.AppendLine("With useParentLimits: false the workflow's own settings govern its steps: each key it");
+        builder.AppendLine("declares replacing the caller's for them - its limits and maxInstances gating its");
         builder.AppendLine("steps alone, counted across every instance of the use and the caller's gates counting them no");
         builder.AppendLine("more, the retries and backoff its steps fall back to, the handoff bound of its paused");
         builder.AppendLine("reasoning steps, its answers consulted for its steps' questions after the step's own and the");
         builder.AppendLine("groups around it and before the run's - and each key it declares none for staying the");
         builder.AppendLine("caller's, for a use cannot widen a run's limits by declaring nothing. Its advisor serves its");
         builder.AppendLine("steps' questions, its files read in its own directory, and the run's one graph takes the");
-        builder.AppendLine("shape it declares where the run's own workflow says none. An amend is refused");
+        builder.AppendLine("shape it declares where the run's own workflow says none. Its budget and reporter it carries,");
+        builder.AppendLine("applied by nothing yet: the run's own budget counts its steps, and the run's own reporter");
+        builder.AppendLine("words them. An amend is refused");
         builder.AppendLine("there, said at validation, for an amend is a run's own, and preapproved is a run's input alone,");
-        builder.AppendLine("whatever the key says. A workflow that");
-        builder.AppendLine($"uses itself, directly or through others, is refused with the chain, and uses nest at most {WorkflowFileParser.MaxDepth} deep");
-        builder.AppendLine("in all; a run records each use's resolution, and a resume is refused where the called");
-        builder.AppendLine("workflow's file changed since the run began, as its own definition's would.");
+        builder.AppendLine("whatever the key says. A workflow file that uses itself, directly or through others, is");
+        builder.AppendLine($"refused with the circle of the files that close it, and steps nest at most {WorkflowFileParser.MaxDepth} deep in all, a");
+        builder.AppendLine("used workflow's own counted below the step that uses it; a run records each use's");
+        builder.AppendLine("resolution, and a resume is refused where what the called workflow says changed since the");
+        builder.AppendLine("run began - the digest of its parsed definition, taken as the run's own definition's is, so a");
+        builder.AppendLine("comment or line endings change nothing - as its own definition's would.");
         builder.AppendLine();
         AppendWrapped(builder, RemoteWorkflowsHelp);
         builder.AppendLine();
         builder.AppendLine($"{ToolPackage.Command} {WorkflowExportService.CommandName} --from <use> --to <dir> vendors a remote workflow into the");
-        builder.AppendLine("repository at its resolved commit: every file of its directory, byte for byte, and");
-        builder.AppendLine("source.md, a note of where it came from - so a team can review what is written and use it");
-        builder.AppendLine("as ./.");
+        builder.AppendLine("repository at its resolved commit - no workflow named beside it, nor --shipped: every file");
+        builder.AppendLine("of its directory, byte for byte, and source.md, a note of where it came from and how the");
+        builder.AppendLine("commit came about where that is worth a word, a directory holding a source.md of its own");
+        builder.AppendLine("refused - so a team can review what is written and use it as ./.");
         builder.AppendLine();
         AppendWrapped(builder, WorkflowCacheHelp);
         builder.AppendLine();

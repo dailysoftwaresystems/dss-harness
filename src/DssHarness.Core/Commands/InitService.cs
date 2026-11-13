@@ -285,7 +285,7 @@ public sealed class InitService(
 
             try
             {
-                workflow = WorkflowTemplates.EnsureShipped(layout.WorkflowsDirectory, _fileSystem);
+                workflow = WorkflowTemplates.EnsureShipped(layout.WorkflowsDirectory, _fileSystem, _platform.PathComparison);
             }
             catch (HarnessException ex) when (ex.ExitCode is HarnessExit.Refused or HarnessExit.ConfigInvalid)
             {
@@ -295,6 +295,7 @@ public sealed class InitService(
             }
 
             actions.AddRange(workflow.Created.Select(file => $"created {file}"));
+            actions.AddRange(workflow.Moved.Select(file => $"note    {WorkflowTemplates.MovedNote(file)}"));
 
             if (workflow.Kept > 0)
             {

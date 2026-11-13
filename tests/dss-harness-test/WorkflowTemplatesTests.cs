@@ -15,6 +15,9 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class WorkflowTemplatesTests
 {
+    /// <summary>How this machine compares paths, as init hands it to the write-back of the shipped files.</summary>
+    private static StringComparison PathComparison => new HostPlatform().PathComparison;
+
     /// <summary>
     /// This build's own implementation workflow holds: parsed and validated against every rule a repository's is held to -
     /// a build whose own workflow does not hold is a build that says so, never one that writes a definition it refuses.
@@ -294,7 +297,7 @@ public sealed class WorkflowTemplatesTests
         var name = WorkflowTemplates.ShippedWorkflowName;
         var workflows = temp.Combine("tree", ".harness-config", "workflows");
 
-        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
 
         Assert.Equal([.. WorkflowTemplates.Files.Select(file => $".harness-config/workflows/{name}/{file}")], written.Created);
         Assert.Equal(0, written.Kept);
@@ -304,7 +307,7 @@ public sealed class WorkflowTemplatesTests
         File.Delete(Path.Combine(workflows, name, "closure.md"));
         File.WriteAllText(Path.Combine(workflows, name, "agents", "advisor.md"), "edited\n");
 
-        var finished = WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        var finished = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
 
         Assert.Equal([$".harness-config/workflows/{name}/recommendations.md", $".harness-config/workflows/{name}/closure.md"], finished.Created);
         Assert.Equal(WorkflowTemplates.Files.Count - 2, finished.Kept);
@@ -327,7 +330,7 @@ public sealed class WorkflowTemplatesTests
         var workflows = temp.Combine("tree", ".harness-config", "workflows");
         var directory = Path.Combine(workflows, name);
 
-        WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
 
         // The repository keeps one step of the shipped flow, and its files; every other file is gone.
         foreach (var file in Directory.GetFiles(directory, "*", SearchOption.AllDirectories))
@@ -347,7 +350,7 @@ public sealed class WorkflowTemplatesTests
                 outputs: schemas/triage.schema.json
             """);
 
-        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
 
         Assert.Equal(
             [
@@ -363,10 +366,91 @@ public sealed class WorkflowTemplatesTests
         File.WriteAllText(Path.Combine(directory, $"{name}.yml"), "name: [unclosed\n");
         File.Delete(Path.Combine(directory, "prompts", "triage.md"));
 
-        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, fileSystem));
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.False(File.Exists(Path.Combine(directory, "prompts", "triage.md")));
+    }
+
+    /// <summary>
+    /// Where the repository took the item pipeline out whole, its definition still using it, init writes it back whole
+    /// in one run: the pipeline's yml, missing, is read from the copy init is about to write, so every file it names is
+    /// known before anything is written.
+    /// </summary>
+    [Fact]
+    public void AUsedPipelineTakenOutWhole_IsWrittenBackWholeInOneRun()
+    {
+        using var temp = new TempDirectory();
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        var workflows = temp.Combine("tree", ".harness-config", "workflows");
+        var pipeline = WorkflowTemplates.Files.Where(file => file.StartsWith("item-pipeline/", StringComparison.Ordinal)).ToList();
+
+        WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
+        Directory.Delete(Path.Combine(workflows, name, "item-pipeline"), recursive: true);
+
+        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
+
+        Assert.Equal([.. pipeline.Select(file => $".harness-config/workflows/{name}/{file}")], written.Created);
+        Assert.Equal(WorkflowTemplates.Files.Count - pipeline.Count, written.Kept);
+    }
+
+    /// <summary>
+    /// A repository's own definition that uses a workflow that does not resolve - one of its own that is not there, and
+    /// no shipped one stands in for it - refuses as configuration that does not hold, naming every problem: which
+    /// shipped files the tree names cannot be told, and none is written. A remote use names no file of the
+    /// repository's, and is no problem of init's.
+    /// </summary>
+    [Fact]
+    public void ARepositorysOwnDefinitionUsingWhatDoesNotResolve_IsRefused_AndARemoteUseIsNone()
+    {
+        using var temp = new TempDirectory();
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        var workflows = temp.Combine("tree", ".harness-config", "workflows");
+        var directory = Path.Combine(workflows, name);
+
+        WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
+        File.Delete(Path.Combine(directory, "prompts", "triage.md"));
+        File.WriteAllText(
+            Path.Combine(directory, $"{name}.yml"),
+            $"""
+            name: {name}
+            steps:
+              - name: triage
+                type: reason
+                agent: triage
+                prompt: prompts/triage.md
+                outputs: schemas/triage.schema.json
+              - name: mine
+                use: ./mine/mine.yml
+            """);
+
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            $".harness-config/workflows/{name}/{name}.yml is the repository's own definition of the {name} workflow, and uses what does not resolve, so which shipped files it names cannot be told, "
+                + $"and none was written; run 'dssharness init' again once it does ('dssharness validate-workflow {name}' says the same):{Environment.NewLine}"
+                + $"  - step 'mine' uses './mine/mine.yml', and no workflow file is at '{name}/mine/mine.yml' under the repository's workflows directory",
+            refusal.Message);
+        Assert.False(File.Exists(Path.Combine(directory, "prompts", "triage.md")));
+
+        File.WriteAllText(
+            Path.Combine(directory, $"{name}.yml"),
+            $"""
+            name: {name}
+            steps:
+              - name: triage
+                type: reason
+                agent: triage
+                prompt: prompts/triage.md
+                outputs: schemas/triage.schema.json
+              - name: review
+                use: acme/shared/workflows/review/review.yml@v1
+            """);
+
+        Assert.Equal([$".harness-config/workflows/{name}/prompts/triage.md"], WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison).Created);
     }
 
     /// <summary>
@@ -382,10 +466,10 @@ public sealed class WorkflowTemplatesTests
         var workflows = temp.Combine("tree", ".harness-config", "workflows");
         var directory = Path.Combine(workflows, name);
 
-        WorkflowTemplates.EnsureShipped(workflows, real);
+        WorkflowTemplates.EnsureShipped(workflows, real, PathComparison);
         File.Delete(Path.Combine(directory, "prompts", "plan.md"));
 
-        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, new UnreadDefinition(real, $"{name}.yml")));
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, new UnreadDefinition(real, $"{name}.yml"), PathComparison));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.Equal(
@@ -546,11 +630,11 @@ public sealed class WorkflowTemplatesTests
         var name = WorkflowTemplates.ShippedWorkflowName;
         var workflows = temp.Combine("tree", ".harness-config", "workflows");
 
-        WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
         File.WriteAllText(Path.Combine(workflows, name, "closure.md"), "# The repository's own universe\n");
         File.Delete(Path.Combine(workflows, name, "recommendations.md"));
 
-        var finished = WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        var finished = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
 
         Assert.Equal([$".harness-config/workflows/{name}/recommendations.md"], finished.Created);
         Assert.Equal("# The repository's own universe\n", File.ReadAllText(Path.Combine(workflows, name, "closure.md")));
