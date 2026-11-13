@@ -1663,7 +1663,12 @@ that ends at its bound leaves what its deciding step found with none of it acted
 called where the deciding step ends and again by the schedule's walk for a session that takes the
 run up from its records), and no iteration's end re-reads the decision, for it was made - the
 shipped review loop decides at its `review`, so the last rework of a loop that ends at its bound
-is reviewed by the round after it and what it leaves is what its last review found. A step raised by another step's ending
+is reviewed by the round after it and what it leaves is what its last review found. Since the
+decision is read where the deciding step ends, its `until`, `blocking` and `leftover` read of the
+iteration only that step and the steps it waits for (V64), and every other step of the iteration
+runs before it - one it waits for - or after it, waiting for it as a handler of its ending does
+(V65), so none is left running in an iteration the loop ended at its decision (`WorkflowValidator`'s
+`DecisionRules`). A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
 schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own.
@@ -1678,13 +1683,33 @@ for a `step`, which a step of the used workflow reads as `{input.<name>}` in its
 whole input of the kind `file` naming its `prompt`, so one pipeline is asked with a different
 prompt by each workflow that uses it; and a step of the used workflow may say a `when` that reads
 one input of it alone, its own gate, held off where a use fills that input so - the way the
-shipped flow's item pipeline holds its `redo` and `undo` off where its recovery uses it. The used
+shipped flow's item pipeline holds its `redo` and `undo` off where its recovery uses it. Only
+where the use's `with` value, or the input's default, is known as the file is read and makes the
+`when` false (`HeldOffByItsUse`, which reads the gate as the run reads it) is such a step free of
+waiting for the agent it works in and of reading a piece outside the work-item group; one the use
+opens runs, and is held to both as any step is. An input the use leaves to its default is read
+as a `with` value is, where the use sits, typed by the whole expression that fills it (`Yield`), as
+a declared output is; a text is a template written whole; a step input read in an `onFailure` or a
+`then` that the use fills with no name is refused where it is read (V62); and a policy read from
+an input is, in every rule that weighs one, the policy the use around its writer fills it with
+(`EffectiveOnFailure` through `PolicyFilled`) - a reasoning step under a group a use fills with
+`recover` is never recovered, a use that fills it with `recover` gives the run's recovery its
+failures, and `recoveryBound` is raised there. The used
 workflow is read as a definition of its own and resolved
 into the step before anything is checked or run: its steps become the step's members - instances
 named under the use as a group's are - its files are read in its own directory, its declared
 outputs are the step's own once it ends, and its recovery takes a failure inside it before the
-caller's handling of the step. Its steps read only its inputs, its params and its own steps,
-never the calling run's; every fact of the caller they need comes through an input. Its budget,
+caller's handling of the step: a failure handed to the recovery reaches the nearest one declared
+around the failing step, however many uses out, and else the run's own, as `RecoveryAt` finds it
+(`RecoveryFrom`, the one reading the reach and the recovery-never-calls-itself rules ask), and a
+used workflow's recovery is held to the run's own recovery's rules (`RecoverRules`) - its
+`onFailure` pause or stop - and placed and checked however deep in other recoveries it sits. Its
+steps read only its inputs, its params and its own steps, never the calling run's - nor the
+caller's work item, the caller's iteration before, or what raised a handler of the caller, and a
+pull request's `base` inside it reads no input, for the base is filled from the run's own inputs
+before any use opens (V61); every fact of the caller they need comes through an input. A step of a
+used workflow placed in the run's recovery still reads the failure that recovery puts right as
+`source`, as the shipped remedy prompt does. Its budget,
 limits, advisor, amend and answers are never applied - the calling run's own hold - and
 `validate-workflow` says so beside the fingerprint of the file it read, one line for each use -
 unless the use says `useParentLimits: false`, and then the used workflow's own settings govern
@@ -1701,6 +1726,15 @@ files read in its own directory (`SeekAdvice` picks it and routes the call's wor
 `AdvisorRunner` reading by the name it names); and the run's one graph takes the shape it
 declares where the run's own workflow says none (`FlowGraphSyncs.RequestOf`'s governing
 shape, passed by the reason steps' serving and the graphify runner through `FlowUse.Around`).
+Each key such a use applies is held to every rule the run's own key of that name is (V66,
+`GoverningRules` calling the run's own `LimitRules`, `AdvisorKinds`, `AnswerRules` and
+`GraphShapeRules`): its limits and `maxInstances` in their ranges, its advisor's tier, model, tries
+and kinds, its agent definition and prompt read in its own directory and checked against the
+configuration, and its keys among those the run needs, its answers to kinds its steps raise, and
+its graph's patterns and languages - a use cannot declare what a run could not; and where the run's
+own workflow declares no `codebaseGraph`, two such uses that shape the graph differently are
+refused, for a run has one graph, of one shape. Its budget and its reporter are carried and held to
+nothing here.
 An amend is refused where the key says false - an amend is a run's
 own, and no step of a run applies one - said at validation; `preapproved` is a run's input
 alone, whatever the key says. A

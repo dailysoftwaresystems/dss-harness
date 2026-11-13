@@ -5282,13 +5282,23 @@ public static class HelpTopics
         builder.AppendLine("workflow's directory for a file, and a name for a step - what a step of the used workflow");
         builder.AppendLine("reads as {input.<name>} in its onFailure or then, filled where it runs; the file a step is");
         builder.AppendLine("asked with may be read the same way, one whole input of the kind file naming its prompt,");
-        builder.AppendLine("so one pipeline is asked with a different prompt by each workflow that uses it. A step of");
+        builder.AppendLine("so one pipeline is asked with a different prompt by each workflow that uses it. An input");
+        builder.AppendLine("the use leaves to its default is read the same way, where the use sits; a step input it");
+        builder.AppendLine("fills with no name is refused where it is read, and a policy filled with recover is held");
+        builder.AppendLine("to what recover written out is - a reasoning step is never recovered, and a recovery never");
+        builder.AppendLine("calls itself. A step of");
         builder.AppendLine("the used workflow may also say a when that reads one input of it alone: its own gate, held");
         builder.AppendLine("off where a use fills that input so - the way the shipped flow's item pipeline holds its");
-        builder.AppendLine("redo and undo off where its recovery uses it. The steps of a used");
+        builder.AppendLine("redo and undo off where its recovery uses it; only where the use's with value, or the");
+        builder.AppendLine("input's default, closes the gate as written is the step free of waiting for the agent it");
+        builder.AppendLine("works in, and one the use opens is held to it as any step is. The steps of a used");
         builder.AppendLine("workflow read only its inputs, its params and its own steps, never the calling run's -");
+        builder.AppendLine("nor the caller's work item, its iteration before, or what raised a handler of the caller,");
+        builder.AppendLine("and a pull request's base inside it reads no input -");
         builder.AppendLine("every fact of the caller they need comes through an input - and a failure inside it goes");
-        builder.AppendLine("to the workflow's own recovery first, then to the caller's handling of the step. Its");
+        builder.AppendLine("to the workflow's own recovery first, the nearest declared around the failing step however");
+        builder.AppendLine("many uses out, then to the caller's handling of the step; that recovery's onFailure is");
+        builder.AppendLine("pause or stop, as the run's own is. Its");
         builder.AppendLine("budget, limits, advisor, amend and answers are never applied - the calling run's own hold -");
         builder.AppendLine("and validate-workflow says so beside the fingerprint of the file it read, unless the use says");
         builder.AppendLine("useParentLimits: false, and then the workflow's own settings govern its steps: each key it");
@@ -5299,7 +5309,11 @@ public static class HelpTopics
         builder.AppendLine("groups around it and before the run's - and each key it declares none for staying the");
         builder.AppendLine("caller's, for a use cannot widen a run's limits by declaring nothing. Its advisor serves its");
         builder.AppendLine("steps' questions, its files read in its own directory, and the run's one graph takes the");
-        builder.AppendLine("shape it declares where the run's own workflow says none. An amend is refused");
+        builder.AppendLine("shape it declares where the run's own workflow says none. Each key it applies is held to");
+        builder.AppendLine("every rule the run's own key of that name is - its limits, its maxInstances, its advisor,");
+        builder.AppendLine("its answers, its graph's shape - for a use cannot declare what a run could not, and two");
+        builder.AppendLine("such uses that shape the graph differently are refused where the run's own workflow");
+        builder.AppendLine("declares no shape, for a run has one graph. An amend is refused");
         builder.AppendLine("there, said at validation, for an amend is a run's own, and preapproved is a run's input alone,");
         builder.AppendLine("whatever the key says. A workflow that");
         builder.AppendLine($"uses itself, directly or through others, is refused with the chain, and uses nest at most {WorkflowFileParser.MaxDepth} deep");
@@ -5932,8 +5946,11 @@ public static class HelpTopics
             "when a review finds nothing, and it decides where its review ended (decideAfter): the until and the",
             "bound are read on what that review found, before the rework acts on it, so the last rework of a loop",
             "that ends at its bound is reviewed by the round after it, and what such a loop leaves is what its last",
-            "review found, none of it acted on. At three iterations the configuration ends it as it stands and what",
-            "is left is the loop's leftover.");
+            "review found, none of it acted on. A loop that decides at a step reads, in its until, its blocking and its",
+            "leftover, only that step and the steps it waits for, which have ended there, and every other step of the",
+            "iteration runs before it or after it - here each step after the review waits for it - so none is left",
+            "running when the loop ends at its decision. At three iterations the configuration ends it as it stands",
+            "and what is left is the loop's leftover.");
 
         return builder.ToString();
 
