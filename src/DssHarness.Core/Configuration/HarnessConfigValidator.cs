@@ -568,9 +568,10 @@ public static partial class HarnessConfigValidator
     }
 
     /// <summary>
-    /// Checks the workflow sources the configuration declares: that each allowed source is named as one is, that each
-    /// host is named as a host and gives the environment variable its credential is read from, and that <c>pin</c> and
-    /// <c>offline</c> spell what they may.
+    /// Checks the workflow sources the configuration declares: that each allowed source is named as one is, under a
+    /// host <c>hosts</c> names where it is under one, that each host is named as a host and gives the environment
+    /// variable its credential is read from - a host with none would be reached with no credential, which the fetch
+    /// refuses - and that <c>pin</c> and <c>offline</c> spell what they may.
     /// </summary>
     private static void ValidateWorkflowSources(WorkflowSourcesConfig? sources, List<string> problems)
     {
@@ -587,6 +588,10 @@ public static partial class HarnessConfigValidator
             {
                 problems.Add($"workflowSources.{problem}");
             }
+            else if (WorkflowSourceRules.AllowedHost(entry) is { } allowedHost && !sources.Hosts.ContainsKey(allowedHost))
+            {
+                problems.Add($"workflowSources.allow names '{entry}', under the host '{allowedHost}', which workflowSources.hosts does not name: a host beyond github.com is reached only with the credential its entry there names");
+            }
         }
 
         foreach (var (host, named) in sources.Hosts)
@@ -601,7 +606,7 @@ public static partial class HarnessConfigValidator
                 problems.Add($"workflowSources.hosts names '{WorkflowSourceRules.GitHub}', which needs no entry: the machine's own gh login reaches it");
             }
 
-            if (named.Credential is { } credential)
+            if (named?.Credential is { } credential)
             {
                 if (!string.Equals(credential.From, "env", StringComparison.Ordinal))
                 {
@@ -612,6 +617,10 @@ public static partial class HarnessConfigValidator
                 {
                     problems.Add($"workflowSources.hosts.{host}.credential names no environment variable; a host's credential is an environment variable, named here");
                 }
+            }
+            else if (!host.Equals(WorkflowSourceRules.GitHub, StringComparison.OrdinalIgnoreCase))
+            {
+                problems.Add($"workflowSources.hosts.{host} names no credential; a host beyond github.com is reached with the one credential named here, \"credential\": {{\"from\": \"env\", \"name\": \"<VARIABLE>\"}}, and never with the machine's own tokens");
             }
         }
 

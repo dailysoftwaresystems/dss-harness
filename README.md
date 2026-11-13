@@ -89,7 +89,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there, each step's schema one the engine reads (`help workflows`). A remote use is resolved - fetched into the workflow cache, or read from it at the commit the run recorded - and each resolution printed with its source. Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
 | `export-workflow --from <use> --to <dir> [--json]` | Vendor a remote workflow, as a use names it (`owner/repo/path/workflow.yml@ref`), at its resolved commit: every file of its directory and a note of where it came from, for review, so a team can use it as `./` |
-| `workflow-cache list [--json]` / `workflow-cache prune [--unused-days N] [--json]` | The hash cache of remote workflows: each entry it holds - where it came from, its commit, its files and bytes - and the removal of the entries no run used for N days, with the blobs no entry left holds |
+| `workflow-cache list [--json]` / `workflow-cache prune --unused-days N [--json]` | The hash cache of remote workflows, its directory named in text and `--json`: each entry it holds - where it came from, its commit, its files and bytes, the refs whose newest resolution it is - and every file of its own it could not read; and the removal of the entries no run used for N days (required, 0 to 36,500), the resolutions that named them and the blobs no entry left holds, ending incomplete (21) where a file could not be removed or read |
 | `list-agent-providers [--template] [--json]` | List the agent sections config.json declares: each provider, its keys' names in the order they are tried with whether the slot holds each - `present` or `missing`, never a value - its models and whether each is priced, the tiers, the clients and each web-search source's key; exit 0 whatever is missing; `--template` prints the sections as `init` writes them into a new config, to paste into an existing one (`help agent-clients`) |
 | `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once no agent of it stands in the way - a live one with no worktree goes with it - and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence, transcripts, steps and sessions go only with `--delete-evidence` |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
@@ -1237,9 +1237,13 @@ every agent by name, a side-task's as well as a step's (`AgentPolicy.SlotOrState
 `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`,
 `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`, `fold-agent`, `delete-agent`, `legs`,
 `install-missing-tools`, `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`,
-`stop-run`, `clean`, `host-exec`, `up` and `down`, and the steps nobody types (`host-agent`,
-`sync-serve`, `host-hold`, `contain-exec`, `isolate-exec`); those that only read, and those that
-write only the tree's own files, stay open (`AgentPolicy.OpenVerbs`).
+`stop-run`, `clean`, `host-exec`, `up`, `down` and `workflow-cache`, and the steps nobody types
+(`host-agent`, `sync-serve`, `host-hold`, `contain-exec`, `isolate-exec`); those that only read, and
+those that write only the tree's own files, stay open (`AgentPolicy.OpenVerbs`).
+`validate-workflow` and `export-workflow` are among them: where a person's run of either would fetch
+a remote workflow into the workflow cache, an agent's - its every child carries
+`DSSHARNESS_UNDER_AGENT` - reads the cache alone and writes nothing to it, and one the cache does not
+hold is refused naming `dssharness validate-workflow`, which a person runs to fetch it.
 
 What the agents wrote runs inside the same isolation when this tool runs it. The work of each leg of a
 run's `build`, `test`, `run` and `check-mutations` step that this machine runs - every phase it starts:
@@ -1798,35 +1802,56 @@ an item built in an agent of its own, tested, reviewed, folded and checkpointed 
 it its prompt, its failure's name and the facts of the run its steps read.
 
 A use may name a workflow beyond the repository: `owner/repo/path/workflow.yml@ref`, as GitHub
-Actions spells `uses`, or the same under a GitHub Enterprise host the configuration names,
-`host/owner/repo/path/workflow.yml@ref`. The ref is resolved to a commit at the run's start - a
-full commit SHA is its own commit, needing no network - the commit's tree is read and every blob
-under the workflow's directory is fetched, each checked against the hash the tree gives of it, the
-whole bounded at 2,000 files and 20 MiB, and it is kept in the workflow cache, `workflow-cache/`
-under this user's own directory for this tool: blobs by their git hash, one entry per repository,
-commit and directory, its files hashed again as they are read, so a cache file changed on disk is
-refused and fetched again. A second run of a pinned SHA reads the cache with no network, a tag
-needs one call to resolve at each run's start, and a run records each use's resolution: a resume
-uses the recorded commit and never resolves again, so a tag or branch that moved since changes no
-run already started, and only a changed local file refuses it as before. A remote workflow is
-trusted by configuration alone: `workflowSources.allow` names the owners and repositories a use
-may name - empty by default, so a remote use is refused until the repository allows its owner -
-`workflowSources.hosts` names the GitHub Enterprise hosts with the environment variable each
-credential is read from (github.com is reached with the machine's own `gh` login), `pin` holds the
-refs to a tag or a full commit SHA (`tag-or-commit`, the default; `commit` refuses tags too;
-`any` allows a branch, warned of at every run that uses one, for a branch moves), and `offline`
-says what happens where a ref cannot be resolved: `refuse` (the default) or `last-resolved`, the
-cache's last resolution standing in, which the run records that it did. Its files resolve against
-its cache entry as a local workflow's do against its directory, a use inside it resolves inside
-the same entry, and a local use never resolves under the workflows folder's `remote/`, which is
-the cache's own reserved place.
+Actions spells `uses` - a repository's name may be dotted, as an organisation's `.github` is - or
+the same under a GitHub Enterprise host the configuration names, `host/owner/repo/path/workflow.yml@ref`.
+The ref is held to git's own rules for a ref's name and resolved at the run's start through the
+repository's own refs: its tag, an annotated one peeled to the commit it names, or its branch where
+the pin allows one. A full commit SHA is its own commit, and is fetched only once the repository's
+default branch, or one of the first 20 tags and branches the forge lists, reaches it: GitHub serves
+a commit of any fork under the repository's own name, and one that is not the repository's own is
+refused. The commit's tree is walked to the workflow's directory, and the whole is refused with
+nothing cached where the directory's listing was cut short, holds a symbolic link or a submodule, or
+a path that is rooted, holds `..`, `\`, `:` or a control character, or is another's where case is
+folded, or where the file the use names is not in it; every blob is fetched as its bytes and checked
+against the hash the tree gives of it, the whole bounded at 2,000 files and 20 MiB. It is kept in
+the workflow cache, `workflow-cache/` under this user's own directory for this tool, named the first
+time a remote use needs it: each blob as its bytes at `blobs/<first 2 hex>/<remaining 38 hex>`, one
+entry per repository, commit and directory, held to its key as it is read, and each ref's newest
+resolution with its time; every blob is hashed again as it is read, so a blob changed on disk is
+refused and its directory fetched again. A second run of a pinned SHA reads the cache with no
+network, a tag needs one call to resolve at each run's start, and a run records each use's
+resolution: a resume uses the recorded commit and never resolves again, so a tag or branch that
+moved since changes no run already started, and only a changed local file refuses it as before. A
+remote workflow is trusted by configuration alone: `workflowSources.allow` names the owners and
+repositories a use may name - empty by default, so a remote use is refused until the repository
+allows its owner - `workflowSources.hosts` names each GitHub Enterprise host with its one
+credential, `"credential": {"from": "env", "name": "<VARIABLE>"}`, given to its calls as `GH_TOKEN`
+for a `*.ghe.com` host and `GH_ENTERPRISE_TOKEN` for any other, every other token of the machine's
+taken away - a host with none, or whose variable is not set, is refused - while github.com is
+reached with the machine's own `gh` login, every call naming its host; `pin` holds the refs to a tag
+or a full commit SHA (`tag-or-commit`, the default; `commit` refuses tags too; `any` allows a
+branch, warned of wherever one is resolved, for a branch moves), and `offline` says what happens
+where the network keeps the forge from being reached: `refuse` (the default) or `last-resolved`, the
+cache's newest resolution of the ref standing in, warned of where it does. A forge that answered -
+refusing the credential, or naming a repository or ref that is not there - is refused with what
+`gh` said, and nothing stands in for it. Its files resolve against its cache entry as a local
+workflow's do against its directory, a use inside it resolves inside the same entry, and a local
+use never resolves under the workflows folder's `remote/`, which is the cache's own reserved place.
+A command an agent runs never reaches the forge nor writes the cache: `validate-workflow` and
+`export-workflow` under an agent read the cache alone, and are refused naming
+`dssharness validate-workflow`, which a person runs to fetch what they need.
 
 `export-workflow --from <source> --to <dir>` vendors a remote workflow into the repository at its
 resolved commit: every file of its directory, byte for byte, and `source.md`, a note of where it
 came from - so a team can review what is written and use it as `./`. `workflow-cache list` says
-each entry the cache holds - where it came from, its commit, its files and bytes, and when it was
-last used - and `workflow-cache prune --unused-days N` removes the entries no run used for N days
-and the blobs no entry left holds.
+each entry the cache holds - where it came from, its commit, its files and bytes, when it was
+fetched and last used, and the refs whose newest resolution it is - and every file of the cache's
+own that could not be read. `workflow-cache prune --unused-days N`, the days required and from 0 to
+36,500, removes the entries no run used and none was fetched for N days, the resolutions that named
+them, and the blobs no entry left holds - every blob an entry it keeps holds kept, and no blob
+removed at all while a file of the cache's own could not be read; a file it could not remove or
+read is said, and the pruning ends incomplete (21). Both name the cache's directory, in text and in
+`--json`, and every write and pruning of the cache is made under one lock.
 
 This build checks workflow definitions - the shape of every key, every step, input, param and
 output an expression, a template or a prompt names, every path typed by the schema or the built-in

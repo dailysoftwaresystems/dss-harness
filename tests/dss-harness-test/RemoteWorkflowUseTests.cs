@@ -1,11 +1,14 @@
+using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json.Nodes;
+using DssHarness.Core.Agents;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using NSubstitute;
 
@@ -13,9 +16,11 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// A workflow used as a step from beyond the repository: the source's spelling, the fetch through the forge's tool -
-/// a ref resolved to a commit, the commit's tree read, every blob under the workflow's directory checked against the
-/// hash the tree gives - the hash cache it is kept in, read again as it is read, the trust a configuration alone
-/// grants, the offline fallback, and the export that vendors the whole for review.
+/// a ref resolved to a commit of the repository's own, the commit's tree walked to the workflow's directory, every path
+/// under it held to the tree's rule and every blob checked against the hash the tree gives - the hash cache it is kept
+/// in as bytes, read again as it is read, the trust a configuration alone grants and the one credential a host is
+/// given, the offline fallback, an agent's command that reads the cache alone, the pruning, and the export that vendors
+/// the whole for review.
 /// </summary>
 public sealed class RemoteWorkflowUseTests
 {
@@ -23,7 +28,13 @@ public sealed class RemoteWorkflowUseTests
 
     private const string Commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string Moved = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    private const string TagObject = "cccccccccccccccccccccccccccccccccccccccc";
+    private const string Repository = "repos/dailysoftwaresystems/shared";
     private const string Source = "dailysoftwaresystems/shared/workflows/security-review/security-review.yml@v1";
+    private const string Directory = "workflows/security-review";
+    private const string Yml = "workflows/security-review/security-review.yml";
+    private const string PromptPath = "workflows/security-review/prompts/review.md";
+    private const string GhesSource = "ghe.acme.internal/acme/shared/workflows/security-review/security-review.yml@v1";
 
     /// <summary>The workflow the repository holds, as the fetch answers it.</summary>
     private const string Definition =
@@ -42,7 +53,10 @@ public sealed class RemoteWorkflowUseTests
 
     private const string Prompt = "Review the paths you are given.\n";
 
-    /// <summary>The forms a source takes: an owner, a repository, a workflow file's path in it, and a ref after @ - and a host under its own name, where there is one.</summary>
+    /// <summary>What gh says where the network is not there: a name that does not resolve.</summary>
+    private const string Unreachable = "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n";
+
+    /// <summary>The forms a source takes: an owner, a repository - dotted, as GitHub's may be - a workflow file's path in it, and a ref after @, a full SHA read in lower case; and a host under its own name, where there is one.</summary>
     [Fact]
     public void ASourceNamesAnOwnerARepositoryAPathAndARef()
     {
@@ -56,55 +70,132 @@ public sealed class RemoteWorkflowUseTests
             ("github.com", "acme", "shared", "workflows/pipeline/pipeline.yml", "1111111111111111111111111111111111111111"),
             AsParts("acme/shared/workflows/pipeline/pipeline.yml@1111111111111111111111111111111111111111"));
 
+        // The organisation's .github repository, the home of its shared workflows, and a dotted repository's name.
+        Assert.Equal(("github.com", "acme", ".github", "workflows/x/x.yml", "v1"), AsParts("acme/.github/workflows/x/x.yml@v1"));
+        Assert.Equal(("github.com", "acme", "my.repo", "workflows/x/x.yml", "v1"), AsParts("acme/my.repo/workflows/x/x.yml@v1"));
+
+        // A full SHA spelled in upper case is the same commit, one cache entry and one name.
+        Assert.Equal(
+            ("github.com", "acme", "shared", "workflows/x/x.yml", "abcdef0123456789abcdef0123456789abcdef01"),
+            AsParts("acme/shared/workflows/x/x.yml@ABCDEF0123456789ABCDEF0123456789ABCDEF01"));
+
         Assert.Null(WorkflowRemote.Source("./pipeline/pipeline.yml"));
         Assert.Null(WorkflowRemote.Source("../pipeline/pipeline.yml"));
         Assert.Null(WorkflowRemote.Source("dailysoftwaresystems/shared/workflows/pipeline/pipeline.yml"));
         Assert.Null(WorkflowRemote.Source("dailysoftwaresystems/shared@v1"));
         Assert.Null(WorkflowRemote.Source("dailysoftwaresystems/shared/pipeline.yml@v1"));
+        Assert.Null(WorkflowRemote.Source("acme/../workflows/x/x.yml@v1"));
+        Assert.Null(WorkflowRemote.Source("acme/./workflows/x/x.yml@v1"));
 
         static (string, string, string, string, string)? AsParts(string source)
             => WorkflowRemote.Source(source) is { } parsed ? (parsed.Host, parsed.Owner, parsed.Repo, parsed.File, parsed.Ref) : null;
     }
 
     /// <summary>
-    /// A tag is resolved to its commit through its ref, the commit's tree read, and every blob under the workflow's
-    /// directory fetched and hashed as git hashes one - the whole kept in the cache, blobs by their git hash and the
-    /// entry by its repository, commit and path, and the second resolution of the same commit makes no request at all.
+    /// A ref git would not take is refused by git's own rules before anything is asked of the forge: the ref is put into
+    /// the forge's addresses as it is spelled, and one that reads as part of the address could reach another ref.
     /// </summary>
-    [Fact]
-    public async Task ATagIsResolved_ItsDirectoryFetchedAndHashChecked_KeptInTheCache()
+    [Theory]
+    [InlineData("../heads/main", "it holds '..'")]
+    [InlineData("v1.", "it ends with '.'")]
+    [InlineData("v1?x", "it holds '?'")]
+    [InlineData("v1 x", "it holds ' '")]
+    [InlineData("rel//v1", "one of its parts is empty")]
+    [InlineData("rel/.v1", "one of its parts begins with '.'")]
+    [InlineData("v1.lock", "one of its parts ends with '.lock'")]
+    [InlineData("v@{1}", "it holds '@{'")]
+    [InlineData("v1~1", "it holds '~'")]
+    public async Task ARefGitWouldNotTake_IsRefused_BeforeAnythingIsAsked(string @ref, string why)
     {
         using var temp = new TempDirectory();
-        var (requests, root, cache, fetcher) = Fixture(temp, Tag(), Tree(), Blob(Definition), Blob(Prompt));
+        var (forge, _, fetcher, _) = Fixture(temp);
+        var source = new WorkflowRemoteSource("github.com", "dailysoftwaresystems", "shared", Yml, @ref);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(source, Allowed(), temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal($"'{source.Spelled}' names '{@ref}' is no ref git takes: {why}; nothing was asked of the forge", refused.Message);
+        Assert.Empty(forge.Requests);
+        Assert.Null(WorkflowRemote.RefProblem("v1.4.0"));
+        Assert.Null(WorkflowRemote.RefProblem("release/2026-11"));
+    }
+
+    /// <summary>
+    /// A tag is resolved to its commit through the repository's own ref, the commit's tree walked to the workflow's
+    /// directory a part at a time, the directory listed whole and every blob under it fetched and hashed as git hashes
+    /// one - each call naming its host - the whole kept in the cache, blobs by their git hash and the entry by its
+    /// repository, commit and path, the resolution recorded with its time; the second resolution of the same tag asks
+    /// the tag alone.
+    /// </summary>
+    [Fact]
+    public async Task ATagIsResolved_ItsDirectoryWalkedFetchedAndHashChecked_KeptInTheCache()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var (forge, cache, fetcher, warned) = Fixture(temp, clock);
+        Holds(forge, Commit, ("security-review.yml", Definition), ("prompts/review.md", Prompt));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+
+        Assert.Equal((Commit, Definition, false, false), (resolved.Commit, resolved.Definition, resolved.Moving, resolved.FromLastResolved));
+        Assert.Equal(
+            [
+                ["api", "--hostname", "github.com", $"{Repository}/git/ref/tags/v1"],
+                ["api", "--hostname", "github.com", $"{Repository}/git/commits/{Commit}"],
+                ["api", "--hostname", "github.com", $"{Repository}/git/trees/{Tree(Commit, 0)}"],
+                ["api", "--hostname", "github.com", $"{Repository}/git/trees/{Tree(Commit, 1)}"],
+                ["api", "--hostname", "github.com", $"{Repository}/git/trees/{Tree(Commit, 2)}?recursive=1"],
+                ["api", "--hostname", "github.com", $"{Repository}/git/blobs/{WorkflowCache.BlobSha(Definition)}"],
+                ["api", "--hostname", "github.com", $"{Repository}/git/blobs/{WorkflowCache.BlobSha(Prompt)}"],
+            ],
+            forge.Requests.Select(request => request.Arguments.ToArray()));
+
+        var listed = Assert.Single(cache.List().Entries);
+
+        Assert.Equal(("github.com", "dailysoftwaresystems", "shared", Commit, Directory), (listed.Entry.Host, listed.Entry.Owner, listed.Entry.Repo, listed.Entry.Commit, listed.Entry.Path));
+        Assert.Equal([PromptPath, Yml], [.. listed.Entry.Files.Select(file => file.Path).Order(StringComparer.Ordinal)]);
+        Assert.Equal(
+            new WorkflowCacheResolution("github.com", "dailysoftwaresystems", "shared", Directory, "v1", Commit, Branch: false, clock.GetUtcNow()),
+            cache.LastResolved("github.com", "dailysoftwaresystems", "shared", Directory, "v1"));
+        Assert.Equal(
+            $"github.com/dailysoftwaresystems/shared at {Commit[..12]}: {Directory} (2 file(s), {(Encoding.UTF8.GetByteCount(Definition) + Encoding.UTF8.GetByteCount(Prompt)).ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} bytes, fetched 2026-09-30, last used 2026-09-30, the newest resolution of the tag v1 on 2026-09-30)",
+            WorkflowCacheService.EntryLine(listed));
+        Assert.Empty(warned);
+
+        // The same tag again: one call re-resolves it - a tag needs that, at every run's start - and the cache answers
+        // the commit it holds, with no tree or blob asked for.
+        forge.Requests.Clear();
+        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+
+        Assert.Equal((Commit, Definition, false, false), (again.Commit, again.Definition, again.Moving, again.FromLastResolved));
+        Assert.Equal([$"{Repository}/git/ref/tags/v1"], forge.Asked);
+    }
+
+    /// <summary>
+    /// An annotated tag's ref names its tag object, never the commit: it is peeled through the tag object to the commit,
+    /// and that commit - a real one - is what is recorded, named and cached.
+    /// </summary>
+    [Fact]
+    public async Task AnAnnotatedTag_IsPeeledToTheCommitItNames()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = Json($$$"""{"ref":"refs/tags/v1","object":{"sha":"{{{TagObject}}}","type":"tag"}}""");
+        forge.Answers[$"{Repository}/git/tags/{TagObject}"] = Json($$$"""{"sha":"{{{TagObject}}}","tag":"v1","object":{"sha":"{{{Commit}}}","type":"commit"}}""");
 
         var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
 
         Assert.Equal(Commit, resolved.Commit);
-        Assert.False(resolved.Moving);
-        Assert.Equal(Definition, resolved.Definition);
-        Assert.Equal(
-            [
-                ["api", "repos/dailysoftwaresystems/shared/git/ref/tags/v1", "--jq", ".object.sha"],
-                ["api", $"repos/dailysoftwaresystems/shared/git/trees/{Commit}?recursive=1"],
-                ["api", $"repos/dailysoftwaresystems/shared/git/blobs/{WorkflowCache.BlobSha(Definition)}"],
-                ["api", $"repos/dailysoftwaresystems/shared/git/blobs/{WorkflowCache.BlobSha(Prompt)}"],
-            ],
-            requests.Select(request => request.Arguments.ToArray()));
+        Assert.Equal(Commit, Assert.Single(cache.List().Entries).Entry.Commit);
+        Assert.Equal([$"{Repository}/git/ref/tags/v1", $"{Repository}/git/tags/{TagObject}", $"{Repository}/git/commits/{Commit}"], forge.Asked.Take(3));
 
-        var entry = Assert.Single(cache.List()).Entry;
+        // A tag of a tree is no commit a workflow is read at.
+        forge.Answers[$"{Repository}/git/tags/{TagObject}"] = Json($$$"""{"sha":"{{{TagObject}}}","object":{"sha":"{{{Moved}}}","type":"tree"}}""");
+        var tree = await Assert.ThrowsAsync<HarnessException>(() => Over(cache, forge).ResolveAsync(Parsed() with { Ref = "v2" }, Allowed(), temp.Path, NoVariables, recorded: null, Token));
 
-        Assert.Equal(("github.com", "dailysoftwaresystems", "shared", Commit, "workflows/security-review", "v1"), (entry.Host, entry.Owner, entry.Repo, entry.Commit, entry.Path, entry.AskedFor));
-        Assert.Equal(
-            ["workflows/security-review/prompts/review.md", "workflows/security-review/security-review.yml"],
-            [.. entry.Files.Select(file => file.Path).Order(StringComparer.Ordinal)]);
-
-        // The same tag again: one call re-resolves it - a tag needs that, at every run's start - and the cache answers
-        // the commit it holds, with no tree or blob asked for.
-        var (asked, againFetcher) = Fetching(cache, Tag());
-        var again = await againFetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
-
-        Assert.Equal((Commit, Definition, false, false), (again.Commit, again.Definition, again.Moving, again.FromLastResolved));
-        Assert.Single(asked);
+        Assert.Equal(HarnessExit.Refused, tree.ExitCode);
     }
 
     /// <summary>
@@ -115,51 +206,210 @@ public sealed class RemoteWorkflowUseTests
     public async Task ABlobThatDoesNotHashToWhatTheTreeSays_IsRefused_AndNothingIsCached()
     {
         using var temp = new TempDirectory();
-        var (requests, _, cache, fetcher) = Fixture(temp, Tag(), Tree(), Blob("something else entirely\n"));
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        forge.Answers[$"{Repository}/git/blobs/{WorkflowCache.BlobSha(Definition)}"] = Blob(Encoding.UTF8.GetBytes("something else entirely\n"));
 
         var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.StartsWith(
-            $"'{Source}': the blob '{WorkflowCache.BlobSha(Definition)}' of 'workflows/security-review/security-review.yml' does not hash to what the commit's tree says of it",
-            refused.Message,
-            StringComparison.Ordinal);
-        Assert.Empty(cache.List());
-        Assert.Equal(3, requests.Count);
+        Assert.Equal(
+            $"'{Source}': the blob '{WorkflowCache.BlobSha(Definition)}' of '{Yml}' does not hash to what the commit's tree says of it; nothing was cached",
+            refused.Message);
+        Assert.Equal(new WorkflowCacheListing([], []), Listed(cache));
+        Assert.False(System.IO.Directory.Exists(cache.Directory));
     }
 
-    /// <summary>A directory past the fetch's bound of files is refused with the count, and nothing of it is fetched.</summary>
+    /// <summary>A directory past the fetch's bound of files is refused with the count, and no blob of it is fetched.</summary>
     [Fact]
-    public async Task ADirectoryPastTheBoundOfFiles_IsRefusedWithTheCount_AndNothingIsFetched()
+    public async Task ADirectoryPastTheBoundOfFiles_IsRefusedWithTheCount_AndNoBlobIsFetched()
     {
         using var temp = new TempDirectory();
-        var entries = Enumerable.Range(0, WorkflowCache.MostFiles + 1)
-            .Select(at => $$"""{"path":"workflows/security-review/f{{at}}.md","sha":"{{new string('c', 40)}}","type":"blob","mode":"100644","size":1}""");
-        var (requests, _, cache, fetcher) = Fixture(
-            temp,
-            Tag(),
-            Exited(0, $$"""{"tree":[{{string.Join(",", entries)}}]}"""));
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, [("security-review.yml", Definition), .. Enumerable.Range(0, WorkflowCache.MostFiles).Select(at => ($"f{at}.md", "x"))]);
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
 
         var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains(
-            $"resolved to a directory of {(WorkflowCache.MostFiles + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)} files, past the fetch's bound of {WorkflowCache.MostFiles.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
-            refused.Message,
-            StringComparison.Ordinal);
-        Assert.Empty(cache.List());
-        Assert.Equal(2, requests.Count);
+        Assert.Equal($"'{Source}' resolved to a directory of 2001 files, past the fetch's bound of 2000; nothing was fetched", refused.Message);
+        Assert.DoesNotContain(forge.Asked, asked => asked.Contains("/git/blobs/", StringComparison.Ordinal));
+        Assert.Equal(new WorkflowCacheListing([], []), Listed(cache));
+    }
+
+    /// <summary>A directory past the fetch's bound of bytes is refused with the size the tree gives, and no blob of it is fetched.</summary>
+    [Fact]
+    public async Task ADirectoryPastTheBoundOfBytes_IsRefusedWithTheSize_AndNoBlobIsFetched()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+
+        // The tree says the one file is a byte past the bound.
+        forge.Answers[$"{Repository}/git/trees/{Tree(Commit, 2)}?recursive=1"] = Listing(("security-review.yml", "blob", "100644", WorkflowCache.BlobSha(Definition), WorkflowCache.MostBytes + 1));
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal($"'{Source}' resolved to a directory of 20971521 bytes, past the fetch's bound of 20971520; nothing was fetched", refused.Message);
+        Assert.DoesNotContain(forge.Asked, asked => asked.Contains("/git/blobs/", StringComparison.Ordinal));
+        Assert.Equal(new WorkflowCacheListing([], []), Listed(cache));
+    }
+
+    /// <summary>
+    /// A use naming a file its directory does not hold at the commit - a typo - is refused naming the file and the
+    /// workflow files the directory does hold, before any blob is fetched, and nothing is cached: no later resolution
+    /// fetches the directory again to fail the same way.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheUseNamesThatTheDirectoryDoesNotHold_IsRefusedNamingIt_BeforeAnyBlobIsFetched()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-reviews.yml", Definition), ("prompts/review.md", Prompt));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            $"'{Source}' names '{Yml}', which the directory '{Directory}' does not hold at the commit '{Commit}': its workflow files are 'workflows/security-review/security-reviews.yml'; nothing was fetched",
+            refused.Message);
+        Assert.DoesNotContain(forge.Asked, asked => asked.Contains("/git/blobs/", StringComparison.Ordinal));
+        Assert.Equal(new WorkflowCacheListing([], []), Listed(cache));
+    }
+
+    /// <summary>
+    /// A listing of the directory the forge cut short is refused, and nothing is cached: a part of a directory read as
+    /// the whole would have a prompt the cut took read as one the workflow does not hold.
+    /// </summary>
+    [Fact]
+    public async Task ATreeListingCutShort_IsRefused_AndNothingIsCached()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        forge.Answers[$"{Repository}/git/trees/{Tree(Commit, 2)}?recursive=1"] = Listing(truncated: true, ("security-review.yml", "blob", "100644", WorkflowCache.BlobSha(Definition), 10));
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            $"'{Source}': the forge listed the directory '{Directory}' cut short, past what one answer of it holds; a part of a directory is not fetched as the directory. Nothing was fetched",
+            refused.Message);
+        Assert.Equal(new WorkflowCacheListing([], []), Listed(cache));
+    }
+
+    /// <summary>
+    /// A path a git tree may hold and a file system reads as a way out of the directory - a backslash, a drive's colon -
+    /// or two paths a file system that folds case reads as one, refuses the whole fetch before any blob is fetched, and
+    /// nothing is cached: an export of the directory writes inside it and nowhere else.
+    /// </summary>
+    [Theory]
+    [InlineData("..\\..\\escape.cmd", "'..\\..\\escape.cmd' holds '\\', which no path of a workflow's may")]
+    [InlineData("C:\\x", "'C:\\x' is rooted")]
+    [InlineData("notes/x:y.md", "'notes/x:y.md' holds ':', which no path of a workflow's may")]
+    [InlineData("Security-Review.yml", "'Security-Review.yml' and 'security-review.yml' are one path where case is folded")]
+    public async Task APathNoWorkflowsMayHold_IsRefused_AndNothingIsCached(string path, string problem)
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition), (path, Prompt));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal($"'{Source}' resolved to the commit '{Commit}', whose directory '{Directory}' holds a path no workflow's may: {problem}. Nothing was fetched", refused.Message);
+        Assert.DoesNotContain(forge.Asked, asked => asked.Contains("/git/blobs/", StringComparison.Ordinal));
+        Assert.Equal(new WorkflowCacheListing([], []), Listed(cache));
+    }
+
+    /// <summary>
+    /// A symbolic link in the directory is refused naming it, never cached as a file holding its target's path; a
+    /// submodule is refused naming it, never dropped without a word.
+    /// </summary>
+    [Fact]
+    public async Task ASymbolicLinkOrASubmodule_IsRefusedNamingIt()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        forge.Answers[$"{Repository}/git/trees/{Tree(Commit, 2)}?recursive=1"] = Listing(
+            ("security-review.yml", "blob", "100644", WorkflowCache.BlobSha(Definition), 10),
+            ("prompts", "blob", "120000", WorkflowCache.BlobSha("../shared-prompts"), 17));
+
+        var link = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(
+            $"'{Source}' resolved to the commit '{Commit}', whose '{Directory}/prompts' is a symbolic link: a workflow's files are its directory's own, and a link is followed nowhere. Nothing was fetched",
+            link.Message);
+
+        forge.Answers[$"{Repository}/git/trees/{Tree(Commit, 2)}?recursive=1"] = Listing(
+            ("security-review.yml", "blob", "100644", WorkflowCache.BlobSha(Definition), 10),
+            ("vendor", "commit", "160000", Moved, null));
+
+        var submodule = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(
+            $"'{Source}' resolved to the commit '{Commit}', whose '{Directory}/vendor' is a submodule: a workflow's files are its directory's own, and another repository's are not fetched with them. Nothing was fetched",
+            submodule.Message);
+        Assert.Equal((HarnessExit.Refused, HarnessExit.Refused), (link.ExitCode, submodule.ExitCode));
+        Assert.Equal(new WorkflowCacheListing([], []), Listed(cache));
+    }
+
+    /// <summary>
+    /// An answer of the forge's that does not read as what was asked - no JSON, a member missing or of the wrong kind,
+    /// base64 that is none, a hash that is no hash - is the forge's failure, said as one naming what was asked
+    /// (<see cref="HarnessExit.CommandFailed"/>), never an exception of the runtime's that ends the command as a defect;
+    /// and nothing is cached.
+    /// </summary>
+    [Theory]
+    [InlineData("commits", "not json at all", "the commit 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'")]
+    [InlineData("commits", """{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}""", "the commit 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'")]
+    [InlineData("commits", """{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","tree":{"sha":"1111111111111111111111111111111111111111"}}""", "the commit 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'")]
+    [InlineData("listing", """{"tree":[{"path":"security-review.yml","type":"blob","mode":"100644","sha":"short","size":3}]}""", "the directory 'workflows/security-review'")]
+    [InlineData("listing", """{"tree":[{"path":7,"type":"blob","mode":"100644","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":3}]}""", "the directory 'workflows/security-review'")]
+    [InlineData("listing", """{"tree":[{"path":"security-review.yml","type":"blob","mode":"100644","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":"many"}]}""", "the directory 'workflows/security-review'")]
+    [InlineData("blob", """{"content":"!!! not base64 !!!","encoding":"base64"}""", "the blob")]
+    [InlineData("blob", """{"content":"eA==","encoding":"rot13"}""", "the blob")]
+    public async Task AnAnswerThatDoesNotRead_IsRefusedAsTheForgesFailure_NeverAnExceptionOfTheRuntimes(string which, string answer, string what)
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        forge.Answers[which switch
+        {
+            "commits" => $"{Repository}/git/commits/{Commit}",
+            "listing" => $"{Repository}/git/trees/{Tree(Commit, 2)}?recursive=1",
+            _ => $"{Repository}/git/blobs/{WorkflowCache.BlobSha(Definition)}",
+        }] = Json(answer);
+
+        var failed = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.CommandFailed, failed.ExitCode);
+        Assert.StartsWith($"'{Source}' could not be resolved: the forge answered {what}", failed.Message, StringComparison.Ordinal);
+        Assert.EndsWith("; nothing was cached", failed.Message, StringComparison.Ordinal);
+        Assert.Equal(new WorkflowCacheListing([], []), Listed(cache));
     }
 
     /// <summary>
     /// A repository the configuration does not allow is refused before anything is asked of the forge, and an allow
-    /// list names an owner whole, its every repository, or one repository - another host's under its own name alone.
+    /// list names an owner whole, its every repository, or one repository - dotted, as GitHub's may be - another
+    /// host's under its own name alone.
     /// </summary>
     [Fact]
     public async Task ARepositoryTheConfigurationDoesNotAllow_IsRefusedBeforeAnythingIsAsked()
     {
         using var temp = new TempDirectory();
-        var (requests, _, _, fetcher) = Fixture(temp, Tag(), Tree(), Blob(Definition), Blob(Prompt));
+        var (forge, _, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
 
         var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), null, temp.Path, NoVariables, recorded: null, Token));
 
@@ -167,7 +417,7 @@ public sealed class RemoteWorkflowUseTests
         Assert.Equal(
             $"'{Source}' names the repository 'dailysoftwaresystems/shared', which workflowSources.allow does not allow; a remote workflow directs agents and machine steps in this repository, so it is trusted by configuration alone; the allow list is empty, so no remote source is allowed until the repository allows its owner",
             refused.Message);
-        Assert.Empty(requests);
+        Assert.Empty(forge.Requests);
 
         var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
 
@@ -176,37 +426,46 @@ public sealed class RemoteWorkflowUseTests
         Assert.True(WorkflowSourceRules.Allows(["dailysoftwaresystems"], "github.com", "dailysoftwaresystems", "shared"));
         Assert.True(WorkflowSourceRules.Allows(["dailysoftwaresystems/*"], "github.com", "dailysoftwaresystems", "shared"));
         Assert.True(WorkflowSourceRules.Allows(["dailysoftwaresystems/shared"], "github.com", "dailysoftwaresystems", "shared"));
+        Assert.True(WorkflowSourceRules.Allows(["dailysoftwaresystems/.github"], "github.com", "dailysoftwaresystems", ".github"));
         Assert.False(WorkflowSourceRules.Allows(["dailysoftwaresystems/other"], "github.com", "dailysoftwaresystems", "shared"));
         Assert.False(WorkflowSourceRules.Allows(["dailysoftwaresystems/*"], "ghe.acme.internal", "dailysoftwaresystems", "shared"));
         Assert.True(WorkflowSourceRules.Allows(["ghe.acme.internal/dailysoftwaresystems/*"], "ghe.acme.internal", "dailysoftwaresystems", "shared"));
+        Assert.True(WorkflowSourceRules.Allows(["ghe.acme.internal/dailysoftwaresystems"], "ghe.acme.internal", "dailysoftwaresystems", "shared"));
     }
 
     /// <summary>
     /// The pin holds the ref to a tag or a full commit SHA by default, a commit only where it says commit, and allows
-    /// a branch - which moves - only where it says any; a branch is told from a tag by the tag's own ref answering
-    /// nothing.
+    /// a branch - which moves, and is warned of - only where it says any; a branch is the repository's own ref of that
+    /// name, asked once the tag's own ref answered nothing and the repository answered it is there.
     /// </summary>
     [Fact]
     public async Task ThePinHoldsTheRefToATagOrACommit_ABranchOnlyWhereItSaysAny()
     {
         using var temp = new TempDirectory();
-        var allowed = new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"] };
-        var (requests, _, cache, fetcher) = Fixture(temp, Missing());
+        var (forge, cache, fetcher, warned) = Fixture(temp);
+        forge.Answers[Repository] = Json("""{"default_branch":"main"}""");
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), allowed, temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(
             $"'{Source}' names the ref 'v1', which is no tag of 'dailysoftwaresystems/shared'; workflowSources.pin is tag-or-commit, which takes a tag or a full commit SHA - a branch moves, and what a run ran must be what it said",
             refused.Message);
-        Assert.Single(requests);
+        Assert.Equal([$"{Repository}/git/ref/tags/v1", Repository], forge.Asked);
 
+        forge.Requests.Clear();
         var commit = await Assert.ThrowsAsync<HarnessException>(
-            () => Fetcher(cache, Tag()).ResolveAsync(Parsed(), new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "commit" }, temp.Path, NoVariables, recorded: null, Token));
+            () => fetcher.ResolveAsync(Parsed(), new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "commit" }, temp.Path, NoVariables, recorded: null, Token));
 
-        Assert.StartsWith($"'{Source}' names the ref 'v1', which is no full commit SHA; workflowSources.pin is commit, which takes a full commit SHA only", commit.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            $"'{Source}' names the ref 'v1', which is no full commit SHA; workflowSources.pin is commit, which takes a full commit SHA only - a tag or a branch moves, and a commit is what it is",
+            commit.Message);
+        Assert.Empty(forge.Requests);
 
-        var any = await Fetcher(cache, Missing(), CommitOf(), BranchTree(), Blob(Definition)).ResolveAsync(
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/heads/v1"] = Json($$$"""{"ref":"refs/heads/v1","object":{"sha":"{{{Commit}}}","type":"commit"}}""");
+
+        var any = await fetcher.ResolveAsync(
             Parsed(),
             new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "any" },
             temp.Path,
@@ -215,33 +474,117 @@ public sealed class RemoteWorkflowUseTests
             Token);
 
         Assert.Equal((Commit, true), (any.Commit, any.Moving));
-        Assert.Single(cache.List());
+        Assert.True(Assert.Single(cache.List().Entries).Resolutions.Single().Branch);
+        Assert.Equal(
+            [$"{WorkflowRemoteFetcher.Said}: '{Source}' names the branch 'v1', which moves: it resolved to the commit {Commit} now, and may resolve to another at the next run - pin it by a tag or a commit where what a run ran must be what it said"],
+            warned);
+
+        // A ref that is neither a tag nor a branch of the repository.
+        var neither = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(
+            Parsed() with { Ref = "nowhere" },
+            new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "any" },
+            temp.Path,
+            NoVariables,
+            recorded: null,
+            Token));
+
+        Assert.Equal("'dailysoftwaresystems/shared/workflows/security-review/security-review.yml@nowhere' names the ref 'nowhere', which is neither a tag nor a branch of 'dailysoftwaresystems/shared'; nothing was cached", neither.Message);
     }
 
     /// <summary>
-    /// Where the network is not there, the run is refused - unless the configuration says last-resolved, and then the
-    /// cache's last resolution of the ref stands in, said so by the resolution the run records.
+    /// A repository that is not there, or that the credential cannot see, answers a tag's ref as a tag that is not there
+    /// does: the repository is asked, and the refusal names it - never "no tag of it", and never the network not being there.
+    /// </summary>
+    [Fact]
+    public async Task AMissingRepository_IsRefusedAsOne_NeverAsAMissingTag()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(
+            Parsed(),
+            new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved", Pin = "any" },
+            temp.Path,
+            NoVariables,
+            recorded: null,
+            Token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            $"'{Source}' names the repository 'dailysoftwaresystems/shared' on 'github.com', which the forge answers is not there: it is misspelt, or the credential gh reaches 'github.com' with cannot see it; nothing was cached",
+            refused.Message);
+        Assert.Equal([$"{Repository}/git/ref/tags/v1", Repository], forge.Asked);
+        Assert.Equal(new WorkflowCacheListing([], []), Listed(cache));
+    }
+
+    /// <summary>
+    /// A commit named by its SHA - the strictest pin's only form - is fetched once the repository's default branch is
+    /// found to reach it, with no tag asked for; and a SHA GitHub serves from a fork of the repository, which no branch or
+    /// tag of the repository reaches, is refused as the imposter it is, with nothing cached.
+    /// </summary>
+    [Fact]
+    public async Task ACommitNamedByItsSha_IsFetchedOnlyWhereABranchOrTagOfTheRepositoryReachesIt()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        var pinned = Parsed() with { Ref = Commit };
+        var commitOnly = new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "commit" };
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[Repository] = Json("""{"default_branch":"main"}""");
+        forge.Answers[$"{Repository}/compare/main...{Commit}"] = Exited(0, "behind\n");
+
+        var resolved = await fetcher.ResolveAsync(pinned, commitOnly, temp.Path, NoVariables, recorded: null, Token);
+
+        Assert.Equal(Commit, resolved.Commit);
+        Assert.Equal([Repository, $"{Repository}/compare/main...{Commit}", $"{Repository}/git/commits/{Commit}"], forge.Asked.Take(3));
+        Assert.DoesNotContain(forge.Asked, asked => asked.Contains("/git/ref/", StringComparison.Ordinal));
+
+        // A commit of a fork: the default branch diverges from it, and no tag or branch the forge lists holds or reaches it.
+        Holds(forge, Moved, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/compare/main...{Moved}"] = Exited(0, "diverged\n");
+        forge.Answers[$"{Repository}/tags?per_page=100"] = Exited(0, $"v1 {Commit}\n");
+        forge.Answers[$"{Repository}/branches?per_page=100"] = Exited(0, $"main {Commit}\nfeature/x {Commit}\n");
+        forge.Answers[$"{Repository}/compare/v1...{Moved}"] = Exited(0, "ahead\n");
+        forge.Answers[$"{Repository}/compare/feature/x...{Moved}"] = Exited(0, "diverged\n");
+        forge.Requests.Clear();
+
+        var imposter = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(pinned with { Ref = Moved }, commitOnly, temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.Refused, imposter.ExitCode);
+        Assert.Equal(
+            $"'dailysoftwaresystems/shared/workflows/security-review/security-review.yml@{Moved}' names the commit '{Moved}', which no branch or tag of 'dailysoftwaresystems/shared' reaches - its default branch 'main', and the first 20 of the tags and branches the forge lists, were compared: GitHub serves a commit of any fork of a repository under the repository's own name, and one that is not the repository's own is never run; name a tag of it, or a commit one of its branches or tags holds. Nothing was cached",
+            imposter.Message);
+        Assert.Equal(
+            [Repository, $"{Repository}/compare/main...{Moved}", $"{Repository}/tags?per_page=100", $"{Repository}/branches?per_page=100", $"{Repository}/compare/v1...{Moved}", $"{Repository}/compare/feature/x...{Moved}"],
+            forge.Asked);
+        Assert.Equal([Commit], cache.List().Entries.Select(listed => listed.Entry.Commit));
+    }
+
+    /// <summary>
+    /// Where the forge cannot be reached, the run is refused naming what gh said - unless the configuration says
+    /// last-resolved, and then the cache's newest resolution of the ref stands in, warned of.
     /// </summary>
     [Fact]
     public async Task OfflineTheRunIsRefused_UnlessLastResolvedStandsIn()
     {
         using var temp = new TempDirectory();
-        var (_, _, cache, online) = Fixture(temp, Tag(), Tree(), Blob(Definition), Blob(Prompt));
+        var (forge, cache, online, warned) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition), ("prompts/review.md", Prompt));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
 
         _ = await online.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
 
-        // The network is not there any more: the tag cannot be resolved, and the refusals say what the configuration
-        // would have stand in.
-        var offline = Fetcher(cache, Exited(1, stderr: "gh: Could not resolve host: api.github.com\n"));
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => offline.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        // The network is not there any more: the tag cannot be resolved, and the refusal says what gh said and what the
+        // configuration would have stand in.
+        forge.Always = Exited(1, stderr: Unreachable);
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => online.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.EndsWith(
-            "workflowSources.offline is refuse, so nothing stands in - last-resolved would use the cache's last resolution, which the run records that it did",
-            refused.Message,
-            StringComparison.Ordinal);
+        Assert.Equal(
+            $"'{Source}' could not be resolved, the forge not being reached: gh api --hostname github.com {Repository}/git/ref/tags/v1 failed, so '{Source}' was not resolved: error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com; workflowSources.offline is refuse, so nothing stands in - last-resolved would stand at the cache's newest resolution of the ref",
+            refused.Message);
 
-        var stood = await offline.ResolveAsync(
+        var stood = await online.ResolveAsync(
             Parsed(),
             new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" },
             temp.Path,
@@ -249,31 +592,125 @@ public sealed class RemoteWorkflowUseTests
             recorded: null,
             Token);
 
-        Assert.Equal((Commit, Definition, true), (stood.Commit, stood.Definition, stood.FromLastResolved));
+        Assert.Equal((Commit, Definition, true, false), (stood.Commit, stood.Definition, stood.FromLastResolved, stood.Moving));
+        Assert.Equal(
+            $"{WorkflowRemoteFetcher.Said}: '{Source}' could not be resolved, the forge not being reached: gh api --hostname github.com {Repository}/git/ref/tags/v1 failed, so '{Source}' was not resolved: error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com; the workflow cache's newest resolution of 'v1' stands in, the commit {Commit} it resolved to on 2026-09-30, as workflowSources.offline says last-resolved",
+            Assert.Single(warned));
     }
 
     /// <summary>
-    /// A cache file changed on disk does not read as the workflow it cached: the blob is hashed again as it is read,
-    /// refused, and the directory fetched again whole.
+    /// An offline last-resolved stands at the ref's newest resolution: a tag that moved since its first fetch, and a
+    /// resolution that found its commit already cached, are each the newest the cache records - never an older entry
+    /// the cache happens to list first.
     /// </summary>
     [Fact]
-    public async Task AChangedCacheFileIsRefused_AndTheDirectoryIsFetchedAgain()
+    public async Task LastResolved_StandsAtTheNewestResolution_NeverAnOlderEntry()
     {
         using var temp = new TempDirectory();
-        var (requests, root, cache, fetcher) = Fixture(temp, Tag(), BranchTree(), Blob(Definition), Blob(Definition));
+        var clock = new ManualClock();
+        var (forge, cache, fetcher, _) = Fixture(temp, clock);
+        var lastResolved = new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" };
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        Holds(forge, Moved, ("security-review.yml", "name: security-review\nsteps: []\n"));
 
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        // v1 resolves to the first commit, then - moved - to the second, a day later.
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
+        clock.Advance(TimeSpan.FromDays(1));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Moved);
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
 
-        var blob = Directory.EnumerateFiles(Path.Combine(root, "blobs"), "*", SearchOption.AllDirectories).Single();
+        forge.Always = Exited(1, stderr: Unreachable);
+        Assert.Equal(Moved, (await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token)).Commit);
+
+        // Moved back to the first commit, which the cache holds: no fetch, and still the newest resolution.
+        forge.Always = null;
+        clock.Advance(TimeSpan.FromDays(1));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
+
+        forge.Always = Exited(1, stderr: Unreachable);
+        Assert.Equal(Commit, (await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token)).Commit);
+        Assert.Equal(clock.GetUtcNow(), cache.LastResolved("github.com", "dailysoftwaresystems", "shared", Directory, "v1")!.ResolvedAt);
+    }
+
+    /// <summary>
+    /// A forge that answered - a credential refused, access forbidden, a tag not there, a login gh does not have - is
+    /// never the network not being there: the run is refused naming what gh said, and the cache's last resolution never
+    /// stands in for it, however the configuration says last-resolved.
+    /// </summary>
+    [Theory]
+    [InlineData("gh: Bad credentials (HTTP 401)")]
+    [InlineData("gh: Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization. (HTTP 403)")]
+    [InlineData("To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.")]
+    public async Task AForgeThatAnswered_IsNeverTheNetworkNotBeingThere(string said)
+    {
+        using var temp = new TempDirectory();
+        var (forge, _, fetcher, warned) = Fixture(temp);
+        var lastResolved = new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" };
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
+
+        forge.Always = Exited(4, stderr: said + "\n");
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            $"'{Source}' could not be resolved, the forge refusing what was asked: gh api --hostname github.com {Repository}/git/ref/tags/v1 failed, so '{Source}' was not resolved: {said.TrimEnd('.')}. Nothing stands in for an answer the forge gave",
+            refused.Message);
+        Assert.Empty(warned);
+    }
+
+    /// <summary>
+    /// Under last-resolved, a tag the forge answers is not there - deleted since, the repository there - is refused,
+    /// never served from the cache's last resolution of it.
+    /// </summary>
+    [Fact]
+    public async Task ATagTheForgeSaysIsNotThere_IsRefused_NeverServedFromTheCache()
+    {
+        using var temp = new TempDirectory();
+        var (forge, _, fetcher, warned) = Fixture(temp);
+        var lastResolved = new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" };
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        forge.Answers[Repository] = Json("""{"default_branch":"main"}""");
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
+
+        _ = forge.Answers.Remove($"{Repository}/git/ref/tags/v1");
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(
+            $"'{Source}' names the ref 'v1', which is no tag of 'dailysoftwaresystems/shared'; workflowSources.pin is tag-or-commit, which takes a tag or a full commit SHA - a branch moves, and what a run ran must be what it said",
+            refused.Message);
+        Assert.Empty(warned);
+    }
+
+    /// <summary>
+    /// A cache file changed on disk does not read as the workflow it cached - the yml or any other file of the entry:
+    /// every blob is hashed again as the entry is read, the change warned of, and the directory fetched again whole.
+    /// </summary>
+    [Theory]
+    [InlineData(Yml)]
+    [InlineData(PromptPath)]
+    public async Task AChangedCacheFileIsRefused_AndTheDirectoryIsFetchedAgain(string changed)
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, warned) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition), ("prompts/review.md", Prompt));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+
+        var first = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var blob = cache.BlobFile(first.Entry.Files.Single(file => file.Path == changed).Blob);
         await File.WriteAllTextAsync(blob, "changed on disk\n", Token);
+        forge.Requests.Clear();
 
-        // The refetch asks the tag, the tree and the blob again: the fetcher is a new one, with answers of its own.
-        var refetching = Fetcher(cache, Tag(), BranchTree(), Blob(Definition));
-        var again = await refetching.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
 
-        Assert.Equal(Commit, again.Commit);
-        Assert.Equal(Definition, again.Definition);
-        Assert.Equal(Definition, cache.ReadText(Assert.Single(cache.List()).Entry, "workflows/security-review/security-review.yml"));
+        Assert.Equal((Commit, Definition), (again.Commit, again.Definition));
+        Assert.Contains(forge.Asked, asked => asked.EndsWith($"/git/blobs/{first.Entry.Files.Single(file => file.Path == changed).Blob}", StringComparison.Ordinal));
+        Assert.Equal(Prompt, cache.ReadText(Assert.Single(cache.List().Entries).Entry, PromptPath));
+        Assert.StartsWith($"{WorkflowRemoteFetcher.Said}: '{Source}': the workflow cache's entry for the commit {Commit} is not whole (the workflow cache's '{blob}', the file '{changed}' of the entry", Assert.Single(warned), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -284,59 +721,228 @@ public sealed class RemoteWorkflowUseTests
     public async Task ARecordedCommitIsUsedAgain_HoweverTheRefHasMoved()
     {
         using var temp = new TempDirectory();
-        var (_, _, cache, fetcher) = Fixture(temp, Tag(), Tree(), Blob(Definition), Blob(Prompt));
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
 
         _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
 
         // The tag has moved since the run began: it answers another commit now.
-        var (moved, movedFetcher) = Fetching(cache, Exited(0, $""" "{Moved}" """.Trim()));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Moved);
+        forge.Requests.Clear();
 
-        var resolved = await movedFetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: Commit, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: Commit, Token);
 
         Assert.Equal(Commit, resolved.Commit);
-        Assert.Empty(moved);
+        Assert.Empty(forge.Requests);
+
+        // The cache pruned before the resume: the recorded commit's own tree is fetched, proved the repository's own as
+        // any commit named by its SHA is, and the ref is never asked again.
+        System.IO.Directory.Delete(cache.Directory, recursive: true);
+        forge.Answers[Repository] = Json("""{"default_branch":"main"}""");
+        forge.Answers[$"{Repository}/compare/main...{Commit}"] = Exited(0, "identical\n");
+
+        var refetched = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: Commit, Token);
+
+        Assert.Equal((Commit, Definition), (refetched.Commit, refetched.Definition));
+        Assert.Equal([Repository, $"{Repository}/compare/main...{Commit}", $"{Repository}/git/commits/{Commit}"], forge.Asked.Take(3));
+        Assert.DoesNotContain(forge.Asked, asked => asked.Contains("/git/ref/", StringComparison.Ordinal));
     }
 
     /// <summary>
-    /// A GitHub Enterprise host's credential, named in the configuration as an environment variable, is handed to the
-    /// call as its environment and written nowhere else - not to the cache, not to a record.
+    /// A GitHub Enterprise Server host's credential, named in the configuration, is handed to every call as the one
+    /// variable gh reads for such a host - GH_ENTERPRISE_TOKEN - every other token variable and GH_HOST taken away, so no
+    /// token of the machine's reaches a host a repository's configuration named; and it is written nowhere else.
     /// </summary>
     [Fact]
-    public async Task AHostsCredentialIsGivenToTheCallAndWrittenNowhere()
+    public async Task AnEnterpriseServerHost_IsGivenItsCredentialAsTheEnterpriseToken_AndNoOtherToken()
     {
         using var temp = new TempDirectory();
-        const string source = "ghe.acme.internal/acme/shared/workflows/security-review/security-review.yml@v1";
-        var (requests, root, cache, fetcher) = Fixture(temp, Tag(), Tree(), Blob(Definition), Blob(Prompt));
-
-        var settings = new WorkflowSourcesConfig
-        {
-            Allow = ["ghe.acme.internal/acme/*"],
-            Hosts = new Dictionary<string, WorkflowHostConfig>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["ghe.acme.internal"] = new() { Credential = new WorkflowHostCredentialConfig { From = "env", Name = "GHE_TOKEN" } },
-            },
-        };
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        HoldsOn(forge, "repos/acme/shared", Commit, ("security-review.yml", Definition));
+        forge.Answers["repos/acme/shared/git/ref/tags/v1"] = TagAt(Commit);
 
         var resolved = await fetcher.ResolveAsync(
-            WorkflowRemote.Source(source)!,
-            settings,
+            WorkflowRemote.Source(GhesSource)!,
+            Hosted("ghe.acme.internal"),
             temp.Path,
             name => name == "GHE_TOKEN" ? "the-token" : null,
             recorded: null,
             Token);
 
         Assert.Equal(Commit, resolved.Commit);
-        Assert.All(requests, request =>
+        Assert.Equal(6, forge.Requests.Count);
+        Assert.All(forge.Requests, request =>
         {
             Assert.Equal(["api", "--hostname", "ghe.acme.internal"], request.Arguments.Take(3).ToArray());
-            Assert.True(request.Environment.TryGetValue("GH_TOKEN", out var token) && token == "the-token");
+            Assert.Equal(
+                [("GH_ENTERPRISE_TOKEN", "the-token"), ("GH_HOST", null), ("GH_TOKEN", null), ("GITHUB_ENTERPRISE_TOKEN", null), ("GITHUB_TOKEN", null)],
+                TokenEnvironment(request));
             Assert.DoesNotContain("the-token", request.Arguments, StringComparer.Ordinal);
         });
 
-        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        foreach (var file in System.IO.Directory.EnumerateFiles(cache.Directory, "*", SearchOption.AllDirectories))
         {
             Assert.DoesNotContain("the-token", await File.ReadAllTextAsync(file, Token), StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>A <c>*.ghe.com</c> host is given its credential as GH_TOKEN, the variable gh reads for it, and no other token.</summary>
+    [Fact]
+    public async Task AGheComHost_IsGivenItsCredentialAsGhToken_AndNoOtherToken()
+    {
+        using var temp = new TempDirectory();
+        var (forge, _, fetcher, _) = Fixture(temp);
+        HoldsOn(forge, "repos/acme/shared", Commit, ("security-review.yml", Definition));
+        forge.Answers["repos/acme/shared/git/ref/tags/v1"] = TagAt(Commit);
+
+        _ = await fetcher.ResolveAsync(
+            WorkflowRemote.Source("acme.ghe.com/acme/shared/workflows/security-review/security-review.yml@v1")!,
+            Hosted("acme.ghe.com"),
+            temp.Path,
+            name => name == "GHE_TOKEN" ? "the-token" : null,
+            recorded: null,
+            Token);
+
+        Assert.All(forge.Requests, request => Assert.Equal(
+            [("GH_ENTERPRISE_TOKEN", null), ("GH_HOST", null), ("GH_TOKEN", "the-token"), ("GITHUB_ENTERPRISE_TOKEN", null), ("GITHUB_TOKEN", null)],
+            TokenEnvironment(request)));
+    }
+
+    /// <summary>
+    /// A github.com call names its host, GH_HOST taken away, so a machine logged in to another host never answers it from
+    /// there; it keeps the machine's own GH_TOKEN and login, and is given no enterprise token.
+    /// </summary>
+    [Fact]
+    public async Task AGitHubComCall_NamesItsHost_AndIsGivenNoEnterpriseToken()
+    {
+        using var temp = new TempDirectory();
+        var (forge, _, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+
+        Assert.All(forge.Requests, request =>
+        {
+            Assert.Equal(["api", "--hostname", "github.com"], request.Arguments.Take(3).ToArray());
+            Assert.Equal([("GH_ENTERPRISE_TOKEN", null), ("GH_HOST", null), ("GITHUB_ENTERPRISE_TOKEN", null)], TokenEnvironment(request));
+        });
+    }
+
+    /// <summary>
+    /// A host beyond github.com whose credential the configuration does not name, or whose variable this process does
+    /// not hold, is refused before anything is asked of it: it is never reached with gh's own login or a machine token.
+    /// </summary>
+    [Fact]
+    public async Task AHostWhoseCredentialIsNotThere_IsRefused_AndNothingIsAsked()
+    {
+        using var temp = new TempDirectory();
+        var (forge, _, fetcher, _) = Fixture(temp);
+
+        var unset = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(WorkflowRemote.Source(GhesSource)!, Hosted("ghe.acme.internal"), temp.Path, NoVariables, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.Refused, unset.ExitCode);
+        Assert.Equal(
+            $"'{GhesSource}' names the host 'ghe.acme.internal', whose credential is the environment variable 'GHE_TOKEN', which is not set in this process; nothing was asked of the host, and no other token is given to it",
+            unset.Message);
+
+        var unnamed = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(
+            WorkflowRemote.Source(GhesSource)!,
+            new WorkflowSourcesConfig
+            {
+                Allow = ["ghe.acme.internal/acme/*"],
+                Hosts = new Dictionary<string, WorkflowHostConfig>(StringComparer.OrdinalIgnoreCase) { ["ghe.acme.internal"] = new() },
+            },
+            temp.Path,
+            name => name == "GH_ENTERPRISE_TOKEN" ? "the-machines-own" : null,
+            recorded: null,
+            Token));
+
+        Assert.Equal(
+            $"'{GhesSource}' names the host 'ghe.acme.internal', for which workflowSources.hosts names no credential: a host beyond github.com is reached with the one credential its entry names, and never with the machine's own tokens; nothing was asked of it",
+            unnamed.Message);
+        Assert.Empty(forge.Requests);
+    }
+
+    /// <summary>
+    /// Files are kept as the bytes the forge gave: one beginning with a byte order mark hashes, caches and reads again
+    /// as it was - read as text the way a repository's own file is, the mark dropped - and one that is not UTF-8 is
+    /// cached whole, its bytes read back unchanged, and refused only where it is read as text.
+    /// </summary>
+    [Fact]
+    public async Task AFileWithAByteOrderMarkOrNotUtf8_IsCachedAsItsBytes_AndReadAsTheRepositorysOwnFileReads()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, warned) = Fixture(temp);
+        byte[] withMark = [.. Encoding.UTF8.Preamble, .. Encoding.UTF8.GetBytes(Definition)];
+        byte[] latin1 = [0x63, 0x61, 0x66, 0xE9, 0x0A];
+        Holds(forge, Commit, ("security-review.yml", withMark), ("prompts/review.md", latin1));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+
+        Assert.Equal(Definition, resolved.Definition);
+        Assert.Equal(withMark, cache.ReadBytes(resolved.Entry, Yml));
+        Assert.Equal(latin1, cache.ReadBytes(resolved.Entry, PromptPath));
+
+        var notText = Assert.Throws<HarnessException>(() => cache.ReadText(resolved.Entry, PromptPath));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, notText.ExitCode);
+        Assert.Equal($"'{PromptPath}' of the workflow 'github.com/dailysoftwaresystems/shared' at '{Commit}' is not UTF-8 text, and a workflow reads its files as text", notText.Message);
+
+        // Read again from the cache, nothing is fetched and nothing reads as changed on disk.
+        forge.Requests.Clear();
+        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+
+        Assert.Equal(Definition, again.Definition);
+        Assert.Equal([$"{Repository}/git/ref/tags/v1"], forge.Asked);
+        Assert.Empty(warned);
+    }
+
+    /// <summary>
+    /// A command an agent runs - its environment marked - reads the workflow cache alone: a tag is resolved by the
+    /// cache's newest resolution of it, nothing is asked of the forge and nothing of the cache is written, not even the
+    /// use's date; one the cache does not hold is refused naming the command a person runs to fetch it.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentsCommand_ReadsTheCacheAlone_AndWritesNothing()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var (forge, cache, fetcher, warned) = Fixture(temp, clock);
+        static string? Agent(string name) => name == AgentChildEnvironment.AgentMarker ? "1" : null;
+
+        var unfetched = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: null, Token));
+
+        Assert.Equal(HarnessExit.Refused, unfetched.ExitCode);
+        Assert.Equal(
+            $"'{Source}' is not in the workflow cache as a command an agent runs needs it (it holds no resolution of 'v1'): such a command never reaches the forge nor writes the cache, so a person runs 'dssharness validate-workflow' to fetch it; nothing was asked of the forge",
+            unfetched.Message);
+        Assert.Empty(forge.Requests);
+        Assert.False(System.IO.Directory.Exists(cache.Directory));
+
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var written = Snapshot(cache.Directory);
+        forge.Requests.Clear();
+        clock.Advance(TimeSpan.FromDays(3));
+
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: null, Token);
+
+        Assert.Equal((Commit, Definition), (resolved.Commit, resolved.Definition));
+        Assert.Empty(forge.Requests);
+        Assert.Equal(written, Snapshot(cache.Directory));
+        Assert.Equal(
+            [$"{WorkflowRemoteFetcher.Said}: '{Source}' was resolved from the workflow cache alone, for a command an agent runs never reaches the forge: it stands at the commit {Commit} the cache's newest resolution of 'v1' names, from 2026-09-30"],
+            warned);
+
+        // A commit the cache does not hold, named by its SHA: refused, and still nothing asked.
+        var sha = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed() with { Ref = Moved }, Allowed(), temp.Path, Agent, recorded: null, Token));
+
+        Assert.StartsWith($"'dailysoftwaresystems/shared/workflows/security-review/security-review.yml@{Moved}' is not in the workflow cache as a command an agent runs needs it (it holds no entry for the commit '{Moved}')", sha.Message, StringComparison.Ordinal);
+        Assert.Empty(forge.Requests);
     }
 
     /// <summary>
@@ -422,7 +1028,7 @@ public sealed class RemoteWorkflowUseTests
                 use: ../remote/shared/security-review.yml
             """);
 
-        var (placed, localProblems, _) = await WorkflowResolver.ResolveAsync(local, "flow", new WorkflowResolution(_ => "name: x\nsteps: []\n"));
+        var (_, localProblems, _) = await WorkflowResolver.ResolveAsync(local, "flow", new WorkflowResolution(_ => "name: x\nsteps: []\n"));
 
         Assert.Equal(
             "step 'review' uses '../remote/shared/security-review.yml', which resolves to 'remote/shared/security-review.yml' under the workflows directory: 'remote/' is the workflow cache's own reserved place, where a remote workflow's files are read, and no local use resolves there",
@@ -430,40 +1036,181 @@ public sealed class RemoteWorkflowUseTests
     }
 
     /// <summary>
-    /// The cache's list says each entry, and its pruning removes the entries no run used for its days and the blobs no
-    /// entry left holds.
+    /// The pruning removes an entry no run used for its days, the resolution that named it, and the blobs no entry
+    /// left holds - and keeps every blob an entry it keeps holds, one the two shared among them: the kept entry reads
+    /// whole after it, and the counts are exactly what went.
     /// </summary>
     [Fact]
-    public async Task TheCacheListsItsEntries_AndPrunesWhatNoRunUsedForItsDays()
+    public async Task ThePruning_KeepsEveryBlobAnEntryItKeepsHolds_AndRemovesTheRest()
     {
         using var temp = new TempDirectory();
-        var (_, root, cache, fetcher) = Fixture(temp, Tag(), BranchTree(), Blob(Definition));
+        var clock = new ManualClock();
+        var (forge, cache, fetcher, _) = Fixture(temp, clock);
+        Holds(forge, Moved, ("security-review.yml", Definition), ("prompts/old.md", "an old prompt\n"));
+        Holds(forge, Commit, ("security-review.yml", Definition), ("prompts/review.md", Prompt));
 
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        // The stale entry, at the moved commit, used forty days ago; the kept one used yesterday. The yml is one blob
+        // both hold.
+        forge.Answers[$"{Repository}/git/ref/tags/v0"] = TagAt(Moved);
+        _ = await fetcher.ResolveAsync(Parsed() with { Ref = "v0" }, Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        clock.Advance(TimeSpan.FromDays(39));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        var kept = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        clock.Advance(TimeSpan.FromDays(1));
 
-        var listed = Assert.Single(cache.List());
+        var pruning = cache.Prune(30, clock.GetUtcNow());
 
-        Assert.StartsWith($"github.com/dailysoftwaresystems/shared at {Commit[..12]}: workflows/security-review", WorkflowCacheService.EntryLine(listed), StringComparison.Ordinal);
-        Assert.Equal(Encoding.UTF8.GetByteCount(Definition), listed.Bytes);
-
-        // An entry whose last use is older than the pruning's days goes, with its blobs; nothing else holds one.
-        var (entries, blobs) = cache.Prune(0, DateTimeOffset.UtcNow + TimeSpan.FromDays(1));
-
-        Assert.Equal((1, 1), (entries, blobs));
-        Assert.Empty(cache.List());
-        Assert.False(Directory.EnumerateFiles(Path.Combine(root, "blobs"), "*", SearchOption.AllDirectories).Any());
+        Assert.Equal((1, 1, true), (pruning.Entries, pruning.Blobs, pruning.Whole));
+        Assert.Equal([Commit], cache.List().Entries.Select(listed => listed.Entry.Commit));
+        Assert.Equal(Definition, cache.ReadText(kept.Entry, Yml));
+        Assert.Equal(Prompt, cache.ReadText(kept.Entry, PromptPath));
+        Assert.Null(cache.LastResolved("github.com", "dailysoftwaresystems", "shared", Directory, "v0"));
+        Assert.NotNull(cache.LastResolved("github.com", "dailysoftwaresystems", "shared", Directory, "v1"));
+        Assert.Equal(
+            new[] { WorkflowCache.BlobSha(Definition), WorkflowCache.BlobSha(Prompt) }.Order(StringComparer.Ordinal),
+            System.IO.Directory.EnumerateFiles(Path.Combine(cache.Directory, "blobs"), "*", SearchOption.AllDirectories).Select(file => WorkflowCache.BlobOf(file)!).Order(StringComparer.Ordinal));
     }
 
     /// <summary>
-    /// export-workflow --from vendors the remote workflow at its resolved commit: every file of its directory, byte for
-    /// byte, and a note saying where it came from - so a team can review what is written and use it as ./.
+    /// A pruning that could not remove a file says which and why, and is not whole - never "pruned" alone - and one
+    /// beside an entry it could not read removes no blob at all, for which blobs that entry holds cannot be told.
+    /// </summary>
+    [Fact]
+    public async Task APruningThatCouldNotRemoveOrReadAFile_SaysSo_AndIsNotWhole()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var root = temp.Combine("workflow-cache");
+        var fileSystem = new UndeletableBlobs(new PhysicalFileSystem(new HarnessFactory().FilePermissions));
+        var cache = new WorkflowCache(fileSystem, root);
+        var forge = new Forge();
+        var fetcher = new WorkflowRemoteFetcher(forge.Gh(), cache, clock: clock);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        clock.Advance(TimeSpan.FromDays(31));
+
+        var stuck = cache.Prune(30, clock.GetUtcNow());
+
+        Assert.Equal((1, 0, false), (stuck.Entries, stuck.Blobs, stuck.Whole));
+        Assert.Equal([cache.BlobFile(WorkflowCache.BlobSha(Definition))], stuck.NotRemoved.Select(file => file.File));
+        Assert.Equal(["this file system keeps its blobs"], stuck.NotRemoved.Select(file => file.Why));
+
+        var outcome = WorkflowCacheReports.Render(new WorkflowCacheReport(cache.Directory, [], stuck.Unread, stuck), json: false);
+
+        Assert.Equal(HarnessExit.Incomplete, outcome.ExitCode);
+        Assert.Equal($"pruned 1 entry(ies) and 0 blob(s) from the workflow cache '{root}', and did not finish: 1 file(s) could not be removed; run it again once they can be", outcome.Message);
+        Assert.Equal([$"could not be removed: '{cache.BlobFile(WorkflowCache.BlobSha(Definition))}': this file system keeps its blobs"], outcome.Details);
+
+        // An entry that does not read: the stale blob stays, and the pruning says why.
+        var unreadable = Path.Combine(root, "entries", "0000000000000000000000000000000000000000000000000000000000000000.json");
+        await File.WriteAllTextAsync(unreadable, "{ not an entry", Token);
+
+        var blind = new WorkflowCache(new PhysicalFileSystem(new HarnessFactory().FilePermissions), root).Prune(0, clock.GetUtcNow() + TimeSpan.FromDays(1));
+
+        Assert.Equal((0, 0, false), (blind.Entries, blind.Blobs, blind.Whole));
+        Assert.Equal([unreadable], blind.Unread.Select(file => file.File));
+        Assert.True(File.Exists(cache.BlobFile(WorkflowCache.BlobSha(Definition))));
+
+        var said = WorkflowCacheReports.Render(new WorkflowCacheReport(root, [], blind.Unread, blind), json: false);
+
+        Assert.Equal($"pruned 0 entry(ies) and 0 blob(s) from the workflow cache '{root}', and did not finish: 1 file(s) of its own could not be read, so no blob was removed; run it again once they can be", said.Message);
+    }
+
+    /// <summary>
+    /// An entry that is not the one its key files it under - its commit or a blob changed by hand, a blob named by what
+    /// is no hash - is refused as it is read, never taken for one that is not there; a resolution warns of it and fetches
+    /// the directory again over it.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryNotTheOneOfItsKey_IsRefusedAsItIsRead_AndFetchedAgain()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, warned) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+
+        var file = System.IO.Directory.EnumerateFiles(Path.Combine(cache.Directory, "entries")).Single();
+        await File.WriteAllTextAsync(file, (await File.ReadAllTextAsync(file, Token)).Replace(WorkflowCache.BlobSha(Definition), "../../escape", StringComparison.Ordinal), Token);
+
+        var refused = Assert.Throws<HarnessException>(() => cache.Find("github.com", "dailysoftwaresystems", "shared", Commit, Directory));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
+        Assert.Equal($"the workflow cache's entry '{file}' names the blob '../../escape', which is no 40 hex characters; it was not read, and a resolution of it fetches it again", refused.Message);
+        Assert.Equal([file], cache.List().Unread.Select(unread => unread.File));
+
+        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+
+        Assert.Equal(Definition, again.Definition);
+        Assert.Equal($"{WorkflowRemoteFetcher.Said}: '{Source}': {refused.Message}", Assert.Single(warned));
+        Assert.Empty(cache.List().Unread);
+    }
+
+    /// <summary>
+    /// The cache's directory is named the first time the cache is used, never as it is made: a process given no home of
+    /// its own makes the cache - and so checks and runs every workflow that names nothing remote - and is told why the
+    /// moment a remote one needs it.
+    /// </summary>
+    [Fact]
+    public void TheCacheIsNamedAtItsFirstUse_AndAProcessWithNoHomeIsToldWhy()
+    {
+        var asked = 0;
+        var cache = new WorkflowCache(new PhysicalFileSystem(new HarnessFactory().FilePermissions), () =>
+        {
+            asked++;
+            throw new DirectoryNotFoundException("no directory of this user's own application data could be named: the process was given no home, and the system has none for its account");
+        });
+
+        Assert.Equal(0, asked);
+
+        var refused = Assert.Throws<HarnessException>(() => cache.List());
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            "the workflow cache has nowhere to be kept: no directory of this user's own application data could be named: the process was given no home, and the system has none for its account; a remote workflow is neither fetched nor read, and a workflow that names none runs as it would",
+            refused.Message);
+    }
+
+    /// <summary>
+    /// A run reads a remote workflow's files from its cache entry by the workflow's name, hashed again as they are read:
+    /// a prompt reads as the forge gave it, and a blob changed on disk since is refused at the read, never run.
+    /// </summary>
+    [Fact]
+    public async Task ARunReadsARemoteWorkflowsFilesFromTheCache_AndRefusesABlobChangedOnDisk()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition), ("prompts/review.md", Prompt));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var name = WorkflowRemote.Name(resolved.Source, resolved.Commit);
+        var files = new WorkflowNamedFiles(harness.FileSystem, StringComparison.Ordinal, cache);
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+
+        Assert.Equal(Prompt, files.ReadText(layout, name, "prompts/review.md", "a prompt"));
+
+        await File.WriteAllTextAsync(cache.BlobFile(WorkflowCache.BlobSha(Prompt)), "Review nothing.\n", Token);
+
+        var refused = Assert.Throws<HarnessException>(() => files.ReadText(layout, name, "prompts/review.md", "a prompt"));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
+        Assert.StartsWith($"the workflow cache's '{cache.BlobFile(WorkflowCache.BlobSha(Prompt))}', the file '{PromptPath}' of the entry for 'github.com/dailysoftwaresystems/shared' at '{Commit}', does not hash to", refused.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// export-workflow --from vendors the remote workflow at its resolved commit: every file of its directory and a
+    /// note saying where it came from - so a team can review what is written and use it as ./.
     /// </summary>
     [Fact]
     public async Task ExportVendorsTheRemoteWorkflow_WithANoteOfWhereItCameFrom()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var (_, _, cache, _) = Fixture(temp, Tag(), Tree(), Blob(Definition), Blob(Prompt));
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        Holds(forge, Commit, ("security-review.yml", Definition), ("prompts/review.md", Prompt));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
 
         await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig { WorkflowSources = Allowed() });
 
@@ -472,7 +1219,7 @@ public sealed class RemoteWorkflowUseTests
             harness.FileSystem,
             new FixedProcessContext { Fixed = temp.Path },
             harness.ContextLoader,
-            Fetcher(cache, Tag(), Tree(), Blob(Definition), Blob(Prompt)),
+            fetcher,
             cache).ExportAsync(
             temp.Path,
             new WorkflowExportRequest("security-review", temp.Combine("vendor"), Shipped: false, From: Source),
@@ -496,9 +1243,10 @@ public sealed class RemoteWorkflowUseTests
     }
 
     /// <summary>
-    /// The workflowSources section is held to its rules: each allowed source named as one is, each host a host with the
-    /// environment variable its credential is read from, and pin and offline spelled as they may be - github.com
-    /// needing no host entry, for the machine's own gh login reaches it.
+    /// The workflowSources section is held to its rules: each allowed source named as one is - never blank - under a
+    /// host the section names where it is under one, each host a host with the environment variable its credential is
+    /// read from, none without one, and pin and offline spelled as they may be - github.com needing no host entry, for
+    /// the machine's own gh login reaches it.
     /// </summary>
     [Fact]
     public void TheWorkflowSourcesSection_IsHeldToItsRules()
@@ -509,7 +1257,10 @@ public sealed class RemoteWorkflowUseTests
             [
                 "workflowSources.allow names 'acme/*/*', which puts * where a name is: the star stands for the repositories of an owner, owner/*",
                 "workflowSources.allow names 'acme/shared/deep/one', which is neither an owner, owner/*, owner/repository nor host/owner/repository: each segment is named, and only a repository may be *",
+                "workflowSources.allow names ' ', which names nothing: an entry is an owner, owner/*, owner/repository or the same under host/",
+                "workflowSources.allow names 'elsewhere.example/acme/*', under the host 'elsewhere.example', which workflowSources.hosts does not name: a host beyond github.com is reached only with the credential its entry there names",
                 "workflowSources.hosts names 'ghe', which is no host: a host is named as its own name is, dotted, with no path in it",
+                "workflowSources.hosts.ghe names no credential; a host beyond github.com is reached with the one credential named here, \"credential\": {\"from\": \"env\", \"name\": \"<VARIABLE>\"}, and never with the machine's own tokens",
                 "workflowSources.hosts names 'github.com', which needs no entry: the machine's own gh login reaches it",
                 "workflowSources.hosts.ghe.acme.internal.credential.from is 'file'; a host's credential is read from an environment variable, env",
                 "workflowSources.hosts.other.acme.internal.credential names no environment variable; a host's credential is an environment variable, named here",
@@ -520,7 +1271,7 @@ public sealed class RemoteWorkflowUseTests
             {
                 WorkflowSources = new WorkflowSourcesConfig
                 {
-                    Allow = ["acme/*/*", "acme/shared/deep/one"],
+                    Allow = ["acme/*/*", "acme/shared/deep/one", " ", "elsewhere.example/acme/*"],
                     Hosts = new Dictionary<string, WorkflowHostConfig>(StringComparer.OrdinalIgnoreCase)
                     {
                         ["ghe"] = new(),
@@ -537,7 +1288,7 @@ public sealed class RemoteWorkflowUseTests
         {
             WorkflowSources = new WorkflowSourcesConfig
             {
-                Allow = ["acme", "acme/*", "acme/shared", "ghe.acme.internal/team/*"],
+                Allow = ["acme", "acme/*", "acme/shared", "acme/.github", "ghe.acme.internal/team/*", "ghe.acme.internal/team", "github.com/acme"],
                 Hosts = new Dictionary<string, WorkflowHostConfig>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["ghe.acme.internal"] = new() { Credential = new WorkflowHostCredentialConfig { From = "env", Name = "GHE_TOKEN" } },
@@ -548,8 +1299,70 @@ public sealed class RemoteWorkflowUseTests
         }));
     }
 
+    /// <summary>
+    /// The help, the README and the architecture say what the fetch, the cache and the pruning do, from the code's own
+    /// bounds and names: the variable each host kind's credential is given as, the blob's path, the refs a commit is
+    /// compared with, the days a pruning takes and the code it ends incomplete with - and the configuration's help the
+    /// shape a host's credential is written in.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhatTheFetchAndTheCacheDo()
+    {
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var remote = Prose.Words(DssHarness.Core.Help.HelpTopics.RemoteWorkflowsHelp);
+
+        Assert.Contains(remote, help, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words(DssHarness.Core.Help.HelpTopics.WorkflowCacheHelp), help, StringComparison.Ordinal);
+        Assert.Contains($"given to its calls as {GhProcess.TokenVariable} for a *.ghe.com host and {GhProcess.EnterpriseTokenVariable} for any other with every other token of the machine's taken away", remote, StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words("hosts, GitHub Enterprise hosts, each with the one credential its calls are given, \"credential\": {\"from\": \"env\", \"name\": \"<VARIABLE>\"} (required)"),
+            Prose.Words(DssHarness.Core.Help.HelpTopics.Render("config")),
+            StringComparison.Ordinal);
+
+        var readme = Prose.Document("README.md");
+
+        foreach (var said in new[]
+        {
+            $"given to its calls as `{GhProcess.TokenVariable}` for a `*.ghe.com` host and `{GhProcess.EnterpriseTokenVariable}` for any other, every other token of the machine's taken away",
+            "each blob as its bytes at `blobs/<first 2 hex>/<remaining 38 hex>`",
+            $"or one of the first {WorkflowRemoteFetcher.MostRefsCompared} tags and branches the forge lists, reaches it",
+            $"`workflow-cache prune --unused-days N`, the days required and from 0 to {WorkflowCache.MostUnusedDays.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)},",
+            $"every blob an entry it keeps holds kept, and no blob removed at all while a file of the cache's own could not be read; a file it could not remove or read is said, and the pruning ends incomplete ({HarnessExit.Incomplete})",
+            "`offline` says what happens where the network keeps the forge from being reached",
+        })
+        {
+            Assert.Contains(said, readme, StringComparison.Ordinal);
+        }
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        foreach (var said in new[]
+        {
+            $"(`WorkflowRemote.{nameof(WorkflowRemote.RefProblem)}`, before anything is asked)",
+            $"(`WorkflowCache.{nameof(WorkflowCache.TreePathProblems)}`)",
+            $"with every other token variable taken away (`GhProcess.{nameof(GhProcess.HostEnvironment)}`)",
+            $"(`GhProcess.{nameof(GhProcess.Unreached)}`) - is the network not being there",
+            $"(`WorkflowCache.{nameof(WorkflowCache.BlobOf)}`, the inverse of the blob's path)",
+            "at `blobs/<first 2 hex>/<remaining 38 hex>`",
+        })
+        {
+            Assert.Contains(said, architecture, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>A fixed settings section that allows the fixture's repository.</summary>
     private static WorkflowSourcesConfig Allowed() => new() { Allow = ["dailysoftwaresystems/*"] };
+
+    /// <summary>A section that allows <c>acme</c> on <paramref name="host"/>, its credential the variable <c>GHE_TOKEN</c>.</summary>
+    private static WorkflowSourcesConfig Hosted(string host)
+        => new()
+        {
+            Allow = [$"{host}/acme/*"],
+            Hosts = new Dictionary<string, WorkflowHostConfig>(StringComparer.OrdinalIgnoreCase)
+            {
+                [host] = new() { Credential = new WorkflowHostCredentialConfig { From = "env", Name = "GHE_TOKEN" } },
+            },
+        };
 
     /// <summary>The fixture's source, parsed.</summary>
     private static WorkflowRemoteSource Parsed() => WorkflowRemote.Source(Source)!;
@@ -557,35 +1370,95 @@ public sealed class RemoteWorkflowUseTests
     /// <summary>An environment naming no variable.</summary>
     private static string? NoVariables(string name) => null;
 
-    /// <summary>The tree of the commit, holding the workflow's directory: its yml and one prompt.</summary>
-    private static ProcessResult Tree()
-        => TreeOf(("workflows/security-review/security-review.yml", Definition), ("workflows/security-review/prompts/review.md", Prompt), ("README.md", "the repository's own readme\n"));
+    /// <summary>The token variables and GH_HOST a call was given or had taken away, by name.</summary>
+    private static (string, string?)[] TokenEnvironment(ProcessRequest request)
+        => [.. request.Environment
+            .Where(variable => variable.Key is "GH_HOST" || GhProcess.TokenVariables.Contains(variable.Key, StringComparer.Ordinal))
+            .OrderBy(variable => variable.Key, StringComparer.Ordinal)
+            .Select(variable => (variable.Key, variable.Value))];
 
-    /// <summary>The tree the moved tag answers, holding only the yml.</summary>
-    private static ProcessResult BranchTree()
-        => TreeOf(("workflows/security-review/security-review.yml", Definition));
-
-    private static ProcessResult TreeOf(params (string Path, string Content)[] files)
+    /// <summary>A listing read whole, compared as a value: its entries by line and its unread files.</summary>
+    private static WorkflowCacheListing Listed(WorkflowCache cache)
     {
-        static string EntryOf((string Path, string Content) file)
-            => $$"""{"path":"{{file.Path}}","sha":"{{WorkflowCache.BlobSha(file.Content)}}","type":"blob","mode":"100644","size":{{Encoding.UTF8.GetByteCount(file.Content)}}}""";
+        var listing = cache.List();
 
-        return Exited(0, $$"""{"tree":[{{string.Join(",", files.Select(EntryOf))}}]}""");
+        return listing.Entries.Count == 0 && listing.Unread.Count == 0 ? new WorkflowCacheListing([], []) : listing;
     }
 
-    /// <summary>The tag's ref, answering the commit as <c>--jq .object.sha</c> answers it.</summary>
-    private static ProcessResult Tag() => Exited(0, $""" "{Commit}" """.Trim());
+    /// <summary>Every file under <paramref name="root"/>, with its bytes, as a value two moments compare by.</summary>
+    private static string Snapshot(string root)
+        => string.Join(
+            "\n",
+            System.IO.Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                .Order(StringComparer.Ordinal)
+                .Select(file => $"{file}: {Convert.ToHexString(File.ReadAllBytes(file))}"));
 
-    /// <summary>A branch's commit, as <c>--jq .sha</c> answers it.</summary>
-    private static ProcessResult CommitOf() => Exited(0, $""" "{Commit}" """.Trim());
+    /// <summary>A tree's hash for the commit <paramref name="commit"/> at the depth <paramref name="level"/>: the root, the workflows directory, the workflow's own.</summary>
+    private static string Tree(string commit, int level)
+        => Convert.ToHexStringLower(SHA1.HashData(Encoding.UTF8.GetBytes($"{commit}:{level.ToString(System.Globalization.CultureInfo.InvariantCulture)}")));
 
-    /// <summary>A tag's ref that is not there, as gh answers it.</summary>
-    private static ProcessResult Missing() => Exited(1, stderr: "HTTP 404: Not Found\n");
+    /// <summary>The fixture's repository holding, at <paramref name="commit"/>, <paramref name="files"/> under the workflow's directory.</summary>
+    private static void Holds(Forge forge, string commit, params (string Path, string Content)[] files)
+        => HoldsOn(forge, Repository, commit, [.. files.Select(file => (file.Path, Encoding.UTF8.GetBytes(file.Content)))]);
+
+    /// <summary>The fixture's repository holding, at <paramref name="commit"/>, <paramref name="files"/> under the workflow's directory, as bytes.</summary>
+    private static void Holds(Forge forge, string commit, params (string Path, byte[] Content)[] files)
+        => HoldsOn(forge, Repository, commit, files);
+
+    private static void HoldsOn(Forge forge, string repository, string commit, params (string Path, string Content)[] files)
+        => HoldsOn(forge, repository, commit, [.. files.Select(file => (file.Path, Encoding.UTF8.GetBytes(file.Content)))]);
+
+    /// <summary>
+    /// <paramref name="repository"/> holding, at <paramref name="commit"/>, <paramref name="files"/> under
+    /// <c>workflows/security-review</c>: the commit, each tree on the way to the directory, the directory's own listing -
+    /// its subdirectories among it - and each blob.
+    /// </summary>
+    private static void HoldsOn(Forge forge, string repository, string commit, params (string Path, byte[] Content)[] files)
+    {
+        forge.Answers[$"{repository}/git/commits/{commit}"] = Json($$$"""{"sha":"{{{commit}}}","tree":{"sha":"{{{Tree(commit, 0)}}}"}}""");
+        forge.Answers[$"{repository}/git/trees/{Tree(commit, 0)}"] = Listing(("workflows", "tree", "040000", Tree(commit, 1), null), ("README.md", "blob", "100644", WorkflowCache.BlobSha("readme\n"), 7));
+        forge.Answers[$"{repository}/git/trees/{Tree(commit, 1)}"] = Listing(("security-review", "tree", "040000", Tree(commit, 2), null));
+
+        var directories = files
+            .SelectMany(file => file.Path.Split('/')[..^1].Select((_, at) => string.Join('/', file.Path.Split('/')[..(at + 1)])))
+            .Distinct(StringComparer.Ordinal)
+            .Select(directory => (directory, "tree", "040000", Tree(commit + directory, 3), (long?)null));
+
+        forge.Answers[$"{repository}/git/trees/{Tree(commit, 2)}?recursive=1"] = Listing(
+            [.. files.Select(file => (file.Path, "blob", "100644", WorkflowCache.BlobSha(file.Content), (long?)file.Content.Length)), .. directories]);
+
+        foreach (var (_, content) in files)
+        {
+            forge.Answers[$"{repository}/git/blobs/{WorkflowCache.BlobSha(content)}"] = Blob(content);
+        }
+    }
+
+    /// <summary>A tree's listing as the forge answers it.</summary>
+    private static ProcessResult Listing(params (string Path, string Type, string Mode, string Sha, long? Size)[] items)
+        => Listing(truncated: false, items);
+
+    private static ProcessResult Listing(bool truncated, params (string Path, string Type, string Mode, string Sha, long? Size)[] items)
+        => Json(new System.Text.Json.Nodes.JsonObject
+        {
+            ["sha"] = "0000000000000000000000000000000000000000",
+            ["tree"] = new System.Text.Json.Nodes.JsonArray([.. items.Select(item => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+            {
+                ["path"] = item.Path,
+                ["mode"] = item.Mode,
+                ["type"] = item.Type,
+                ["sha"] = item.Sha,
+                ["size"] = item.Size,
+            })]),
+            ["truncated"] = truncated,
+        }.ToJsonString());
+
+    /// <summary>A lightweight tag's ref, naming <paramref name="commit"/>.</summary>
+    private static ProcessResult TagAt(string commit) => Json($$$"""{"ref":"refs/tags/v1","object":{"sha":"{{{commit}}}","type":"commit"}}""");
 
     /// <summary>One blob's answer, base64 with the newlines the forge's JSON holds them over, escaped as JSON escapes them.</summary>
-    private static ProcessResult Blob(string content)
+    private static ProcessResult Blob(byte[] content)
     {
-        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(content));
+        var base64 = Convert.ToBase64String(content);
         var wrapped = new StringBuilder();
 
         for (var at = 0; at < base64.Length; at += 60)
@@ -593,51 +1466,25 @@ public sealed class RemoteWorkflowUseTests
             _ = wrapped.Append(base64[at..Math.Min(at + 60, base64.Length)]).Append('\n');
         }
 
-        return Exited(0, $$"""{"content":"{{wrapped.ToString().TrimEnd('\n').Replace("\n", "\\n")}}","encoding":"base64"}""");
+        return Json($$"""{"content":"{{wrapped.ToString().TrimEnd('\n').Replace("\n", "\\n", StringComparison.Ordinal)}}","encoding":"base64","size":{{content.Length}}}""");
     }
 
-    /// <summary>The fetcher and its cache in <paramref name="temp"/>, and the requests it made.</summary>
-    private static (List<ProcessRequest> Requests, string Root, WorkflowCache Cache, WorkflowRemoteFetcher Fetcher) Fixture(
-        TempDirectory temp,
-        params ProcessResult[] answers)
+    private static ProcessResult Json(string answer) => Exited(0, answer);
+
+    /// <summary>The fetcher, its forge and its cache in <paramref name="temp"/>, and what it warned of.</summary>
+    private static (Forge Forge, WorkflowCache Cache, WorkflowRemoteFetcher Fetcher, List<string> Warned) Fixture(TempDirectory temp, ManualClock? clock = null)
     {
-        var requests = new List<ProcessRequest>();
-        var cache = new WorkflowCache(harnessFileSystem(temp), Path.Combine(temp.Path, "workflow-cache"));
-        var fetcher = new WorkflowRemoteFetcher(Gh(requests, answers), cache);
+        var forge = new Forge();
+        var cache = new WorkflowCache(new PhysicalFileSystem(new HarnessFactory().FilePermissions), temp.Combine("workflow-cache"));
+        var warned = new List<string>();
+        var output = Substitute.For<IHarnessOutput>();
+        output.When(said => said.Warn(Arg.Any<string>(), Arg.Any<string>())).Do(call => warned.Add($"{call.ArgAt<string>(0)}: {call.ArgAt<string>(1)}"));
 
-        return (requests, Path.Combine(temp.Path, "workflow-cache"), cache, fetcher);
-
-        static IFileSystem harnessFileSystem(TempDirectory temp) => new PhysicalFileSystem(new HarnessFactory().FilePermissions);
+        return (forge, cache, new WorkflowRemoteFetcher(forge.Gh(), cache, output, clock ?? new ManualClock()), warned);
     }
 
-    /// <summary>A fetcher over <paramref name="cache"/>, answering each call with the next of <paramref name="answers"/>.</summary>
-    private static WorkflowRemoteFetcher Fetcher(WorkflowCache cache, params ProcessResult[] answers)
-    {
-        var requests = new List<ProcessRequest>();
-
-        return new WorkflowRemoteFetcher(Gh(requests, answers), cache);
-    }
-
-    /// <summary>The fetcher over <paramref name="cache"/> that answers every call with <paramref name="answer"/>, saying what it asked.</summary>
-    private static (List<ProcessRequest> Requests, WorkflowRemoteFetcher Fetcher) Fetching(WorkflowCache cache, ProcessResult answer)
-    {
-        var requests = new List<ProcessRequest>();
-
-        return (requests, new WorkflowRemoteFetcher(Gh(requests, answer), cache));
-    }
-
-    /// <summary>The forge's tool, answering each call with the next of <paramref name="answers"/>, the last again once they run out.</summary>
-    private static GhProcess Gh(List<ProcessRequest> requests, params ProcessResult[] answers)
-    {
-        var runner = Substitute.For<IProcessRunner>();
-        var next = 0;
-
-        runner.FindExecutable(GhProcess.Executable).Returns(GhProcess.Executable);
-        runner.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(answers[Math.Min(next++, answers.Length - 1)]));
-
-        return new GhProcess(runner, GitLocalVariables.Fixed(["GIT_DIR"]), NoVariables);
-    }
+    /// <summary>Another fetcher over <paramref name="cache"/>, asking <paramref name="forge"/>.</summary>
+    private static WorkflowRemoteFetcher Over(WorkflowCache cache, Forge forge) => new(forge.Gh(), cache, clock: new ManualClock());
 
     /// <summary>The cache entry of the fixture, as a resolution hands it to the resolver.</summary>
     private static WorkflowCacheEntry Entry()
@@ -646,12 +1493,57 @@ public sealed class RemoteWorkflowUseTests
             "dailysoftwaresystems",
             "shared",
             Commit,
-            "workflows/security-review",
+            Directory,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
-            AskedFor: "v1",
-            [new WorkflowCacheFile("workflows/security-review/security-review.yml", WorkflowCache.BlobSha(Definition), "100644")]);
+            [new WorkflowCacheFile(Yml, WorkflowCache.BlobSha(Definition), "100644")]);
 
     private static ProcessResult Exited(int exitCode, string standardOutput = "", string stderr = "")
         => new(exitCode, standardOutput, stderr, TimeSpan.Zero, TimedOut: false);
+
+    /// <summary>
+    /// The forge as gh answers it: each call by the address it asks, every call kept; an address it holds no answer for
+    /// answered as gh answers a thing not there, and every call answered alike where <see cref="Always"/> is set.
+    /// </summary>
+    private sealed class Forge
+    {
+        public List<ProcessRequest> Requests { get; } = [];
+
+        public Dictionary<string, ProcessResult> Answers { get; } = new(StringComparer.Ordinal);
+
+        public ProcessResult? Always { get; set; }
+
+        /// <summary>The address each call asked, in order.</summary>
+        public IReadOnlyList<string> Asked => [.. Requests.Select(request => request.Arguments[3])];
+
+        public GhProcess Gh()
+        {
+            var runner = Substitute.For<IProcessRunner>();
+
+            runner.FindExecutable(GhProcess.Executable).Returns(GhProcess.Executable);
+            runner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(call =>
+            {
+                var request = call.Arg<ProcessRequest>();
+                Requests.Add(request);
+
+                return Task.FromResult(Always ?? (Answers.TryGetValue(request.Arguments[3], out var answer) ? answer : Exited(1, stderr: "gh: Not Found (HTTP 404)\n")));
+            });
+
+            return new GhProcess(runner, GitLocalVariables.Fixed(["GIT_DIR"]), NoVariables);
+        }
+    }
+
+    /// <summary>A file system that keeps every blob of the cache's: deleting one fails, as a file held open would.</summary>
+    private sealed class UndeletableBlobs(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public override void DeleteFile(string path)
+        {
+            if (WorkflowCache.BlobOf(path) is not null)
+            {
+                throw new IOException("this file system keeps its blobs.");
+            }
+
+            base.DeleteFile(path);
+        }
+    }
 }

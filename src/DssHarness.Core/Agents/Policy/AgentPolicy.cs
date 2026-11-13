@@ -269,6 +269,10 @@ public sealed partial class AgentPolicy
     /// <summary>
     /// This tool's verbs open to an agent: each only reads, or writes only the tree's own files - never a slot, the tool's
     /// state or its install. With <see cref="SlotOrStateVerbs"/> and <c>run-side-task</c>, every verb the tool has.
+    /// <c>validate-workflow</c> and <c>export-workflow</c> resolve a remote workflow a person's command would fetch into
+    /// the workflow cache; run by an agent - its every child carries <see cref="AgentChildEnvironment.AgentMarker"/> - they
+    /// read the cache alone and write nothing to it (<see cref="Orchestration.Flow.WorkflowRemoteFetcher"/>), refused
+    /// naming the person's command where it does not hold what they need.
     /// </summary>
     public static IReadOnlyList<string> OpenVerbs { get; } =
     [

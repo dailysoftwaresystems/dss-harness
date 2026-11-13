@@ -25,31 +25,35 @@ public sealed class WorkflowSourcesConfig
     public List<string> Allow { get; init; } = [];
 
     /// <summary>
-    /// The GitHub Enterprise hosts a <c>use:</c> may reach, each with the credential its API is called with; github.com
-    /// needs no entry, for the machine's own <c>gh</c> login reaches it.
+    /// The GitHub Enterprise hosts a <c>use:</c> may reach, each with the credential its API is called with and with no
+    /// other: the call is given that one credential, as the one variable <c>gh</c> reads for the host's kind, and none of
+    /// the machine's own tokens. github.com needs no entry, for the machine's own <c>gh</c> login reaches it.
     /// </summary>
+    [Description("the GitHub Enterprise hosts a remote use may reach, each with credential: {from: env, name: <VARIABLE>}, the one credential its calls are given")]
     public Dictionary<string, WorkflowHostConfig> Hosts { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The refs a remote <c>use:</c> may name: <c>tag-or-commit</c> (the default) takes a tag or a full commit SHA,
-    /// <c>commit</c> refuses tags too, and <c>any</c> allows a branch, which moves, warned of at every run that uses one.
+    /// <c>commit</c> refuses tags too, and <c>any</c> allows a branch, which moves, warned of wherever one is resolved.
     /// </summary>
     [Description("the refs a remote use may name: tag-or-commit (the default), commit, or any, which allows a moving branch")]
     public string? Pin { get; init; }
 
     /// <summary>
-    /// What happens where a tag or branch cannot be resolved offline: <c>refuse</c> (the default) refuses the run, and
-    /// <c>last-resolved</c> uses the last resolution in the cache, which the run records that it did.
+    /// What happens where a tag or branch cannot be resolved for the network not being there: <c>refuse</c> (the
+    /// default) refuses the run, and <c>last-resolved</c> uses the cache's newest resolution of the ref, warned of
+    /// wherever it stands in. A forge that answered - a refusal of the credential, a repository or ref not there - is
+    /// never the network not being there, and nothing stands in for it.
     /// </summary>
-    [Description("what happens where a ref cannot be resolved offline: refuse (the default) or last-resolved")]
+    [Description("what happens where a ref cannot be resolved for the network not being there: refuse (the default) or last-resolved")]
     public string? Offline { get; init; }
 }
 
 /// <summary>One GitHub Enterprise host a remote <c>use:</c> may reach, and the credential its API is called with.</summary>
 public sealed class WorkflowHostConfig
 {
-    /// <summary>How the host is authenticated: an environment variable, named here.</summary>
-    [Description("how the host is authenticated: an environment variable, named here")]
+    /// <summary>How the host is authenticated: an environment variable, named here; a host with none is refused.</summary>
+    [Description("how the host is authenticated: {from: env, name: <VARIABLE>}, the environment variable its token is read from")]
     public WorkflowHostCredentialConfig? Credential { get; init; }
 }
 
@@ -74,7 +78,7 @@ public static class WorkflowSourceRules
     /// <summary>The <c>pin</c> that takes a full commit SHA only, refusing tags too.</summary>
     public const string PinCommit = "commit";
 
-    /// <summary>The <c>pin</c> that allows a branch as well, which moves, warned of at every run that uses one.</summary>
+    /// <summary>The <c>pin</c> that allows a branch as well, which moves, warned of wherever one is resolved.</summary>
     public const string PinAny = "any";
 
     /// <summary>Every <c>pin</c>, in the order a refusal lists them.</summary>
@@ -83,7 +87,10 @@ public static class WorkflowSourceRules
     /// <summary>The <c>offline</c> that refuses a run whose ref cannot be resolved; the default.</summary>
     public const string OfflineRefuse = "refuse";
 
-    /// <summary>The <c>offline</c> that uses the cache's last resolution, which the run records that it did.</summary>
+    /// <summary>
+    /// The <c>offline</c> that uses the cache's newest resolution of the ref where the network is not there, warned of
+    /// wherever it stands in.
+    /// </summary>
     public const string OfflineLastResolved = "last-resolved";
 
     /// <summary>Every <c>offline</c>, in the order a refusal lists them.</summary>
@@ -155,14 +162,54 @@ public static class WorkflowSourceRules
     }
 
     /// <summary>
+    /// The environment variable the credential of <paramref name="host"/> is read from, as <paramref name="sources"/>
+    /// names it; null where it names none - and a host beyond github.com is then reached with no credential at all,
+    /// which the configuration's check and the fetch both refuse, for the machine's own tokens are never given to a host
+    /// a repository's configuration names.
+    /// </summary>
+    /// <param name="sources">The section; null where the file holds none.</param>
+    /// <param name="host">A host beyond github.com.</param>
+    public static string? CredentialOf(WorkflowSourcesConfig? sources, string host)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+
+        return sources?.Hosts is { } hosts
+            && hosts.TryGetValue(host, out var named)
+            && named?.Credential is { Name: { } name } credential
+            && string.Equals(credential.From, "env", StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(name)
+                ? name
+                : null;
+    }
+
+    /// <summary>
+    /// The host an <c>allow</c> entry is written under, where its first segment names one - dotted, as an owner never
+    /// is - and not github.com, whose entries need none; null where it is github.com's.
+    /// </summary>
+    /// <param name="entry">The entry as written.</param>
+    public static string? AllowedHost(string entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        var first = entry.Trim().Split('/')[0];
+
+        return first.Contains('.', StringComparison.Ordinal) && !first.Equals(GitHub, StringComparison.OrdinalIgnoreCase) ? first : null;
+    }
+
+    /// <summary>
     /// Every problem with one <c>allow</c> entry: that it is a whole owner, an owner's every repository or one
-    /// repository, each segment named - never empty, and the star only where a repository is - and a host only under
-    /// its own name, three segments deep; null where it is one of these.
+    /// repository - <c>owner</c>, <c>owner/*</c> or <c>owner/repo</c> - or the same under a host,
+    /// <c>host/owner</c>, <c>host/owner/*</c> or <c>host/owner/repo</c>, each segment named: never blank or empty, the
+    /// star only where a repository is, and a first of three segments a host; null where it is one of these. Whether
+    /// the host is one <c>hosts</c> names is the section's to say, which sees both.
     /// </summary>
     /// <param name="entry">The entry as written.</param>
     public static string? AllowProblem(string entry)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(entry);
+        if (string.IsNullOrWhiteSpace(entry))
+        {
+            return $"allow names '{entry}', which names nothing: an entry is an owner, owner/*, owner/repository or the same under host/";
+        }
 
         var parts = entry.Split('/');
 

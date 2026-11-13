@@ -318,12 +318,15 @@ public static class ServiceRegistration
         services.AddSingleton<IWorkflowExportService, WorkflowExportService>();
         services.AddSingleton<IWorkflowCacheService, WorkflowCacheService>();
 
-        // The hash cache of remote workflows, in this user's own directory for this tool, and the one fetcher that
-        // fills it - read by the workflow check, the runs and the export alike.
-        services.AddSingleton(provider => new WorkflowCache(
-            provider.GetRequiredService<IFileSystem>(),
-            Path.Combine(Platform.UserState.Directory, WorkflowCache.DirectoryName)));
-        services.AddSingleton<WorkflowRemoteFetcher>();
+        // The hash cache of remote workflows, in this user's own directory for this tool - named the first time the cache
+        // is used, so a process with no home of its own still checks and runs every workflow that names nothing remote -
+        // and the one fetcher that fills it, read by the workflow check, the runs and the export alike.
+        services.AddSingleton(provider => new WorkflowCache(provider.GetRequiredService<IFileSystem>(), WorkflowCache.DefaultDirectory));
+        services.AddSingleton(provider => new WorkflowRemoteFetcher(
+            provider.GetRequiredService<GhProcess>(),
+            provider.GetRequiredService<WorkflowCache>(),
+            provider.GetRequiredService<IHarnessOutput>(),
+            provider.GetRequiredService<TimeProvider>()));
 
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();
