@@ -496,8 +496,8 @@ public sealed class RemoteWorkflowUseTests
 
     /// <summary>
     /// A relative use inside a remote workflow that leaves its cache entry is refused, as a local one that leaves the
-    /// workflows directory is; and where the resolution reads no cache entry, the use is refused saying so - neither is
-    /// ever read from the repository.
+    /// workflows directory is; where the resolution reads no cache entry, the use is refused saying so, and where the
+    /// entry holds no such workflow, it is said as the commit's - none is ever read from the repository.
     /// </summary>
     [Fact]
     public async Task AUseInsideARemoteWorkflow_ThatLeavesItsEntry_OrWhereNoEntryIsRead_IsRefused()
@@ -524,6 +524,11 @@ public sealed class RemoteWorkflowUseTests
         Assert.Equal(
             [$"step 'scan.review' uses './inner/inner.yml', which could not be read: it is a workflow inside the remote workflow 'remote/github.com/dailysoftwaresystems/shared/{Commit}/workflows/security-review', and no resolution of this kind reads the cache entry that holds it"],
             await ProblemsOf("name: security-review\nsteps:\n  - name: review\n    use: ./inner/inner.yml\n", cached: null));
+
+        // One the entry does not hold is said as the commit's, never looked for in the repository.
+        Assert.Equal(
+            ["step 'scan.review' uses './inner/inner.yml', and the commit 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' of 'github.com/dailysoftwaresystems/shared' holds no workflow file at 'workflows/security-review/inner/inner.yml'"],
+            await ProblemsOf("name: security-review\nsteps:\n  - name: review\n    use: ./inner/inner.yml\n", (_, _) => null));
     }
 
     /// <summary>
@@ -656,6 +661,67 @@ public sealed class RemoteWorkflowUseTests
             "'dailysoftwaresystems/shared/workflows/other/other.yml@v2' holds a 'source.md' of its own in its directory, the name the note of where a vendored workflow came from is written as; export-workflow writes that note beside a workflow's files and never over one of them. Nothing was written.",
             colliding.Message);
         Assert.False(Directory.Exists(temp.Combine("elsewhere")));
+    }
+
+    /// <summary>
+    /// validate-workflow reads a workflow a remote one uses where its run reads it: each file a step of it names is
+    /// looked for in the cache entry under that workflow's own directory, never the directory of the remote workflow
+    /// that uses it, and the text of a prompt it names is read from there for its placeholders to be checked.
+    /// </summary>
+    [Fact]
+    public async Task ValidationReadsTheFilesOfAWorkflowARemoteOneUses_UnderItsOwnDirectoryInTheEntry()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        const string Outer = "name: security-review\nsteps:\n  - name: review\n    use: ./inner/inner.yml\n";
+        const string Inner = "name: inner\nsteps:\n  - name: check\n    type: reason\n    agent: reviewer\n    prompt: prompts/check.md\n    outputs: schemas/check.json\n";
+        const string Agent = "---\nname: reviewer\ndescription: reviews the paths\n---\nYou review.\n";
+        const string Check = "Check {nothing.here}.\n";
+        const string Schema = """{ "type": "object", "properties": { "done": { "type": "boolean" } }, "required": ["done"], "additionalProperties": false }""";
+        var (_, _, cache, fetcher) = Fixture(
+            temp,
+            Tag(),
+            TreeOf(
+                ("workflows/security-review/security-review.yml", Outer),
+                ("workflows/security-review/inner/inner.yml", Inner),
+                ("workflows/security-review/inner/agents/reviewer.md", Agent),
+                ("workflows/security-review/inner/prompts/check.md", Check),
+                ("workflows/security-review/inner/schemas/check.json", Schema)),
+            Blob(Outer),
+            Blob(Inner),
+            Blob(Agent),
+            Blob(Check),
+            Blob(Schema));
+
+        // The agent sections as init writes them, so the step's tier resolves and only what the files say is said.
+        var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
+
+        await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig
+        {
+            WorkflowSources = Allowed(),
+            Workflows = ["flow"],
+            Defaults = new HarnessDefaults { AgentTier = agents.AgentTier },
+            Providers = [.. agents.Providers],
+            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase),
+        });
+        Directory.CreateDirectory(temp.Combine(".harness-config", "workflows", "flow"));
+        await File.WriteAllTextAsync(temp.Combine(".harness-config", "workflows", "flow", "flow.yml"), $"name: flow\nsteps:\n  - name: scan\n    use: {Source}\n", Token);
+
+        var report = await new WorkflowValidationService(
+            harness.ContextLoader,
+            harness.FileSystem,
+            harness.Platform,
+            new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform),
+            DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild,
+            fetcher,
+            cache).CheckAsync(temp.Path, "flow", Token);
+
+        // Its agent, prompt and schema are found where they sit, and the prompt's text is read to be held to its names.
+        Assert.Equal(
+            [
+                ".harness-config/workflows/flow/flow.yml: step 'scan.review.check' prompt 'prompts/check.md' line 1 reads 'nothing.here', and a workflow used as a step reads only its own steps and its own names: it is of the workflow that called it. Give the fact to the called workflow as one of its inputs",
+            ],
+            report.Workflows.Single().Lines);
     }
 
     /// <summary>

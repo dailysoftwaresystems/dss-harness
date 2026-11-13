@@ -1623,6 +1623,10 @@ public sealed class WorkflowValidationServiceTests
             advisor:
               agent: counsel
               prompt: prompts/counsel.md
+            reporter:
+              agent: teller
+              statusPrompt: prompts/status.md
+              askPrompt: prompts/ask.md
             steps:
               - name: look
                 type: orient
@@ -1638,6 +1642,10 @@ public sealed class WorkflowValidationServiceTests
                 $"{Shown("flow")}: 'closure.md', the text 'closure' of 'flow/pipeline', is not at '{At}/closure.md'; write it there, beside the definition that names it",
                 $"{Shown("flow")}: 'agents/counsel.md', the agent the advisor of 'flow/pipeline' runs, is not at '{At}/agents/counsel.md'; write it there, beside the definition that names it",
                 $"{Shown("flow")}: 'prompts/counsel.md', the advisor of 'flow/pipeline''s prompt, is not at '{At}/prompts/counsel.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'agents/teller.md', the agent the reporter of 'flow/pipeline''s status prompt runs, is not at '{At}/agents/teller.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'prompts/status.md', the reporter of 'flow/pipeline''s status prompt's prompt, is not at '{At}/prompts/status.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'agents/teller.md', the agent the reporter of 'flow/pipeline''s ask prompt runs, is not at '{At}/agents/teller.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'prompts/ask.md', the reporter of 'flow/pipeline''s ask prompt's prompt, is not at '{At}/prompts/ask.md'; write it there, beside the definition that names it",
             ],
             report.Lines);
     }

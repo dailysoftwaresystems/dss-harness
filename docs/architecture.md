@@ -1693,7 +1693,10 @@ one input of it alone, its own gate, held off where a use fills that input so - 
 shipped flow's item pipeline holds its `redo` and `undo` off where its recovery uses it. The used
 workflow is read as a definition of its own and resolved
 into the step before anything is checked or run: its steps become the step's members - instances
-named under the use as a group's are - its files are read in its own directory, its declared
+named under the use as a group's are - its files are read in its own directory, and checked there
+by `validate-workflow` as the run's own are (each its steps and its recovery's steps name, its
+texts, the file an input of the kind `file` is filled with or defaults to, and the advisor's and
+reporter's files of a use that governs itself: `WorkflowFiles.OfUse`), its declared
 outputs are the step's own once it ends, and its recovery takes a failure inside it before the
 caller's handling of the step. Its steps read only its inputs, its params and its own steps,
 never the calling run's; every fact of the caller they need comes through an input. Its budget,
