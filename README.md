@@ -1762,7 +1762,11 @@ A step may be a whole workflow: it says `use`, a path to the workflow's yml file
 calling workflow's own directory and resolving inside the workflows folder, and `with`, the values
 the workflow's inputs are filled with - an expression for a `value` input, a template for a
 `text`, a path of the used workflow's directory for a `file`, and a single name for a `step`,
-which its steps read as `{input.<name>}` in their `onFailure` or `then`. The used workflow runs
+which its steps read as `{input.<name>}` in their `onFailure` or `then`. The file a step is asked
+with may be read the same way - one whole input of the kind `file` naming its `prompt` - so one
+pipeline is asked with a different prompt by each workflow that uses it, and a step may say a
+`when` that reads one input of its workflow alone, its own gate, held off where a use fills that
+input so. The used workflow runs
 inside the run as a group's members do, its steps named under the use; its files are read in its
 own directory, its declared outputs are the step's own once it ends, and its recovery takes a
 failure inside it before the caller's handling of the step. Its steps read only its inputs, its
@@ -1771,7 +1775,10 @@ budget, limits, advisor, amend and answers are never applied, which `validate-wo
 beside the fingerprint of the file each use read. A workflow that uses itself, directly or
 through others, is refused with the chain, uses nest at most ten deep in all, and a resume is
 refused where a used workflow's file changed since the run began, as the run's own definition's
-would be.
+would be. The shipped implementation workflow uses the mechanism for itself: its item pipeline -
+an item built in an agent of its own, tested, reviewed, folded and checkpointed - is one workflow,
+`item-pipeline/item-pipeline.yml`, used by its rounds and by its recovery alike, each use handing
+it its prompt, its failure's name and the facts of the run its steps read.
 
 This build checks workflow definitions - the shape of every key, every step, input, param and
 output an expression, a template or a prompt names, every path typed by the schema or the built-in

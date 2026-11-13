@@ -660,10 +660,187 @@ public sealed class FlowUseTests
             problems);
     }
 
+    /// <summary>
+    /// V63: the file a reason step is asked with is read from one of the used workflow's file-kind inputs alone - a
+    /// step of the calling workflow that reads one is refused, and a template that is not one whole read of such an
+    /// input, or a use that fills it with no path, is refused with the input's shape.
+    /// </summary>
+    [Fact]
+    public void TheFileAStepIsAskedWith_IsReadFromOneInputOfTheUsedWorkflow()
+    {
+        var gated = Swap(Pipeline, "    prompt: prompts/implement.md\n", "    prompt: '{input.prompt}'\n");
+
+        Assert.Empty(WorkflowValidator.Validate(Resolved("""
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            """, gated), hasCommitTemplate: false, (named, owner) => named.StartsWith("agents/", StringComparison.Ordinal) ? null : named));
+
+        Assert.Equal(
+            ["step 'lone' is asked with '{input.prompt}', and only a step of a workflow used as a step reads its prompt so: it is {input.<name>} whole, the name of an input the used workflow declares of the kind 'file'"],
+            WorkflowValidator.Validate(Parse("""
+                name: flow
+                steps:
+                  - name: lone
+                    type: reason
+                    agent: worker
+                    prompt: '{input.prompt}'
+                    outputs: schemas/lone.json
+                """), hasCommitTemplate: false));
+
+        Assert.Equal(
+            ["step 'items.implement' is asked with 'head {input.prompt}', which is not one read of a file-kind input; it is {input.<name>} whole, the name of an input the workflow 'flow/pipeline' declares of the kind 'file'"],
+            WorkflowValidator.Validate(Resolved("""
+                name: flow
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """, Swap(Pipeline, "    prompt: prompts/implement.md\n", "    prompt: 'head {input.prompt}'\n")), hasCommitTemplate: false));
+
+        Assert.Equal(
+            ["step 'items.implement' is asked with '{input.title}', which is not one read of a file-kind input; it is {input.<name>} whole, the name of an input the workflow 'flow/pipeline' declares of the kind 'file'"],
+            WorkflowValidator.Validate(Resolved("""
+                name: flow
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """, Swap(Pipeline, "    prompt: prompts/implement.md\n", "    prompt: '{input.title}'\n")), hasCommitTemplate: false));
+
+        Assert.Equal(
+            ["step 'items.implement' is asked with '{input.prompt}', and 'items' fills the input with no path; a step is asked with a file, and the use fills it with one"],
+            WorkflowValidator.Validate(Resolved("""
+                name: flow
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    with:
+                      title: t
+                """, gated), hasCommitTemplate: false));
+    }
+
+    /// <summary>
+    /// The file a use fills a prompt input with is the file its step is asked with, where it runs: each use asks with
+    /// its own, the placeholders of the file filled from the scope the step runs in.
+    /// </summary>
+    [Fact]
+    public async Task AStepAskedWithAFileItsUseFills_IsAskedWithThatFile()
+    {
+        var gated = Swap(Pipeline, "    prompt: prompts/implement.md\n", "    prompt: '{input.prompt}'\n");
+        var runner = new FakeRunner();
+        var coordinator = new FlowCoordinator(
+            Resolved("""
+                name: flow
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    with:
+                      title: the work
+                      prompt: prompts/one.md
+                """, gated),
+            runner,
+            Facts(),
+            new JumpingClock(),
+            workflowFile: (owner, named) => named == "prompts/one.md" ? "Build {input.title} now." : throw new ArgumentException($"{owner ?? "flow"}/{named}"));
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("Build the work now.", Prompt(runner, "items.implement"));
+
+        return;
+
+        static string Prompt(FakeRunner runner, string instance)
+            => string.Concat(runner.Asked[instance]["prompt"].Select(piece => piece.Text));
+    }
+
+    /// <summary>
+    /// WF2: a step held off by its own workflow's gate - a <c>when</c> that reads one input of it alone - runs where a
+    /// use opens the gate and never where one closes it: the alternatives a pipeline declares are the use's to hold
+    /// ready or off, and a closed gate is the one way the same pipeline runs with fewer steps.
+    /// </summary>
+    [Fact]
+    public async Task AStepHeldOffByItsWorkflowsGate_RunsOnlyWhereTheUseOpensIt()
+    {
+        var pipeline = Swap(
+            Swap(Pipeline,
+                "  - name: prompt\n    kind: file\n",
+                "  - name: prompt\n    kind: file\n  - name: alternatives\n    kind: value\n    required: true\n"),
+            "steps:\n  - name: implement\n",
+            "steps:\n  - name: spare\n    type: orient\n    when: 'input.alternatives'\n  - name: implement\n");
+
+        var open = new FakeRunner();
+        _ = await new FlowCoordinator(Resolved("""
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+                  alternatives: 'true'
+            """, pipeline), open, Facts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["items.spare", "items.implement", "items.verify"], open.Started.Where(started => started.StartsWith("items.", StringComparison.Ordinal)));
+
+        var closed = new FakeRunner();
+        var shut = new FlowCoordinator(Resolved("""
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+                  alternatives: 'false'
+            """, pipeline), closed, Facts(), new JumpingClock());
+        _ = await shut.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["items.implement", "items.verify"], closed.Started.Where(started => started.StartsWith("items.", StringComparison.Ordinal)));
+        Assert.Equal(FlowInstanceState.Skipped, shut.Instances["items.spare"].State);
+    }
+
+    /// <summary>
+    /// The value a use fills a step-kind input with is held to what the policy it reads is: one filled
+    /// <c>recover</c>, on a step of the recovery, calls the recovery from inside itself and is refused.
+    /// </summary>
+    [Fact]
+    public void AFailToFilledWithRecover_InTheRecoveryIsRefused()
+    {
+        var pipeline = Swap(Pipeline, "    onFailure: recover\n", "    onFailure: '{input.failTo}'\n");
+
+        Assert.Equal(
+            ["step 'recover.items.verify', which reads its onFailure from '{input.failTo}', filled with 'recover' by 'recover.items', is a step of the recovery and gives its failure to the recovery, and so calls itself; a step never does - one that is to run again after it failed says retries"],
+            WorkflowValidator.Validate(Resolved("""
+                name: flow
+                steps:
+                  - name: head
+                    type: orient
+                    onFailure: recover
+                recover:
+                    onSuccess: failed-step
+                    onFailure: pause
+                    steps:
+                      - name: items
+                        use: ./pipeline/pipeline.yml
+                        with:
+                          title: t
+                          prompt: prompts/implement.md
+                          failTo: recover
+                """, pipeline), hasCommitTemplate: false));
+    }
+
     /// <summary>The facts a run of these definitions needs, with nothing configured.</summary>
     private static ConfiguredRunnerFacts Facts()
         => new(new HarnessConfig());
-
     /// <summary>The parser's problems of a whole definition, whole: these tests read one that does not.</summary>
     private static IReadOnlyList<string> ParserProblems(string text)
     {
@@ -687,6 +864,9 @@ public sealed class FlowUseTests
         /// <summary>Every instance asked, in the order the coordinator started it.</summary>
         public List<string> Started { get; } = [];
 
+        /// <summary>Each reason step's asked-for files, by its instance: the prompt and resume prompt, in their pieces.</summary>
+        public Dictionary<string, IReadOnlyDictionary<string, IReadOnlyList<FlowTemplate.Piece>>> Asked { get; } = new(StringComparer.Ordinal);
+
         /// <summary>Answers <paramref name="step"/> with one result, every time it is asked.</summary>
         public FakeRunner On(string step, FlowStepResult result)
         {
@@ -706,6 +886,11 @@ public sealed class FlowUseTests
         {
             Started.Add(run.Instance);
 
+            if (run.Prompts is { } asked)
+            {
+                Asked[run.Instance] = asked;
+            }
+
             return Task.FromResult(_scripts.GetValueOrDefault(run.Step.Name, () => FlowStepResult.Ended(passed: true, HarnessExit.Success))());
         }
 
@@ -714,4 +899,3 @@ public sealed class FlowUseTests
             => Task.FromResult<string?>(null);
     }
 }
-

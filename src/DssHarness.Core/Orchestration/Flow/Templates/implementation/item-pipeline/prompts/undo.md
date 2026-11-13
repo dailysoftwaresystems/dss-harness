@@ -12,19 +12,19 @@ What the change means for this item: {piece.changed}
 
 ## The item that is withdrawn
 
-{item.title}
+{input.item.title}
 
-{item.instructions}
+{input.item.instructions}
 
-- The paths you may write, and the only ones: {item.ownedPaths}
-- The paths you must not touch: {item.forbiddenPaths}
-- What must hold once it is taken back, checked statement by statement before you report: {item.done}
-- The filter that names the tests the item affects: `{item.testFilter}`; the engine runs only those when you report
+- The paths you may write, and the only ones: {input.item.ownedPaths}
+- The paths you must not touch: {input.item.forbiddenPaths}
+- What must hold once it is taken back, checked statement by statement before you report: {input.item.done}
+- The filter that names the tests the item affects: `{input.item.testFilter}`; the engine runs only those when you report
   where the run's input affectedTests is on (`{input.affectedTests}`), and every test where it is off or the filter is
   empty
-- How the engine runs the tests, leg by leg: {orient.tests}
+- How the engine runs the tests, leg by leg: {input.orient.tests}
 
-The plan this item was part of, as it now is: {planning.plan.latest.summary}
+The plan this item was part of, as it now is: {input.planSummary}
 
 ## What the item built
 

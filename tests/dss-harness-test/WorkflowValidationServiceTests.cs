@@ -99,7 +99,7 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.True(report.Passed);
-        Assert.Equal($"ok {Shown(Default)} (82 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
+        Assert.Equal($"ok {Shown(Default)} (82 steps, 48 recovering, 48 reasoning)", report.Lines[0]);
         Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at xhigh", report.Lines);
         Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
 
@@ -423,7 +423,7 @@ public sealed class WorkflowValidationServiceTests
 
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
-        Assert.Equal($"ok {Shown(Default)} (82 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
+        Assert.Equal($"ok {Shown(Default)} (82 steps, 48 recovering, 48 reasoning)", report.Lines[0]);
         Assert.All(
             report.Lines.Skip(1).TakeWhile(line => !line.StartsWith(Shown("small"), StringComparison.Ordinal)),
             line => Assert.True(
@@ -431,8 +431,9 @@ public sealed class WorkflowValidationServiceTests
                     || line.StartsWith("advisor ", StringComparison.Ordinal)
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
                     || line.StartsWith("prices of", StringComparison.Ordinal)
-                    || line.StartsWith("no file under", StringComparison.Ordinal),
-                $"a level, price or missing-key line: {line}"));
+                    || line.StartsWith("no file under", StringComparison.Ordinal)
+                    || line.StartsWith("'", StringComparison.Ordinal),
+                $"a level, price, resolution or missing-key line: {line}"));
         Assert.Equal(
             [
                 $"{Shown("small")}: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
@@ -445,7 +446,8 @@ public sealed class WorkflowValidationServiceTests
                     || line.StartsWith("advisor ", StringComparison.Ordinal)
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
                     || line.StartsWith("prices of", StringComparison.Ordinal)
-                    || line.StartsWith("no file under", StringComparison.Ordinal)));
+                    || line.StartsWith("no file under", StringComparison.Ordinal)
+                    || line.StartsWith("'", StringComparison.Ordinal)));
         Assert.Equal([true, false], report.Workflows.Select(workflow => workflow.Holds));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
@@ -831,7 +833,7 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository, held).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.Equal($"{Shown("small")} could not be read: {Held.Why}", report.Lines[0]);
-        Assert.Equal($"ok {Shown(Default)} (82 steps, 46 recovering, 46 reasoning)", report.Lines[1]);
+        Assert.Equal($"ok {Shown(Default)} (82 steps, 48 recovering, 48 reasoning)", report.Lines[1]);
         Assert.All(
             report.Lines.Skip(2),
             line => Assert.True(
@@ -839,8 +841,9 @@ public sealed class WorkflowValidationServiceTests
                     || line.StartsWith("advisor ", StringComparison.Ordinal)
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
                     || line.StartsWith("prices of", StringComparison.Ordinal)
-                    || line.StartsWith("no file under", StringComparison.Ordinal),
-                $"a level, price or missing-key line: {line}"));
+                    || line.StartsWith("no file under", StringComparison.Ordinal)
+                    || line.StartsWith("'", StringComparison.Ordinal),
+                $"a level, price, resolution or missing-key line: {line}"));
 
         // Z.AI's key alone: Anthropic's models are reached through claude-code, which reads none.
         Assert.Equal(1, report.Lines.Count(line => line.StartsWith("no file under", StringComparison.Ordinal)));

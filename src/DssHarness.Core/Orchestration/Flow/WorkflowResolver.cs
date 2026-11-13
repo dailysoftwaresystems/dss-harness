@@ -160,12 +160,12 @@ public static class WorkflowResolver
 
         var inner = new List<string>(chain) { name };
         var calledSteps = ResolveSteps(called.Steps, name, inner, depth + 1, readFile, problems)
-            .Select(member => member.WorkflowOf is null ? member with { WorkflowOf = name } : member)
+            .Select(member => Marked(member, name))
             .ToList();
         var calledRecover = called.Recover is null ? null : called.Recover with
         {
             Steps = [.. ResolveSteps(called.Recover.Steps, name, inner, depth + 1, readFile, problems)
-                .Select(member => member.WorkflowOf is null ? member with { WorkflowOf = name } : member)],
+                .Select(member => Marked(member, name))],
         };
 
         foreach (var parameter in called.Params.Where(parameter => parameter.Required && parameter.Default is null))
@@ -227,6 +227,18 @@ public static class WorkflowResolver
             Steps = calledSteps,
         };
     }
+
+    /// <summary>
+    /// A member of a used workflow, marked with the workflow its files are read under - it and every step nested in
+    /// it, a group's members as much as the workflow's own; a member a nested use marked already, of a workflow deeper
+    /// still, keeps the mark of that one.
+    /// </summary>
+    private static WorkflowStep Marked(WorkflowStep step, string name)
+        => step with
+        {
+            WorkflowOf = step.WorkflowOf ?? name,
+            Steps = [.. step.Steps.Select(member => Marked(member, name))],
+        };
 
     /// <summary>
     /// The path a use names, under the repository's workflows root and written with forward slashes: the caller's

@@ -403,14 +403,14 @@ public sealed class WorkflowValidationService(
             }
 
             // A file a use fills an input with is a file of the used workflow's directory, as every file a step of it
-            // names is.
+            // names is - read there, under the used workflow's own name.
             if (step.Use is { } use)
             {
                 foreach (var input in use.Inputs.Where(input => input.Kind == FlowInput.FileKind))
                 {
                     if (step.With.TryGetValue(input.Name, out var value))
                     {
-                        Add(problems, _named.Problem(value, ownerDirectory, ownerName, $"the '{input.Name}' it fills '{use.Name}'s input '{input.Name}' with", out _));
+                        Add(problems, _named.Problem(value, DirectoryOf(context.Layout, use.Name), use.Name, $"the '{input.Name}' it fills '{use.Name}'s input '{input.Name}' with", out _));
                     }
                 }
             }

@@ -2043,9 +2043,12 @@ public sealed class ReasonStepRunnerTests
         await GraphedTreeAsync(kit);
         var workflows = Path.Combine(kit.Main, ".harness-config", "workflows");
         WorkflowTemplates.EnsureShipped(workflows, kit.Harness.FileSystem);
-        var shipped = WorkflowFileParser.Parse("workflows/implementation/implementation.yml", File.ReadAllText(Path.Combine(workflows, "implementation", "implementation.yml")));
-        var mend = FlowScope.Declared(shipped).First(one => one.Step.Name == "mend" && !one.Path.StartsWith(FlowScope.Recovery + ".", StringComparison.Ordinal));
-        var implement = ResumeChain.Root(shipped, mend.Path, mend.Step);
+        var definition = WorkflowResolver.Resolve(
+            WorkflowFileParser.Parse("workflows/implementation/implementation.yml", File.ReadAllText(Path.Combine(workflows, "implementation", "implementation.yml"))),
+            "implementation",
+            relative => File.ReadAllText(Path.Combine([workflows, .. relative.Split('/')]))).Definition;
+        var mend = FlowScope.Declared(definition).First(one => one.Step.Name == "mend" && !one.Path.StartsWith(FlowScope.Recovery + ".", StringComparison.Ordinal));
+        var implement = ResumeChain.Root(definition, mend.Path, mend.Step);
 
         Assert.Equal(("implement", WorkflowStep.GraphFromChanges, (string?)null), (implement.Name, mend.Step.GraphFrom, implement.GraphFrom));
 
@@ -2054,7 +2057,7 @@ public sealed class ReasonStepRunnerTests
             .Replace("\"tiers\": [\"best\"]", "\"tiers\": [\"best\", \"balanced\"]", StringComparison.Ordinal)
             .Replace("\"efforts\": [\"high\"]", "\"efforts\": [\"high\", \"xhigh\"]", StringComparison.Ordinal)
             .Replace("\"tierConfig\": { \"best\": [\"claude-opus-5-5\"] }", "\"tierConfig\": { \"best\": [\"claude-opus-5-5\"], \"balanced\": [\"claude-opus-5-5\"] }", StringComparison.Ordinal));
-        var run = Graphing(kit, shipped, mend.Path, instance: "rounds#1.items[0].mend", made: false);
+        var run = Graphing(kit, definition, mend.Path, instance: "rounds#1.items[0].mend", made: false);
         await kit.CreateReadingAgentAsync("a9");
 
         var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(run, Token);

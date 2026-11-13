@@ -227,11 +227,14 @@ public sealed class WorkflowExportService(
         ];
     }
 
-    /// <summary>Every file the definition names, each with '/', and the definition last: a folder that has its yml has every file it names.</summary>
+    /// <summary>
+    /// Every file the definition names, each with '/', and the definition last: a folder that has its yml has every
+    /// file it names - a used workflow's own yml among them, and each file under the used workflow's place in the set.
+    /// </summary>
     private static IReadOnlyList<string> Named(WorkflowDefinition definition, string name)
         =>
         [
-            .. WorkflowFiles.All(definition).Select(file => file.Replace('\\', '/')).Distinct(StringComparer.Ordinal),
+            .. WorkflowFiles.AllUnder(definition).Select(file => file.Replace('\\', '/')).Distinct(StringComparer.Ordinal),
             $"{name}{HarnessLayout.WorkflowFileExtension}",
         ];
 

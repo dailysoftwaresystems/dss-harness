@@ -1060,9 +1060,10 @@ public static class WorkflowFileParser
         };
 
         // A failure policy read from an input - only a step of a workflow used as a step reads one, which the
-        // definition's check refuses elsewhere - and the values a use hands the workflow it uses, each read as the
-        // input it fills declares, are held to their own rules where those steps are checked.
-        foreach (var (key, value) in keys.Where(entry => entry.Key is not ("name" or "type" or "steps" or "onFailure" or "with") && !filled.Contains(entry.Key, StringComparer.Ordinal)))
+        // definition's check refuses elsewhere - the file a reason step is asked with, read the same one way - and the
+        // values a use hands the workflow it uses, each read as the input it fills declares, are held to their own
+        // rules where those steps are checked.
+        foreach (var (key, value) in keys.Where(entry => entry.Key is not ("name" or "type" or "steps" or "onFailure" or "prompt" or "resumePrompt" or "with") && !filled.Contains(entry.Key, StringComparer.Ordinal)))
         {
             foreach (var (path, scalar) in TextsIn(key, value, inList: false))
             {

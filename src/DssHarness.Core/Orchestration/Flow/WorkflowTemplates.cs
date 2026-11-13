@@ -53,32 +53,68 @@ public static class WorkflowTemplates
     /// </summary>
     private static readonly Lazy<IReadOnlyDictionary<string, string>> Embedded = new(ReadEmbedded);
 
-    /// <summary>The agent files the implementation workflow names.</summary>
+    /// <summary>The agent files the implementation workflow names at its own levels.</summary>
     private static IReadOnlyList<string> Agents =>
     [
-        "prioritizer", "triage", "planner", "plan-auditor", "implementer",
-        "review-scope", "reviewer-correctness", "reviewer-errors", "reviewer-tests",
-        "reviewer-types", "reviewer-comments", "reviewer-simplicity",
+        "prioritizer", "triage", "planner", "plan-auditor",
         "scribe", "auditor", "diagnostician", "pre-existing-triage", "advisor", "reporter",
     ];
 
-    /// <summary>The prompt files the implementation workflow names.</summary>
+    /// <summary>The prompt files the implementation workflow names at its own levels.</summary>
     private static IReadOnlyList<string> Prompts =>
     [
         "priority", "triage", "plan", "replan", "plan-update", "plan-audit",
-        "implement", "redo", "undo", "unblock", "mend", "reconcile", "anchors",
-        "review-scope", "review", "rework",
-        "deferrals", "handoff",
+        "anchors", "deferrals", "handoff",
         "self-audit", "pr-body",
-        "diagnose", "rediagnose", "redirect", "remedy", "pre-existing",
+        "diagnose", "rediagnose", "redirect", "pre-existing",
         "recommend", "status", "ask",
     ];
 
-    /// <summary>The schema files the implementation workflow names.</summary>
+    /// <summary>The schema files the implementation workflow names at its own levels.</summary>
     private static IReadOnlyList<string> Schemas =>
     [
-        "priority", "triage", "plan", "plan-audit", "implement",
-        "review-scope", "review", "self-audit", "summary", "diagnosis", "pre-existing",
+        "priority", "triage", "plan", "plan-audit",
+        "self-audit", "summary", "diagnosis", "pre-existing",
+    ];
+
+    /// <summary>The agent files the item pipeline names: the workflow its rounds and its recovery both use.</summary>
+    private static IReadOnlyList<string> PipelineAgents =>
+    [
+        "implementer", "review-scope", "reviewer-correctness", "reviewer-errors", "reviewer-tests",
+        "reviewer-types", "reviewer-comments", "reviewer-simplicity",
+    ];
+
+    /// <summary>The prompt files the item pipeline names, the two its uses hand it among them.</summary>
+    private static IReadOnlyList<string> PipelinePrompts =>
+    [
+        "implement", "remedy", "redo", "undo", "unblock", "mend", "reconcile", "anchors",
+        "review-scope", "review", "rework",
+    ];
+
+    /// <summary>The schema files the item pipeline names.</summary>
+    private static IReadOnlyList<string> PipelineSchemas =>
+    [
+        "implement", "review-scope", "review",
+    ];
+
+    /// <summary>
+    /// The item pipeline's own files, under its directory in the implementation workflow's, in the order they are
+    /// written: the workflow the two uses name, its agents, its prompts - the two a use hands it among them - and its
+    /// schemas.
+    /// </summary>
+    private static IReadOnlyList<string> PipelineFiles =>
+    [
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/implementer.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/review-scope.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-correctness.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-errors.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-tests.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-types.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-comments.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-simplicity.md",
+        .. PipelinePrompts.Select(prompt => $"item-pipeline/prompts/{prompt}.md"),
+        .. PipelineSchemas.Select(schema => $"item-pipeline/schemas/{schema}.schema.json"),
+        $"item-pipeline/item-pipeline{HarnessLayout.WorkflowFileExtension}",
     ];
 
     /// <summary>
@@ -91,6 +127,7 @@ public static class WorkflowTemplates
         .. Prompts.Select(prompt => $"prompts/{prompt}.md"),
         .. Schemas.Select(schema => $"schemas/{schema}.schema.json"),
         "recommendations.md",
+        .. PipelineFiles,
         $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}",
     ];
 
@@ -134,16 +171,24 @@ public static class WorkflowTemplates
                 $"this build's implementation workflow names itself '{parsed.Name}'; it is '{ShippedWorkflowName}'");
         }
 
-        // As for a config with no commit.template: each commit step writes its message. The files are the build's own, so
-        // every schema is held to the subset, every path is typed by the schema that holds it and every prompt's
-        // placeholder is checked.
+        // The definition as a run reads it: every use resolved - the item pipeline placed at each of the two places
+        // that name it - so that what is held to the rules is the tree the engine runs.
+        var (resolved, resolution) = WorkflowResolver.Resolve(parsed, ShippedWorkflowName, path => TextOf(Below(path)));
+
+        // As for a config with no commit.template: each commit step writes its message. The files are the build's own,
+        // so every schema is held to the subset, every path is typed by the schema that holds it and every prompt's
+        // placeholder is checked - each in the directory of the workflow that names it, and the file a use fills a
+        // file-kind input with is one of the used workflow's directory, found where its use is checked.
         IReadOnlyList<string> problems =
         [
-            .. WorkflowFiles.Steps(parsed)
-                .SelectMany(entry => WorkflowFiles.OfStep(entry.Step, $"step '{entry.Path}'"))
-                .Where(named => named.IsSchema && TextOf(named.File) is not null)
-                .SelectMany(named => WorkflowFiles.SchemaProblems(named, TextOf(named.File)!)),
-            .. WorkflowValidator.Validate(parsed, hasCommitTemplate: false, (named, owner) => TextOf(named)),
+            .. resolution,
+            .. WorkflowFiles.Steps(resolved)
+                .SelectMany(entry => WorkflowFiles.OfStep(entry.Step, $"step '{entry.Path}'")
+                    .Select(named => (entry.Step.WorkflowOf, Named: named)))
+                .Where(schema => schema.Named.IsSchema && EmbeddedText(schema.WorkflowOf, schema.Named.File) is not null)
+                .SelectMany(schema => WorkflowFiles.SchemaProblems(schema.Named, EmbeddedText(schema.WorkflowOf, schema.Named.File)!)),
+            .. WithFilesOf(resolved),
+            .. WorkflowValidator.Validate(resolved, hasCommitTemplate: false, (named, owner) => EmbeddedText(owner, named)),
         ];
 
         if (problems.Count > 0)
@@ -155,8 +200,56 @@ public static class WorkflowTemplates
                 $"this build's own implementation workflow does not hold:{Environment.NewLine}{detail}");
         }
 
-        return parsed;
+        return resolved;
     }
+
+    /// <summary>
+    /// Why a file a use of the resolved definition fills a file-kind input with is not one of this build's embedded
+    /// set: each such file is a file of the used workflow's directory, as every file a step of it names is, and one
+    /// that is missing makes the build's own set incomplete. An input filled with nothing, or with a template, is the
+    /// definition's own check to refuse; none is said here.
+    /// </summary>
+    private static IReadOnlyList<string> WithFilesOf(WorkflowDefinition resolved)
+    {
+        var problems = new List<string>();
+
+        foreach (var (path, step) in WorkflowFiles.Steps(resolved).Where(entry => entry.Step.Use is not null))
+        {
+            var use = step.Use!;
+
+            foreach (var input in use.Inputs.Where(input => input.Kind == FlowInput.FileKind))
+            {
+                var filled = step.With.TryGetValue(input.Name, out var with) ? with : input.Default;
+
+                if (filled is not { Length: > 0 } || filled.Contains('{'))
+                {
+                    continue;
+                }
+
+                if (EmbeddedText(use.Name, filled) is null)
+                {
+                    problems.Add($"step '{path}' fills the input '{input.Name}' of the workflow '{use.Name}' it uses with '{filled}', and no file is at that path in this build's embedded set");
+                }
+            }
+        }
+
+        return problems;
+    }
+
+    /// <summary>
+    /// The text of one embedded file of this workflow's set, named by the workflow that owns it: a file of the
+    /// workflow itself is named as it names it, and a file of a workflow it uses - the item pipeline's prompts and
+    /// schemas - carries that workflow's own place under this one.
+    /// </summary>
+    /// <param name="owner">The workflow the file belongs to: its path under the workflows root, or null for this workflow's own.</param>
+    /// <param name="named">The file, as the definition names it, relative to its owner's directory.</param>
+    private static string? EmbeddedText(string? owner, string named)
+        => owner is null || owner == ShippedWorkflowName
+            ? TextOf(named)
+            : TextOf($"{owner[(ShippedWorkflowName.Length + 1)..]}/{named}");
+
+    /// <summary>A workflow file's path under this workflow's own directory, as the resolver names it under the workflows root.</summary>
+    private static string Below(string path) => path[(ShippedWorkflowName.Length + 1)..];
 
     /// <summary>
     /// Writes each file of the implementation workflow that is missing from its directory under
@@ -269,7 +362,32 @@ public static class WorkflowTemplates
 
         try
         {
-            var named = WorkflowFiles.All(WorkflowFileParser.Parse(definition, text));
+            // The definition resolved as a run reads it, its uses included: what a repository's own definition names
+            // is the whole tree it runs, a used workflow's files among them - so a pipeline file the repository took
+            // out is written back, read from the repository's own workflows directory as a run resolves them.
+            var parsed = WorkflowFileParser.Parse(definition, text);
+            var workflows = Path.GetDirectoryName(directory.TrimEnd(Path.DirectorySeparatorChar))!;
+            string? ReadUnder(string relative)
+            {
+                var path = Path.Combine([workflows, .. relative.Split('/')]);
+
+                if (!fileSystem.FileExists(path))
+                {
+                    return null;
+                }
+
+                try
+                {
+                    return fileSystem.ReadAllText(path);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    return null;
+                }
+            }
+
+            var (resolved, _) = WorkflowResolver.Resolve(parsed, ShippedWorkflowName, ReadUnder);
+            var named = WorkflowFiles.AllUnder(resolved);
 
             return [.. Files.Where(file => named.Contains(file, StringComparer.Ordinal))];
         }

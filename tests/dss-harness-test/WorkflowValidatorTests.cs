@@ -1223,7 +1223,7 @@ public sealed class WorkflowValidatorTests
                 "step 'items.redo' works in the agent 'items.item-agent' makes, and does not wait for it: name 'item-agent', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
                 "amend.whenChangeScope names 'planning.plan', which is not declared beside 'items.implement': the three are alternatives at one place of one forEach group",
                 "amend.whenRemoveScope names 'items.undo', a orient step, and 'items.implement' is a reason step: an alternative runs in that step's place, and is of its type",
-                "amend.whenRemoveScope names 'items.undo', which says dependsOn, when: it runs in the place of 'implement', with that step's dependencies, and begins the work of its instance",
+                "amend.whenRemoveScope names 'items.undo', which says dependsOn, when: it runs in the place of 'implement', with that step's dependencies, and begins the work of its instance - the one thing it may say of its own is a when that reads one input of the used workflow alone, which holds it off where a use fills that input",
                 "step 'items.after-undo' is raised by 'undo': 'undo' runs in the place of 'implement', and is named by that step's name",
                 "step 'items.after-undo' sends the run to 'undo': 'undo' runs in the place of 'implement', and is named by that step's name",
                 "step 'items.verify' depends on 'undo': 'undo' runs in the place of 'implement', and is named by that step's name",

@@ -5272,7 +5272,12 @@ public static class HelpTopics
         builder.AppendLine("step's once it ends. Its with fills the workflow's inputs, each value read as the input");
         builder.AppendLine("it fills declares: an expression for a value, a template for a text, a path of the used");
         builder.AppendLine("workflow's directory for a file, and a name for a step - what a step of the used workflow");
-        builder.AppendLine("reads as {input.<name>} in its onFailure or then, filled where it runs. The steps of a used");
+        builder.AppendLine("reads as {input.<name>} in its onFailure or then, filled where it runs; the file a step is");
+        builder.AppendLine("asked with may be read the same way, one whole input of the kind file naming its prompt,");
+        builder.AppendLine("so one pipeline is asked with a different prompt by each workflow that uses it. A step of");
+        builder.AppendLine("the used workflow may also say a when that reads one input of it alone: its own gate, held");
+        builder.AppendLine("off where a use fills that input so - the way the shipped flow's item pipeline holds its");
+        builder.AppendLine("redo and undo off where its recovery uses it. The steps of a used");
         builder.AppendLine("workflow read only its inputs, its params and its own steps, never the calling run's -");
         builder.AppendLine("every fact of the caller they need comes through an input - and a failure inside it goes");
         builder.AppendLine("to the workflow's own recovery first, then to the caller's handling of the step. Its");

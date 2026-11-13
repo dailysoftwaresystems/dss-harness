@@ -1,0 +1,515 @@
+# The item pipeline: one work item built in an agent of its own, tested, reviewed, folded and
+# checkpointed - written once and used by the implementation workflow wherever an item is built,
+# by its rounds and by its recovery alike ('use: ./item-pipeline/item-pipeline.yml').
+#
+# Every fact its steps read beyond their own they are handed as inputs, filled by each use: the
+# item itself, the run's orientation, the plan's summary, the run's affectedTests - and, where
+# the recovery uses the pipeline, the diagnosis its remedy puts right. The prompt its builder is
+# asked with and the name a machine step's failure goes to are handed the same way: implementPrompt
+# and failTo, for a round builds an item with prompts/implement.md and gives its failures to the
+# run's recovery, and the recovery builds one with prompts/remedy.md and asks with its own failures,
+# as it cannot call itself. redo and undo - the alternatives a plan update runs in the builder's
+# place - are held off by the alternatives input where the recovery uses the pipeline, which no
+# update reaches.
+name: item-pipeline
+description: One work item built in an agent of its own, tested, reviewed, folded and checkpointed - the pipeline the implementation workflow's rounds and recovery both use.
+inputs:
+  - name: item
+    kind: value
+    required: true
+    description: The work item this use builds - its title, instructions, ownedPaths and testFilter, as the round's check or the recovery's diagnosis holds it.
+  - name: implementPrompt
+    kind: file
+    required: true
+    description: The prompt file the item's builder is asked with - prompts/implement.md where a round builds the item, prompts/remedy.md where the recovery does.
+  - name: alternatives
+    kind: value
+    required: true
+    description: '''true'' where redo and undo are held ready as the alternatives a plan update runs in the builder''s place; ''false'' where they are held off, as the recovery''s use does, which no update reaches.'
+  - name: failTo
+    kind: step
+    required: true
+    description: What a failure of the pipeline's machine steps does, by its name in the caller - recover in a round, which the run's recovery takes; pause in the recovery, which cannot call itself.
+  - name: orient
+    kind: value
+    required: true
+    description: The run's orientation - hasLegs, anchors, startCommit, hasRemote, tests - which the pipeline's verify, its checks and its pushes read.
+  - name: planSummary
+    kind: value
+    required: true
+    description: The plan's summary of what it set out to do, which the builder reads.
+  - name: affectedTests
+    kind: value
+    required: true
+    description: '''on'': the item is tested on the tests its change affects, the filter it names. ''off'': every test runs for the item.'
+  - name: diagnose
+    kind: value
+    description: The recovery's diagnosis, whose cause and summary the remedy prompt reads; absent where a round uses the pipeline.
+outputs:
+  - name: written
+    description: The paths the item's fold wrote.
+    from: fold.written
+  - name: rows
+    description: The anchor rows the item's fold carried.
+    from: fold.rows
+  - name: leftover
+    description: The review findings still standing at the review loop's bound.
+    from: fix.review.findings
+steps:
+  - name: item-agent
+    type: create-agent
+    agent: implementer
+    onFailure: '{input.failTo}'
+  - name: implement
+    type: reason
+    agent: implementer
+    tier: balanced
+    effort: xhigh
+    access: write
+    in: item-agent
+    writes: 'input.item.ownedPaths'
+    dependsOn: [item-agent]
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
+    onPreExisting: triage-pre-existing-issue
+    prompt: '{input.implementPrompt}'
+    outputs: schemas/implement.schema.json
+  - name: redo
+    type: reason
+    agent: implementer
+    tier: balanced
+    effort: xhigh
+    access: write
+    in: item-agent
+    writes: 'input.item.ownedPaths'
+    when: 'input.alternatives'
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
+    onPreExisting: triage-pre-existing-issue
+    prompt: prompts/redo.md
+    outputs: schemas/implement.schema.json
+  - name: undo
+    type: reason
+    agent: implementer
+    tier: balanced
+    effort: xhigh
+    access: write
+    in: item-agent
+    writes: 'input.item.ownedPaths'
+    when: 'input.alternatives'
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
+    onPreExisting: triage-pre-existing-issue
+    prompt: prompts/undo.md
+    outputs: schemas/implement.schema.json
+  - name: item-blocked
+    type: pause
+    dependsOn: [implement]
+    when: '!empty(implement.latest.blocked)'
+    onFailure: '{input.failTo}'
+    question: |-
+      The work on '{input.item.title}' cannot go on as planned: its builder says it cannot do part of it.
+      {implement.latest.blocked}
+      Answer continue, with what it is to do instead or what was done to lift what stands in its way; skip, to leave this item out of the run, listed as not done; or abort.
+    options: [continue, skip]
+    text: [continue]
+  - name: unblock
+    type: reason
+    resume: implement
+    on:
+      step: item-blocked
+      outcome: success
+    when: "item-blocked.answer == 'continue'"
+    then: item-blocked
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
+    onPreExisting: triage-pre-existing-issue
+    prompt: prompts/unblock.md
+    outputs: schemas/implement.schema.json
+  - name: verify
+    type: test
+    in: item-agent
+    filter: '{input.item.testFilter}'
+    filterWhen: "input.affectedTests == 'on'"
+    dependsOn: [item-blocked]
+    when: "input.orient.hasLegs && (item-blocked.answer ?? 'continue') != 'skip'"
+    onFailure: '{input.failTo}'
+  - name: mend
+    type: reason
+    resume: implement
+    on:
+      step: verify
+      outcome: failure
+      codes: [20]
+    then: item-blocked
+    maxVisits: 3
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
+    onPreExisting: triage-pre-existing-issue
+    graphFrom: changes
+    prompt: prompts/mend.md
+    outputs: schemas/implement.schema.json
+  - name: fold
+    type: fold
+    of: item-agent
+    within: 'input.item.ownedPaths'
+    allow:
+      new: 'implement.latest.newRows'
+    answers:
+      foldNewRows: allow
+      foldTwoChanges: merge
+      foldConflicts: fail
+      foldOutside: fail
+    dependsOn: [verify, mend]
+    when: "(item-blocked.answer ?? 'continue') != 'skip'"
+    onFailure: '{input.failTo}'
+  - name: reconcile
+    on:
+      step: fold
+      outcome: failure
+      codes: [13]
+    when: "fold.question == 'foldOutside' || fold.question == 'foldConflicts'"
+    then: item-blocked
+    maxVisits: 2
+    onFailure: '{input.failTo}'
+    steps:
+      - name: catch-up
+        type: refresh
+        of: item-agent
+        all: true
+        answers:
+          foldTwoChanges: merge
+          foldConflicts: fail
+        onFailure: continue
+      - name: settle
+        type: reason
+        resume: implement
+        dependsOn: [catch-up]
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
+        onPreExisting: triage-pre-existing-issue
+        graphFrom: changes
+        prompt: prompts/reconcile.md
+        outputs: schemas/implement.schema.json
+  - name: fold-checks
+    dependsOn: [fold]
+    when: "input.orient.anchors && (item-blocked.answer ?? 'continue') != 'skip'"
+    gather: [findings]
+    onFailure: '{input.failTo}'
+    steps:
+      - name: balance
+        type: anchor-balance
+        base: '{input.orient.startCommit}'
+        rows: 'fold.rows'
+      - name: citations
+        type: anchor-citations
+        paths: 'fold.written'
+  - name: cite
+    type: reason
+    resume: implement
+    on:
+      step: fold-checks
+      outcome: failure
+      codes: [1]
+    then: item-blocked
+    maxVisits: 2
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
+    onPreExisting: triage-pre-existing-issue
+    graphFrom: changes
+    prompt: prompts/anchors.md
+    outputs: schemas/implement.schema.json
+  - name: checkpoint
+    type: commit
+    dependsOn: [fold-checks]
+    onFailure: '{input.failTo}'
+    message: |-
+      {input.item.title}
+
+      Committed when the item was folded, before its review and the round's gate.
+      Checked:
+      {carried.ran}
+      Not checked:
+      {carried.notRun}
+      Known red:
+      {carried.red}
+  - name: checkpoint-push
+    type: push
+    checkpoint: true
+    dependsOn: [checkpoint]
+    when: 'input.orient.hasRemote'
+    onFailure: '{input.failTo}'
+  - name: fix
+    dependsOn: [checkpoint-push]
+    when: "(item-blocked.answer ?? 'continue') != 'skip'"
+    repeat:
+      until: 'empty(review.findings)'
+      rounds: 3
+      # Three rounds; past them the loop goes on only while a critical, high or medium finding
+      # stands, three rounds more at most. What is left then - a low or a nit after the three,
+      # anything after the six - is written to the backlog and named in the pull request and
+      # the handoff, for the person who reads them at the end; the run goes on.
+      blocking: "any(review.findings, it.severity != 'low' && it.severity != 'nit')"
+      blockersLimitRounds: 3
+      leftover: 'review.findings'
+    answers:
+      loopBound: accept
+    onFailure: '{input.failTo}'
+    steps:
+      - name: review-scope
+        type: reason
+        agent: review-scope
+        tier: fast
+        effort: low
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
+        onPreExisting: triage-pre-existing-issue
+        graph: map
+        graphFrom: changes
+        prompt: prompts/review-scope.md
+        outputs: schemas/review-scope.schema.json
+      - name: review
+        dependsOn: [review-scope]
+        gather: [findings]
+        onFailure: '{input.failTo}'
+        steps:
+          - name: correctness
+            type: reason
+            agent: reviewer-correctness
+            tier: high
+            effort: xhigh
+            independent: true
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/review.md
+            outputs: schemas/review.schema.json
+          - name: errors
+            type: reason
+            agent: reviewer-errors
+            tier: high
+            effort: xhigh
+            independent: true
+            when: 'review-scope.errors'
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/review.md
+            outputs: schemas/review.schema.json
+          - name: tests
+            type: reason
+            agent: reviewer-tests
+            tier: high
+            effort: xhigh
+            independent: true
+            when: 'review-scope.tests'
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/review.md
+            outputs: schemas/review.schema.json
+          - name: types
+            type: reason
+            agent: reviewer-types
+            tier: balanced
+            effort: high
+            independent: true
+            when: 'review-scope.types'
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/review.md
+            outputs: schemas/review.schema.json
+          - name: comments
+            type: reason
+            agent: reviewer-comments
+            tier: balanced
+            effort: high
+            independent: true
+            when: 'review-scope.comments'
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/review.md
+            outputs: schemas/review.schema.json
+          - name: simplicity
+            type: reason
+            agent: reviewer-simplicity
+            tier: balanced
+            effort: high
+            independent: true
+            when: 'review-scope.simplicity'
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/review.md
+            outputs: schemas/review.schema.json
+      - name: revise
+        dependsOn: [review]
+        when: '!empty(review.findings)'
+        onFailure: '{input.failTo}'
+        steps:
+          - name: rework
+            type: reason
+            resume: implement
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/rework.md
+            outputs: schemas/implement.schema.json
+          - name: reverify
+            type: test
+            in: item-agent
+            filter: '{input.item.testFilter}'
+            filterWhen: "input.affectedTests == 'on'"
+            dependsOn: [rework]
+            when: 'input.orient.hasLegs'
+            onFailure: '{input.failTo}'
+          - name: remend
+            type: reason
+            resume: implement
+            on:
+              step: reverify
+              outcome: failure
+              codes: [20]
+            then: reverify
+            maxVisits: 3
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/mend.md
+            outputs: schemas/implement.schema.json
+          - name: refold
+            type: fold
+            of: item-agent
+            within: 'input.item.ownedPaths'
+            allow:
+              new: 'implement.latest.newRows'
+            answers:
+              foldNewRows: allow
+              foldTwoChanges: merge
+              foldConflicts: fail
+              foldOutside: fail
+            dependsOn: [reverify, remend]
+            onFailure: '{input.failTo}'
+          - name: rereconcile
+            on:
+              step: refold
+              outcome: failure
+              codes: [13]
+            when: "refold.question == 'foldOutside' || refold.question == 'foldConflicts'"
+            then: reverify
+            maxVisits: 2
+            onFailure: '{input.failTo}'
+            steps:
+              - name: recatch-up
+                type: refresh
+                of: item-agent
+                all: true
+                answers:
+                  foldTwoChanges: merge
+                  foldConflicts: fail
+                onFailure: continue
+              - name: resettle
+                type: reason
+                resume: implement
+                dependsOn: [recatch-up]
+                retries: 3
+                backoffSeconds: 30
+                onFailure: pause
+                onPreExisting: triage-pre-existing-issue
+                graphFrom: changes
+                prompt: prompts/reconcile.md
+                outputs: schemas/implement.schema.json
+          - name: recheck
+            dependsOn: [refold]
+            when: 'input.orient.anchors'
+            gather: [findings]
+            onFailure: '{input.failTo}'
+            steps:
+              - name: balance
+                type: anchor-balance
+                base: '{input.orient.startCommit}'
+                rows: 'refold.rows'
+              - name: citations
+                type: anchor-citations
+                paths: 'refold.written'
+          - name: recite
+            type: reason
+            resume: implement
+            on:
+              step: recheck
+              outcome: failure
+              codes: [1]
+            then: reverify
+            maxVisits: 2
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/anchors.md
+            outputs: schemas/implement.schema.json
+          - name: recheckpoint
+            type: commit
+            dependsOn: [recheck]
+            onFailure: '{input.failTo}'
+            message: |-
+              {input.item.title}: review fixes
+
+              Committed when the fixes were folded, before the next review and the round's gate.
+              Checked:
+              {carried.ran}
+              Not checked:
+              {carried.notRun}
+              Known red:
+              {carried.red}
+          - name: repush
+            type: push
+            checkpoint: true
+            dependsOn: [recheckpoint]
+            when: 'input.orient.hasRemote'
+            onFailure: '{input.failTo}'
+  - name: release
+    type: delete-agent
+    of: item-agent
+    within: 'input.item.ownedPaths'
+    allow:
+      new: 'implement.latest.newRows'
+    answers:
+      foldNewRows: allow
+      foldTwoChanges: merge
+    dependsOn: [fix]
+    when: "(item-blocked.answer ?? 'continue') != 'skip'"
+    onFailure: '{input.failTo}'
+  - name: drop
+    type: delete-agent
+    of: item-agent
+    discardUncommitted: true
+    dependsOn: [item-blocked]
+    when: "(item-blocked.answer ?? 'continue') == 'skip'"
+    onFailure: '{input.failTo}'

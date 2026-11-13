@@ -14,24 +14,24 @@ An empty line means the change names nothing there.
 
 ## The item as it now is
 
-{item.title}
+{input.item.title}
 
-{item.instructions}
+{input.item.instructions}
 
-- The paths you own, and the only ones you write: {item.ownedPaths}
-- The paths near your work that you must not touch: {item.forbiddenPaths}
+- The paths you own, and the only ones you write: {input.item.ownedPaths}
+- The paths near your work that you must not touch: {input.item.forbiddenPaths}
 - What must hold when your work is finished, the item's definition of done as it now is, checked statement by
-  statement before you report: {item.done}
-- The filter that names the tests your change affects: `{item.testFilter}`; the engine runs only those for this item
+  statement before you report: {input.item.done}
+- The filter that names the tests your change affects: `{input.item.testFilter}`; the engine runs only those for this item
   where the run's input affectedTests is on (`{input.affectedTests}`), and every test where it is off or the filter is
   empty
-- How the engine runs the tests, leg by leg: {orient.tests}
-- The existing code this item reuses or extends, and for what: {item.reuses}
-- What this item creates from nothing, with why nothing that exists serves: {item.creates}
+- How the engine runs the tests, leg by leg: {input.orient.tests}
+- The existing code this item reuses or extends, and for what: {input.item.reuses}
+- What this item creates from nothing, with why nothing that exists serves: {input.item.creates}
 - What this item replaces because the request asked for it to be rebuilt, and what becomes of the old one:
-  {item.replaces}
+  {input.item.replaces}
 
-The plan this item is part of, as it now is: {planning.plan.latest.summary}
+The plan this item is part of, as it now is: {input.planSummary}
 
 ## What the earlier work left
 
@@ -55,7 +55,7 @@ when you report.
 4. Build what the item now asks for, with a test for each behaviour that fails when the behaviour is broken, and
    change the tests of what you kept where the change makes them say something else.
 5. Build and run your tests as the engine runs them. Where you cannot, say why in what you ran.
-6. Registry rows, where this repository keeps an anchor registry ({orient.anchors}): do not delete a row the earlier
+6. Registry rows, where this repository keeps an anchor registry ({input.orient.anchors}): do not delete a row the earlier
    work filed for something now gone; name it in your summary. File a row only for what you leave for later, in the
    rows directory your run context names, and cite its id where the work belongs.
 

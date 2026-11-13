@@ -70,7 +70,12 @@ public sealed class WorkflowExportServiceTests
             Token);
 
         var destination = repository.Tree.Combine("out", Shipped);
-        var named = NamedFiles.All(WorkflowFileParser.Parse("x.yml", await File.ReadAllTextAsync(Path.Combine(directory, $"{Shipped}.yml"), Token)));
+        var workflows = Path.Combine(repository.Path, ".harness-config", "workflows");
+        var resolved = WorkflowResolver.Resolve(
+            WorkflowFileParser.Parse("x.yml", await File.ReadAllTextAsync(Path.Combine(directory, $"{Shipped}.yml"), Token)),
+            Shipped,
+            relative => File.ReadAllText(Path.Combine([workflows, .. relative.Split('/')]))).Definition;
+        var named = NamedFiles.AllUnder(resolved);
 
         Assert.Equal((Shipped, false, destination), (export.Workflow, export.Shipped, export.Destination));
         Assert.Equal([.. named, $"{Shipped}.yml"], export.Files);

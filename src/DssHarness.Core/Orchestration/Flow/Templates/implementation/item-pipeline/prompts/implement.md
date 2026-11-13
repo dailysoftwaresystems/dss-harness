@@ -2,31 +2,31 @@ Build this work item.
 
 ## The item
 
-{item.title}
+{input.item.title}
 
-{item.instructions}
+{input.item.instructions}
 
-- The paths you own, and the only ones you write: {item.ownedPaths}
-- The paths near your work that you must not touch: {item.forbiddenPaths}
+- The paths you own, and the only ones you write: {input.item.ownedPaths}
+- The paths near your work that you must not touch: {input.item.forbiddenPaths}
 - What must hold when your work is finished, your item's definition of done, checked statement by statement before
-  you report: {item.done}
-- The filter that names the tests your change affects: `{item.testFilter}`. The tests it names are yours to write
+  you report: {input.item.done}
+- The filter that names the tests your change affects: `{input.item.testFilter}`. The tests it names are yours to write
   where they are not there yet. The engine runs only those for this item where the run's input affectedTests is on
   (it is `{input.affectedTests}`), and every test where it is off or the filter is empty; every test runs once every
   item of the round is built, either way.
 
 What exists and what is new:
 
-- The existing code this item reuses or extends, and for what. Build on it: {item.reuses}
-- What this item creates from nothing, with why nothing that exists serves: {item.creates}
+- The existing code this item reuses or extends, and for what. Build on it: {input.item.reuses}
+- What this item creates from nothing, with why nothing that exists serves: {input.item.creates}
 - What this item replaces because the request asked for it to be rebuilt, and what becomes of the old one:
-  {item.replaces}
+  {input.item.replaces}
 
 Hold to these lists. Where you find existing code the plan missed that does what you were about to write, use it and
 say so in your report. Create nothing the second list does not name without looking for it first, and leave nothing
 you replace standing beside its replacement.
 
-The plan this item is part of, for context: {planning.plan.latest.summary}
+The plan this item is part of, for context: {input.planSummary}
 
 ## Where you work
 
@@ -37,7 +37,7 @@ the same time. Nothing you do is committed by you: the engine folds your changes
 
 The legs it tests on, each with its test runner, the option your filter is given through, and what the leg leaves out:
 
-{orient.tests}
+{input.orient.tests}
 
 ## What to do
 
@@ -46,7 +46,7 @@ The legs it tests on, each with its test runner, the option your filter is given
 3. Build and run your tests as the engine runs them, above. Where you cannot, say why in what you ran.
 4. Work to your item's definition of done: nothing is finished while one of its statements does not hold, and part
    of an item is never reported as the item.
-5. This repository keeps an anchor registry of deferred work: {orient.anchors}. Where true and you leave something
+5. This repository keeps an anchor registry of deferred work: {input.orient.anchors}. Where true and you leave something
    for later, file one row for it in the rows directory your run context names, and cite its id where the work
    belongs. Where false, file no row.
 

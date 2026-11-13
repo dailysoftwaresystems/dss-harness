@@ -818,10 +818,11 @@ public static class WorkflowValidator
             }
 
             // Each declared output of the used workflow, checked as the workflow's own are, inside the use and after
-            // every step of it - which is what a later step of the caller reads as the use step's output.
+            // every step of it - which is what a later step of the caller reads as the use step's output. Its from is
+            // read within the use, as the engine reads it there when the use ends.
             foreach (var output in use.Outputs)
             {
-                Expression(new Entry(entry.Step, entry.Path, AfterEveryStep, entry), output.From, $"outputs.{output.Name}.from");
+                Expression(new Entry(entry.Step, entry.Path, AfterEveryStep, entry), output.From, $"outputs.{output.Name}.from", within: true);
             }
         }
 
@@ -885,11 +886,54 @@ public static class WorkflowValidator
                     else if (holder.Step.With.GetValueOrDefault(named, filled.Default ?? string.Empty) is { } given && given.Length > 0 && !given.Contains('{'))
                     {
                         // The value the use fills it with is known where the file is read: it is one of the policies,
-                        // said here as a step's own is.
+                        // said here as a step's own is, and held to the two rules a policy written out is: the
+                        // recovery never calls itself, and a reasoning step is never recovered.
                         if (!WorkflowStep.FailurePolicies.Contains(given, StringComparer.Ordinal))
                         {
                             _problems.Add($"{where} reads its onFailure from '{{input.{named}}}', which '{holder.Path}' fills with '{given}', and that is none of {string.Join(", ", WorkflowStep.FailurePolicies.Select(known => $"'{known}'"))}");
                         }
+                        else if (string.Equals(given, WorkflowStep.Recover, StringComparison.Ordinal))
+                        {
+                            if (InRecovery(entry))
+                            {
+                                _problems.Add(CallsItself($"{where}, which reads its onFailure from '{{input.{named}}}', filled with '{given}' by '{holder.Path}',", "is a step of the recovery and gives its failure to the recovery"));
+                            }
+                            else if (step.Type == "reason")
+                            {
+                                _problems.Add($"{where} reads its onFailure from '{{input.{named}}}', filled with '{given}' by '{holder.Path}', and a reasoning step is never recovered - its agent is tried again and on its fallback, and what still fails is asked: say pause");
+                            }
+                        }
+                    }
+                }
+            }
+
+            foreach (var (askedKey, askedWith) in new[] { ("prompt", step.Prompt), ("resumePrompt", step.ResumePrompt) })
+            {
+                if (askedWith is null || !askedWith.Contains('{'))
+                {
+                    continue;
+                }
+
+                // V63, the one place a file a step is asked with is read rather than written: a step of a workflow
+                // used as a step is asked with a file one of the used workflow's file-kind inputs names, filled by
+                // the use - every other step names its file itself.
+                if (UseOf(entry) is not { Step.Use: { } use } asker)
+                {
+                    _problems.Add($"{where} is asked with '{askedWith}', and only a step of a workflow used as a step reads its {askedKey} so: it is {{input.<name>}} whole, the name of an input the used workflow declares of the kind 'file'");
+                }
+                else
+                {
+                    var reads = WorkflowExpressions.TemplateReads(askedWith);
+
+                    if (reads is not [{ Root: "input", Names: [_, { } named] }]
+                        || !askedWith.Equals($"{{input.{named}}}", StringComparison.Ordinal)
+                        || use.Inputs.FirstOrDefault(input => string.Equals(input.Name, named, StringComparison.Ordinal)) is not { Kind: FlowInput.FileKind } filled)
+                    {
+                        _problems.Add($"{where} is asked with '{askedWith}', which is not one read of a file-kind input; it is {{input.<name>}} whole, the name of an input the workflow '{use.Name}' declares of the kind 'file'");
+                    }
+                    else if ((asker.Step.With.GetValueOrDefault(named) ?? filled.Default) is not ({ Length: > 0 } file) || file.Contains('{'))
+                    {
+                        _problems.Add($"{where} is asked with '{{input.{named}}}', and '{asker.Path}' fills the input with no path; a step is asked with a file, and the use fills it with one");
                     }
                 }
             }
@@ -1495,11 +1539,13 @@ public static class WorkflowValidator
         {
             // An alternative to the step that builds a work item runs in its place, with its dependencies (V44): it - and,
             // where it is a group, every step inside it, as inside any group - waits for what the builder waits for,
-            // beside what its own dependencies reach.
+            // beside what its own dependencies reach. A step of a used workflow held off by its own gate never starts
+            // of its own accord: where it runs at all it runs in the builder's place, which waits.
             var waits = FlowGraph.Waits(_definition, entry.Path, create.Path)
                 || (_definition.Amend is { } amend
                     && new[] { amend.WhenChangeScope, amend.WhenRemoveScope }.Any(alternative => entry.Path == alternative || entry.Path.StartsWith(alternative + ".", StringComparison.Ordinal))
-                    && FlowGraph.Waits(_definition, amend.WhenAddScope, create.Path));
+                    && FlowGraph.Waits(_definition, amend.WhenAddScope, create.Path))
+                || (UseOf(entry) is not null && GatedByOneInput(entry));
 
             if (!waits)
             {
@@ -3245,7 +3291,9 @@ public static class WorkflowValidator
 
         /// <summary>
         /// V46: <c>piece</c> is the part of a plan update one instance of the work-item group carries, so only a step of
-        /// that group reads it; outside it, and in a workflow with no such group, no piece is there to read.
+        /// that group reads it; outside it, and in a workflow with no such group, no piece is there to read. A step of a
+        /// used workflow held off by its own gate - a <c>when</c> that reads one input of that workflow alone - reads
+        /// one where the gate is open and never runs where it is closed, so its reads are the work-item group's own.
         /// </summary>
         private void PieceRead(Entry entry, WorkflowExpressions.Read read, string what)
         {
@@ -3253,11 +3301,22 @@ public static class WorkflowValidator
             {
                 _problems.Add($"'{what}' reads '{read.Whole}', whose 'piece' is the part of a plan update a work item carries, and the workflow has no work-item group: amend.whenAddScope names the step of a forEach group that builds one");
             }
-            else if (!group.Owns(entry))
+            else if (!group.Owns(entry) && !(UseOf(entry) is not null && GatedByOneInput(entry)))
             {
                 _problems.Add($"'{what}' reads '{read.Whole}', whose 'piece' is the part of a plan update a work item carries, and '{entry.Path}' is no step of the work-item group '{group.Path}'");
             }
         }
+
+        /// <summary>
+        /// Whether <paramref name="entry"/> says a <c>when</c> that reads one input of a used workflow alone: the used
+        /// workflow's own gate over its steps, filled by each use, which holds what it gates off where a use fills the
+        /// input so they do not run there.
+        /// </summary>
+        private static bool GatedByOneInput(Entry entry)
+            => entry.Step.When is { } gated
+                && WorkflowExpressions.ReadsOf(gated) is [var read]
+                && read.Root == "input"
+                && read.Names.Count == 2;
 
         /// <summary>
         /// What the amend block says beyond each step it names being there: that it takes an amended request or a changed
@@ -3388,8 +3447,10 @@ public static class WorkflowValidator
 
         /// <summary>
         /// An alternative to the step that builds a work item runs in its place in an instance: of its type, with its
-        /// dependencies and under its name, beginning the instance's work - so it says no dependsOn, when, on, resume or
-        /// always of its own, and no other step names it.
+        /// dependencies and under its name, beginning the instance's work - so it says no dependsOn, on, resume or
+        /// always of its own, and no other step names it. It may say one thing of its own: a <c>when</c> that reads
+        /// one input of the used workflow it is a step of alone, the workflow's own gate, which holds the alternative
+        /// off where a use fills that input so its alternatives do not run there.
         /// </summary>
         private void AlternativeRules(Entry alternative, Entry builder, string named)
         {
@@ -3402,14 +3463,19 @@ public static class WorkflowValidator
 
             IReadOnlyList<string> ownWiring =
             [
-                .. new (string Key, bool Says)[] { ("dependsOn", step.DependsOn.Count > 0), ("when", step.When is not null), ("on", step.On is not null), ("resume", step.Resume is not null), ("always", step.Always is true) }
+                .. new (string Key, bool Says)[] { ("dependsOn", step.DependsOn.Count > 0), ("on", step.On is not null), ("resume", step.Resume is not null), ("always", step.Always is true) }
                     .Where(key => key.Says)
                     .Select(key => key.Key),
             ];
 
+            if (step.When is not null && !(UseOf(alternative) is not null && GatedByOneInput(alternative)))
+            {
+                ownWiring = [.. ownWiring, "when"];
+            }
+
             if (ownWiring.Count > 0)
             {
-                _problems.Add($"{named}, which says {string.Join(", ", ownWiring)}: it runs in the place of '{builder.Step.Name}', with that step's dependencies, and begins the work of its instance");
+                _problems.Add($"{named}, which says {string.Join(", ", ownWiring)}: it runs in the place of '{builder.Step.Name}', with that step's dependencies, and begins the work of its instance - the one thing it may say of its own is a when that reads one input of the used workflow alone, which holds it off where a use fills that input");
             }
 
             var why = $"'{step.Name}' runs in the place of '{builder.Step.Name}', and is named by that step's name";
@@ -4175,16 +4241,19 @@ public static class WorkflowValidator
                 ("body", step.Type == "pull-request" ? step.Body : null, ReadIn.Body),
             };
 
-            foreach (var (key, file, readIn) in asked)
+            foreach (var (key, declared, readIn) in asked)
             {
-                if (file is null)
+                if (declared is null)
                 {
                     continue;
                 }
 
+                // A file read through an input of a used workflow is, at this place, the file the use fills that
+                // input with; a file the step names itself is read as it is written, in its own workflow's directory.
+                var file = AskedFile(entry, declared);
                 var what = $"{entry.Path}.{key}";
 
-                Placeholders($"step '{entry.Path}' {key} '{file}'", file, what, (read, at) =>
+                Placeholders($"step '{entry.Path}' {key} '{file}'", file, step.WorkflowOf, what, (read, at) =>
                 {
                     if (read.Root == "previous" && key == "prompt")
                     {
@@ -4195,6 +4264,25 @@ public static class WorkflowValidator
                     TemplateRead(entry, read, what, readIn);
                 });
             }
+        }
+
+        /// <summary>
+        /// The file a step is asked with, as its <paramref name="declared"/> key names it at this place: the key's own
+        /// path where it names one, and where it reads an input of a used workflow - the one way a step is asked with a
+        /// file it does not name (V63) - the file the use around it fills that input with, or the key as written where
+        /// no fill is there to read, for the rule that refuses it says the rest.
+        /// </summary>
+        private string AskedFile(Entry entry, string declared)
+        {
+            if (!declared.Contains('{')
+                || WorkflowExpressions.TemplateReads(declared) is not [{ Root: "input", Names: [_, { } named] }]
+                || UseOf(entry) is not { Step.Use: { } use } asker
+                || use.Inputs.FirstOrDefault(input => string.Equals(input.Name, named, StringComparison.Ordinal)) is not { Kind: FlowInput.FileKind })
+            {
+                return declared;
+            }
+
+            return asker.Step.With.GetValueOrDefault(named) ?? use.Inputs.First(input => string.Equals(input.Name, named, StringComparison.Ordinal)).Default ?? declared;
         }
 
         /// <summary>
@@ -4215,7 +4303,7 @@ public static class WorkflowValidator
 
             foreach (var (key, named) in new[] { ("prompt", step.Prompt), ("resumePrompt", step.ResumePrompt) })
             {
-                if (named is null || _files?.Invoke(named, null) is not { } text)
+                if (named is null || AskedFile(entry, named) is not { } file || _files?.Invoke(file, step.WorkflowOf) is not { } text)
                 {
                     continue;
                 }
@@ -4328,7 +4416,7 @@ public static class WorkflowValidator
             var asked = new Entry(new WorkflowStep { Name = agent }, agent, AfterEveryStep, null);
             var what = $"{agent}.{key}";
 
-            Placeholders($"{agent} {key} '{file}'", file, what, (read, at) =>
+            Placeholders($"{agent} {key} '{file}'", file, null, what, (read, at) =>
             {
                 if (WorkflowExpressions.IsRoot(read.Root))
                 {
@@ -4345,11 +4433,12 @@ public static class WorkflowValidator
         /// Checks each placeholder of <paramref name="file"/> once by <paramref name="check"/>, said at the line it first
         /// stands on (<paramref name="where"/> and the line): a refusal that names <paramref name="what"/>, the key it is
         /// read in, names the file and the line instead. A file not written whole is refused for it and read no further;
-        /// without the files, none is read.
+        /// without the files, none is read. <paramref name="owner"/> is the workflow whose directory holds the file,
+        /// where it is one of a used workflow's.
         /// </summary>
-        private void Placeholders(string where, string file, string what, Action<WorkflowExpressions.Read, string> check)
+        private void Placeholders(string where, string file, string? owner, string what, Action<WorkflowExpressions.Read, string> check)
         {
-            if (_files?.Invoke(file, null) is not { } text)
+            if (_files?.Invoke(file, owner) is not { } text)
             {
                 return;
             }

@@ -1652,7 +1652,12 @@ workflow lives in a folder of its own beside the one that uses it - and `with`, 
 inputs are filled with, each read as the input it fills declares: an expression for a `value`, a
 template for a `text`, a path of the used workflow's directory for a `file`, and a single name
 for a `step`, which a step of the used workflow reads as `{input.<name>}` in its `onFailure` or
-`then`, filled where it runs. The used workflow is read as a definition of its own and resolved
+`then`, filled where it runs. The file a step is asked with may be read the same way (V63): one
+whole input of the kind `file` naming its `prompt`, so one pipeline is asked with a different
+prompt by each workflow that uses it; and a step of the used workflow may say a `when` that reads
+one input of it alone, its own gate, held off where a use fills that input so - the way the
+shipped flow's item pipeline holds its `redo` and `undo` off where its recovery uses it. The used
+workflow is read as a definition of its own and resolved
 into the step before anything is checked or run: its steps become the step's members - instances
 named under the use as a group's are - its files are read in its own directory, its declared
 outputs are the step's own once it ends, and its recovery takes a failure inside it before the
@@ -1664,7 +1669,12 @@ workflow that uses itself, directly or through others, is refused with the chain
 close the circle, and uses nest at most ten deep in all, across the workflows they name. A run
 records each use's resolution - the called workflow's name and the fingerprint of its file - in
 the definition it freezes, and a resume is refused where the called file changed since the run
-began, as the run's own definition's would be.
+began, as the run's own definition's would be. The shipped implementation workflow uses the
+mechanism for itself: its item pipeline - written once in `item-pipeline/item-pipeline.yml` - is
+used by its rounds (`implementPrompt: prompts/implement.md`, `alternatives: 'true'`,
+`failTo: recover`) and by its recovery (`prompts/remedy.md`, `alternatives: 'false'`,
+`failTo: pause`, for the recovery cannot call itself) alike, and the validator and the tests count
+the resolved tree, every step of every use a step as a group's are.
 
 A definition may declare `recover`: steps written once, which a step gives a failure nothing handles
 to by saying `onFailure: recover`, itself or through a group around it. A member that writes none

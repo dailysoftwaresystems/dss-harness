@@ -74,14 +74,14 @@ public static class WorkflowFiles
             named.Add(new Named(AgentFile(step.Agent), $"{where}'s agent", IsSchema: false));
         }
 
-        if (step.Prompt is not null)
+        if (step.Prompt is { } prompt && !prompt.Contains('{'))
         {
-            named.Add(new Named(step.Prompt, $"{where}'s prompt", IsSchema: false));
+            named.Add(new Named(prompt, $"{where}'s prompt", IsSchema: false));
         }
 
-        if (step.ResumePrompt is not null)
+        if (step.ResumePrompt is { } resumePrompt && !resumePrompt.Contains('{'))
         {
-            named.Add(new Named(step.ResumePrompt, $"{where}'s resume prompt", IsSchema: false));
+            named.Add(new Named(resumePrompt, $"{where}'s resume prompt", IsSchema: false));
         }
 
         if (step.Outputs is not null)
@@ -122,6 +122,64 @@ public static class WorkflowFiles
                 .Select(named => named.File)
                 .Distinct(StringComparer.Ordinal),
         ];
+    }
+
+    /// <summary>
+    /// Every file a resolved definition names - its own, every step's, and each file a use fills a file-kind input of
+    /// the workflow it uses with - each once, spelled relative to the workflow's own directory: a file of a used
+    /// workflow's step carries that workflow's own place under this one, so one flat list names every file of the set
+    /// the way it sits on the disk.
+    /// </summary>
+    /// <param name="resolved">The definition as the resolver placed every use in.</param>
+    public static IReadOnlyList<string> AllUnder(WorkflowDefinition resolved)
+    {
+        ArgumentNullException.ThrowIfNull(resolved);
+
+        var files = new List<string>();
+
+        string Under(string? owner, string file)
+            => owner is null || owner == resolved.Name ? file : $"{owner[(resolved.Name.Length + 1)..]}/{file}";
+
+        files.AddRange(OfDefinition(resolved).Select(named => Under(null, named.File)));
+
+        foreach (var (path, step) in Steps(resolved))
+        {
+            foreach (var named in OfStep(step, $"step '{path}'"))
+            {
+                files.Add(Under(step.WorkflowOf, named.File));
+            }
+
+            if (step.UseSource is { } source)
+            {
+                // A use the resolver could not place still names the file of the workflow it uses: that file is one
+                // of the set wherever the workflow it names is read from.
+                files.Add(Under(step.WorkflowOf, source.TrimStart('.', '/')));
+            }
+
+            if (step.Use is { } placed)
+            {
+                // The file of the workflow a use places - its yml, as the source spelled it - is one of the set too,
+                // beside every file the workflow it places names.
+                files.Add(Under(step.WorkflowOf, placed.Source.TrimStart('.', '/')));
+            }
+
+            if (step.Use is { } use)
+            {
+                // The file a use fills a file-kind input with is a file of the used workflow's directory, as every
+                // file a step of it names is.
+                foreach (var input in use.Inputs.Where(input => input.Kind == FlowInput.FileKind))
+                {
+                    var filled = step.With.TryGetValue(input.Name, out var with) ? with : input.Default;
+
+                    if (filled is { Length: > 0 } && !filled.Contains('{'))
+                    {
+                        files.Add(Under(use.Name, filled));
+                    }
+                }
+            }
+        }
+
+        return [.. files.Distinct(StringComparer.Ordinal)];
     }
 
     private static IReadOnlyList<Named> AgentAndPrompt(string agent, string prompt, string what)

@@ -1446,7 +1446,8 @@ public sealed class ImplementationFlowTests
 
             await EditWorkflowAsync(
                 kit,
-                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: recover" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "            onFailure: stop" : line)]);
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
+                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: '{input.failTo}'" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "    onFailure: stop" : line)]);
 
             var failed = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -1474,7 +1475,8 @@ public sealed class ImplementationFlowTests
 
             await EditWorkflowAsync(
                 kit,
-                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: recover" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "            onFailure: pause" : line)]);
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
+                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: '{input.failTo}'" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "    onFailure: pause" : line)]);
 
             var asked = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -1628,15 +1630,24 @@ public sealed class ImplementationFlowTests
             Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
             Assert.Contains("runs 'corpus', which writes the tree (writesTree), on the main tree", string.Join("; ", refused.Details ?? []), StringComparison.Ordinal);
 
+            // The corpus step comes out of the flow's own file, where the first edit put it, and goes into the item
+            // pipeline beside the alternatives.
             await EditWorkflowAsync(
                 kit,
                 lines =>
                 {
                     var top = Array.IndexOf(lines, "  - name: corpus");
-                    string[] without = [.. lines[..top], .. lines[(top + 3)..]];
-                    var at = Array.IndexOf(without, "          - name: redo");
 
-                    return [.. without[..at], "          - name: corpus", "            type: run", "            runner: corpus", "            in: item-agent", "            dependsOn: [item-agent]", .. without[at..]];
+                    return [.. lines[..top], .. lines[(top + 3)..]];
+                });
+            await EditWorkflowAsync(
+                kit,
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
+                lines =>
+                {
+                    var at = Array.FindIndex(lines, line => line.Trim() == "- name: redo");
+
+                    return [.. lines[..at], "  - name: corpus", "    type: run", "    runner: corpus", "    in: item-agent", "    dependsOn: [item-agent]", .. lines[at..]];
                 });
 
             var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
@@ -2110,7 +2121,8 @@ public sealed class ImplementationFlowTests
         using var temp = new TempDirectory();
         var kit = await PrepareAsync(temp);
 
-        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "implementation.yml");
+        // The errors reviewer is a step of the item pipeline the entry uses, taken out of the pipeline's own file.
+        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "item-pipeline", "item-pipeline.yml");
         var lines = File.ReadAllLines(workflow).ToList();
         var from = lines.FindIndex(line => line.Trim().Equals("- name: errors", StringComparison.Ordinal));
         var to = lines.FindIndex(from + 1, line => line.Trim().Equals("- name: tests", StringComparison.Ordinal));
@@ -2195,7 +2207,7 @@ public sealed class ImplementationFlowTests
                 Completed(Review(Finding(severity: "high", production: false))),
                 Completed(Review(Finding(severity: "high", production: false)))));
 
-        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(kit, WithoutConfiguredLoopBounds);
 
         OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
         await kit.Harness.CommitAllAsync(kit.Tree.Path, "the backlog the run files what it leaves in", Token);
@@ -2265,7 +2277,7 @@ public sealed class ImplementationFlowTests
                 Completed(Review(Finding(severity: "high", production: false))),
                 Completed(Review(Finding(severity: "high", production: false)))));
 
-        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(kit, WithoutConfiguredLoopBounds);
 
         OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
         await kit.Harness.CommitAllAsync(kit.Tree.Path, "the backlog the run files what it leaves in", Token);
@@ -2314,7 +2326,7 @@ public sealed class ImplementationFlowTests
                     Completed(Review(Finding(severity: "high", production: false))));
             });
 
-        await EditWorkflowAsync(other, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(other, WithoutConfiguredLoopBounds);
         OrchestrationKit.Write(other.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
         await other.Harness.CommitAllAsync(other.Tree.Path, "the backlog the run files what it leaves in", Token);
 
@@ -3738,7 +3750,7 @@ public sealed class ImplementationFlowTests
 
         // The rounds loop asks at its bound where the configuration would answer for it: the window an amendment past
         // the items of the last round stands in.
-        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(kit, WithoutConfiguredLoopBounds);
 
         var paused = await StartAsync(kit, "request=Ship the orders report.");
 
@@ -3905,9 +3917,11 @@ public sealed class ImplementationFlowTests
         // The rounds loop asks at its bound where the configuration would answer for it: the window a change past its
         // minute stands in.
         var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "implementation.yml");
+        var pipeline = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "item-pipeline", "item-pipeline.yml");
         var asShipped = File.ReadAllLines(workflow);
+        var pipelineAsShipped = File.ReadAllLines(pipeline);
 
-        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(kit, WithoutConfiguredLoopBounds);
 
         var paused = await StartAsync(kit, "request=Ship the orders report.");
 
@@ -4084,6 +4098,7 @@ public sealed class ImplementationFlowTests
         // person answered anything, so a change of the answer the configuration gave is refused - it is no set to
         // change.
         await EditWorkflowAsync(kit, _ => asShipped);
+        await EditWorkflowAsync(kit, Path.Combine("item-pipeline", "item-pipeline.yml"), _ => pipelineAsShipped);
 
         var secondRun = await kit.Service.RunAsync(
             kit.Tree.Path,
@@ -4736,10 +4751,20 @@ public sealed class ImplementationFlowTests
 
     /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
     private static async Task EditWorkflowAsync(Kit kit, Func<string[], string[]> edit)
+        => await EditWorkflowAsync(kit, "implementation.yml", edit);
+
+    private static async Task EditWorkflowAsync(Kit kit, string file, Func<string[], string[]> edit)
     {
-        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "implementation.yml");
+        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", file);
         File.WriteAllLines(workflow, edit([.. File.ReadAllLines(workflow)]));
         await kit.Harness.CommitAllAsync(kit.Tree.Path, "the workflow as this run reads it", Token);
+    }
+
+    /// <summary>The edit applied to the shipped flow's every file - its own and the item pipeline its uses place.</summary>
+    private static async Task EditShippedAsync(Kit kit, Func<string[], string[]> edit)
+    {
+        await EditWorkflowAsync(kit, "implementation.yml", edit);
+        await EditWorkflowAsync(kit, Path.Combine("item-pipeline", "item-pipeline.yml"), edit);
     }
 
     /// <summary>
@@ -5171,7 +5196,7 @@ public sealed class ImplementationFlowTests
 
             if (edit is not null)
             {
-                await EditWorkflowAsync(kit, edit);
+                await EditShippedAsync(kit, edit);
             }
 
             return (kit, claude!, glm!);
@@ -5292,8 +5317,8 @@ public sealed class ImplementationFlowTests
                 keys: "ZAI_API_KEY=sk-test-two\n",
                 edit: lines =>
                 {
-                    var at = Array.IndexOf(lines, "            tier: balanced");
-                    return [.. lines[..at], "            model: glm-5.3", .. lines[(at + 1)..]];
+                    var at = Array.FindIndex(lines, line => line.Trim() == "tier: balanced");
+                    return [.. lines[..at], $"{lines[at][..^lines[at].TrimStart().Length]}model: glm-5.3", .. lines[(at + 1)..]];
                 });
 
             var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
@@ -5316,8 +5341,8 @@ public sealed class ImplementationFlowTests
                 keys: "ANTHROPIC_API_KEY=sk-test-one\n",
                 edit: lines =>
                 {
-                    var at = Array.IndexOf(lines, "            tier: balanced");
-                    return [.. lines[..at], "            model: glm-5.3", .. lines[(at + 1)..]];
+                    var at = Array.FindIndex(lines, line => line.Trim() == "tier: balanced");
+                    return [.. lines[..at], $"{lines[at][..^lines[at].TrimStart().Length]}model: glm-5.3", .. lines[(at + 1)..]];
                 });
 
             var refused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
@@ -5525,7 +5550,7 @@ public sealed class ImplementationFlowTests
                 script: agents => agents.Queue("implementer", Completed(Implement())),
                 machine: steps => steps.Queue("fold", Conflicting(), Folded("DS-2")));
 
-            await EditWorkflowAsync(kit, lines => [.. lines.Where((line, at) => at != Array.IndexOf(lines, "              foldConflicts: fail"))]);
+            await EditWorkflowAsync(kit, Path.Combine("item-pipeline", "item-pipeline.yml"), lines => [.. lines.Where(line => !line.Trim().Equals("foldConflicts: fail", StringComparison.Ordinal))]);
 
             var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -5590,6 +5615,7 @@ public sealed class ImplementationFlowTests
             // However the configuration is written, no line of it accepts a cell for a person: the check refuses it.
             await EditWorkflowAsync(
                 kit,
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
                 lines =>
                 {
                     var edited = new List<string>();
@@ -5601,7 +5627,7 @@ public sealed class ImplementationFlowTests
 
                         if (first && line.Trim() == "foldNewRows: allow")
                         {
-                            edited.Add("              foldOverCells: allow");
+                            edited.Add($"{line[..^line.TrimStart().Length]}foldOverCells: allow");
                             first = false;
                         }
                     }

@@ -4338,6 +4338,10 @@ public sealed class FlowCoordinator
         item.Piece = piece;
         item.PieceOf = update.Id;
         round.Children.Add(item);
+
+        // A use inside a forEach fills its inputs per item, an update-placed work item as much as one the group's own
+        // list drew: the piece's item is the scope's, and the use reads it as any item's.
+        OpenUse(item, round.Step, item.GroupInstance!);
         _ = Create(item, round.Step, FlowInstanceState.Running, item.Id);
 
         Record(
@@ -4600,6 +4604,10 @@ public sealed class FlowCoordinator
                 again.PieceOf = update;
                 again.AgainOf = item;
                 round.Children.Add(again);
+
+                // The use's inputs are filled for the visit again as for the item it takes the place of: its with
+                // values read the piece's item of their own.
+                OpenUse(again, round.Step, again.GroupInstance!);
                 _ = Create(again, round.Step, FlowInstanceState.Running, again.Id);
                 Record(
                     FlowChangeKind.Step,
@@ -6390,7 +6398,23 @@ public sealed class FlowCoordinator
                             continue;
                         }
 
-                        if (FlowTemplate.FillAroundSkills(readFile(step.WorkflowOf, promptFileNamed), path => Read(path, instance.DeclaredScope!, reader: instance), name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
+                        // A step of a workflow used as a step may be asked with a file one of that workflow's file-kind
+                        // inputs names, filled by the use from the scope the step runs in: the file is read once the
+                        // fill is, and a fill that cannot be read fails the step as a template key's that breaks.
+                        var promptFile = promptFileNamed;
+
+                        if (promptFile.Contains('{'))
+                        {
+                            if (Filled(instance, promptFile, out var unfilled) is not { } filledFile)
+                            {
+                                _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, unfilled!)), null, Attempt: attempt));
+                                return;
+                            }
+
+                            promptFile = filledFile;
+                        }
+
+                        if (FlowTemplate.FillAroundSkills(readFile(step.WorkflowOf, promptFile), path => Read(path, instance.DeclaredScope!, reader: instance), name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
                         {
                             _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
                             return;

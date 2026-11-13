@@ -26,11 +26,54 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
         Assert.Equal(82, Count(definition.Steps));
-        Assert.Equal(46, Count(definition.Recover!.Steps));
-        Assert.Equal(46, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(48, Count(definition.Recover!.Steps));
+        Assert.Equal(48, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "affectedTests" && input.Default == "off");
         Assert.Equal(["on", "off"], definition.Inputs.Single(input => input.Name == "affectedTests").Options);
+    }
+
+    /// <summary>
+    /// The item pipeline is written once: the two places that build a work item - the rounds and the recovery - both
+    /// use the one workflow, and the flow's own file holds no copy of its steps. The recovery's instance holds
+    /// <c>redo</c> and <c>undo</c> too, held off there by the pipeline's <c>alternatives</c> input, which is why the
+    /// recovery counts 48 where it counted 46 and the reason steps with it.
+    /// </summary>
+    [Fact]
+    public void TheItemPipeline_IsOneWorkflow_UsedByTheRoundsAndTheRecoveryAlike()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+        var items = StepAt(definition.Steps, "rounds", "items");
+        var remedies = StepAt(definition.Recover!.Steps, "remedies");
+
+        Assert.NotNull(items.Use);
+        Assert.NotNull(remedies.Use);
+        Assert.Equal("./item-pipeline/item-pipeline.yml", items.Use.Source);
+        Assert.Equal("./item-pipeline/item-pipeline.yml", remedies.Use.Source);
+        Assert.Equal("implementation/item-pipeline", items.Use.Name);
+        Assert.Equal("implementation/item-pipeline", remedies.Use.Name);
+
+        // Each use fills the pipeline's inputs as the place it builds at reads them: the rounds with the implement
+        // prompt, its alternatives held ready and failures given to the run's recovery; the recovery with the remedy
+        // prompt, reading its own diagnosis, its alternatives held off and its failures asked, for it cannot call
+        // itself.
+        Assert.Equal("prompts/implement.md", items.With["implementPrompt"]);
+        Assert.Equal("prompts/remedy.md", remedies.With["implementPrompt"]);
+        Assert.Equal("recover", items.With["failTo"]);
+        Assert.Equal("pause", remedies.With["failTo"]);
+        Assert.Equal("true", items.With["alternatives"]);
+        Assert.Equal("false", remedies.With["alternatives"]);
+        Assert.DoesNotContain("diagnose", items.With.Keys);
+        Assert.Equal("diagnose.latest", remedies.With["diagnose"]);
+
+        // The two uses name the one file: its fingerprint is one, and the steps the flow holds are the pipeline's,
+        // placed at each use.
+        Assert.Equal(items.Use.Fingerprint, remedies.Use.Fingerprint);
+        Assert.Equal([.. items.Steps.Select(step => step.Name)], [.. remedies.Steps.Select(step => step.Name)]);
+
+        // The recovery's redo and undo never run there: the pipeline's own gate holds them off.
+        Assert.Equal("input.alternatives", StepAt(remedies.Steps, "redo").When);
+        Assert.Null(StepAt(definition.Steps, "rounds", "items", "redo").DependsOn.SingleOrDefault());
     }
 
     /// <summary>
@@ -353,11 +396,26 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
         var schemas = NamedFiles.Steps(definition)
             .Where(entry => entry.Step.Type == "reason" && entry.Step.Raised is null)
-            .Select(entry => entry.Step.Outputs!)
+            .Select(entry => entry.Step.WorkflowOf is { } owner
+                ? $"{owner[(WorkflowTemplates.ShippedWorkflowName.Length + 1)..]}/{entry.Step.Outputs!}"
+                : entry.Step.Outputs!)
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(10, schemas.Count);
+        Assert.Equal(
+            [
+                "item-pipeline/schemas/implement.schema.json",
+                "item-pipeline/schemas/review-scope.schema.json",
+                "item-pipeline/schemas/review.schema.json",
+                "schemas/diagnosis.schema.json",
+                "schemas/plan-audit.schema.json",
+                "schemas/plan.schema.json",
+                "schemas/priority.schema.json",
+                "schemas/self-audit.schema.json",
+                "schemas/summary.schema.json",
+                "schemas/triage.schema.json",
+            ],
+            [.. schemas.Order(StringComparer.Ordinal)]);
 
         foreach (var schema in schemas)
         {
@@ -385,7 +443,8 @@ public sealed class WorkflowTemplatesTests
     public void NoShippedAgentFile_NamesAModelATierOrAnEffort()
     {
         string[] chosen = ["model", "tier", "effort"];
-        var agents = WorkflowTemplates.Files.Where(file => file.StartsWith("agents/", StringComparison.Ordinal)).ToList();
+        var agents = WorkflowTemplates.Files.Where(file =>
+            file.StartsWith("agents/", StringComparison.Ordinal) || file.StartsWith("item-pipeline/agents/", StringComparison.Ordinal)).ToList();
 
         Assert.Equal(18, agents.Count);
 
@@ -437,14 +496,14 @@ public sealed class WorkflowTemplatesTests
             Assert.Contains(items.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
         }
 
-        var workflow = Read("implementation.yml");
+        var pipeline = Read("item-pipeline/item-pipeline.yml");
 
-        Assert.Contains("rounds: 3", workflow, StringComparison.Ordinal);
+        Assert.Contains("rounds: 3", pipeline, StringComparison.Ordinal);
         Assert.Contains(
             "blocking: \"any(review.findings, it.severity != 'low' && it.severity != 'nit')\"",
-            workflow,
+            pipeline,
             StringComparison.Ordinal);
-        Assert.DoesNotContain("it.production && it.severity", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("it.production && it.severity", pipeline, StringComparison.Ordinal);
 
         var fix = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items", "fix");
 
@@ -483,11 +542,13 @@ public sealed class WorkflowTemplatesTests
         var otherwise = new List<string>();
         var asking = new List<string>();
 
-        Walk(definition.Steps, parent: null, inherited: null, recovering: false);
-        Walk(recover.Steps, parent: "recover", inherited: null, recovering: true);
+        Walk(definition.Steps, parent: null, inherited: null, recovering: false, failTo: null);
+        Walk(recover.Steps, parent: "recover", inherited: null, recovering: true, failTo: null);
 
         // Only the reads that are told on, never judged, pass a failure over; every reasoning step asks, every other
-        // step of the flow gives its failure to the recovery, and no step of the recovery does.
+        // step of the flow gives its failure to the recovery - through the pipeline's failTo input, filled 'recover'
+        // by the rounds' use - and no step of the recovery does, the pipeline's own filled 'pause' there, which is
+        // what its steps' default was.
         Assert.Equal(["codebase", "ci", "rounds.items.reconcile.catch-up", "rounds.items.fix.revise.rereconcile.recatch-up", "recover.remedies.reconcile.catch-up", "recover.remedies.fix.revise.rereconcile.recatch-up"], passedOver);
         Assert.Empty(otherwise);
 
@@ -524,19 +585,23 @@ public sealed class WorkflowTemplatesTests
 
         return;
 
-        void Walk(IReadOnlyList<WorkflowStep> steps, string? parent, string? inherited, bool recovering)
+        void Walk(IReadOnlyList<WorkflowStep> steps, string? parent, string? inherited, bool recovering, string? failTo)
         {
             foreach (var step in steps)
             {
                 var path = parent is null ? step.Name : $"{parent}.{step.Name}";
-                var effective = step.OnFailure ?? inherited;
-                var expected = step.Type == "reason" ? "pause" : recovering ? null : WorkflowStep.Recover;
+
+                // The pipeline's steps read their failure policy from its failTo input, filled by each use: 'recover'
+                // where the rounds use it, 'pause' where the recovery does.
+                var written = step.OnFailure == "{input.failTo}" ? failTo : step.OnFailure;
+                var effective = written ?? inherited;
+                var expected = step.Type == "reason" ? "pause" : recovering ? "pause" : WorkflowStep.Recover;
 
                 if (step.OnFailure == "continue")
                 {
                     passedOver.Add(path);
                 }
-                else if (!step.IsGroup && effective != expected)
+                else if (!step.IsGroup && effective != expected && !(recovering && step.Type != "reason" && effective is null or "pause"))
                 {
                     otherwise.Add($"{path}: {effective ?? "nothing"}");
                 }
@@ -556,7 +621,7 @@ public sealed class WorkflowTemplatesTests
                     asking.Add(path);
                 }
 
-                Walk(step.Steps, path, effective, recovering);
+                Walk(step.Steps, path, effective, recovering, step.With.TryGetValue("failTo", out var filled) ? filled : failTo);
             }
         }
     }
