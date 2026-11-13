@@ -1053,6 +1053,85 @@ public sealed class FlowUseTests
     }
 
     /// <summary>
+    /// WF4b: a question a step of a use that governs itself raises is recommended by the advisor the workflow it runs in
+    /// declares - its files read in its own directory - and where it declares none, the run's own advisor stands as it
+    /// always did.
+    /// </summary>
+    [Fact]
+    public async Task TheQuestionsOfAStepOfAUseThatGovernsItself_AreRecommendedByItsAdvisor()
+    {
+        var pipeline = Swap(Pipeline, "steps:\n  - name: implement\n", "steps:\n  - name: spin\n    repeat:\n      until: 'false'\n      maxIterations: 2\n    steps:\n      - name: once\n        type: orient\n  - name: implement\n");
+        pipeline = Swap(pipeline, "name: pipeline\n", """
+            name: pipeline
+            advisor:
+              agent: consul
+              prompt: prompts/advise.md
+
+            """ + "\n");
+
+        string Caller(bool governs)
+            => $$"""
+                name: flow
+                advisor:
+                  agent: helper
+                  prompt: prompts/advise.md
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml{{(governs ? "\n    useParentLimits: false" : string.Empty)}}
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """;
+
+        var governed = new FakeAdvisor();
+        var governedRun = new FlowCoordinator(
+            Resolved(Caller(governs: true), pipeline),
+            new FakeRunner(),
+            Facts(),
+            new JumpingClock(),
+            advisor: governed,
+            workflowFileIfThere: _ => "the bar");
+        _ = await governedRun.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(("consul", "flow/pipeline"), governed.Called.Single());
+
+        var plain = new FakeAdvisor();
+        var plainRun = new FlowCoordinator(
+            Resolved(Caller(governs: false), pipeline),
+            new FakeRunner(),
+            Facts(),
+            new JumpingClock(),
+            advisor: plain,
+            workflowFileIfThere: _ => "the bar");
+        _ = await plainRun.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(("helper", "flow"), plain.Called.Single());
+    }
+
+    /// <summary>
+    /// WF4b: the run's one graph takes the shape a use that governs itself declares where the run's own workflow says
+    /// none - its reason steps' serving and its graphify steps fall back to it - and the run's own shape stands wherever
+    /// it declares one.
+    /// </summary>
+    [Fact]
+    public async Task TheGraphOfAStepOfAUseThatGovernsItself_FallsBackToTheShapeItDeclares()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig());
+        var context = await harness.ContextLoader.LoadAsync(temp.Path, token);
+        var place = new FlowRunPlace(temp.Path, "r1", "0123456789abcdef0123456789abcdef01234567", WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n"), null);
+        var governing = new FlowCodebaseGraph(Include: ["src/**"]);
+
+        Assert.Equal(["src/**"], [.. FlowGraphSyncs.RequestOf(context, place, "why", governing: governing).Shape.Include!.Select(pattern => pattern.ToString())]);
+        Assert.Empty(FlowGraphSyncs.RequestOf(context, place, "why").Shape.Include ?? []);
+
+        var own = place with { Definition = place.Definition with { CodebaseGraph = new FlowCodebaseGraph(Include: ["tests/**"]) } };
+        Assert.Equal(["tests/**"], [.. FlowGraphSyncs.RequestOf(context, own, "why", governing: governing).Shape.Include!.Select(pattern => pattern.ToString())]);
+    }
+
+    /// <summary>
     /// WF4: a use that governs itself caps the instances its steps may open, beside the run's own cap, counted across
     /// every instance of the use - a group of it past the cap is refused naming the workflow and its maxInstances.
     /// </summary>
@@ -1185,5 +1264,20 @@ public sealed class FlowUseTests
         /// <inheritdoc/>
         public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)
             => Task.FromResult<string?>(null);
+    }
+
+    /// <summary>An advisor runner that records each asking's advisor and workflow and obtains nothing.</summary>
+    private sealed class FakeAdvisor : IFlowAdvisorRunner
+    {
+        /// <summary>Each asking's advisor agent and the workflow its files are read in, in the order they were asked.</summary>
+        public List<(string Agent, string Workflow)> Called { get; } = [];
+
+        /// <inheritdoc/>
+        public Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
+        {
+            Called.Add((call.Advisor.Agent, call.Workflow));
+
+            return Task.FromResult(new FlowAdvice(Answer: null, Why: null, Text: null, NotObtained: "the test sought none"));
+        }
     }
 }

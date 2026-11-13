@@ -184,8 +184,9 @@ public sealed class FlowStepGraph
         // The view the step is served: the agent's where it has a worktree, the base where it reads. The engine syncs it
         // at the step's start (FlowGraphSyncs.AtStartAsync); what is read here is what that left, and every call made of the
         // service for the step - its changes, a check of a file the tool makes again - acts on the tree that view is of.
+        // The shape a use that governs this step declares stands where the run's own workflow says none.
         var worktree = FlowGraphSyncs.WorktreeOf(agent, record, context.Layout);
-        var request = FlowGraphSyncs.RequestOf(context, place, $"{run.Instance}:graph", worktree);
+        var request = FlowGraphSyncs.RequestOf(context, place, $"{run.Instance}:graph", worktree, governing: FlowUse.Around(place.Definition, run.DeclarationPath)?.Use?.Own?.CodebaseGraph);
         var directory = layout.InstanceDirectory(run.Instance, agent);
         CodebaseGraphRead? read = null;
 

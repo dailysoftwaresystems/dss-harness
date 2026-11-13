@@ -68,7 +68,12 @@ public sealed class FlowGraphSyncs(
     /// <param name="why">What asked for it, as the graph's sync log says it.</param>
     /// <param name="worktree">The agent's worktree whose view is asked; null for the base.</param>
     /// <param name="rebuild">Whether every file of the tree is extracted again, no extract reused.</param>
-    public static CodebaseGraphSync RequestOf(HarnessContext context, FlowRunPlace place, string why, CodebaseGraphWorktree? worktree = null, bool rebuild = false)
+    /// <param name="governing">
+    /// The shape a use that governs itself declares, where the step this is asked for is one of its steps and the run's
+    /// own workflow says none: its reason steps' serving and its graphify steps fall back to it. Null where no use
+    /// governs the step or it declares none.
+    /// </param>
+    public static CodebaseGraphSync RequestOf(HarnessContext context, FlowRunPlace place, string why, CodebaseGraphWorktree? worktree = null, bool rebuild = false, FlowCodebaseGraph? governing = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(place);
@@ -76,7 +81,7 @@ public sealed class FlowGraphSyncs(
         return new CodebaseGraphSync(
             context.Layout,
             OrchestratorLayout.Of(context.Layout, place.Run),
-            place.Definition.CodebaseGraph?.Shape ?? CodebaseGraphShape.Default,
+            (place.Definition.CodebaseGraph ?? governing)?.Shape ?? CodebaseGraphShape.Default,
             context.Config.Worktrees.Root,
             rebuild,
             why)

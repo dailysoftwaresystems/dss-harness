@@ -8378,11 +8378,18 @@ public sealed class FlowCoordinator
             return;
         }
 
-        if (_definition.Advisor is not { } advisor || _advisor is null)
+        // The advisor the question is recommended with: the workflow a use that governs the asking step runs declares
+        // one, and it replaces the run's for its steps - its files read in its own directory - while each the use
+        // declares none for stays the run's.
+        var governing = GoverningUseOf(instance?.DeclaredScope);
+        var useAdvisor = governing?.Own.Advisor;
+        var advisor = useAdvisor ?? _definition.Advisor;
+
+        if (advisor is null || _advisor is null)
         {
-            asked.Recommendation = _definition.Advisor is null
+            asked.Recommendation = _definition.Advisor is null && useAdvisor is null
                 ? new FlowRecommendation("notSought", Why: $"no recommendation was sought: orchestrator '{_definition.Name}' names no advisor")
-                : new FlowRecommendation("notSought", Why: $"no recommendation was sought: this run starts no advisor");
+                : new FlowRecommendation("notSought", Why: "no recommendation was sought: this run starts no advisor");
             WriteQuestions();
             return;
         }
@@ -8437,7 +8444,7 @@ public sealed class FlowCoordinator
         var call = new FlowAdvisorCall(
             advisor,
             _runName ?? "run",
-            _definition.Name,
+            useAdvisor is not null ? governing?.Use.Use?.Name ?? _definition.Name : _definition.Name,
             asked.Id,
             asked.Kind,
             asked.Problem,

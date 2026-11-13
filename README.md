@@ -1780,7 +1780,9 @@ caller's for them (its budget, its limits and `maxInstances` gating its steps al
 across every instance of the use and the caller's gates counting them no more; the retries and
 backoff its steps fall back to; the handoff bound of its paused reasoning steps; its answers
 consulted for its steps' questions before the run's) and each key it declares none for staying
-the caller's, for a use cannot widen a run's limits by declaring nothing. An amend is refused
+the caller's, for a use cannot widen a run's limits by declaring nothing. Its advisor serves
+its steps' questions - its files read in its own directory - and the run's one graph takes the
+shape it declares where the run's own workflow says none. An amend is refused
 there, said at validation, for an amend is a run's own, and `preapproved` is a run's input
 alone, whatever the key says. A workflow that uses itself, directly or
 through others, is refused with the chain, uses nest at most ten deep in all, and a resume is

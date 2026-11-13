@@ -5289,7 +5289,9 @@ public static class HelpTopics
         builder.AppendLine("more, the retries and backoff its steps fall back to, the handoff bound of its paused");
         builder.AppendLine("reasoning steps, its answers consulted for its steps' questions after the step's own and the");
         builder.AppendLine("groups around it and before the run's - and each key it declares none for staying the");
-        builder.AppendLine("caller's, for a use cannot widen a run's limits by declaring nothing. An amend is refused");
+        builder.AppendLine("caller's, for a use cannot widen a run's limits by declaring nothing. Its advisor serves its");
+        builder.AppendLine("steps' questions, its files read in its own directory, and the run's one graph takes the");
+        builder.AppendLine("shape it declares where the run's own workflow says none. An amend is refused");
         builder.AppendLine("there, said at validation, for an amend is a run's own, and preapproved is a run's input alone,");
         builder.AppendLine("whatever the key says. A workflow that");
         builder.AppendLine($"uses itself, directly or through others, is refused with the chain, and uses nest at most {WorkflowFileParser.MaxDepth} deep");

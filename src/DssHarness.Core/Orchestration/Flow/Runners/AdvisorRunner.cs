@@ -29,6 +29,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="harnessOutput">Writes output the copies of a continuation record name.</param>
 /// <param name="isolation">Decides the operating system's isolation the advice's agent runs under.</param>
 /// <param name="updates">Finds the Claude Code the advice's order starts, where it holds the client that starts one; null where nothing does.</param>
+/// <param name="cache">The hash cache of remote workflows, where the advisor the call names is a remote workflow's; null where none is read.</param>
 public sealed class AdvisorRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -38,7 +39,8 @@ public sealed class AdvisorRunner(
     AgentKeyStore keys,
     Output.IHarnessOutput harnessOutput,
     Agents.Isolation.IAgentIsolation isolation,
-    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowAdvisorRunner
+    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null,
+    WorkflowCache? cache = null) : IFlowAdvisorRunner
 {
     /// <summary>The directory under the asking step's own that holds its advices, one numbered directory for each.</summary>
     public const string AdviceDirectoryName = "advice";
@@ -104,7 +106,7 @@ public sealed class AdvisorRunner(
             platform,
             cancellationToken).ConfigureAwait(false);
         var layout = OrchestratorLayout.Of(context.Layout, place.Run);
-        var files = new WorkflowNamedFiles(fileSystem, platform.PathComparison);
+        var files = new WorkflowNamedFiles(fileSystem, platform.PathComparison, cache);
 
         // The advisor's own definition and prompt, read as the definition's check reads them - the file the
         // orchestrator names, which the check holds to be there.

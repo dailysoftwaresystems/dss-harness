@@ -1672,9 +1672,14 @@ its `maxInstances` gate its steps alone, counted across every instance of the us
 caller's gates count them no more (`FlowCoordinator.OwnOf` walks the scope chain for the
 governing use, `CounterFull` counts its gate, `UseBound` holds its cap); the retries and
 backoff its steps fall back to where they say neither (`RetryCap`, and the reason runner's
-`FlowUse.Around`); the handoff bound of its paused reasoning steps; and its answers are
+`FlowUse.Around`); the handoff bound of its paused reasoning steps; its answers are
 consulted for its steps' questions after the step's own and the groups around it and before
-the run's (`ConfiguredFor`). An amend is refused where the key says false - an amend is a run's
+the run's (`ConfiguredFor`); its advisor serves its steps' questions, its agent and prompt
+files read in its own directory (`SeekAdvice` picks it and routes the call's workflow,
+`AdvisorRunner` reading by the name it names); and the run's one graph takes the shape it
+declares where the run's own workflow says none (`FlowGraphSyncs.RequestOf`'s governing
+shape, passed by the reason steps' serving and the graphify runner through `FlowUse.Around`).
+An amend is refused where the key says false - an amend is a run's
 own, and no step of a run applies one - said at validation; `preapproved` is a run's input
 alone, whatever the key says. A
 workflow that uses itself, directly or through others, is refused with the chain of the uses that
