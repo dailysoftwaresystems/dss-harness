@@ -26,10 +26,14 @@ public sealed record WorkflowRemoteSource(string Host, string Owner, string Repo
         ? $"{Owner}/{Repo}/{File}@{Ref}"
         : $"{Host}/{Owner}/{Repo}/{File}@{Ref}";
 
-    /// <summary>Whether <paramref name="ref"/> is a full commit SHA, which is its own commit and resolves nowhere.</summary>
-    /// <param name="ref">A ref as written after <c>@</c>.</param>
+    /// <summary>
+    /// Whether <paramref name="ref"/> is a full commit SHA, which is its own commit and resolves nowhere: 40 hex
+    /// characters, lower case as git and the forge spell one - a source spelled in upper case is lowered as it is read
+    /// (<see cref="WorkflowRemote.Source"/>), so one commit has one cache entry and one name.
+    /// </summary>
+    /// <param name="ref">A ref as written after <c>@</c>, or a commit as the cache and a run record it.</param>
     public static bool IsCommit(string @ref)
-        => @ref.Length == 40 && @ref.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
+        => @ref.Length == 40 && @ref.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 }
 
 /// <summary>
@@ -46,7 +50,11 @@ public static class WorkflowRemote
     /// The remote source <paramref name="source"/> names, or null where it names none: it carries an <c>@</c>, and at
     /// least an owner, a repository and a workflow file's path before it - each segment named, the file's path
     /// relative and inside the repository, and a host only where the first of four or more segments is dotted, for a
-    /// GitHub owner is never dotted and a host always is.
+    /// GitHub owner is never dotted and a host always is. A repository's name may be dotted, as GitHub's may
+    /// (<c>org/.github</c>, the conventional home of an organisation's shared workflows). A ref that is a full commit
+    /// SHA is read in lower case, however it was spelled; whether any other ref is one git takes is
+    /// <see cref="RefProblem"/>'s to say, so a source with a ref git refuses is still read as remote and refused by
+    /// name rather than taken for a local path.
     /// </summary>
     /// <param name="source">The value of a step's <c>use:</c>.</param>
     public static WorkflowRemoteSource? Source(string source)
@@ -90,7 +98,7 @@ public static class WorkflowRemote
         var (owner, repo) = (parts[first], parts[first + 1]);
         var file = string.Join("/", parts[(first + 2)..]);
 
-        if (owner.Contains('.', StringComparison.Ordinal) || repo.Contains('.', StringComparison.Ordinal)
+        if (owner.Contains('.', StringComparison.Ordinal)
             || parts.Any(part => part.Length == 0 || part is "." or ".." || part == "*")
             || !file.EndsWith(HarnessLayout.WorkflowFileExtension, StringComparison.Ordinal)
             || file.Split('/').Length < 2)
@@ -98,7 +106,40 @@ public static class WorkflowRemote
             return null;
         }
 
-        return new WorkflowRemoteSource(host, owner, repo, file, source[(at + 1)..]);
+        var @ref = source[(at + 1)..];
+
+        return new WorkflowRemoteSource(host, owner, repo, file, WorkflowRemoteSource.IsCommit(@ref.ToLowerInvariant()) ? @ref.ToLowerInvariant() : @ref);
+    }
+
+    /// <summary>
+    /// Why <paramref name="ref"/> is no name git takes for a tag or a branch, by git's own rules for a ref's name
+    /// (<c>git check-ref-format</c>): no part empty or beginning with <c>.</c> or ending with <c>.lock</c>, no <c>..</c>,
+    /// no <c>@{</c>, not <c>@</c> alone, no end in <c>.</c> or <c>/</c>, and none of the control characters, the space,
+    /// <c>~ ^ : ? * [ \</c>; null where it is one - a full commit SHA among them. The ref is put into the forge's
+    /// addresses as it is spelled, so one these rules refuse is refused before anything is asked.
+    /// </summary>
+    /// <param name="ref">A ref as written after <c>@</c>.</param>
+    public static string? RefProblem(string @ref)
+    {
+        ArgumentNullException.ThrowIfNull(@ref);
+
+        var problem = @ref switch
+        {
+            "" => "it is empty",
+            "@" => "it is '@' alone",
+            _ when @ref.StartsWith('/') || @ref.EndsWith('/') => "it begins or ends with '/'",
+            _ when @ref.EndsWith('.') => "it ends with '.'",
+            _ when @ref.Contains("..", StringComparison.Ordinal) => "it holds '..'",
+            _ when @ref.Contains("@{", StringComparison.Ordinal) => "it holds '@{'",
+            _ when @ref.Any(character => character < ' ' || character == '\u007f') => "it holds a control character",
+            _ when @ref.IndexOfAny([' ', '~', '^', ':', '?', '*', '[', '\\']) is var at and >= 0 => $"it holds '{@ref[at]}'",
+            _ when @ref.Split('/').Any(part => part.Length == 0) => "one of its parts is empty",
+            _ when @ref.Split('/').Any(part => part.StartsWith('.')) => "one of its parts begins with '.'",
+            _ when @ref.Split('/').Any(part => part.EndsWith(".lock", StringComparison.Ordinal)) => "one of its parts ends with '.lock'",
+            _ => null,
+        };
+
+        return problem is null ? null : $"'{@ref}' is no ref git takes: {problem}";
     }
 
     /// <summary>

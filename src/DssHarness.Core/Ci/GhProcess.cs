@@ -44,9 +44,100 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
     /// </summary>
     internal const string RepositoryOverrideVariable = "GH_REPO";
 
+    /// <summary>The variable that sends a <c>gh</c> call that names no host to another host than github.com.</summary>
+    public const string HostVariable = "GH_HOST";
+
+    /// <summary>The variable <c>gh</c> reads a token from for github.com and every <c>*.ghe.com</c> host, before its stored login.</summary>
+    public const string TokenVariable = "GH_TOKEN";
+
+    /// <summary>The variable <c>gh</c> reads a token from for any other host - a GitHub Enterprise Server's - before its stored login.</summary>
+    public const string EnterpriseTokenVariable = "GH_ENTERPRISE_TOKEN";
+
+    /// <summary>
+    /// Every variable <c>gh</c> reads a token from, for one host kind or another: <see cref="TokenVariable"/> and its older
+    /// spelling for github.com and <c>*.ghe.com</c>, <see cref="EnterpriseTokenVariable"/> and its older spelling for a
+    /// GitHub Enterprise Server - where, in a Codespace, <c>GITHUB_TOKEN</c> is read as well.
+    /// </summary>
+    public static IReadOnlyList<string> TokenVariables { get; } = [TokenVariable, "GITHUB_TOKEN", EnterpriseTokenVariable, "GITHUB_ENTERPRISE_TOKEN"];
+
+    /// <summary>
+    /// What <c>gh</c> writes, in any case, where a call never reached the forge: its own words for a name that did not
+    /// resolve, and the network's own for an address that did not answer, a connection that dropped or a wait that ran
+    /// out. Every other failure is the forge's answer, or gh's own refusal - a credential refused, a login missing, a
+    /// thing not there - and never reads as the network not being there.
+    /// </summary>
+    public static IReadOnlyList<string> UnreachedWords { get; } =
+    [
+        "error connecting to ", "no such host", "dial tcp", "connection refused", "connection reset", "network is unreachable",
+        "no route to host", "i/o timeout", "tls handshake timeout", "client.timeout exceeded", "context deadline exceeded",
+        "server misbehaving", "temporary failure in name resolution",
+    ];
+
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly GitLocalVariables _localVariables = localVariables ?? new GitLocalVariables(processRunner);
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
+
+    /// <summary>
+    /// Whether <paramref name="failed"/>, which a call of this class's raised, says the call never reached the forge: it
+    /// did not answer within its limit (<see cref="HarnessExit.Incomplete"/>), or gh said one of
+    /// <see cref="UnreachedWords"/>. A forge that answered - 401, 403, 404, a login gh does not have - and gh not
+    /// being there are not this.
+    /// </summary>
+    /// <param name="failed">What a call raised.</param>
+    public static bool Unreached(HarnessException failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+
+        return failed.ExitCode == HarnessExit.Incomplete
+            || (failed.ExitCode == HarnessExit.CommandFailed && UnreachedWords.Any(words => failed.Message.Contains(words, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
+    /// The environment a <c>gh</c> call to <paramref name="host"/> is given beyond the machine's own: <see cref="HostVariable"/>
+    /// taken away, so the call reaches the host its <c>--hostname</c> names and no other, and for a host beyond github.com
+    /// every one of <see cref="TokenVariables"/> taken away but the one gh reads for that host's kind, set to
+    /// <paramref name="token"/> - so no token of the machine's reaches a host it was not meant for. github.com keeps the
+    /// machine's own <see cref="TokenVariable"/> and login, and never sees an enterprise token.
+    /// </summary>
+    /// <param name="host">The host the call reaches.</param>
+    /// <param name="token">The token for a host beyond github.com, read from the credential its configuration names; ignored for github.com.</param>
+    public static Dictionary<string, string?> HostEnvironment(string host, string? token)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal) { [HostVariable] = null };
+
+        if (host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            environment[EnterpriseTokenVariable] = null;
+            environment["GITHUB_ENTERPRISE_TOKEN"] = null;
+
+            return environment;
+        }
+
+        foreach (var name in TokenVariables)
+        {
+            environment[name] = null;
+        }
+
+        environment[TokenVariableOf(host)] = token;
+
+        return environment;
+    }
+
+    /// <summary>
+    /// The one variable <c>gh</c> reads a token for <paramref name="host"/> from: <see cref="TokenVariable"/> for
+    /// github.com and a <c>*.ghe.com</c> host, <see cref="EnterpriseTokenVariable"/> for any other.
+    /// </summary>
+    /// <param name="host">The host.</param>
+    public static string TokenVariableOf(string host)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+
+        return host.Equals("github.com", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".ghe.com", StringComparison.OrdinalIgnoreCase)
+            ? TokenVariable
+            : EnterpriseTokenVariable;
+    }
 
     /// <summary>Runs <c>gh</c> with <paramref name="arguments"/> in <paramref name="repositoryRoot"/> and answers what it printed.</summary>
     /// <param name="repositoryRoot">The repository the call answers for.</param>

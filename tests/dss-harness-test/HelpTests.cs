@@ -1239,9 +1239,15 @@ public sealed partial class HelpTests
         Assert.Contains(
             "so each is refused to every agent by name, a side-task's as well as a step's: "
                 + $"{string.Join(", ", DssHarness.Core.Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those "
-                + "that write only the tree's own files, stay open.",
+                + $"that write only the tree's own files, stay open. {WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} "
+                + "are among them: where a person's run of either would fetch a remote workflow into the workflow cache, an agent's - "
+                + $"its every child carries {DssHarness.Core.Agents.AgentChildEnvironment.AgentMarker} - reads the cache alone and writes "
+                + $"nothing to it, and one the cache does not hold is refused naming 'dssharness {WorkflowValidationService.CommandName}', "
+                + "which a person runs to fetch it.",
             prose,
             StringComparison.Ordinal);
+        Assert.Contains(WorkflowValidationService.CommandName, DssHarness.Core.Agents.Policy.AgentPolicy.OpenVerbs);
+        Assert.Contains(WorkflowExportService.CommandName, DssHarness.Core.Agents.Policy.AgentPolicy.OpenVerbs);
 
         // The tool's own executions of the agents' work inside the same isolation, the codes the mode turns into its own.
         Assert.Contains(

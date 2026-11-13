@@ -3426,7 +3426,10 @@ public static class HelpTopics
             + "tool's verbs that read a credential slot or write its state or install would fail inside it, so each is "
             + "refused to every agent by name, a side-task's as well as a step's: "
             + $"{string.Join(", ", Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those that "
-            + "write only the tree's own files, stay open.";
+            + $"write only the tree's own files, stay open. {WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} are among "
+            + "them: where a person's run of either would fetch a remote workflow into the workflow cache, an agent's - its every "
+            + $"child carries {Agents.AgentChildEnvironment.AgentMarker} - reads the cache alone and writes nothing to it, and one the cache "
+            + $"does not hold is refused naming '{ToolPackage.Command} {WorkflowValidationService.CommandName}', which a person runs to fetch it.";
 
     /// <summary>
     /// The places the user keeps credentials in that the isolation hides, said from their one list
@@ -5197,6 +5200,58 @@ public static class HelpTopics
         return builder.ToString();
     }
 
+    /// <summary>
+    /// What a remote use is, how its ref is resolved and proved the repository's own, what refuses its directory, how the
+    /// cache keeps it, and what workflowSources says of it - every bound and every variable named from the code that holds
+    /// it, so the paragraph cannot promise what the fetch does not do.
+    /// </summary>
+    internal static string RemoteWorkflowsHelp
+        => "A use may name a workflow beyond the repository: owner/repo/path/workflow.yml@ref, as GitHub Actions spells uses - a "
+            + "repository's name may be dotted, as an organisation's .github is - or the same under a GitHub Enterprise host the "
+            + "configuration names. The ref is held to git's own rules for a ref's name and resolved at the run's start through the "
+            + "repository's own refs: its tag, an annotated one peeled to the commit it names, or its branch where the pin allows one. A full "
+            + "commit SHA is its own commit, and is fetched only once the repository's default branch, or one of the first "
+            + $"{WorkflowRemoteFetcher.MostRefsCompared} tags and branches the forge lists, reaches it: GitHub serves a commit of any fork under "
+            + "the repository's own name, and one that is not the repository's own is refused. The commit's tree is walked to the "
+            + "workflow's directory, and the whole is refused with nothing cached where the directory's listing was cut short, holds a "
+            + "symbolic link or a submodule, or a path that is rooted, holds '..', '\\', ':' or a control character, or is another's "
+            + "where case is folded, or where the file the use names is not in it; every blob is fetched as its bytes and checked "
+            + "against the hash the tree gives of it, the whole bounded at "
+            + $"{WorkflowCache.MostFiles.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} files and "
+            + $"{(WorkflowCache.MostBytes / (1024 * 1024)).ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} MiB. It is kept in the "
+            + $"workflow cache, {WorkflowCache.DirectoryName}/ under this user's own directory for this tool, named the first time a "
+            + "remote use needs it: each blob as its bytes at blobs/<first 2 hex>/<remaining 38 hex>, one entry per repository, commit "
+            + "and directory, held to its key as it is read, and each ref's newest resolution with its time; every blob is hashed "
+            + "again as it is read, so a blob changed on disk is refused and its directory fetched again. A second run of a pinned "
+            + "SHA reads the cache with no network, a tag needs one call at each run's start, and a run records each use's "
+            + "resolution: a resume uses the recorded commit and never resolves again, so a tag or branch that moved since changes "
+            + "no run already started. A remote workflow is trusted by configuration alone - it directs agents and machine steps in "
+            + "this repository - so workflowSources in config.json allows its owner (empty by default, and a remote use is refused "
+            + "until then); names each GitHub Enterprise host with its one credential, \"credential\": {\"from\": \"env\", \"name\": "
+            + $"\"<VARIABLE>\"}}, given to its calls as {GhProcess.TokenVariable} for a *.ghe.com host and {GhProcess.EnterpriseTokenVariable} for any "
+            + "other with every other token of the machine's taken away, a host with none or whose variable is not set refused; "
+            + "reaches github.com with the machine's own gh login, every call naming its host; pins the refs it takes "
+            + $"({WorkflowSourceRules.PinTagOrCommit} by default, {WorkflowSourceRules.PinCommit}, or {WorkflowSourceRules.PinAny}, which allows a branch, "
+            + $"warned of wherever one is resolved); and says what stands in where the network keeps the forge from being reached "
+            + $"({WorkflowSourceRules.OfflineRefuse}, or {WorkflowSourceRules.OfflineLastResolved}, the cache's newest resolution of the ref, warned of where "
+            + "it stands in) - a forge that answered, refusing the credential or naming a thing not there, is refused with what gh "
+            + "said, and nothing stands in for it. Its files resolve against its cache entry as a local workflow's do against its "
+            + "directory, a use inside it resolves inside the same entry, and no local use resolves under remote/, the cache's own "
+            + "reserved place in the workflows folder. A command an agent runs never reaches the forge nor writes the cache: "
+            + $"{WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} under an agent read the cache alone, and are refused "
+            + $"naming '{ToolPackage.Command} {WorkflowValidationService.CommandName}', which a person runs to fetch what they need.";
+
+    /// <summary>What the workflow-cache verbs do, every bound named from the code that holds it.</summary>
+    internal static string WorkflowCacheHelp
+        => $"{ToolPackage.Command} {WorkflowCacheService.CommandName} list says each entry the cache holds - where it came from, its commit, its "
+            + "files and bytes, when it was fetched and last used, and the refs whose newest resolution it is - and every file of "
+            + $"the cache's own that could not be read. {ToolPackage.Command} {WorkflowCacheService.CommandName} prune --unused-days N, the days "
+            + $"required and from 0 to {WorkflowCache.MostUnusedDays.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}, removes the "
+            + "entries no run used and none was fetched for N days, the resolutions that named them, and the blobs no entry left "
+            + "holds - every blob an entry it keeps holds kept, and no blob removed at all while a file of the cache's own could not "
+            + $"be read; a file it could not remove or read is said, and the pruning ends incomplete ({HarnessExit.Incomplete}). Both name "
+            + "the cache's directory, in text and in --json, and every write and pruning of the cache is made under one lock.";
+
     private static string RenderWorkflows()
     {
         var builder = new StringBuilder();
@@ -5306,35 +5361,14 @@ public static class HelpTopics
         builder.AppendLine("in all; a run records each use's resolution, and a resume is refused where the called");
         builder.AppendLine("workflow's file changed since the run began, as its own definition's would.");
         builder.AppendLine();
-        builder.AppendLine("A use may name a workflow beyond the repository: owner/repo/path/workflow.yml@ref, as");
-        builder.AppendLine("GitHub Actions spells uses, or the same under a GitHub Enterprise host the configuration");
-        builder.AppendLine("names. The ref is resolved to a commit at the run's start - a full commit SHA is its own");
-        builder.AppendLine("commit, needing no network - the commit's tree is read, every blob under the workflow's");
-        builder.AppendLine($"directory fetched and checked against the hash the tree gives of it, the whole bounded at {WorkflowCache.MostFiles.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} files and {(WorkflowCache.MostBytes / (1024 * 1024)).ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} MiB, and it is kept in the");
-        builder.AppendLine("workflow cache, workflow-cache/ under this user's own directory for this tool: blobs by");
-        builder.AppendLine("their git hash, one entry per repository, commit and directory, the files hashed again as");
-        builder.AppendLine("they are read, so a cache file changed on disk is refused and fetched again. A second run");
-        builder.AppendLine("of a pinned SHA reads the cache with no network, a tag needs one call at each run's start,");
-        builder.AppendLine("and a run records each use's resolution: a resume uses the recorded commit and never");
-        builder.AppendLine("resolves again, so a tag or branch that moved since changes no run already started. A");
-        builder.AppendLine("remote workflow is trusted by configuration alone - it directs agents and machine steps in");
-        builder.AppendLine("this repository - so workflowSources in config.json allows its owner (empty by default,");
-        builder.AppendLine("and a remote use is refused until then), names the hosts it may reach with each");
-        builder.AppendLine("credential's environment variable, pins the refs it takes (tag-or-commit by default,");
-        builder.AppendLine("commit, or any, which allows a branch and warns of it at every run that uses one), and");
-        builder.AppendLine("says what stands in offline (refuse, or last-resolved, the cache's last resolution,");
-        builder.AppendLine("which the run records that it did). Its files resolve against its cache entry as a local");
-        builder.AppendLine("workflow's do against its directory, a use inside it resolves inside the same entry, and");
-        builder.AppendLine("no local use resolves under remote/, the cache's own reserved place in the workflows");
-        builder.AppendLine("folder.");
+        AppendWrapped(builder, RemoteWorkflowsHelp);
         builder.AppendLine();
         builder.AppendLine($"{ToolPackage.Command} {WorkflowExportService.CommandName} --from <use> --to <dir> vendors a remote workflow into the");
         builder.AppendLine("repository at its resolved commit: every file of its directory, byte for byte, and");
         builder.AppendLine("source.md, a note of where it came from - so a team can review what is written and use it");
-        builder.AppendLine($"as ./. {ToolPackage.Command} workflow-cache list says each entry the cache holds - where it came from, its");
-        builder.AppendLine("commit, its files and bytes, and when it was last used - and workflow-cache prune");
-        builder.AppendLine("--unused-days N removes the entries no run used for N days and the blobs no entry left");
-        builder.AppendLine("holds.");
+        builder.AppendLine("as ./.");
+        builder.AppendLine();
+        AppendWrapped(builder, WorkflowCacheHelp);
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -6166,10 +6200,12 @@ public static class HelpTopics
         builder.AppendLine("                 alone; validate-workflow checks them ('help workflows')");
         builder.AppendLine("  workflowSources  where a remote use may come from beyond the repository: allow, the");
         builder.AppendLine("                 owners and repositories it may name (empty, and a remote use is refused);");
-        builder.AppendLine("                 hosts, GitHub Enterprise hosts with each credential's environment");
-        builder.AppendLine("                 variable; pin, the refs it takes (tag-or-commit, the default, commit, or");
-        builder.AppendLine("                 any, which allows a moving branch); offline, what stands in where a ref");
-        builder.AppendLine("                 cannot be resolved (refuse, the default, or last-resolved)");
+        builder.AppendLine("                 hosts, GitHub Enterprise hosts, each with the one credential its calls");
+        builder.AppendLine("                 are given, \"credential\": {\"from\": \"env\", \"name\": \"<VARIABLE>\"}");
+        builder.AppendLine("                 (required); pin, the refs it takes (tag-or-commit, the default, commit,");
+        builder.AppendLine("                 or any, which allows a moving branch); offline, what stands in where the");
+        builder.AppendLine("                 network keeps a ref from being resolved (refuse, the default, or");
+        builder.AppendLine("                 last-resolved) ('help workflows')");
         builder.AppendLine("  setUp          what a run brings up around its work and down after, by name: an up");
         builder.AppendLine($"                 and a down command line for '{ToolPackage.Command} up' and '{ToolPackage.Command} down', which");
         builder.AppendLine("                 take inputs; a test invocation's and a runner's setUp name them ('help setups')");

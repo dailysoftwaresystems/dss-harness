@@ -1,6 +1,12 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -8,14 +14,14 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// A remote workflow a use resolved to: its source as written, the commit the ref resolved to, the cache entry its
 /// directory lives in, its own yml, and how the resolution came about - whether a moving ref was allowed and used,
-/// and whether the network was not there and the cache's last resolution stood in.
+/// and whether the forge could not be reached and the cache's newest resolution stood in.
 /// </summary>
 /// <param name="Source">The source as the use wrote it.</param>
 /// <param name="Commit">The commit the ref resolved to, 40 hex characters.</param>
 /// <param name="Entry">The cache entry holding the workflow's directory at that commit.</param>
 /// <param name="Definition">The workflow's own yml.</param>
 /// <param name="Moving">Whether the ref was a branch, allowed by <c>pin: any</c>, which moves.</param>
-/// <param name="FromLastResolved">Whether the network was not there and the cache's last resolution was used.</param>
+/// <param name="FromLastResolved">Whether the forge could not be reached and the cache's newest resolution of the ref was used.</param>
 public sealed record WorkflowRemoteResolution(
     WorkflowRemoteSource Source,
     string Commit,
@@ -25,35 +31,59 @@ public sealed record WorkflowRemoteResolution(
     bool FromLastResolved = false);
 
 /// <summary>
-/// The one way a remote workflow is fetched: a ref resolved to a commit, the commit's tree read, every blob under
-/// the workflow's directory fetched and checked against the tree's hash of it, and the whole kept in the workflow
-/// cache - read from it with no network where the commit is cached already. A remote source is trusted by
-/// configuration alone: the repository's <c>workflowSources</c> allows its owner, names its host, pins the refs it
-/// may name, and says what happens offline; nothing of that is decided by a response.
+/// The one way a remote workflow is fetched: a ref resolved to a commit of the named repository's own - a tag peeled to
+/// the commit it names, a branch where the pin allows one, and a commit named by its SHA proved to be one a branch or a
+/// tag of the repository reaches - the commit's tree walked to the workflow's directory, every path under it held to
+/// the tree's rule, every blob fetched as bytes and checked against the tree's hash of it, and the whole kept in the
+/// workflow cache - read from it with no network where the commit is cached already. A remote source is trusted by
+/// configuration alone: the repository's <c>workflowSources</c> allows its owner, names its host and the one credential
+/// it is reached with, pins the refs it may name, and says what happens where the forge cannot be reached; nothing of
+/// that is decided by a response. A command an agent runs never reaches the forge and never writes the cache: it reads
+/// what the cache holds, or is refused naming the command a person runs to fetch it.
 /// </summary>
 /// <param name="gh">Runs the forge's tool, <c>gh api</c> among its calls.</param>
 /// <param name="cache">The workflow cache the fetch is kept in.</param>
-public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache)
+/// <param name="output">Says what a resolution is warned of - a moving ref, the cache standing in; null says nothing.</param>
+/// <param name="clock">Dates a fetch, a use and a resolution; the system's where none is given.</param>
+public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHarnessOutput? output = null, TimeProvider? clock = null)
 {
+    /// <summary>What a resolution's warnings are said under, whichever command resolved it.</summary>
+    public const string Said = "remote-workflow";
+
+    /// <summary>
+    /// The most refs a commit named by its SHA is compared with, beyond the repository's default branch, before it is
+    /// refused as one no branch or tag of the repository reaches: the first tags, then the first branches, the forge lists.
+    /// </summary>
+    public const int MostRefsCompared = 20;
+
+    /// <summary>The most tags a tag is peeled through to the commit it names.</summary>
+    private const int MostPeels = 10;
+
     private readonly GhProcess _gh = gh;
     private readonly WorkflowCache _cache = cache;
+    private readonly IHarnessOutput? _output = output;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <summary>
     /// Resolves the remote source a use names to a commit and a cached directory: the commit the run's own record
     /// says where it has one (<paramref name="recorded"/>, so a resume never resolves again, and a tag or branch
-    /// that moved since changes no run already started), the cache where that commit is held, and the network where
-    /// it is not - refused, or the cache's last resolution where the configuration says <c>last-resolved</c>.
+    /// that moved since changes no run already started), the cache where that commit is held, and the forge where
+    /// it is not - refused where the forge cannot be reached, or the cache's newest resolution where the configuration
+    /// says <c>last-resolved</c>. Where the command runs under an agent, the cache alone is read.
     /// </summary>
     /// <param name="source">The source a step's <c>use:</c> names, parsed.</param>
     /// <param name="settings">The repository's <c>workflowSources</c>; null where the file holds none.</param>
     /// <param name="workingDirectory">The tree the forge's tool is run in.</param>
-    /// <param name="environment">Reads this process's environment, for a host's credential.</param>
+    /// <param name="environment">Reads this process's environment: a host's credential, and the mark of an agent's command.</param>
     /// <param name="recorded">The commit this run's own record holds for the source, where one does; null else.</param>
     /// <param name="cancellationToken">Stops the fetch.</param>
     /// <exception cref="HarnessException">
-    /// The source's repository is not allowed, its host is not named, its ref is not one the pin takes, or the
-    /// network is not there and nothing stands in (<see cref="HarnessExit.Refused"/>); the forge could not be
-    /// reached or answered nothing that reads (<see cref="HarnessExit.CommandFailed"/> or the tool's own codes).
+    /// The ref is no ref git takes, the source's repository is not allowed, its host is not named or its credential not
+    /// there, its ref is not one the pin takes or not the repository's own, the file it names is not in the directory,
+    /// the forge refused what was asked - naming what it said - or the forge could not be reached and nothing stands in
+    /// (<see cref="HarnessExit.Refused"/>); a cache file could not be read (<see cref="HarnessExit.ConfigInvalid"/>);
+    /// the forge answered what does not read (<see cref="HarnessExit.CommandFailed"/>), or <c>gh</c> is not there
+    /// (<see cref="HarnessExit.ToolMissing"/>).
     /// </exception>
     public async Task<WorkflowRemoteResolution> ResolveAsync(
         WorkflowRemoteSource source,
@@ -67,23 +97,44 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache)
         ArgumentNullException.ThrowIfNull(workingDirectory);
         ArgumentNullException.ThrowIfNull(environment);
 
+        if (WorkflowRemote.RefProblem(source.Ref) is { } badRef)
+        {
+            throw new HarnessException(HarnessExit.Refused, $"'{source.Spelled}' names {badRef}; nothing was asked of the forge");
+        }
+
         Trusted(source, settings);
+
+        if (recorded is not null && !WorkflowRemoteSource.IsCommit(recorded))
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{source.Spelled}': the run's own record names '{recorded}' as the commit it began with, which is no commit's 40 hex characters; nothing was asked of the forge");
+        }
+
+        // A command an agent runs reads what the person's cache holds and nothing else: it reaches no forge with the
+        // person's login, and writes nothing of the tool's own.
+        if (environment(AgentChildEnvironment.AgentMarker) is not null)
+        {
+            return CachedOnly(source, settings, recorded);
+        }
+
+        var asked = new Asked(source, settings, workingDirectory, environment, cancellationToken);
 
         // A run's own record of the resolution: the commit it began with, used again however the ref has moved, so a
         // resume is refused by nothing it cannot help.
-        if (recorded is { Length: 40 })
+        if (recorded is not null)
         {
-            return await Read(source, settings, workingDirectory, environment, recorded, moving: false, cancellationToken).ConfigureAwait(false);
+            return await ReadAsync(asked, recorded, proven: false, resolution: null).ConfigureAwait(false);
         }
 
         if (WorkflowRemoteSource.IsCommit(source.Ref))
         {
-            return await Read(source, settings, workingDirectory, environment, source.Ref, moving: false, cancellationToken).ConfigureAwait(false);
+            return await ReadAsync(asked, source.Ref, proven: false, resolution: null).ConfigureAwait(false);
         }
 
         Pin(source, WorkflowSourceRules.PinOf(settings));
 
-        return await ResolveRefAsync(source, settings, workingDirectory, environment, cancellationToken).ConfigureAwait(false);
+        return await ResolveRefAsync(asked).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -130,309 +181,613 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache)
     }
 
     /// <summary>
-    /// The commit a ref resolves to, with the tag told from the branch: a tag is asked as the ref it is, and a branch
-    /// - allowed only by <c>pin: any</c> - through the commit the forge answers for it. Where the network is not
-    /// there, the configuration's <c>offline</c> says what stands in.
+    /// The commit a ref resolves to, through the named repository's own refs: its tag of that name, peeled to the commit
+    /// it names, and where it has none - and the pin says <c>any</c> - its branch of that name, which moves. Where the
+    /// forge could not be reached, the configuration's <c>offline</c> says what stands in; a forge that answered is never
+    /// that, and what it refused is refused naming what it said.
     /// </summary>
-    private async Task<WorkflowRemoteResolution> ResolveRefAsync(
-        WorkflowRemoteSource source,
-        WorkflowSourcesConfig? settings,
-        string workingDirectory,
-        Func<string, string?> environment,
-        CancellationToken cancellationToken)
+    private async Task<WorkflowRemoteResolution> ResolveRefAsync(Asked asked)
     {
-        var moving = false;
+        var source = asked.Source;
         string commit;
+        bool branch;
 
         try
         {
-            // A tag is asked as the ref it is, for the commit it points at; a branch answers no such ask, and is told
-            // from the tag by that alone - allowed only where the pin says any, for a branch moves.
-            var tag = await ApiAsync(
-                source,
-                settings,
-                workingDirectory,
-                environment,
-                [$"repos/{source.Owner}/{source.Repo}/git/ref/tags/{source.Ref}", "--jq", ".object.sha"],
-                cancellationToken).ConfigureAwait(false);
+            var tag = await ApiAsync(asked, $"repos/{source.Owner}/{source.Repo}/git/ref/tags/{Escaped(source.Ref)}").ConfigureAwait(false);
 
-            if (tag is null)
+            if (tag is not null)
             {
-                if (WorkflowSourceRules.PinOf(settings) != WorkflowSourceRules.PinAny)
-                {
-                    throw new HarnessException(
-                        HarnessExit.Refused,
-                        $"'{source.Spelled}' names the ref '{source.Ref}', which is no tag of '{source.Owner}/{source.Repo}'; workflowSources.pin is {WorkflowSourceRules.PinOf(settings)}, which takes a tag or a full commit SHA - a branch moves, and what a run ran must be what it said");
-                }
-
-                moving = true;
-
-                commit = Sha((await ApiAsync(
-                    source,
-                    settings,
-                    workingDirectory,
-                    environment,
-                    [$"repos/{source.Owner}/{source.Repo}/commits/{source.Ref}", "--jq", ".sha"],
-                    cancellationToken).ConfigureAwait(false)) ?? throw NotRead(source));
+                commit = await PeeledAsync(asked, tag, $"the tag '{source.Ref}'").ConfigureAwait(false);
+                branch = false;
             }
             else
             {
-                commit = Sha(tag);
+                // A 404 for the tag is also what a repository that is not there, or that the credential cannot see,
+                // answers: the repository is asked before the ref is said to be no tag of it.
+                _ = await RepositoryAsync(asked).ConfigureAwait(false);
+
+                if (WorkflowSourceRules.PinOf(asked.Settings) != WorkflowSourceRules.PinAny)
+                {
+                    throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"'{source.Spelled}' names the ref '{source.Ref}', which is no tag of '{source.Owner}/{source.Repo}'; workflowSources.pin is {WorkflowSourceRules.PinOf(asked.Settings)}, which takes a tag or a full commit SHA - a branch moves, and what a run ran must be what it said");
+                }
+
+                var head = await ApiAsync(asked, $"repos/{source.Owner}/{source.Repo}/git/ref/heads/{Escaped(source.Ref)}").ConfigureAwait(false)
+                    ?? throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"'{source.Spelled}' names the ref '{source.Ref}', which is neither a tag nor a branch of '{source.Owner}/{source.Repo}'; nothing was cached");
+
+                commit = Peeled(source, head, $"the branch '{source.Ref}'") is ({ } sha, "commit")
+                    ? sha
+                    : throw Malformed(source, $"the branch '{source.Ref}'", "it names no commit");
+                branch = true;
             }
         }
-        catch (HarnessException failed) when (failed.ExitCode != HarnessExit.Refused)
+        catch (HarnessException failed) when (GhProcess.Unreached(failed))
         {
-            // The forge could not be reached, or answered nothing that reads: offline, the configuration may say the
-            // cache's last resolution stands in, and the run records that it did. A refusal is not that - the pin and
-            // the trust have already said their word.
-            if (LastResolved(source, settings, failed) is { } last)
-            {
-                return last;
-            }
+            return LastResolved(source, asked.Settings, failed);
+        }
 
-            var offline = WorkflowSourceRules.OfflineOf(settings);
+        var resolution = new WorkflowCacheResolution(source.Host, source.Owner, source.Repo, source.Directory, source.Ref, commit, branch, _clock.GetUtcNow());
+        var resolved = await ReadAsync(asked, commit, proven: true, resolution).ConfigureAwait(false);
 
+        if (branch)
+        {
+            _output?.Warn(Said, $"'{source.Spelled}' names the branch '{source.Ref}', which moves: it resolved to the commit {commit} now, and may resolve to another at the next run - pin it by a tag or a commit where what a run ran must be what it said");
+        }
+
+        return resolved with { Moving = branch };
+    }
+
+    /// <summary>
+    /// The cache's newest resolution of <paramref name="source"/>'s ref, where the forge could not be reached and the
+    /// configuration says <c>last-resolved</c> - warned of, and refused where it says <c>refuse</c> or the cache holds no
+    /// whole resolution, each refusal naming what the forge's tool said.
+    /// </summary>
+    private WorkflowRemoteResolution LastResolved(WorkflowRemoteSource source, WorkflowSourcesConfig? settings, HarnessException failed)
+    {
+        var unreached = $"'{source.Spelled}' could not be resolved, the forge not being reached: {failed.Message.TrimEnd('.')}";
+
+        if (WorkflowSourceRules.OfflineOf(settings) != WorkflowSourceRules.OfflineLastResolved)
+        {
             throw new HarnessException(
                 HarnessExit.Refused,
-                $"'{source.Spelled}' could not be resolved: {failed.Message.TrimEnd('.')}"
-                    + (offline == WorkflowSourceRules.OfflineLastResolved
-                        ? "; and the workflow cache holds no last resolution of it"
-                        : "; workflowSources.offline is refuse, so nothing stands in - last-resolved would use the cache's last resolution, which the run records that it did"),
+                $"{unreached}; workflowSources.offline is refuse, so nothing stands in - last-resolved would stand at the cache's newest resolution of the ref",
                 failed);
         }
 
-        return await Read(source, settings, workingDirectory, environment, commit, moving, cancellationToken).ConfigureAwait(false);
-    }
+        var last = _cache.LastResolved(source.Host, source.Owner, source.Repo, source.Directory, source.Ref)
+            ?? throw new HarnessException(HarnessExit.Refused, $"{unreached}; and the workflow cache holds no resolution of '{source.Ref}'", failed);
 
-    /// <summary>
-    /// The cache's last resolution of <paramref name="source"/>'s ref, where the configuration says one stands in;
-    /// null where it says nothing stands in, or the cache holds none - and the refusal that reached here is the one
-    /// the caller sees.
-    /// </summary>
-    private WorkflowRemoteResolution? LastResolved(WorkflowRemoteSource source, WorkflowSourcesConfig? settings, HarnessException failed)
-    {
-        if (WorkflowSourceRules.OfflineOf(settings) != WorkflowSourceRules.OfflineLastResolved)
-        {
-            return null;
-        }
+        var entry = Found(source, last.Commit);
+        var (cached, broken) = entry is null ? (null, "it holds no entry for the commit") : Whole(source, entry);
 
-        if (_cache.LastResolved(source.Host, source.Owner, source.Repo, source.Directory, source.Ref) is not { } last)
-        {
-            return null;
-        }
-
-        var cached = Cached(source, last) ?? throw new HarnessException(
-            HarnessExit.Refused,
-            $"'{source.Spelled}': the network was not there, and the workflow cache's last resolution of '{source.Ref}' is the commit '{last.Commit}', whose files are not whole in the cache; it is fetched again where the network is",
-            failed);
-
-        _cache.Touch(last);
-
-        return cached with { FromLastResolved = true };
-    }
-
-    /// <summary>
-    /// The workflow at <paramref name="commit"/>, from the cache where it is held - read with no network, its blobs
-    /// hashed again as they are read, and where one fails to hash, fetched again whole - else fetched, checked and
-    /// cached.
-    /// </summary>
-    private async Task<WorkflowRemoteResolution> Read(
-        WorkflowRemoteSource source,
-        WorkflowSourcesConfig? settings,
-        string workingDirectory,
-        Func<string, string?> environment,
-        string commit,
-        bool moving,
-        CancellationToken cancellationToken)
-    {
-        if (_cache.Find(source.Host, source.Owner, source.Repo, commit, source.Directory) is { } entry
-            && Cached(source, entry) is { } cached)
-        {
-            _cache.Touch(cached.Entry);
-
-            return cached with { Moving = moving };
-        }
-
-        var fetched = await FetchAsync(source, commit, settings, workingDirectory, environment, cancellationToken).ConfigureAwait(false);
-
-        _cache.Touch(fetched.Entry);
-
-        return fetched with { Moving = moving };
-    }
-
-    /// <summary>
-    /// The workflow's directory at <paramref name="commit"/>: every blob of the repository's tree under it, each
-    /// checked against the hash the tree gives, the whole bounded - and kept in the cache only once every check
-    /// holds, so a mismatch or a bound refuses with nothing cached.
-    /// </summary>
-    private async Task<WorkflowRemoteResolution> FetchAsync(
-        WorkflowRemoteSource source,
-        string commit,
-        WorkflowSourcesConfig? settings,
-        string workingDirectory,
-        Func<string, string?> environment,
-        CancellationToken cancellationToken)
-    {
-        var tree = JsonNode.Parse(await ApiAsync(
-            source,
-            settings,
-            workingDirectory,
-            environment,
-            [$"repos/{source.Owner}/{source.Repo}/git/trees/{commit}?recursive=1"],
-            cancellationToken).ConfigureAwait(false) ?? throw NotRead(source))!.AsObject();
-
-        var under = $"{source.Directory}/";
-        var blobs = new List<(string Path, string Blob, string Mode, long Size)>();
-
-        foreach (var entry in (tree["tree"] as JsonArray) ?? [])
-        {
-            var path = entry!["path"]!.GetValue<string>();
-            var kind = entry["type"]?.GetValue<string>();
-
-            if (!path.StartsWith(under, StringComparison.Ordinal) || kind != "blob")
-            {
-                continue;
-            }
-
-            blobs.Add((path, entry["sha"]!.GetValue<string>(), entry["mode"]?.GetValue<string>() ?? "100644", entry["size"]?.GetValue<long>() ?? 0));
-        }
-
-        if (blobs.Count == 0)
+        if (cached is null)
         {
             throw new HarnessException(
                 HarnessExit.Refused,
-                $"'{source.Spelled}' resolved to the commit '{commit}', whose tree holds no directory '{source.Directory}'");
+                $"{unreached}; the workflow cache's newest resolution of '{source.Ref}' is the commit '{last.Commit}', whose files are not whole in the cache ({broken}); it is fetched again where the forge is reached",
+                failed);
+        }
+
+        _output?.Warn(Said, $"{unreached}; the workflow cache's newest resolution of '{source.Ref}' stands in, the commit {last.Commit} it resolved to on {Day(last.ResolvedAt)}, as workflowSources.offline says last-resolved");
+        Touch(source, cached.Entry, resolution: null);
+
+        return cached with { Moving = last.Branch, FromLastResolved = true };
+    }
+
+    /// <summary>
+    /// The workflow resolved from the cache alone, for a command an agent runs: the commit the run's record or the
+    /// source names, or the cache's newest resolution of its ref - read, its every file hashed again, and nothing written,
+    /// not even the use's date. Refused, naming the command a person runs to fetch it, where the cache does not hold it whole.
+    /// </summary>
+    private WorkflowRemoteResolution CachedOnly(WorkflowRemoteSource source, WorkflowSourcesConfig? settings, string? recorded)
+    {
+        string commit;
+        var branch = false;
+        WorkflowCacheResolution? last = null;
+
+        if (recorded is not null)
+        {
+            commit = recorded;
+        }
+        else if (WorkflowRemoteSource.IsCommit(source.Ref))
+        {
+            commit = source.Ref;
+        }
+        else
+        {
+            Pin(source, WorkflowSourceRules.PinOf(settings));
+
+            last = _cache.LastResolved(source.Host, source.Owner, source.Repo, source.Directory, source.Ref)
+                ?? throw Unfetched(source, $"it holds no resolution of '{source.Ref}'");
+
+            if (last.Branch && WorkflowSourceRules.PinOf(settings) != WorkflowSourceRules.PinAny)
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"'{source.Spelled}' names the ref '{source.Ref}', which the workflow cache last resolved as a branch; workflowSources.pin is {WorkflowSourceRules.PinOf(settings)}, which takes a tag or a full commit SHA - a branch moves");
+            }
+
+            (commit, branch) = (last.Commit, last.Branch);
+        }
+
+        var entry = Found(source, commit) ?? throw Unfetched(source, $"it holds no entry for the commit '{commit}'");
+        var (cached, broken) = Whole(source, entry);
+
+        if (cached is null)
+        {
+            throw Unfetched(source, $"its files of the commit '{commit}' are not whole: {broken}");
+        }
+
+        if (last is not null)
+        {
+            _output?.Warn(Said, $"'{source.Spelled}' was resolved from the workflow cache alone, for a command an agent runs never reaches the forge: it stands at the commit {commit} the cache's newest resolution of '{source.Ref}' names, from {Day(last.ResolvedAt)}");
+        }
+
+        return cached with { Moving = branch };
+    }
+
+    /// <summary>The refusal of a resolution an agent's command would need the forge for.</summary>
+    private static HarnessException Unfetched(WorkflowRemoteSource source, string why)
+        => new(
+            HarnessExit.Refused,
+            $"'{source.Spelled}' is not in the workflow cache as a command an agent runs needs it ({why}): such a command never reaches the forge nor writes the cache, so a person runs '{ToolPackage.Command} {WorkflowValidationService.CommandName}' to fetch it; nothing was asked of the forge");
+
+    /// <summary>
+    /// The workflow at <paramref name="commit"/>, from the cache where it is held whole - read with no network, every
+    /// file of it hashed again - else proved the repository's own where <paramref name="proven"/> is not, fetched,
+    /// checked and cached.
+    /// </summary>
+    private async Task<WorkflowRemoteResolution> ReadAsync(Asked asked, string commit, bool proven, WorkflowCacheResolution? resolution)
+    {
+        var source = asked.Source;
+
+        if (Found(source, commit) is { } entry)
+        {
+            var (cached, broken) = Whole(source, entry);
+
+            if (cached is not null)
+            {
+                Touch(source, entry, resolution);
+
+                return cached;
+            }
+
+            _output?.Warn(Said, $"'{source.Spelled}': the workflow cache's entry for the commit {commit} is not whole ({broken}); its directory is fetched again whole");
+        }
+
+        if (!proven)
+        {
+            await ProveAsync(asked, commit).ConfigureAwait(false);
+        }
+
+        return await FetchAsync(asked, commit, resolution).ConfigureAwait(false);
+    }
+
+    /// <summary>The cache's entry for <paramref name="source"/>'s directory at <paramref name="commit"/>; null where it holds none, or one it could not read, which is said and fetched again.</summary>
+    private WorkflowCacheEntry? Found(WorkflowRemoteSource source, string commit)
+    {
+        try
+        {
+            return _cache.Find(source.Host, source.Owner, source.Repo, commit, source.Directory);
+        }
+        catch (HarnessException unread) when (unread.ExitCode == HarnessExit.ConfigInvalid)
+        {
+            _output?.Warn(Said, $"'{source.Spelled}': {unread.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The cached resolution of <paramref name="source"/> at its entry's commit, every file of the entry hashed again as
+    /// it is read; null, with which file is not whole, where one is not - a blob changed on disk, or gone.
+    /// </summary>
+    /// <exception cref="HarnessException">
+    /// The entry holds no file the source names (<see cref="HarnessExit.Refused"/>): the commit's directory holds none,
+    /// and fetching it again would hold none either; or the yml is not UTF-8 text (<see cref="HarnessExit.ConfigInvalid"/>).
+    /// </exception>
+    private (WorkflowRemoteResolution? Resolution, string? Broken) Whole(WorkflowRemoteSource source, WorkflowCacheEntry entry)
+    {
+        if (!entry.Files.Any(file => file.Path == source.File))
+        {
+            throw NoSuchFile(source, entry.Commit, entry.Files.Select(file => file.Path));
+        }
+
+        byte[]? definition = null;
+
+        foreach (var file in entry.Files)
+        {
+            try
+            {
+                var bytes = _cache.ReadBytes(entry, file.Path);
+
+                definition = file.Path == source.File ? bytes : definition;
+            }
+            catch (HarnessException broken)
+            {
+                return (null, broken.Message);
+            }
+        }
+
+        return (new WorkflowRemoteResolution(source, entry.Commit, entry, WorkflowCache.Text(definition!, $"'{source.Spelled}'")), null);
+    }
+
+    /// <summary>
+    /// Records that a run used <paramref name="entry"/> now, and the resolution that led to it; a cache that cannot be
+    /// written is warned of, and what was read stands.
+    /// </summary>
+    private void Touch(WorkflowRemoteSource source, WorkflowCacheEntry entry, WorkflowCacheResolution? resolution)
+    {
+        try
+        {
+            _cache.Touch(entry, resolution, _clock.GetUtcNow());
+        }
+        catch (HarnessException unwritten)
+        {
+            _output?.Warn(Said, $"'{source.Spelled}': {unwritten.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Proves <paramref name="commit"/>, named by its SHA, a commit of the named repository's own: one its default branch,
+    /// or a tag or branch the forge lists, reaches. GitHub serves a commit of any fork of a repository under the
+    /// repository's own name, so a SHA alone names nothing the allow list allowed.
+    /// </summary>
+    /// <exception cref="HarnessException">No branch or tag of the repository reaches it (<see cref="HarnessExit.Refused"/>).</exception>
+    private async Task ProveAsync(Asked asked, string commit)
+    {
+        var source = asked.Source;
+        var main = await RepositoryAsync(asked).ConfigureAwait(false);
+
+        if (await ReachesAsync(asked, main, commit).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        var refs = new List<(string Name, string Head)>();
+
+        foreach (var kind in new[] { "tags", "branches" })
+        {
+            var listed = await ApiAsync(asked, $"repos/{source.Owner}/{source.Repo}/{kind}?per_page=100", "--jq", ".[] | .name + \" \" + .commit.sha").ConfigureAwait(false) ?? string.Empty;
+
+            foreach (var line in listed.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var at = line.LastIndexOf(' ');
+
+                refs.Add(at > 0 ? (line[..at], line[(at + 1)..]) : throw Malformed(source, $"the {kind} of '{source.Owner}/{source.Repo}'", $"'{line}' names no ref and commit"));
+            }
+        }
+
+        if (refs.Any(listed => listed.Head == commit))
+        {
+            return;
+        }
+
+        foreach (var (name, _) in refs.Where(listed => listed.Name != main).Take(MostRefsCompared))
+        {
+            if (await ReachesAsync(asked, name, commit).ConfigureAwait(false))
+            {
+                return;
+            }
+        }
+
+        throw new HarnessException(
+            HarnessExit.Refused,
+            $"'{source.Spelled}' names the commit '{commit}', which no branch or tag of '{source.Owner}/{source.Repo}' reaches - its default branch '{main}', and the first {MostRefsCompared.ToString(CultureInfo.InvariantCulture)} of the tags and branches the forge lists, were compared: GitHub serves a commit of any fork of a repository under the repository's own name, and one that is not the repository's own is never run; name a tag of it, or a commit one of its branches or tags holds. Nothing was cached");
+    }
+
+    /// <summary>Whether <paramref name="name"/>, a branch or a tag of the repository, reaches <paramref name="commit"/>: the commit is it, or behind it.</summary>
+    private async Task<bool> ReachesAsync(Asked asked, string name, string commit)
+    {
+        var status = await ApiAsync(asked, $"repos/{asked.Source.Owner}/{asked.Source.Repo}/compare/{Escaped(name)}...{commit}", "--jq", ".status").ConfigureAwait(false);
+
+        return status?.Trim() is "behind" or "identical";
+    }
+
+    /// <summary>The repository's default branch, as the forge answers the repository's own record.</summary>
+    /// <exception cref="HarnessException">The repository is not there, or the credential cannot see it (<see cref="HarnessExit.Refused"/>).</exception>
+    private async Task<string> RepositoryAsync(Asked asked)
+    {
+        var source = asked.Source;
+        var answer = await ApiAsync(asked, $"repos/{source.Owner}/{source.Repo}").ConfigureAwait(false)
+            ?? throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{source.Spelled}' names the repository '{source.Owner}/{source.Repo}' on '{source.Host}', which the forge answers is not there: it is misspelt, or the credential gh reaches '{source.Host}' with cannot see it; nothing was cached");
+
+        return Read(source, $"the repository '{source.Owner}/{source.Repo}'", answer, node => Text(node, "default_branch"));
+    }
+
+    /// <summary>
+    /// The commit a tag's ref names: the object it points at, each tag object on the way peeled to what it points at in
+    /// turn, until a commit - an annotated tag's ref names its tag object, never the commit.
+    /// </summary>
+    private async Task<string> PeeledAsync(Asked asked, string answer, string what)
+    {
+        var source = asked.Source;
+        var (sha, type) = Peeled(source, answer, what);
+
+        for (var peels = 0; type == "tag"; peels++)
+        {
+            if (peels == MostPeels)
+            {
+                throw new HarnessException(HarnessExit.Refused, $"'{source.Spelled}': {what} names a tag of a tag {MostPeels.ToString(CultureInfo.InvariantCulture)} deep, past which none is peeled; nothing was cached");
+            }
+
+            var tag = await ApiAsync(asked, $"repos/{source.Owner}/{source.Repo}/git/tags/{sha}").ConfigureAwait(false)
+                ?? throw Malformed(source, what, $"the tag object '{sha}' it names is not there");
+
+            (sha, type) = Peeled(source, tag, what);
+        }
+
+        return type == "commit"
+            ? sha
+            : throw new HarnessException(HarnessExit.Refused, $"'{source.Spelled}': {what} names a {type}, '{sha}', and no commit; a workflow is read at a commit. Nothing was cached");
+    }
+
+    /// <summary>The object a ref's or a tag object's answer points at: its hash and its type.</summary>
+    private static (string Sha, string Type) Peeled(WorkflowRemoteSource source, string answer, string what)
+        => Read(source, what, answer, node =>
+        {
+            var target = node["object"] as JsonObject ?? throw new JsonException("it names no object");
+
+            return (Sha(target, "sha"), Text(target, "type"));
+        });
+
+    /// <summary>
+    /// The workflow's directory at <paramref name="commit"/>: the commit's tree walked to the directory's own, every path
+    /// under it held to the tree's rule - no symbolic link, no submodule, the listing whole - the file the use names among
+    /// them, every blob fetched as bytes and checked against the tree's hash of it, the whole bounded, and kept in the
+    /// cache only once every check holds, so a mismatch or a bound refuses with nothing cached.
+    /// </summary>
+    private async Task<WorkflowRemoteResolution> FetchAsync(Asked asked, string commit, WorkflowCacheResolution? resolution)
+    {
+        var source = asked.Source;
+        var repository = $"repos/{source.Owner}/{source.Repo}";
+
+        var commitAnswer = await ApiAsync(asked, $"{repository}/git/commits/{commit}").ConfigureAwait(false)
+            ?? throw new HarnessException(HarnessExit.Refused, $"'{source.Spelled}': '{source.Owner}/{source.Repo}' holds no commit '{commit}'; nothing was cached");
+
+        var tree = Read(source, $"the commit '{commit}'", commitAnswer, node =>
+            Sha(node, "sha") == commit
+                ? Sha(node["tree"] as JsonObject ?? throw new JsonException("it names no tree"), "sha")
+                : throw new JsonException($"it is the commit '{Sha(node, "sha")}'"));
+
+        // The commit's tree, walked to the workflow's directory a part at a time: the directory's own listing is whole
+        // where the repository's would be cut short, and is the directory at this commit and no other.
+        foreach (var part in source.Directory.Split('/'))
+        {
+            var listing = Listing(source, $"the tree '{tree}'", await ApiAsync(asked, $"{repository}/git/trees/{tree}").ConfigureAwait(false));
+
+            tree = listing.FirstOrDefault(item => item.Path == part && item.Type == "tree") is { Sha.Length: > 0 } found
+                ? found.Sha
+                : throw new HarnessException(HarnessExit.Refused, $"'{source.Spelled}' resolved to the commit '{commit}', whose tree holds no directory '{source.Directory}'; nothing was cached");
+        }
+
+        var items = Listing(source, $"the directory '{source.Directory}'", await ApiAsync(asked, $"{repository}/git/trees/{tree}?recursive=1").ConfigureAwait(false));
+
+        if (WorkflowCache.TreePathProblems([.. items.Select(item => item.Path)]) is { Count: > 0 } paths)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{source.Spelled}' resolved to the commit '{commit}', whose directory '{source.Directory}' holds a path no workflow's may: {string.Join("; ", paths)}. Nothing was fetched");
+        }
+
+        var blobs = new List<TreeItem>();
+
+        foreach (var item in items)
+        {
+            switch (item.Type, item.Mode)
+            {
+                case ("tree", _):
+                    continue;
+                case ("blob", "120000"):
+                    throw new HarnessException(HarnessExit.Refused, $"'{source.Spelled}' resolved to the commit '{commit}', whose '{source.Directory}/{item.Path}' is a symbolic link: a workflow's files are its directory's own, and a link is followed nowhere. Nothing was fetched");
+                case ("commit", _):
+                    throw new HarnessException(HarnessExit.Refused, $"'{source.Spelled}' resolved to the commit '{commit}', whose '{source.Directory}/{item.Path}' is a submodule: a workflow's files are its directory's own, and another repository's are not fetched with them. Nothing was fetched");
+                case ("blob", var mode) when WorkflowCache.FileModes.Contains(mode, StringComparer.Ordinal) && item.Size is not null:
+                    blobs.Add(item);
+                    continue;
+                default:
+                    throw Malformed(source, $"the directory '{source.Directory}'", $"'{item.Path}' is a {item.Type} of mode {item.Mode}{(item.Size is null ? " with no size" : string.Empty)}, which is no file a workflow's directory holds");
+            }
+        }
+
+        var file = source.File[(source.Directory.Length + 1)..];
+
+        if (!blobs.Any(blob => blob.Path == file))
+        {
+            throw NoSuchFile(source, commit, blobs.Select(blob => $"{source.Directory}/{blob.Path}"));
         }
 
         if (blobs.Count > WorkflowCache.MostFiles)
         {
             throw new HarnessException(
                 HarnessExit.Refused,
-                $"'{source.Spelled}' resolved to a directory of {blobs.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} files, past the fetch's bound of {WorkflowCache.MostFiles.ToString(System.Globalization.CultureInfo.InvariantCulture)}; nothing was fetched");
+                $"'{source.Spelled}' resolved to a directory of {blobs.Count.ToString(CultureInfo.InvariantCulture)} files, past the fetch's bound of {WorkflowCache.MostFiles.ToString(CultureInfo.InvariantCulture)}; nothing was fetched");
         }
 
-        var bytes = blobs.Sum(blob => blob.Size);
+        var bytes = blobs.Sum(blob => blob.Size!.Value);
 
         if (bytes > WorkflowCache.MostBytes)
         {
             throw new HarnessException(
                 HarnessExit.Refused,
-                $"'{source.Spelled}' resolved to a directory of {bytes.ToString(System.Globalization.CultureInfo.InvariantCulture)} bytes, past the fetch's bound of {WorkflowCache.MostBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)}; nothing was fetched");
+                $"'{source.Spelled}' resolved to a directory of {bytes.ToString(CultureInfo.InvariantCulture)} bytes, past the fetch's bound of {WorkflowCache.MostBytes.ToString(CultureInfo.InvariantCulture)}; nothing was fetched");
         }
 
-        var contents = new Dictionary<string, string>(StringComparer.Ordinal);
+        var contents = new Dictionary<string, byte[]>(StringComparer.Ordinal);
 
         foreach (var blob in blobs)
         {
-            var fetched = JsonNode.Parse(await ApiAsync(
-                source,
-                settings,
-                workingDirectory,
-                environment,
-                [$"repos/{source.Owner}/{source.Repo}/git/blobs/{blob.Blob}"],
-                cancellationToken).ConfigureAwait(false) ?? throw NotRead(source))!.AsObject();
+            var path = $"{source.Directory}/{blob.Path}";
+            var answer = await ApiAsync(asked, $"{repository}/git/blobs/{blob.Sha}").ConfigureAwait(false)
+                ?? throw Malformed(source, $"the blob '{blob.Sha}' of '{path}'", "it is not there");
+            var content = Read(source, $"the blob '{blob.Sha}' of '{path}'", answer, node => Text(node, "encoding") switch
+            {
+                "base64" => Convert.FromBase64String(Text(node, "content").Replace("\n", string.Empty, StringComparison.Ordinal)),
+                "utf-8" => System.Text.Encoding.UTF8.GetBytes(Text(node, "content")),
+                var other => throw new JsonException($"its encoding is '{other}'"),
+            });
 
-            var encoding = fetched["encoding"]?.GetValue<string>();
-            var content = fetched["content"]?.GetValue<string>() ?? string.Empty;
-            var text = encoding == "base64" ? FromBase64(content) : content;
-
-            if (WorkflowCache.BlobSha(text) != blob.Blob)
+            if (WorkflowCache.BlobSha(content) != blob.Sha)
             {
                 throw new HarnessException(
                     HarnessExit.Refused,
-                    $"'{source.Spelled}': the blob '{blob.Blob}' of '{blob.Path}' does not hash to what the commit's tree says of it; nothing was cached, and the fetch is made again");
+                    $"'{source.Spelled}': the blob '{blob.Sha}' of '{path}' does not hash to what the commit's tree says of it; nothing was cached");
             }
 
-            contents[blob.Path] = text;
+            contents[path] = content;
         }
 
+        var now = _clock.GetUtcNow();
         var written = new WorkflowCacheEntry(
             source.Host,
             source.Owner,
             source.Repo,
             commit,
             source.Directory,
-            DateTimeOffset.UtcNow,
-            DateTimeOffset.UtcNow,
-            WorkflowRemoteSource.IsCommit(source.Ref) ? null : source.Ref,
-            [.. blobs.Select(blob => new WorkflowCacheFile(blob.Path, blob.Blob, blob.Mode))]);
+            now,
+            now,
+            [.. blobs.Select(blob => new WorkflowCacheFile($"{source.Directory}/{blob.Path}", blob.Sha, blob.Mode))]);
 
-        _cache.Write(written, contents);
+        // The yml is read as text before anything is cached, so a definition that is not text caches nothing.
+        var definition = WorkflowCache.Text(contents[source.File], $"'{source.Spelled}'");
 
-        return new WorkflowRemoteResolution(source, commit, written, contents[source.File]);
+        _cache.Write(written, contents, resolution);
+
+        return new WorkflowRemoteResolution(source, commit, written, definition);
     }
 
-    /// <summary>The cached resolution of <paramref name="source"/> at its entry's commit, its files hashed again as they are read; null where the cache's files are not whole.</summary>
-    private WorkflowRemoteResolution? Cached(WorkflowRemoteSource source, WorkflowCacheEntry entry)
+    /// <summary>The refusal of a use whose file the commit's directory does not hold, naming what it holds.</summary>
+    private static HarnessException NoSuchFile(WorkflowRemoteSource source, string commit, IEnumerable<string> held)
     {
-        try
-        {
-            var definition = _cache.ReadText(entry, source.File) ?? throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                $"'{source.Spelled}': the cache's entry for '{source.Repository}' at '{entry.Commit}' names no '{source.File}'");
+        var workflows = held.Where(path => path.EndsWith(HarnessLayout.WorkflowFileExtension, StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
 
-            return new WorkflowRemoteResolution(source, entry.Commit, entry, definition);
-        }
-        catch (HarnessException)
-        {
-            // A cache file changed on disk is refused, and the directory fetched again.
-            return null;
-        }
+        return new HarnessException(
+            HarnessExit.Refused,
+            $"'{source.Spelled}' names '{source.File}', which the directory '{source.Directory}' does not hold at the commit '{commit}'"
+                + (workflows.Count == 0 ? ": it holds no workflow file" : $": its workflow files are {string.Join(", ", workflows.Select(path => $"'{path}'"))}")
+                + "; nothing was fetched");
     }
 
-    /// <summary>One SHA as <c>gh api --jq</c> answers it - a JSON string, quoted - trimmed to its hex, lower case.</summary>
-    private static string Sha(string answered) => answered.Trim().Trim('"').ToLowerInvariant();
+    /// <summary>One entry of a tree's listing: its path under the listed tree, its type, mode and hash, and its size where it is a blob.</summary>
+    private sealed record TreeItem(string Path, string Type, string Mode, string Sha, long? Size);
 
-    /// <summary>Base64 as the forge writes it: padded, with the newlines its JSON holds them over stripped.</summary>
-    private static string FromBase64(string content)
-        => System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(content.Replace("\n", string.Empty, StringComparison.Ordinal)));
+    /// <summary>Every entry of a tree's listing, refused where the listing was cut short - a part of a directory is no directory.</summary>
+    private static List<TreeItem> Listing(WorkflowRemoteSource source, string what, string? answer)
+        => Read(source, what, answer ?? throw Malformed(source, what, "it is not there"), node =>
+        {
+            if (node["truncated"] is JsonValue truncated && truncated.TryGetValue<bool>(out var cut) && cut)
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"'{source.Spelled}': the forge listed {what} cut short, past what one answer of it holds; a part of a directory is not fetched as the directory. Nothing was fetched");
+            }
+
+            return (node["tree"] as JsonArray ?? throw new JsonException("it holds no tree"))
+                .Select(item => item as JsonObject ?? throw new JsonException("an entry of it is no object"))
+                .Select(item => new TreeItem(
+                    Text(item, "path"),
+                    Text(item, "type"),
+                    Text(item, "mode"),
+                    Sha(item, "sha"),
+                    item["size"] is JsonValue size ? size.GetValue<long>() : null))
+                .ToList();
+        });
 
     /// <summary>
-    /// One <c>gh api</c> call, its answer whole, or null where the forge answered that the thing asked is not there -
-    /// a missing tag, which the next call tells from a missing repository. The host's credential, where one is named,
-    /// is handed to the call as its environment and written nowhere else.
+    /// What <paramref name="read"/> takes from <paramref name="answer"/>, parsed as JSON: any shape it does not read as
+    /// refused naming what was asked and why, never an exception of the runtime's.
     /// </summary>
-    private async Task<string?> ApiAsync(
-        WorkflowRemoteSource source,
-        WorkflowSourcesConfig? settings,
-        string workingDirectory,
-        Func<string, string?> environment,
-        IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
+    private static T Read<T>(WorkflowRemoteSource source, string what, string answer, Func<JsonObject, T> read)
     {
-        var with = new Dictionary<string, string?>(StringComparer.Ordinal);
-
-        if (!source.Host.Equals(WorkflowSourceRules.GitHub, StringComparison.OrdinalIgnoreCase)
-            && (settings?.Hosts ?? new Dictionary<string, WorkflowHostConfig>(StringComparer.OrdinalIgnoreCase)).TryGetValue(source.Host, out var host)
-            && host?.Credential is { From: "env", Name: { Length: > 0 } name })
-        {
-            with["GH_TOKEN"] = environment(name);
-        }
-
-        var forwarded = source.Host.Equals(WorkflowSourceRules.GitHub, StringComparison.OrdinalIgnoreCase)
-            ? arguments
-            : ["--hostname", source.Host, .. arguments];
-
         try
         {
-            var answer = await _gh.RunAsync(
-                workingDirectory,
-                ["api", .. forwarded],
-                $"so '{source.Spelled}' was not resolved",
-                null,
-                cancellationToken,
-                withEnvironment: with).ConfigureAwait(false);
-
-            return answer.Trim().Length == 0 ? null : answer;
+            return read(JsonNode.Parse(answer) as JsonObject ?? throw new JsonException("it is no JSON object"));
         }
-        catch (HarnessException failed) when (failed.Message.Contains("HTTP 404", StringComparison.Ordinal))
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException or FormatException)
         {
-            return null;
+            throw Malformed(source, what, exception.Message.TrimEnd('.'));
         }
     }
 
-    private static HarnessException NotRead(WorkflowRemoteSource source)
+    /// <summary>The string <paramref name="name"/> of <paramref name="node"/>.</summary>
+    private static string Text(JsonObject node, string name)
+        => node[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : throw new JsonException($"its '{name}' is no string");
+
+    /// <summary>The git hash <paramref name="name"/> of <paramref name="node"/>: 40 hex characters, lower case.</summary>
+    private static string Sha(JsonObject node, string name)
+        => Text(node, name) is var sha && WorkflowRemoteSource.IsCommit(sha) ? sha : throw new JsonException($"its '{name}' is no git hash of 40 hex characters");
+
+    private static HarnessException Malformed(WorkflowRemoteSource source, string what, string why)
         => new(
             HarnessExit.CommandFailed,
-            $"'{source.Spelled}' could not be resolved: the forge answered nothing that reads for it, so no workflow was fetched");
+            $"'{source.Spelled}' could not be resolved: the forge answered {what} with what does not read as one ({why}); nothing was cached");
+
+    /// <summary>A ref put into an address a part at a time, each escaped, so no character of it is read as the address's own.</summary>
+    private static string Escaped(string @ref)
+        => string.Join('/', @ref.Split('/').Select(Uri.EscapeDataString));
+
+    private static string Day(DateTimeOffset when) => when.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// One <c>gh api</c> call to the source's host - named by <c>--hostname</c> always, and <c>GH_HOST</c> taken away, so
+    /// no call reaches another - its answer whole, or null where the forge answered that the thing asked is not there.
+    /// A host beyond github.com is given the one credential its configuration names, as the one variable gh reads for
+    /// it, and none of the machine's tokens; the credential is written nowhere else. A forge that answered with a
+    /// refusal is refused naming what it said; one that could not be reached is raised as the call raised it
+    /// (<see cref="GhProcess.Unreached"/>).
+    /// </summary>
+    private async Task<string?> ApiAsync(Asked asked, string path, params string[] more)
+    {
+        var source = asked.Source;
+        string? token = null;
+
+        if (!source.Host.Equals(WorkflowSourceRules.GitHub, StringComparison.OrdinalIgnoreCase))
+        {
+            var variable = WorkflowSourceRules.CredentialOf(asked.Settings, source.Host)
+                ?? throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"'{source.Spelled}' names the host '{source.Host}', for which workflowSources.hosts names no credential: a host beyond github.com is reached with the one credential its entry names, and never with the machine's own tokens; nothing was asked of it");
+
+            token = asked.Environment(variable) is { Length: > 0 } value
+                ? value
+                : throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"'{source.Spelled}' names the host '{source.Host}', whose credential is the environment variable '{variable}', which is not set in this process; nothing was asked of the host, and no other token is given to it");
+        }
+
+        try
+        {
+            return await _gh.RunAsync(
+                asked.WorkingDirectory,
+                ["api", "--hostname", source.Host, path, .. more],
+                $"so '{source.Spelled}' was not resolved",
+                null,
+                asked.CancellationToken,
+                withEnvironment: GhProcess.HostEnvironment(source.Host, token)).ConfigureAwait(false);
+        }
+        catch (HarnessException failed) when (failed.ExitCode == HarnessExit.CommandFailed && failed.Message.Contains("(HTTP 404)", StringComparison.Ordinal))
+        {
+            return null;
+        }
+        catch (HarnessException failed) when (failed.ExitCode == HarnessExit.CommandFailed && !GhProcess.Unreached(failed))
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{source.Spelled}' could not be resolved, the forge refusing what was asked: {failed.Message.TrimEnd('.')}. Nothing stands in for an answer the forge gave",
+                failed);
+        }
+    }
+
+    /// <summary>What one resolution asks of the forge with: the source, the configuration, where gh runs, the environment and the stop.</summary>
+    private sealed record Asked(
+        WorkflowRemoteSource Source,
+        WorkflowSourcesConfig? Settings,
+        string WorkingDirectory,
+        Func<string, string?> Environment,
+        CancellationToken CancellationToken);
 }
