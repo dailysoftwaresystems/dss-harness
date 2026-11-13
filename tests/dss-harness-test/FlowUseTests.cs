@@ -1088,12 +1088,14 @@ public sealed class FlowUseTests
 
     /// <summary>
     /// The value a use fills a step-kind input with is held to what the policy it reads is: one filled
-    /// <c>recover</c>, on a step of the recovery, calls the recovery from inside itself and is refused.
+    /// <c>recover</c>, on a step of the recovery whose failure reaches that recovery - the used workflow declaring none
+    /// of its own - calls the recovery from inside itself and is refused.
     /// </summary>
     [Fact]
     public void AFailToFilledWithRecover_InTheRecoveryIsRefused()
     {
-        var pipeline = Swap(Pipeline, "    onFailure: recover\n", "    onFailure: '{input.failTo}'\n");
+        var swapped = Swap(Pipeline, "    onFailure: recover\n", "    onFailure: '{input.failTo}'\n");
+        var pipeline = swapped[..swapped.IndexOf("\nrecover:", StringComparison.Ordinal)];
 
         Assert.Equal(
             ["step 'recover.items.verify', which reads its onFailure from '{input.failTo}', filled with 'recover' by 'recover.items', is a step of the recovery and gives its failure to the recovery, and so calls itself; a step never does - one that is to run again after it failed says retries"],
@@ -1166,9 +1168,13 @@ public sealed class FlowUseTests
         Assert.True(own.Amends);
         Assert.Equal(["budget", "limits", "answers"], own.Declared);
 
-        // And the amend it declares is refused, never silently dropped.
+        // And the amend it declares is refused, never silently dropped; what it applies is held to the run's own rules
+        // (V66), so an answer to a kind none of its steps raises is refused as the run's own would be.
         Assert.Equal(
-            ["step 'items' says useParentLimits: false on the workflow 'flow/pipeline' it uses, which declares an amend; an amend is a run's own - a request amended, or an answer changed, while it works - and no step of a run applies one"],
+            [
+                "step 'items' says useParentLimits: false on the workflow 'flow/pipeline' it uses, which declares an amend; an amend is a run's own - a request amended, or an answer changed, while it works - and no step of a run applies one",
+                "the workflow 'flow/pipeline' governing step 'items' (useParentLimits: false) answers 'loopBound', which no step in it raises; the answer would be read by nothing",
+            ],
             WorkflowValidator.Validate(governed, hasCommitTemplate: false));
 
         // A step that is no use saying the key is refused where the file is read.

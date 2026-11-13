@@ -1789,13 +1789,21 @@ which its steps read as `{input.<name>}` in their `onFailure` or `then`. The fil
 with may be read the same way - one whole input of the kind `file` naming its `prompt` - so one
 pipeline is asked with a different prompt by each workflow that uses it, and a step may say a
 `when` that reads one input of its workflow alone, its own gate, held off where a use fills that
-input so. The used workflow runs
+input so - only where the use's `with` value, or the input's default, closes the gate as written
+is the step free of waiting for the agent it works in, and one the use opens is held to it as any
+step is. An input the use leaves to its default is read as a `with` value is, where the use sits;
+a step input it fills with no name is refused where it is read, and a policy filled with `recover`
+is held to what `recover` written out is - a reasoning step is never recovered, and a recovery
+never calls itself. The used workflow runs
 inside the run as a group's members do, its steps named under the use; its files are read in its
 own directory, its declared outputs are the step's own once it ends, and its recovery takes a
-failure inside it before the caller's handling of the step. Its steps read only its inputs, its
-params and its own steps - every fact of the caller they need comes through an input - and its
-budget, reporter, `pushCheckpoints` and `recommendations` are never applied, nor - unless the use
-says `useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`, which
+failure inside it before the caller's handling of the step - the nearest recovery declared around
+the failing step, however many uses out, its `onFailure` pause or stop as the run's own is. Its
+steps read only its inputs, its params and its own steps - never the caller's work item, its
+iteration before or what raised a handler of the caller, and a pull request's `base` inside it
+reads no input; every fact of the caller they need comes through an input - and its budget,
+reporter, `pushCheckpoints` and `recommendations` are never applied, nor - unless the use says
+`useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`, which
 `validate-workflow` says beside the fingerprint of what each use read. With `useParentLimits: false`
 the workflow's own settings govern its steps: each key it declares replacing the
 caller's for them (its limits and `maxInstances` gating its steps alone, counted
@@ -1804,9 +1812,12 @@ backoff its steps fall back to; the handoff bound of its paused reasoning steps;
 consulted for its steps' questions before the run's) and each key it declares none for staying
 the caller's, for a use cannot widen a run's limits by declaring nothing. Its advisor serves
 its steps' questions - its files read in its own directory - and the run's one graph takes the
-shape it declares where the run's own workflow says none. Its budget and reporter it carries,
-applied by nothing yet: the run's own budget counts its steps, and the run's own reporter words
-them. An amend is refused
+shape it declares where the run's own workflow says none. Each key it applies is held to every
+rule the run's own key of that name is - its limits, its `maxInstances`, its advisor, its answers,
+its graph's shape - for a use cannot declare what a run could not, and two such uses that shape
+the graph differently are refused where the run's own workflow declares no shape, for a run has
+one graph. Its budget and reporter it carries, applied by nothing yet: the run's own budget counts
+its steps, and the run's own reporter words them. An amend is refused
 there, said at validation, for an amend is a run's own, and `preapproved` is a run's input
 alone, whatever the key says. A workflow file that uses itself, directly or through others, is
 refused with the circle of the files that close it, steps nest at most ten deep in all - a used
@@ -1892,6 +1903,9 @@ loop's `until`, `blocking` and bound are read at when it ends, instead of at the
 what follows that step starts only where the loop goes on, and a loop that ends at its bound
 leaves what its deciding step found, none of it acted on - the shipped review loop decides at its
 `review`, so its last rework is always reviewed and its leftover is what its last review found.
+Its `until`, `blocking` and `leftover` read of the iteration only the deciding step and the steps it
+waits for, which have ended there, and every other step of the iteration runs before it or after
+it, so none is left running when the loop ends at its decision.
 What only a prompt reads stands where its agent is asked it:
 `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote,
 read live each time it is given - `{text.<name>}` beside it, a workflow's texts, and
