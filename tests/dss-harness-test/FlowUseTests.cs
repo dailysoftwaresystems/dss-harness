@@ -112,6 +112,79 @@ public sealed class FlowUseTests
     }
 
     /// <summary>
+    /// The texts a used workflow declares are carried to its use and read inside it by their name: a step of the
+    /// called workflow's prompt reads <c>{text.&lt;name&gt;}</c> as the called workflow declares it first, and a name
+    /// only the caller declares reaches its steps through the use, as the run's own texts do; a name neither declares
+    /// is refused inside it, naming the called workflow.
+    /// </summary>
+    [Fact]
+    public void TheTextsAUsedWorkflowDeclares_AreItsStepsOwnInsideIt()
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["flow/pipeline/prompts/implement.md"] = "Close the class:\n{text.closure}\n",
+            ["flow/pipeline/prompts/shared.md"] = "The caller's bar:\n{text.barred}\n",
+            ["flow/pipeline/prompts/absent.md"] = "Nothing declares this:\n{text.nope}\n",
+            ["flow/pipeline/texts/closure.md"] = "the pipeline's own universe\n",
+        };
+
+        var caller = """
+            name: flow
+            texts:
+              barred: texts/barred.md
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: the work
+            """;
+
+        string? Read(string path)
+            => files.TryGetValue(path, out var text) ? text : null;
+
+        // The called workflow's own text is carried to its use; a name only the caller declares reaches its steps
+        // through it, for the run's texts are what a use declares none for - as its inputs are not.
+        var declared = WorkflowResolver.Resolve(
+            Parse(caller),
+            "flow",
+            path => path == "flow/pipeline/pipeline.yml"
+                ? Swap(Pipeline, "prompt: prompts/implement.md", "prompt: prompts/shared.md")
+                : Read(path));
+
+        Assert.Empty(declared.Problems);
+        Assert.Null(declared.Definition.Steps[0].Use!.Texts);
+        Assert.Empty(WorkflowValidator.Validate(declared.Definition, hasCommitTemplate: false, Files));
+
+        var own = WorkflowResolver.Resolve(
+            Parse(caller),
+            "flow",
+            path => path == "flow/pipeline/pipeline.yml"
+                ? Swap(Pipeline, "name: pipeline\n", "name: pipeline\ntexts:\n  closure: texts/closure.md\n")
+                : Read(path));
+
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["closure"] = "texts/closure.md" },
+            own.Definition.Steps[0].Use!.Texts);
+        Assert.Empty(WorkflowValidator.Validate(own.Definition, hasCommitTemplate: false, Files));
+
+        // A name neither the called workflow nor the run declares is refused inside the called one, naming it.
+        var absent = WorkflowResolver.Resolve(
+            Parse(caller),
+            "flow",
+            path => path == "flow/pipeline/pipeline.yml"
+                ? Swap(Pipeline, "prompt: prompts/implement.md", "prompt: prompts/absent.md")
+                : Read(path));
+
+        Assert.Equal(
+            ["step 'items.implement' prompt 'prompts/absent.md' line 2 reads 'text.nope', and the workflow 'flow/pipeline' declares no text 'nope'"],
+            WorkflowValidator.Validate(absent.Definition, hasCommitTemplate: false, Files));
+        return;
+
+        string? Files(string path, string? owner)
+            => owner is null ? Read(path) : Read($"flow/pipeline/{path}");
+    }
+
+    /// <summary>
     /// WF1, the with values: a <c>value</c> is read in the use's scope - the item of a forEach among what it may read -
     /// a <c>text</c> is filled per item, and the called workflow's steps read them as <c>input.&lt;name&gt;</c>; its
     /// params are its own defaults, never the calling run's.

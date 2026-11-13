@@ -46,6 +46,14 @@ public static class WorkflowFiles
             named.Add(new Named(definition.Recommendations, "the bar for recommendations", IsSchema: false));
         }
 
+        if (definition.Texts is { } texts)
+        {
+            foreach (var (name, file) in texts)
+            {
+                named.Add(new Named(file, $"the text '{name}'", IsSchema: false));
+            }
+        }
+
         if (definition.Advisor is { } advisor)
         {
             named.AddRange(AgentAndPrompt(advisor.Agent, advisor.Prompt, "the advisor"));
@@ -175,6 +183,12 @@ public static class WorkflowFiles
                     {
                         files.Add(Under(use.Name, filled));
                     }
+                }
+
+                // The texts of the used workflow are files of its own directory, as every file a step of it names is.
+                foreach (var file in use.Texts?.Values ?? [])
+                {
+                    files.Add(Under(use.Name, file));
                 }
             }
         }

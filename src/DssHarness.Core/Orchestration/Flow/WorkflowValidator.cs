@@ -738,6 +738,35 @@ public static class WorkflowValidator
             return null;
         }
 
+        /// <summary>
+        /// The texts that declare the name <paramref name="named"/> for a step: the nearest use around it whose called
+        /// workflow declares it, and else the run's own where the run does. Where neither does, the owner to name in
+        /// the refusal: the nearest use around the step - the world it reads in - or the run.
+        /// </summary>
+        /// <param name="entry">The step reading <c>{text.&lt;named&gt;}</c>.</param>
+        /// <param name="named">The text's name.</param>
+        private (string? Owner, IReadOnlyDictionary<string, string>? Texts) TextsFor(Entry entry, string named)
+        {
+            string? nearest = null;
+
+            for (var at = entry.Parent; at is not null; at = at.Parent)
+            {
+                if (at.Step.Use is not { } use)
+                {
+                    continue;
+                }
+
+                nearest ??= use.Name;
+
+                if (use.Texts is { } own && own.ContainsKey(named))
+                {
+                    return (use.Name, own);
+                }
+            }
+
+            return _definition.Texts is { } texts && texts.ContainsKey(named) ? (null, texts) : (nearest, null);
+        }
+
         /// <summary>Checks every step that uses a workflow: the values it fills the workflow's inputs with, read as each input's kind declares.</summary>
         private void Uses()
         {
@@ -1200,6 +1229,21 @@ public static class WorkflowValidator
                 if (repeat.BlockersUnbounded && _definition.Budget is null)
                 {
                     _problems.Add($"{where}: repeat.blockersLimitRounds is false and the workflow has no budget: nothing would bound the loop");
+                }
+
+                if (repeat.DecideAfter is { } decide)
+                {
+                    // The deciding step is a direct step of the repeated group, one the schedule draws in its course:
+                    // the loop reads its decision at that step's ending, so a step that never ends in the course of an
+                    // iteration - a handler, a step raised by an issue, an always step - would leave it undecided.
+                    if (entry.Step.Steps.FirstOrDefault(member => string.Equals(member.Name, decide, StringComparison.Ordinal)) is not { } decider)
+                    {
+                        _problems.Add($"{where} decides after '{decide}', which is no step of the group it repeats");
+                    }
+                    else if (decider.On is not null || decider.Raised is not null || decider.Always == true)
+                    {
+                        _problems.Add($"{where} decides after '{decide}', which never runs in the course of an iteration - {(decider.On is not null ? "a handler" : decider.Raised is not null ? "a step raised by an issue" : "an always step")} - so the loop would read its decision nowhere; name a step the schedule draws");
+                    }
                 }
             }
 
@@ -2211,6 +2255,32 @@ public static class WorkflowValidator
 
                     return;
 
+                case "text":
+                {
+                    if (PromptAloneUnread(entry, read, readIn) is { } alone)
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}': {alone}");
+                        return;
+                    }
+
+                    // A text is named by one segment alone - {text.<name>} - and the name is one the workflow that
+                    // reads it declares: the nearest use around the reading step that declares it, and else the run.
+                    if (read.Names is not ["text", var named])
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}', and a text is read by its name alone: {{text.<name>}} with nothing under it");
+                        return;
+                    }
+
+                    var (owner, texts) = TextsFor(entry, named);
+
+                    if (texts is null)
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}', and the workflow '{owner ?? _definition.Name}' declares no text '{named}'");
+                    }
+
+                    return;
+                }
+
                 case "piece":
                     PieceRead(entry, read, what);
                     return;
@@ -2609,6 +2679,7 @@ public static class WorkflowValidator
         {
             // V43.
             ["recommendations"] = "the repository's bar for a recommendation is text for an agent, and only a reason step's prompt and the advisor's read it",
+            ["text"] = "a workflow's texts are prose for an agent, and only a reason step's prompt and the advisor's read them",
             ["question"] = "only the advisor's prompt reads a question",
 
             // V45.
@@ -2632,6 +2703,7 @@ public static class WorkflowValidator
             => (read.Root, readIn) switch
             {
                 ("recommendations", ReadIn.StepPrompt or ReadIn.AdvisorPrompt) => null,
+                ("text", ReadIn.StepPrompt or ReadIn.AdvisorPrompt) => null,
                 ("question", ReadIn.AdvisorPrompt) => null,
                 ("status", ReadIn.AskPrompt) => null,
                 ("status", ReadIn.StatusPrompt) => read.Names is [_, "question", ..] ? NoStatusQuestion : null,
@@ -3843,6 +3915,11 @@ public static class WorkflowValidator
 
                 case "recommendations":
                     return said.Walked(JsonSchemaSubset.Reading.Of("string"), root, steps, "the bar for a recommendation");
+
+                case "text":
+                    return steps is [{ Key: { } named }, ..]
+                        ? said.Walked(JsonSchemaSubset.Reading.Of("string"), $"text.{named}", steps.Skip(1), $"the text '{named}'")
+                        : JsonSchemaSubset.Reading.Anything;
 
                 case var fact when WorkflowExpressions.RunFacts.Contains(fact, StringComparer.Ordinal):
                     if (!template)

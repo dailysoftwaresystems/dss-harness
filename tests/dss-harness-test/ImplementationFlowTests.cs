@@ -1861,9 +1861,10 @@ public sealed class ImplementationFlowTests
     }
 
     /// <summary>
-    /// A review that still finds a low finding after three rounds ends the loop: nobody is asked - the bound is
-    /// accepted by the flow's own configuration, the answer recorded as the configuration's - and what the loop left
-    /// is kept in its record, named in the run's report and given to the scribe that writes the handoff.
+    /// A review that still finds a low finding after three rounds ends the loop, deciding where its review ended
+    /// (decideAfter): nobody is asked - nothing blocking stands, so the bound is not reached - the rework of the third
+    /// round never runs, for the loop ended before it started, and what the review found is kept in its record, named
+    /// in the run's report and given to the scribe that writes the handoff.
     /// </summary>
     [Fact]
     public async Task ALowFindingTheThirdRoundStillFinds_EndsTheLoop_Unasked_LeftInTheRecordAndGivenToTheScribe()
@@ -1882,10 +1883,10 @@ public sealed class ImplementationFlowTests
         Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
         Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
 
-        // Three rounds of review, each reworking the finding; the loop ended at its rounds with no question asked -
-        // nothing blocking stands, so the bound is not reached and nobody is asked.
+        // Three rounds of review, the first two reworking their finding; the third ended the loop where its review
+        // stood, so its rework never ran - the low finding it found is what the loop left, none of it acted on.
         Assert.Equal(3, kit.Agents.Of("reviewer-correctness").Count);
-        Assert.Equal(4, kit.Agents.Of("implementer").Count);
+        Assert.Equal(3, kit.Agents.Of("implementer").Count);
 
         var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
 
@@ -1905,8 +1906,9 @@ public sealed class ImplementationFlowTests
 
     /// <summary>
     /// A finding the loop counts - critical, high or medium, in production code or out of it - keeps the loop going
-    /// past its three rounds to the further three its blocking holds for; at the sixth the configuration accepts the
-    /// bound, and what is left is said in the record and to the scribe, which is told to file it in the run's backlog.
+    /// past its three rounds to the further three its blocking holds for; at the sixth, deciding where its review
+    /// ended (decideAfter), the configuration accepts the bound - the sixth round's rework never runs - and what the
+    /// sixth review found is said in the record and to the scribe, which is told to file it in the run's backlog.
     /// </summary>
     [Fact]
     public async Task ABlockingFindingStandsPastThreeRoundsToSix_ThenTheBoundIsAcceptedByTheConfiguration()
@@ -1930,9 +1932,10 @@ public sealed class ImplementationFlowTests
 
         Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
 
-        // Six rounds, one rework each, the bound reached once - at the sixth, not asked of a person at the third.
+        // Six rounds, the first five reworking their finding; the sixth ended the loop where its review stood - the
+        // bound read there, not at the iteration's end - so the sixth rework never ran.
         Assert.Equal(6, kit.Agents.Of("reviewer-correctness").Count);
-        Assert.Equal(7, kit.Agents.Of("implementer").Count);
+        Assert.Equal(6, kit.Agents.Of("implementer").Count);
 
         var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
 

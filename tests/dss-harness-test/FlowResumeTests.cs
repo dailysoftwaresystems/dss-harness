@@ -90,6 +90,77 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// A workflow's texts are read in a prompt by their name - <c>{text.&lt;name&gt;}</c> - as the bar is, live each
+    /// time one is given: the file the workflow declares, in its own directory; a name it declares none for reads
+    /// nothing, saying why.
+    /// </summary>
+    [Fact]
+    public async Task AWorkflowsText_IsReadInAPromptByItsName()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            texts:
+              closure: texts/closure.md
+            steps:
+              - name: first
+                type: pause
+                question: '{text.closure}'
+                options: [approve, revise]
+              - name: second
+                type: pause
+                dependsOn: [first]
+                question: '{text.closure}'
+                options: [approve, revise]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var closure = Path.Combine(temp.Path, ".harness-config", "workflows", "flow", "texts", "closure.md");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(closure)!);
+        File.WriteAllText(closure, "formats x targets, both directions");
+
+        string ReadText(string named)
+            => new WorkflowNamedFiles(harness.FileSystem, harness.Platform.PathComparison)
+                .ReadText(new HarnessLayout(temp.Path, temp.Path), "flow", named, "a workflow file");
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records, workflowFile: (_, named) => ReadText(named));
+            _ = coordinator.RunAsync(Token);
+
+            var first = coordinator.OpenQuestions.Single();
+
+            Assert.Equal("formats x targets, both directions", first.Problem);
+
+            File.WriteAllText(closure, "formats x targets x tiers, both directions");
+
+            Assert.True(coordinator.TryAnswer(first.Id, "approve", null, out _));
+            _ = coordinator.RunAsync(Token);
+
+            // The change holds from the next question on: a text is read live, as the bar is.
+            Assert.Equal("formats x targets x tiers, both directions", coordinator.OpenQuestions.Single().Problem);
+        }
+
+        // A name the workflow declares none for reads nothing, saying why: the step fails as an unreadable question.
+        var undeclared = Parse("""
+            name: flow
+            texts:
+              closure: texts/closure.md
+            steps:
+              - name: ask
+                type: pause
+                question: '{text.nope}'
+                options: [approve, revise]
+            """);
+        var failing = new FlowCoordinator(undeclared, new Runner(), new RunnerFacts(), new JumpingClock(), workflowFile: (_, named) => ReadText(named));
+
+        var end = await failing.RunAsync(Token);
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Contains("the workflow 'flow' declares no text 'nope'", failing.Instances["ask"].Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A step of others a crash cut off goes on at the resume from its record alone: at the first target whose turn had
     /// not ended, the ones that ended never asked again, and its every target's count of attempts carried on.
     /// </summary>

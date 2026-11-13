@@ -127,6 +127,7 @@ public static class WorkflowTemplates
         .. Prompts.Select(prompt => $"prompts/{prompt}.md"),
         .. Schemas.Select(schema => $"schemas/{schema}.schema.json"),
         "recommendations.md",
+        "closure.md",
         .. PipelineFiles,
         $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}",
     ];

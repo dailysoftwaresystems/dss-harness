@@ -5205,7 +5205,8 @@ public static class HelpTopics
         builder.AppendLine("fails, saying no runner serves its type.");
         builder.AppendLine();
         builder.AppendLine("The workflow's directory is the workflow's own - its agent files (agents/<name>.md),");
-        builder.AppendLine("its prompts, its schemas, the bar it recommends by (recommendations.md) - and every path");
+        builder.AppendLine("its prompts, its schemas, the bar it recommends by (recommendations.md), its texts");
+        builder.AppendLine("(texts:, each name a markdown file a prompt reads as {text.<name>}) - and every path");
         builder.AppendLine("the yml names is relative to that directory and stays inside it, as an action's files");
         builder.AppendLine("are relative to its own directory (see 'help runners'). So two workflows never read");
         builder.AppendLine("each other's files, and a repository can hold as many as it has ways of working. init");
@@ -5710,7 +5711,10 @@ public static class HelpTopics
             + "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the "
             + "advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own "
             + "recommendations.md, read live each time it is given so a change holds from the next question on, and a "
-            + "sentence saying none was written where the folder has no one - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its "
+            + "sentence saying none was written where the folder has no one - and {text.<name>} beside it, a workflow's "
+            + "texts (texts:): each name a markdown file of its own directory, read live as the bar is, the used "
+            + "workflow's own first where the reading step is one of its and the run's where none between them "
+            + "declares the name - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its "
             + "askPrompt alone - {update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and "
             + "{piece.<name>} in a step of the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull "
             + "request's body, which the engine fills and no agent reads, reads what a template key reads and no skill. "
@@ -5880,6 +5884,7 @@ public static class HelpTopics
                 repeat:
                   until: empty(review.findings)
                   maxIterations: 3
+                  decideAfter: review
                   leftover: review.findings
                 answers:
                   loopBound: accept
@@ -5917,8 +5922,11 @@ public static class HelpTopics
             """,
             "Each iteration reviews what is in the tree; where the review found something, the author's agent",
             "reworks it, it is tested, folded and committed, and the next iteration reviews it again. The loop ends",
-            "when a review finds nothing. At three iterations the configuration ends it as it stands and what is",
-            "left is the loop's leftover.");
+            "when a review finds nothing, and it decides where its review ended (decideAfter): the until and the",
+            "bound are read on what that review found, before the rework acts on it, so the last rework of a loop",
+            "that ends at its bound is reviewed by the round after it, and what such a loop leaves is what its last",
+            "review found, none of it acted on. At three iterations the configuration ends it as it stands and what",
+            "is left is the loop's leftover.");
 
         return builder.ToString();
 

@@ -1168,14 +1168,14 @@ public sealed class WorkflowValidationServiceTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own recommendations.md, read live each time it is given so a change holds from the next question on, and a sentence saying none was written where the folder has no one - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
+            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own recommendations.md, read live each time it is given so a change holds from the next question on, and a sentence saying none was written where the folder has no one - and {text.<name>} beside it, a workflow's texts (texts:): each name a markdown file of its own directory, read live as the bar is, the used workflow's own first where the reading step is one of its and the run's where none between them declares the name - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
                 + "{update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and {piece.<name>} in a step of "
                 + "the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's body, which the "
                 + "engine fills and no agent reads, reads what a template key reads and no skill.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{text.<name>}` beside it, a workflow's texts, and `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
                 + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
                 + "work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's `body`, which the engine "
                 + "fills and no agent reads, reads what a template key reads and no skill.",

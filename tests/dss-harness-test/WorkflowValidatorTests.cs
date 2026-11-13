@@ -3485,7 +3485,7 @@ public sealed class WorkflowValidatorTests
         string[] reserved =
         [
             "run", "carried", "previous", "source", "item", "it", "index", "iteration", "visit", "input", "recover", "skill",
-            "recommendations", "update", "piece", "status", "true", "false", "null", "empty", "any",
+            "recommendations", "text", "update", "piece", "status", "true", "false", "null", "empty", "any",
             "outcome", "code", "error", "question", "latest", "assumptions",
             "worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os",
             "param", "issue",
@@ -5344,5 +5344,123 @@ public sealed class WorkflowValidatorTests
         Assert.Equal(
             ["step 'look' says graphFrom: 'changes', which is the pack's own seed and names the reason step 'changes' too; a step named task or changes cannot seed a pack - rename it to seed from it"],
             Checked("changes", "changes"));
+    }
+
+    /// <summary>
+    /// A workflow's texts (<c>texts:</c>) are read in a prompt by their name alone - <c>{text.&lt;name&gt;}</c> with
+    /// nothing under it - where the workflow declares the name, and nowhere but a reason step's prompt and the
+    /// advisor's: prose for an agent, as the bar for recommendations is.
+    /// </summary>
+    [Fact]
+    public void ATextIsReadInAPromptByItsName_WhereTheWorkflowDeclaresIt()
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["prompts/think.md"] = "Close the class at its one home:\n{text.closure}\n",
+            ["prompts/barred.md"] = "The run's bar:\n{text.barred}\n",
+            ["prompts/dotted.md"] = "Dotted:\n{text.a.b}\n",
+            ["prompts/bare.md"] = "Bare:\n{text}\n",
+        };
+
+        string Definition(string prompt)
+            => $$"""
+                name: default
+                texts:
+                  closure: texts/closure.md
+                steps:
+                  - name: think
+                    type: reason
+                    agent: thinker
+                    prompt: {{prompt}}
+                    outputs: schemas/think.json
+                """;
+
+        Assert.Empty(WorkflowValidator.Validate(Parse(Definition("prompts/think.md")), hasCommitTemplate: false, (path, owner) => files.GetValueOrDefault(path)));
+
+        Assert.Equal(
+            ["step 'think' prompt 'prompts/barred.md' line 2 reads 'text.barred', and the workflow 'default' declares no text 'barred'"],
+            WorkflowValidator.Validate(Parse(Definition("prompts/barred.md")), hasCommitTemplate: false, (path, owner) => files.GetValueOrDefault(path)));
+
+        Assert.Equal(
+            ["step 'think' prompt 'prompts/dotted.md' line 2 reads 'text.a.b', and a text is read by its name alone: {text.<name>} with nothing under it"],
+            WorkflowValidator.Validate(Parse(Definition("prompts/dotted.md")), hasCommitTemplate: false, (path, owner) => files.GetValueOrDefault(path)));
+
+        Assert.Equal(
+            ["step 'think' prompt 'prompts/bare.md' line 2 reads 'text', and a text is read by its name alone: {text.<name>} with nothing under it"],
+            WorkflowValidator.Validate(Parse(Definition("prompts/bare.md")), hasCommitTemplate: false, (path, owner) => files.GetValueOrDefault(path)));
+
+        // A step's own key reads no text: the run's names are its world, prose is a prompt's.
+        Assert.Equal(
+            ["'think.when' reads 'text.closure': a workflow's texts are prose for an agent, and only a reason step's prompt and the advisor's read them"],
+            Problems("""
+                name: default
+                texts:
+                  closure: texts/closure.md
+                steps:
+                  - name: think
+                    type: reason
+                    agent: thinker
+                    when: '{text.closure}'
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """, files));
+    }
+
+    /// <summary>
+    /// A repeat that decides after a step (<c>decideAfter</c>) names one of the group's own that the schedule draws in
+    /// the course of an iteration: a step that never runs there - no step at all, a handler - would leave the loop's
+    /// decision unread.
+    /// </summary>
+    [Fact]
+    public void ARepeatDecidesAfterAStepOfItsOwn_ThatTheScheduleDraws()
+    {
+        Assert.Equal(
+            ["group 'fix' decides after 'nope', which is no step of the group it repeats"],
+            Problems("""
+                name: default
+                steps:
+                  - name: fix
+                    repeat:
+                      until: "review.outcome == 'done'"
+                      maxIterations: 3
+                      decideAfter: nope
+                    steps:
+                      - name: review
+                        type: orient
+                """));
+
+        Assert.Equal(
+            ["group 'fix' decides after 'mend', which never runs in the course of an iteration - a handler - so the loop would read its decision nowhere; name a step the schedule draws"],
+            Problems("""
+                name: default
+                steps:
+                  - name: fix
+                    repeat:
+                      until: "review.outcome == 'done'"
+                      maxIterations: 3
+                      decideAfter: mend
+                    steps:
+                      - name: review
+                        type: orient
+                      - name: mend
+                        on:
+                          step: review
+                          outcome: failure
+                        type: orient
+                """));
+
+        // A step of the group, drawn in its course: no problem.
+        Assert.Empty(Problems("""
+            name: default
+            steps:
+              - name: fix
+                repeat:
+                  until: "review.outcome == 'done'"
+                  maxIterations: 3
+                  decideAfter: review
+                steps:
+                  - name: review
+                    type: orient
+            """));
     }
 }

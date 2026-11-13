@@ -91,6 +91,7 @@ public static class WorkflowFileParser
         int? handoffSeconds = null;
         FlowBudget? budget = null;
         string? recommendations = null;
+        IReadOnlyDictionary<string, string>? texts = null;
         FlowAdvisor? advisor = null;
         FlowReporter? reporter = null;
         FlowAmend? amend = null;
@@ -152,6 +153,10 @@ public static class WorkflowFileParser
 
                 case "recommendations":
                     recommendations = YamlReading.RequireScalar(value, "recommendations", problems);
+                    break;
+
+                case "texts":
+                    texts = ReadTexts(value, problems);
                     break;
 
                 case "advisor":
@@ -239,7 +244,8 @@ public static class WorkflowFileParser
                 recommendations,
                 advisor,
                 reporter,
-                amend)
+                amend,
+                texts)
             {
                 Recover = recover,
                 BackoffSeconds = backoffSeconds,
@@ -536,6 +542,58 @@ public static class WorkflowFileParser
         }
 
         return (null, byModel);
+    }
+
+    /// <summary>
+    /// Reads the <c>texts</c> section: each name a markdown file of the workflow's own directory, read in a prompt as
+    /// <c>{text.&lt;name&gt;}</c>. A name is one segment - no dot, no slash, no placeholder - for the read that names it
+    /// is <c>{text.&lt;name&gt;}</c> alone, and a file is a markdown one, relative, as every file a workflow names is.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? ReadTexts(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(YamlReading.At(node, "'texts' is not a mapping of names to markdown files"));
+            return null;
+        }
+
+        var texts = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var (key, value) in mapping.Children)
+        {
+            var name = YamlReading.ScalarOf(key);
+            var file = YamlReading.RequireScalar(value, $"texts.{name ?? "''"}", problems);
+
+            if (name is null)
+            {
+                problems.Add(YamlReading.At(key, "'texts' holds a key that is not one name: a text is read as {text.<name>}, so its name is one segment with no dot and no slash"));
+                continue;
+            }
+
+            if (file is null)
+            {
+                continue;
+            }
+
+            if (name.Contains('.') || name.Contains('/') || name.Contains('\\') || name.Contains('{'))
+            {
+                problems.Add(YamlReading.At(key, $"'texts' names the text '{name}', and a text is read as {{text.<name>}}: its name is one segment with no dot and no slash"));
+                continue;
+            }
+
+            if (!file.EndsWith(".md", StringComparison.OrdinalIgnoreCase) || file.Contains('{'))
+            {
+                problems.Add(YamlReading.At(value, $"'texts.{name}' names '{file}', and a text is a markdown file of the workflow's directory, named as it is, relative"));
+                continue;
+            }
+
+            if (!texts.TryAdd(name, file))
+            {
+                problems.Add(YamlReading.At(key, $"'texts' names '{name}' more than once"));
+            }
+        }
+
+        return texts.Count == 0 ? null : texts;
     }
 
     private static FlowAmend? ReadAmend(YamlNode node, List<string> problems)
@@ -1380,6 +1438,7 @@ public static class WorkflowFileParser
             ScalarIn(repeatKeys, $"{where}.repeat.blocking", problems),
             unbounded ? null : IntIn(repeatKeys, $"{where}.repeat.blockersLimitRounds", problems),
             ScalarIn(repeatKeys, $"{where}.repeat.leftover", problems),
+            ScalarIn(repeatKeys, $"{where}.repeat.decideAfter", problems),
             unbounded);
     }
 

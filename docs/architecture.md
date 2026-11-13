@@ -1618,7 +1618,8 @@ A workflow is a flow of typed steps that depend on one another by name, declared
 `workflows` in `config.json` and defined by a yml file of its own,
 `.harness-config/workflows/<name>/<name>.yml` - never an entry in the configuration, which holds the
 names and nothing else. The workflow's directory is the workflow's own - its agent files
-(`agents/<name>.md`), its prompts, its schemas, the bar it recommends by (`recommendations.md`) -
+(`agents/<name>.md`), its prompts, its schemas, the bar it recommends by (`recommendations.md`), its
+texts (`texts:`, each name a markdown file a prompt reads as `{text.<name>}`) -
 and every path the definition names is relative to that directory and stays inside it, as an
 action's files are relative to its own directory; two workflows never read each other's files. The
 name is the folder's, the file's and the `name:` key's alike, one word, and a disagreement among the
@@ -1641,7 +1642,14 @@ and `outputs`, what the whole workflow produces, each from a step of the flow. I
 one `type` - from `orient` and `reason` through the leg steps, the fold family, the checks, git
 and the forge, to `pause` - or groups holding steps of their own: a group runs its steps once for
 each work item a `forEach` yields, again and again until a `repeat`'s bound is met, or once as a
-block that `gathers` its members' findings into one list. A step raised by another step's ending
+block that `gathers` its members' findings into one list. A repeat that says `decideAfter` reads
+its decision - its `until`, its `blocking` and its bound - where that step of each iteration ends,
+not at the iteration's end: the rest of that iteration starts only where the loop goes on, a loop
+that ends at its bound leaves what its deciding step found with none of it acted on (`DecideAt`,
+called where the deciding step ends and again by the schedule's walk for a session that takes the
+run up from its records), and no iteration's end re-reads the decision, for it was made - the
+shipped review loop decides at its `review`, so the last rework of a loop that ends at its bound
+is reviewed by the round after it and what it leaves is what its last review found. A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
 schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own.

@@ -497,6 +497,7 @@ public static class WorkflowStepTypes
         new("blocking", "the expression that says, past the rounds, whether what is left must still be dealt with"),
         new("blockersLimitRounds", "further rounds past rounds while blocking holds, from 1 to 20 (absent, 3); false, none but the workflow's budget"),
         new("leftover", "where what the loop left is written"),
+        new("decideAfter", "the step of each iteration the loop's until, blocking and bound are read at when it ends; what follows it in the iteration starts only where the loop goes on"),
     ];
 
     /// <summary>What one <c>allow</c> block takes.</summary>

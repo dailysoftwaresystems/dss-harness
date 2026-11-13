@@ -137,6 +137,7 @@ public sealed class AdvisorRunnerTests
             new JsonObject { ["request"] = "build the login" },
             Record: null,
             Bar: "Prefer the cheaper answer.\n",
+            Texts: null,
             new FlowRunPlace(kit.Main, "o1", StartCommit: null, WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: orient\n    type: orient\n")),
             budgetLeftUsd);
 

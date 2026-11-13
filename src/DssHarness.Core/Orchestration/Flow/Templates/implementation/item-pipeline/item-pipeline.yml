@@ -251,6 +251,12 @@ steps:
     when: "(item-blocked.answer ?? 'continue') != 'skip'"
     repeat:
       until: 'empty(review.findings)'
+      # The loop decides where its review ends (decideAfter), not where the whole
+      # iteration does: the until, the blocking and the bound are read on what review
+      # found, before revise acts on it, so the last rework of a round that ends at the
+      # bound is reviewed by the round after it, and what a bound-ended loop leaves is
+      # what its last review found, none of it acted on.
+      decideAfter: review
       rounds: 3
       # Three rounds; past them the loop goes on only while a critical, high or medium finding
       # stands, three rounds more at most. What is left then - a low or a nit after the three,

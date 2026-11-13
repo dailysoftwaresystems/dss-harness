@@ -602,6 +602,10 @@ public sealed record FlowStepResult
 /// <param name="Inputs">The run's inputs, as its person gave them.</param>
 /// <param name="Record">What the run stored of the asking step, rendered as a continuation record renders a step.</param>
 /// <param name="Bar">The repository's bar for a recommendation, read where the question was raised.</param>
+/// <param name="Texts">
+/// The texts of the workflow whose advisor is asked, as its prompt reads them by <c>{text.&lt;name&gt;}</c>: the used
+/// workflow's own where a use that governs itself declares the advisor, and else the run's. Null where none are declared.
+/// </param>
 /// <param name="Place">Where the run works; null for a run held in memory alone.</param>
 /// <param name="BudgetLeftUsd">What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less than its own bound, or where it names none; null where the run budgets no dollars.</param>
 /// <param name="RunValues">The run as its own <c>run</c> root reads it, as the asking left it: its name, what it has checked and what it knows to be red among it; null where the asking was made from no run.</param>
@@ -620,6 +624,7 @@ public sealed record FlowAdvisorCall(
     System.Text.Json.Nodes.JsonObject Inputs,
     string? Record,
     string Bar,
+    IReadOnlyDictionary<string, string>? Texts = null,
     FlowRunPlace? Place = null,
     double? BudgetLeftUsd = null,
     System.Text.Json.Nodes.JsonObject? RunValues = null);

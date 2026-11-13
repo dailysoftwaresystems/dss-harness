@@ -28,6 +28,7 @@ public static class WorkflowKeys
         new("handoffSeconds", "how long a paused reasoning step is given to write its handoff; absent, 180"),
         new("budget", "what a whole run's reasoning may cost, and the reserve that pauses the run first") { Keys = Budget },
         new("recommendations", "the file holding the repository's bar for recommendations, in this directory"),
+        new("texts", "the workflow's texts: each name a markdown file in this directory, read in a prompt as {text.<name>}; the shipped flow declares its recommendations and its closure here"),
         new("advisor", "the agent that recommends an answer to a question the engine raises itself") { Keys = Advisor },
         new("reporter", "the agent that words what a run is doing for a person who asks") { Keys = Reporter },
         new("amend", "everything the workflow says about a request amended, or an answer changed, while a run works") { Keys = Amend },

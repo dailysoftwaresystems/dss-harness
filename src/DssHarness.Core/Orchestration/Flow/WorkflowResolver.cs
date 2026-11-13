@@ -401,7 +401,8 @@ public static class WorkflowResolver
             called.Outputs,
             calledRecover,
             notApplied,
-            own);
+            own,
+            called.Texts);
 
         return step with
         {

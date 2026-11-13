@@ -390,6 +390,9 @@ public sealed class AdvisorRunner(
                 "question" => new(QuestionOf(call), 0),
                 "input" => new(FlowValue.Of(call.Inputs), 0),
                 "recommendations" => new(FlowValue.Of(call.Bar), 0),
+                "text" => path.Steps is [{ Key: { } named }] && call.Texts?.TryGetValue(named, out var file) is true
+                    ? new(FlowValue.Of(files.ReadText(layout, call.Workflow, file, $"the text '{named}'")), 1)
+                    : new(FlowValue.Missing, 1),
                 "run" => new(call.RunValues is { } run ? FlowValue.Of(run) : FlowValue.Missing, 0),
                 _ => new(FlowValue.Missing, 0),
             },

@@ -36,7 +36,13 @@ maxRetries: 3
 backoffSeconds: 30
 maxInstances: 12000
 pushCheckpoints: false
-recommendations: recommendations.md
+# The workflow's texts: prose a prompt reads by name - {text.<name>} - beside the bar
+# for recommendations, which every prompt that recommends reads as {recommendations}
+# still, as it always did. closure.md is the repository's own from the day it is
+# written: the universe its decisions range over, and what else judges them.
+texts:
+  recommendations: recommendations.md
+  closure: closure.md
 advisor:
   agent: advisor
   tier: high

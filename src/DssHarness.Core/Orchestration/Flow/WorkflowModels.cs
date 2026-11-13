@@ -24,6 +24,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Advisor">The agent that recommends an answer to a question the engine raises itself.</param>
 /// <param name="Reporter">The agent that words what a run is doing for a person who asks.</param>
 /// <param name="Amend">Everything the workflow says about a request amended, or an answer changed, while a run works.</param>
+/// <param name="Texts">
+/// The workflow's texts: each name a markdown file of its own directory, read in a prompt as <c>{text.&lt;name&gt;}</c> -
+/// a general mechanism of which <c>recommendations</c> is the shipped flow's own name, kept for the repositories that
+/// read it. Null where the workflow declares none.
+/// </param>
 /// <param name="Answers">The answers the configuration gives to question kinds, beforehand.</param>
 /// <param name="Inputs">The values a run of this workflow is started with.</param>
 /// <param name="Params">The workflow's own knobs, defaulted in the file and read as <c>param.&lt;name&gt;</c>.</param>
@@ -50,7 +55,8 @@ public sealed record WorkflowDefinition(
     string? Recommendations = null,
     FlowAdvisor? Advisor = null,
     FlowReporter? Reporter = null,
-    FlowAmend? Amend = null)
+    FlowAmend? Amend = null,
+    IReadOnlyDictionary<string, string>? Texts = null)
 {
     /// <summary>The most step instances a run may have where the file says nothing (<c>maxInstances</c>).</summary>
     public const int DefaultMaxInstances = 5_000;
@@ -481,6 +487,10 @@ public sealed record FlowUseOwn(
 /// The called workflow's run-level settings, carried where the use says <c>useParentLimits: false</c> and applied to
 /// its steps; null where the calling run's settings govern.
 /// </param>
+/// <param name="Texts">
+/// The called workflow's texts: each name a markdown file of its own directory, read inside it as
+/// <c>{text.&lt;name&gt;}</c>. Null where it declares none, and then no text of its own is read inside it.
+/// </param>
 public sealed record FlowUse(
     string Source,
     string Name,
@@ -490,7 +500,8 @@ public sealed record FlowUse(
     IReadOnlyList<WorkflowOutput> Outputs,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowRecover? Recover,
     IReadOnlyList<string> NotApplied,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowUseOwn? Own = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowUseOwn? Own = null,
+    IReadOnlyDictionary<string, string>? Texts = null)
 {
     /// <summary>
     /// The nearest use around the step at <paramref name="path"/> that governs itself - says
@@ -1021,6 +1032,12 @@ public sealed record FlowOn(string Step, string Outcome, IReadOnlyList<int> Code
 /// <param name="Blocking">The expression that says, past the rounds, whether what is left must still be dealt with.</param>
 /// <param name="BlockersLimitRounds">Further rounds past <paramref name="Rounds"/> while <paramref name="Blocking"/> holds.</param>
 /// <param name="Leftover">Where what the loop left is written, read as the run's leftover.</param>
+/// <param name="DecideAfter">
+/// The step of each iteration the loop's decision - its <c>until</c>, its <c>blocking</c> and its bound - is read at
+/// when it ends, instead of at the iteration's end: what follows that step in the iteration starts only where the loop
+/// goes on, and a loop that ends at its bound leaves what that step found, none of it acted on. Null where the decision
+/// is read at each iteration's end, as it always was.
+/// </param>
 /// <param name="BlockersUnbounded">
 /// Whether <c>blockersLimitRounds</c> says <c>false</c>: no bound past the rounds but the workflow's budget.
 /// </param>
@@ -1031,6 +1048,7 @@ public sealed record FlowRepeat(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Blocking,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? BlockersLimitRounds,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Leftover,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? DecideAfter,
     bool BlockersUnbounded = false)
 {
     /// <summary>The further rounds past <see cref="Rounds"/> while blocking holds, where the file names none.</summary>

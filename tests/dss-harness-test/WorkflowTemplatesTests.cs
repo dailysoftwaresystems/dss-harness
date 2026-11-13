@@ -294,13 +294,15 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(WorkflowTemplates.Files.Count, Directory.GetFiles(workflows, "*", SearchOption.AllDirectories).Length);
 
         File.Delete(Path.Combine(workflows, name, "recommendations.md"));
+        File.Delete(Path.Combine(workflows, name, "closure.md"));
         File.WriteAllText(Path.Combine(workflows, name, "agents", "advisor.md"), "edited\n");
 
         var finished = WorkflowTemplates.EnsureShipped(workflows, fileSystem);
 
-        Assert.Equal([$".harness-config/workflows/{name}/recommendations.md"], finished.Created);
-        Assert.Equal(WorkflowTemplates.Files.Count - 1, finished.Kept);
+        Assert.Equal([$".harness-config/workflows/{name}/recommendations.md", $".harness-config/workflows/{name}/closure.md"], finished.Created);
+        Assert.Equal(WorkflowTemplates.Files.Count - 2, finished.Kept);
         Assert.Equal(WorkflowTemplates.TextOf("recommendations.md"), File.ReadAllText(Path.Combine(workflows, name, "recommendations.md")));
+        Assert.Equal(WorkflowTemplates.TextOf("closure.md"), File.ReadAllText(Path.Combine(workflows, name, "closure.md")));
         Assert.Equal("edited\n", File.ReadAllText(Path.Combine(workflows, name, "agents", "advisor.md")));
     }
 
@@ -509,7 +511,42 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Equal(3, fix.Repeat!.BlockersLimitRounds);
         Assert.Equal("review.findings", fix.Repeat.Leftover);
+        Assert.Equal("review", fix.Repeat.DecideAfter);
         Assert.Equal(new FlowAnswer("accept", null, null), fix.Answers["loopBound"]);
+    }
+
+    /// <summary>
+    /// The shipped flow declares its texts - the bar for recommendations and its closure, the universe a repository's
+    /// decisions range over - and <c>init</c> writes <c>closure.md</c> once and never over a repository's own, exactly
+    /// as it keeps <c>recommendations.md</c>: the file is the repository's from the day it is written.
+    /// </summary>
+    [Fact]
+    public void TheShippedFlow_DeclaresItsTexts_AndShipsClosureMdAsTheRepositorysOwn()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["recommendations"] = "recommendations.md",
+                ["closure"] = "closure.md",
+            },
+            definition.Texts);
+        Assert.Null(definition.Recommendations);
+
+        using var temp = new TempDirectory();
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        var workflows = temp.Combine("tree", ".harness-config", "workflows");
+
+        WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        File.WriteAllText(Path.Combine(workflows, name, "closure.md"), "# The repository's own universe\n");
+        File.Delete(Path.Combine(workflows, name, "recommendations.md"));
+
+        var finished = WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+
+        Assert.Equal([$".harness-config/workflows/{name}/recommendations.md"], finished.Created);
+        Assert.Equal("# The repository's own universe\n", File.ReadAllText(Path.Combine(workflows, name, "closure.md")));
     }
 
     /// <summary>

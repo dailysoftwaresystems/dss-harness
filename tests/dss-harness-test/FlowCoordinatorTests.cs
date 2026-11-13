@@ -530,6 +530,150 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["fix"].State);
     }
 
+    /// <summary>
+    /// A repeat that decides after a step of its iteration (<c>decideAfter</c>) reads its bound where that step ended:
+    /// the rest of the iteration is never started, each step of it NotRun saying the loop ended where it decided, and
+    /// the loop's leftover is what the deciding step found, none of it acted on.
+    /// </summary>
+    [Fact]
+    public async Task ARepeatThatDecidesAfterAStep_EndsAtItsBoundBeforeTheRestOfTheIteration()
+    {
+        var definition = Parse("""
+            name: flow
+            answers:
+              loopBound: accept
+            steps:
+              - name: fix
+                repeat:
+                  until: 'empty(review.findings)'
+                  maxIterations: 1
+                  decideAfter: review
+                  leftover: 'review.findings'
+                steps:
+                  - name: review
+                    type: orient
+                  - name: revise
+                    dependsOn: [review]
+                    type: orient
+            """);
+        var runner = new FakeRunner()
+            .On("review", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"findings": [{"severity": "high", "text": "the wrong home"}]}""")))
+            .On("revise", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"done": true}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["fix#1.review"], runner.Started);
+
+        var revise = coordinator.Instances["fix#1.revise"];
+
+        Assert.Equal(FlowInstanceState.NotRun, revise.State);
+        Assert.Equal(FlowNotRunCause.LoopDecided, revise.NotRunCause);
+        Assert.Equal("the loop ended at 'review' (decideAfter) before it started", revise.NotRunBecause);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["fix"].State);
+
+        // The leftover is that review's findings, none of them acted on: revise never ran.
+        Assert.Equal(
+            """[{"severity":"high","text":"the wrong home"}]""",
+            coordinator.Instances["fix"].Leftover!.ToJsonString());
+    }
+
+    /// <summary>
+    /// A repeat that decides after a step reads its <c>until</c> there and nowhere else: a later step of the iteration
+    /// that turns the until true does not end the loop at the iteration's end, for the decision was read where the
+    /// deciding step ended - and the loop runs on to its bound, where it ends before the last iteration's rest.
+    /// </summary>
+    [Fact]
+    public async Task ARepeatThatDecidesAfterAStep_ReadsItsUntilThereAndNotAtTheIterationsEnd()
+    {
+        var definition = Parse("""
+            name: flow
+            answers:
+              loopBound: accept
+            steps:
+              - name: fix
+                repeat:
+                  until: 'revise.done ?? false'
+                  maxIterations: 3
+                  decideAfter: review
+                steps:
+                  - name: review
+                    type: orient
+                  - name: revise
+                    dependsOn: [review]
+                    type: orient
+            """);
+        var runner = new FakeRunner()
+            .On("review", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"looked": true}""")))
+            .On("revise", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"done": true}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // Every iteration's revise set the until true, and no iteration's end read it: the decision is read at review,
+        // where revise's done was still unset, so the loop went on to its bound and ended there, the last revise never
+        // started. A loop without decideAfter would have ended done after the first iteration.
+        Assert.Equal(["fix#1.review", "fix#1.revise", "fix#2.review", "fix#2.revise", "fix#3.review"], runner.Started);
+        Assert.Equal(FlowInstanceState.NotRun, coordinator.Instances["fix#3.revise"].State);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["fix"].State);
+    }
+
+    /// <summary>
+    /// A repeat that decides after a step asks at its bound there, with the rest of the iteration held from starting
+    /// while the question stands open: <c>more</c> lets the rest run as it always did, and the next iteration asks
+    /// again at its own deciding step, where <c>accept</c> ends the loop before that iteration's rest.
+    /// </summary>
+    [Fact]
+    public async Task ARepeatThatDecidesAfterAStep_AsksAtItsBoundThere_HoldingTheRestOfTheIteration()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: fix
+                repeat:
+                  until: 'attempt.ok'
+                  maxIterations: 1
+                  decideAfter: attempt
+                steps:
+                  - name: attempt
+                    type: orient
+                  - name: act
+                    dependsOn: [attempt]
+                    type: orient
+            """);
+        var runner = new FakeRunner().On("attempt", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var first = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // The question stands where the deciding step ended, and nothing more of the iteration started.
+        Assert.Equal(FlowRunStatus.Paused, first.Status);
+        Assert.Equal(["fix#1.attempt"], runner.Started);
+
+        var bound = Assert.Single(coordinator.OpenQuestions);
+
+        Assert.Equal("loopBound", bound.Kind);
+        Assert.Contains("its 'attempt' ended among them", bound.Problem, StringComparison.Ordinal);
+
+        Assert.True(coordinator.TryAnswer(bound.Id, "more", null, out _));
+        var second = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // 'more' let the rest of the first iteration run, and the second iteration asked at its own deciding step.
+        Assert.Equal(["fix#1.attempt", "fix#1.act", "fix#2.attempt"], runner.Started);
+        Assert.Equal(FlowRunStatus.Paused, second.Status);
+
+        var askedAgain = Assert.Single(coordinator.OpenQuestions);
+
+        Assert.True(coordinator.TryAnswer(askedAgain.Id, "accept", null, out _));
+        var third = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, third.Status);
+        Assert.Equal(FlowInstanceState.NotRun, coordinator.Instances["fix#2.act"].State);
+        Assert.Equal(FlowNotRunCause.LoopDecided, coordinator.Instances["fix#2.act"].NotRunCause);
+    }
+
     /// <summary>A group whose next expansion would pass the instance bound is not expanded: it fails with the bound's own words, and its onFailure decides what follows.</summary>
     [Fact]
     public async Task AGroupThatWouldPassTheInstanceBound_IsNotExpandedAndFailsWithTheWording()

@@ -573,13 +573,18 @@ A `pause` step asks and asks only: its question filled as a template is filled, 
 upstream step wrote (`questions`) shown under its own - the shipped `blocked` shows what triage
 found that only a person can lift - the step's answer answering them together. What the person gave
 the run answers first, where they gave it: the first `preAnswer` entry whose `when` holds answers at
-once, as a configured answer would, and an entry that quotes words holds only where they stand in
-the input they are said to be of - the shipped approval is pre-answered by `preapproved = 'yes'` or
+once, as a configured answer would, and an entry that quotes words holds only where they stand in the
+input they are said to be of - the shipped approval is pre-answered by `preapproved = 'yes'` or
 by the request's own words, quoted and looked for. The repository's bar for a recommendation -
 `recommendations.md` in the workflow's folder, or the file its `recommendations` key names - is read
 by `{recommendations}` in a reason step's prompt, live each time it is given, so a change holds from
 the next question on; where the folder has none, a sentence says so and a recommendation says it
-follows none.
+follows none. Beside it a workflow declares texts (`texts:`), each name a markdown file of its own
+directory read in a prompt as `{text.<name>}` the same live way - the used workflow's own first
+where the reading step is one of its, and the run's where none between them declares the name - and
+the shipped flow declares its `recommendations` and its `closure` there, `closure.md` being the
+repository's own from the day init writes it: the universe its decisions range over, and what else
+judges them.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its
@@ -1836,9 +1841,15 @@ runner, or a runner its run checks name, writes the tree (`writesTree`) names wi
 create-agent step whose worktree it works in; the agents a run makes, `a` and a number up to the
 workflow's `maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every
 variable `commit.template` requires and none for one it does not declare - with no template, a
-`message` and no `variables`. What only a prompt reads stands where its agent is asked it:
+`message` and no `variables`. A repeat that says `decideAfter` names a step of each iteration the
+loop's `until`, `blocking` and bound are read at when it ends, instead of at the iteration's end:
+what follows that step starts only where the loop goes on, and a loop that ends at its bound
+leaves what its deciding step found, none of it acted on - the shipped review loop decides at its
+`review`, so its last rework is always reviewed and its leftover is what its last review found.
+What only a prompt reads stands where its agent is asked it:
 `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote,
-read live each time it is given - `{question.*}` in the advisor's
+read live each time it is given - `{text.<name>}` beside it, a workflow's texts, and
+`{question.*}` in the advisor's
 alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone -
 `{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and
 `{piece.*}` in a step of the work-item group; the advisor's and the reporter's prompts read no step

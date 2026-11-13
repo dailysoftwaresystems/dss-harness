@@ -60,6 +60,12 @@ public enum FlowNotRunCause
     /// <c>always</c> step failed or never run.
     /// </summary>
     AgentNotMade,
+
+    /// <summary>
+    /// The loop the step's group is an iteration of ended at its deciding step (<c>decideAfter</c>) before this step
+    /// was started: what the deciding step found was the loop's to leave, and the rest of the iteration never ran.
+    /// </summary>
+    LoopDecided,
 }
 
 /// <summary>
@@ -316,6 +322,13 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal readonly List<Scope> Children = [];
     internal (int Exit, string? Error, string Member)? Failing;
     internal int ExtraIterations;
+
+    /// <summary>
+    /// The iteration a loop that decides at a step of its own (<c>decideAfter</c>) last read its decision in: no
+    /// iteration after it re-reads the <c>until</c>, the <c>blocking</c> or the bound, for the decision stands as it
+    /// was read where the deciding step ended. 0 where none was read.
+    /// </summary>
+    internal int DecidedIteration;
 
     /// <summary>
     /// The updates that owe this loop work - each one's id, added where a piece it places finds the work-item group's
@@ -3517,6 +3530,15 @@ public sealed class FlowCoordinator
                 instance.State = FlowInstanceState.Running;
                 break;
             case "accept":
+                if (instance.Step.Repeat?.DecideAfter is not null && instance.Children.Count > 0 && instance.Children[^1].GroupInstance is { State: FlowInstanceState.Running })
+                {
+                    // The loop asked at its deciding step, with the rest of the iteration never started: it ends there,
+                    // the rest NotRun, and what its leftover names is what that step found, none of it acted on.
+                    EndTheIterationAt(instance, instance.Children[^1]);
+                    EndRepeat(instance);
+                    break;
+                }
+
                 if (instance.Children.Count > 0 && instance.Children[^1].GroupInstance is { State: FlowInstanceState.Running } last)
                 {
                     End(last, FlowInstanceState.Done, null, null);
@@ -4771,6 +4793,14 @@ public sealed class FlowCoordinator
             return false;
         }
 
+        if (scope.LoopOf is { Step.Repeat.DecideAfter: not null, WaitingQuestion: not null })
+        {
+            // The loop around this iteration stands on its bound's question, read where the iteration's deciding step
+            // ended (decideAfter): nothing more of the iteration starts while the answer is unset, for on 'accept' the
+            // rest is never started at all, and its leftover is what the deciding step found, none of it acted on.
+            return false;
+        }
+
         foreach (var declaration in DeclarationsOf(scope))
         {
             if (scope.Instantiated.Contains(declaration.Name) || !Draws(scope, declaration))
@@ -5339,18 +5369,7 @@ public sealed class FlowCoordinator
         // the instance bound.
         if (iteration > bound)
         {
-            var said = declaration.Repeat!.Rounds is { } rounds
-                ? $"{rounds.ToString(System.Globalization.CultureInfo.InvariantCulture)} rounds and {(declaration.Repeat.BlockersUnbounded ? "no further bound but the budget" : declaration.Repeat.BlockersRounds.ToString(System.Globalization.CultureInfo.InvariantCulture) + " more while blocking holds")} (rounds, blockersLimitRounds)"
-                : $"at most {(declaration.Repeat?.MaxIterations ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture)} are allowed (maxIterations)";
-            _ = Ask(
-                instance,
-                "loopBound",
-                $"'{instance.Id}' has run {iteration - 1} iterations and its until still reads false; {said}{(instance.ExtraIterations > 0 ? $", and {instance.ExtraIterations.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
-                WorkflowValidator.AnswersOf["loopBound"]);
-
-            // The work plan updates owe the loop is the question's to carry from here: each owing entry says so once the
-            // question is written.
-            LeaveToTheBound(instance);
+            AskAtTheBound(instance, $"'{instance.Id}' has run {iteration - 1} iterations and its until still reads false");
             return false;
         }
 
@@ -5370,6 +5389,138 @@ public sealed class FlowCoordinator
         instance.Children.Add(body);
         _ = Create(body, declaration, FlowInstanceState.Running, body.Id);
         return true;
+    }
+
+    /// <summary>
+    /// Asks the question a repeat at its bound asks, with the bound's own words after the prelude that says where the
+    /// loop stands - the one owner of the asking, wherever the loop reads its bound: at an iteration's end, and where a
+    /// loop that decides at a step of its own (<c>decideAfter</c>) reads it at that step's ending.
+    /// </summary>
+    /// <param name="instance">The repeat at its bound.</param>
+    /// <param name="stood">How the loop stands, as the question's own words say it.</param>
+    private void AskAtTheBound(FlowInstance instance, string stood)
+    {
+        var repeat = instance.Step.Repeat!;
+        var said = repeat.Rounds is { } rounds
+            ? $"{rounds.ToString(System.Globalization.CultureInfo.InvariantCulture)} rounds and {(repeat.BlockersUnbounded ? "no further bound but the budget" : repeat.BlockersRounds.ToString(System.Globalization.CultureInfo.InvariantCulture) + " more while blocking holds")} (rounds, blockersLimitRounds)"
+            : $"at most {(repeat.MaxIterations ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture)} are allowed (maxIterations)";
+        _ = Ask(
+            instance,
+            "loopBound",
+            $"{stood}; {said}{(instance.ExtraIterations > 0 ? $", and {instance.ExtraIterations.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
+            WorkflowValidator.AnswersOf["loopBound"]);
+
+        // The work plan updates owe the loop is the question's to carry from here: each owing entry says so once the
+        // question is written.
+        LeaveToTheBound(instance);
+    }
+
+    /// <summary>
+    /// Reads the decision of a repeat that decides at a step of its own (<c>decideAfter</c>), where that step of its
+    /// current iteration has ended: its <c>until</c>, its <c>blocking</c> past the rounds, and its bound are read on
+    /// the iteration as it stands at that step - what the step found, nothing after it yet - for that is where the
+    /// workflow says the loop decides. A loop that ends here ends on the spot: the rest of the iteration is never
+    /// started, and what its <c>leftover</c> names is what the deciding step found, none of it acted on. One that goes
+    /// on runs the rest of the iteration as it always did, and the iteration's end makes the next iteration with no
+    /// second reading - the decision was made. A loop at its bound asks here, and its question holds the iteration
+    /// from starting anything more until it is answered.
+    /// </summary>
+    /// <param name="instance">The repeat.</param>
+    /// <returns>Whether anything changed.</returns>
+    private bool DecideAt(FlowInstance instance)
+    {
+        var repeat = instance.Step.Repeat!;
+
+        if (repeat.DecideAfter is not { } after
+            || instance.State is not FlowInstanceState.Running
+            || instance.WaitingQuestion is not null
+            || instance.Children.Count == 0
+            || instance.DecidedIteration >= instance.Children.Count)
+        {
+            return false;
+        }
+
+        var body = instance.Children[^1];
+
+        if (body.Members.GetValueOrDefault(after) is not { State: FlowInstanceState.Done or FlowInstanceState.Skipped }
+            || body.GroupInstance is not { State: FlowInstanceState.Running })
+        {
+            // The deciding step has not ended - the iteration still works towards the decision - or the iteration is
+            // over, and the next iteration is what the decision said.
+            return false;
+        }
+
+        instance.DecidedIteration = instance.Children.Count;
+
+        var until = Holds(repeat.Until, body, out var problem);
+
+        if (problem is not null)
+        {
+            FailGroup(instance, HarnessExit.ConfigInvalid, Unreadable("until", body.GroupInstance.Id, problem), instance.Path);
+            return true;
+        }
+
+        var owed = IterationOwed(instance);
+
+        if (until && !owed)
+        {
+            EndTheIterationAt(instance, body);
+            End(instance, FlowInstanceState.Done, null, null);
+            return true;
+        }
+
+        if (repeat.Rounds is { } rounds && instance.Children.Count >= rounds)
+        {
+            var blocking = Holds(repeat.Blocking!, body, out var unreadable);
+
+            if (unreadable is not null)
+            {
+                FailGroup(instance, HarnessExit.ConfigInvalid, Unreadable("blocking", body.GroupInstance.Id, unreadable), instance.Path);
+                return true;
+            }
+
+            if (!blocking && !owed)
+            {
+                // Where blocking is false the repeat ends as it stands, with no question, and what it left is said.
+                EndTheIterationAt(instance, body);
+                EndRepeat(instance);
+                return true;
+            }
+        }
+
+        if (instance.Children.Count + 1 > BoundOf(instance.Step, instance))
+        {
+            AskAtTheBound(
+                instance,
+                $"'{instance.Id}' has run {instance.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} iterations, its '{after}' ended among them, and its until still reads false");
+            return true;
+        }
+
+        // The loop goes on: the rest of the iteration runs as it always did, and its end makes the next iteration.
+        return false;
+    }
+
+    /// <summary>
+    /// Ends the body scope of a repeat's current iteration at its deciding step (<c>decideAfter</c>): every step of it
+    /// the schedule had not drawn is NotRun, saying the loop ended where it decided, and the iteration's own record
+    /// ends done - the rest of the iteration is not started, and nothing of it is left unsaid.
+    /// </summary>
+    /// <param name="instance">The repeat ending.</param>
+    /// <param name="body">The iteration's body scope, its deciding step ended.</param>
+    private void EndTheIterationAt(FlowInstance instance, Scope body)
+    {
+        var after = instance.Step.Repeat!.DecideAfter!;
+
+        foreach (var declaration in DeclarationsOf(body).Where(declaration => !body.Instantiated.Contains(declaration.Name)))
+        {
+            body.Instantiated.Add(declaration.Name);
+            CreateNotRun(body, declaration, FlowNotRunCause.LoopDecided, $"the loop ended at '{after}' (decideAfter) before it started");
+        }
+
+        if (body.GroupInstance is { State: FlowInstanceState.Running } record)
+        {
+            End(record, FlowInstanceState.Done, null, null);
+        }
     }
 
     /// <summary>
@@ -5434,12 +5585,21 @@ public sealed class FlowCoordinator
             return false;
         }
 
-        var until = Holds(instance.Step.Repeat!.Until, instance.Children[^1], out var problem);
+        // A loop that decides at a step of its own (decideAfter) read its until, its blocking and its bound where that
+        // step ended: no end of an iteration re-reads them, for the decision was made, and the iteration's end makes
+        // the next iteration alone.
+        var decided = instance.Step.Repeat!.DecideAfter is not null;
+        var until = false;
 
-        if (problem is not null)
+        if (!decided)
         {
-            FailGroup(instance, HarnessExit.ConfigInvalid, Unreadable("until", instance.Children[^1].GroupInstance?.Id ?? instance.Id, problem), instance.Path);
-            return true;
+            until = Holds(instance.Step.Repeat.Until, instance.Children[^1], out var problem);
+
+            if (problem is not null)
+            {
+                FailGroup(instance, HarnessExit.ConfigInvalid, Unreadable("until", instance.Children[^1].GroupInstance?.Id ?? instance.Id, problem), instance.Path);
+                return true;
+            }
         }
 
         // Work a plan update owes this loop's next iteration carries it there whatever the until says: the loop runs
@@ -5457,7 +5617,7 @@ public sealed class FlowCoordinator
             return true;
         }
 
-        if (instance.Step.Repeat.Rounds is { } rounds && instance.Children.Count >= rounds)
+        if (!decided && instance.Step.Repeat.Rounds is { } rounds && instance.Children.Count >= rounds)
         {
             // Past the rounds another iteration is created only while blocking holds: whether what is left has to be
             // dealt with before the loop may end, worked out by the engine from what the body's steps answered.
@@ -5930,6 +6090,7 @@ public sealed class FlowCoordinator
 
             if (instance.Step.Repeat is not null)
             {
+                changed |= DecideAt(instance);
                 changed |= Iterate(instance);
                 continue;
             }
@@ -8456,6 +8617,7 @@ public sealed class FlowCoordinator
             Inputs(),
             Record: null,
             bar,
+            useAdvisor is not null ? governing?.Use.Use?.Texts : _definition.Texts,
             _place,
             BudgetLeftUsd(),
             RunValues());
@@ -8918,6 +9080,16 @@ public sealed class FlowCoordinator
         }
 
         MaybeSettle(instance);
+
+        if (state is FlowInstanceState.Done or FlowInstanceState.Skipped
+            && instance.DeclaredScope is { LoopOf: { Step.Repeat.DecideAfter: { } deciding } loop }
+            && string.Equals(instance.Step.Name, deciding, StringComparison.Ordinal))
+        {
+            // The loop around this iteration decides at this step's ending (decideAfter): the decision is read now,
+            // before anything more of the iteration is drawn - and a session that takes the run up from its records
+            // reads it again where the schedule walks the loop, for nothing between the two changes it.
+            _ = DecideAt(loop);
+        }
 
         if (IsRecovery(instance) && state == FlowInstanceState.Done && instance.RaisedBy is { } again)
         {
@@ -9898,6 +10070,57 @@ public sealed class FlowCoordinator
                 {
                     throw new UnresolvedReadException(unread.Message);
                 }
+            case "text":
+            {
+                // A text the workflow declares by name (texts), read live as the bar is: the used workflow's own where
+                // the reading step is one of its - the nearest use that declares the name - and else the run's.
+                if (path.Steps is not [{ Key: { } textName }])
+                {
+                    throw new UnresolvedReadException("a text is read by its name alone: {text.<name>} with nothing under it");
+                }
+
+                for (var at = scope; at is not null; at = at.Parent)
+                {
+                    if (at.Group?.Use is { Texts: { } own } use && own.TryGetValue(textName, out var ownFile))
+                    {
+                        return TextOfRead(use.Name, ownFile);
+                    }
+                }
+
+                string? Owner()
+                {
+                    for (var at = scope; at is not null; at = at.Parent)
+                    {
+                        if (at.Group?.Use is { } parent)
+                        {
+                            return parent.Name;
+                        }
+                    }
+
+                    return null;
+                }
+
+                return _definition.Texts is { } texts && texts.TryGetValue(textName, out var file)
+                    ? TextOfRead(null, file)
+                    : throw new UnresolvedReadException($"the workflow '{Owner() ?? _definition.Name}' declares no text '{textName}'");
+
+                FlowExpression.PathRead TextOfRead(string? owner, string named)
+                {
+                    if (_workflowFile is null)
+                    {
+                        return new(FlowValue.Missing, 1);
+                    }
+
+                    try
+                    {
+                        return new(FlowValue.Of(_workflowFile(owner, named)), 1);
+                    }
+                    catch (HarnessException unread)
+                    {
+                        throw new UnresolvedReadException(unread.Message);
+                    }
+                }
+            }
             case "update":
                 // What raised the update under way, what has run since, and the work of the run - read by the step
                 // that plans an update and by every step of its scope; outside an update, a sentence that says none

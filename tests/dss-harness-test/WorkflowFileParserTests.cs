@@ -246,7 +246,7 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.Equal(
-            ["line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover', 'codebaseGraph'."],
+            ["line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'texts', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover', 'codebaseGraph'."],
             problems);
     }
 
@@ -681,7 +681,7 @@ public sealed class WorkflowFileParserTests
                 "line 7, column 9: 'mend.on' is not a mapping of 'step', 'outcome', 'codes'",
                 "line 13, column 14: 'fix.on.codes' is not a list.",
                 "line 11, column 7: fix.on.outcome is 'broke', which is none of 'failure', 'success', 'end'.",
-                "line 15, column 13: 'loop.repeat' is not a mapping of 'until', 'maxIterations', 'rounds', 'blocking', 'blockersLimitRounds', 'leftover'",
+                "line 15, column 13: 'loop.repeat' is not a mapping of 'until', 'maxIterations', 'rounds', 'blocking', 'blockersLimitRounds', 'leftover', 'decideAfter'",
                 "line 25, column 12: 'fold.allow' is not a mapping of 'settled', 'new', 'acceptLost', 'merge', 'acceptOver'",
                 "line 30, column 16: 'ask.preAnswer' is not a sequence.",
                 "line 36, column 9: an entry of 'asked.preAnswer' is not a mapping of 'when', 'answer', 'text', 'quote'",
@@ -1029,7 +1029,7 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.NotNull(parsed);
-        Assert.Equal(new FlowRepeat("review.clean", null, 3, "review.blocking", null, null, BlockersUnbounded: true), parsed.Steps[0].Repeat);
+        Assert.Equal(new FlowRepeat("review.clean", null, 3, "review.blocking", null, null, DecideAfter: null, BlockersUnbounded: true), parsed.Steps[0].Repeat);
         Assert.Equal("diagnose", Assert.Single(parsed.Recover!.Steps).Name);
         Assert.Null(parsed.Recover.MaxVisits);
         Assert.Null(parsed.BackoffSeconds);
