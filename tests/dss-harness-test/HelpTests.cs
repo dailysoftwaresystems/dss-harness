@@ -4030,7 +4030,13 @@ public sealed partial class HelpTests
             + "delete, or a worker an earlier version of this tool kept beside an agent's worktree, which clean --former-workers "
             + "removes - --force "
             + $"or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git cannot list its worktrees "
-            + $"({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. A plain worktree cannot take an "
+            + $"({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. A worktree git records at another "
+            + "place that holds none now - as after the checkout, or the worktrees in it, were moved by hand, its .git file and git's record "
+            + "still naming where they were - is a worktree with its work in it, never a directory to delete: list-worktree, delete-worktree, "
+            + "delete-orchestrator and every agent verb name 'git -C <main checkout> worktree repair <path>', which points the record and the "
+            + ".git file back at each other, and list-orchestrator says of a live agent whose worktree git cannot open, or holds as another "
+            + "kind than its record names, that it cannot be worked on and why, never that the agent stands live at it (\"worktreeProblem\" in "
+            + "--json). A plain worktree cannot take an "
             + "orchestrator's name. An agent's copies on hosts are kept under orchestrator--agent, so two orchestrators' agents of one name "
             + "keep theirs apart.",
             text,
@@ -4054,7 +4060,8 @@ public sealed partial class HelpTests
             $"One that cannot be removed stops the deletion before git runs ({HarnessExit.CommandFailed}), and a volume mounted "
                 + "on a directory is never unmounted.",
             "A directory under the root with no .git and no record of git's - what a removal that stopped part way leaves - is "
-                + $"refused ({HarnessExit.Refused}), naming --force; git worktree repair is named only while git still records a worktree there.",
+                + $"refused ({HarnessExit.Refused}), naming --force; git worktree repair is named only while git still records a worktree there - "
+                + "at that path, or, after the checkout was moved by hand, at another place that holds none now.",
         })
         {
             Assert.Contains(said, text, StringComparison.Ordinal);

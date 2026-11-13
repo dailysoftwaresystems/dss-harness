@@ -48,7 +48,21 @@ internal sealed record SubmoduleLoss(string Path, int Commits, bool HasStash);
 /// In an orchestrator's directory, each directory directly in it holding a .git entry of its own that git records no
 /// worktree at, as this machine spells it: a person's to look in and delete.
 /// </param>
-internal sealed record WorktreesBelow(IReadOnlyList<string> Worktrees, IReadOnlyList<string> Unrecorded);
+/// <param name="Moved">
+/// Each directory directly in it that is a worktree git records at another place holding none now, as after the checkout
+/// was moved by hand, with that place (<see cref="WorktreeInspector.MovedFromAsync"/>): its work is still in it, and git's
+/// repair points the record back at it.
+/// </param>
+internal sealed record WorktreesBelow(IReadOnlyList<string> Worktrees, IReadOnlyList<string> Unrecorded, IReadOnlyList<(string Path, string Recorded)> Moved)
+{
+    /// <summary>Nothing below: no worktree, nothing unrecorded, nothing moved.</summary>
+    public static WorktreesBelow None { get; } = new([], [], []);
+
+    /// <summary>What is said of the moved ones, each with the repair that points git's record back at it.</summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose git the repair runs in.</param>
+    public string SaidMoved(string mainCheckoutRoot)
+        => string.Join("; ", Moved.Select(moved => WorktreeInspector.SaidMoved(mainCheckoutRoot, moved.Path, moved.Recorded)));
+}
 
 /// <summary>Everything that stops a worktree being deleted without --force, found before anything is touched.</summary>
 /// <param name="Changes">Paths with uncommitted changes, including edits status cannot see.</param>
@@ -228,6 +242,108 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     }
 
     /// <summary>
+    /// Where git's record of the worktree in <paramref name="directory"/> says it is, where that is another place holding no
+    /// worktree now - as after the checkout, or the worktrees in it, were moved by hand - or <see langword="null"/> where the
+    /// directory is no such worktree. The empty text is a record that names no place. <c>git worktree repair</c> run on the
+    /// directory points that record, and the directory's .git file, back at each other; until then git may not open the
+    /// worktree at all, and its work is all still in it.
+    /// </summary>
+    /// <remarks>
+    /// Read as git's own repair reads it: the directory's .git is a file naming a record in a worktrees directory; where
+    /// that record is gone, as it is once the checkout itself moved, the record of the same name in this checkout's git
+    /// directory is the one meant, and where it is there it must be that one. A record whose worktree is still where the
+    /// record says is another worktree's, and is never taken for this one.
+    /// </remarks>
+    /// <param name="mainCheckoutRoot">The main checkout, whose git directory holds the records.</param>
+    /// <param name="directory">A directory holding a .git entry of its own that git lists no worktree at.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">git's records could not be read (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    public async Task<string?> MovedFromAsync(string mainCheckoutRoot, string directory, CancellationToken cancellationToken)
+    {
+        if (ReadGitFile(directory) is not { } named)
+        {
+            return null;
+        }
+
+        var parent = Path.GetDirectoryName(named);
+        var id = Path.GetFileName(named);
+
+        if (parent is null || id.Length == 0 || !string.Equals(Path.GetFileName(parent), "worktrees", _platform.PathComparison))
+        {
+            return null;
+        }
+
+        var record = Path.Combine(await MainGitDirectoryAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false), "worktrees", id);
+
+        try
+        {
+            if (!_fileSystem.DirectoryExists(record) || (_fileSystem.DirectoryExists(named) && !PathsEqual(ResolveLinks(named), ResolveLinks(record))))
+            {
+                return null;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"Could not read git's worktree record '{record}': {ex.Message}");
+        }
+
+        var recorded = ReadRecordedWorktree(record);
+
+        if (recorded is not null && (PathsEqual(recorded, ResolveLinks(directory)) || _fileSystem.FileExists(Path.Combine(recorded, ".git"))))
+        {
+            return null;
+        }
+
+        return recorded ?? string.Empty;
+    }
+
+    /// <summary>
+    /// The full path of the record the .git file in <paramref name="directory"/> names, or null where its .git is no such
+    /// file: read without following a link - a worktree's own files are a place its agent's commands write - and only as
+    /// far as git's own one line runs.
+    /// </summary>
+    private string? ReadGitFile(string directory)
+    {
+        var dotGit = Path.Combine(directory, ".git");
+
+        try
+        {
+            if (!_fileSystem.FileExists(dotGit))
+            {
+                return null;
+            }
+
+            using var reader = new StreamReader(UnfollowedFiles.OpenRead(_fileSystem, directory, dotGit));
+            var buffer = new char[4096];
+            var line = new string(buffer, 0, reader.ReadBlock(buffer)).Split('\n')[0].TrimEnd('\r');
+
+            const string Prefix = "gitdir:";
+
+            return line.StartsWith(Prefix, StringComparison.Ordinal) && line[Prefix.Length..].Trim() is { Length: > 0 } named
+                ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(directory, named)))
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"Could not read '{dotGit}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// What is said of the worktree at <paramref name="directory"/> that git records at <paramref name="recorded"/>, elsewhere:
+    /// that it is one, with its work in it, and the one command that points git's record back at it - never that it is a
+    /// person's to delete.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose git the repair runs in.</param>
+    /// <param name="directory">The worktree, where it is now.</param>
+    /// <param name="recorded">Where git's record says it is; empty where the record names no place.</param>
+    public static string SaidMoved(string mainCheckoutRoot, string directory, string recorded)
+        => $"'{ReportText.Printable(directory)}' is a worktree git records "
+            + (recorded.Length == 0 ? "with no place named" : $"at '{ReportText.Printable(recorded)}', as after the checkout or its worktrees were moved by hand")
+            + $", and git cannot be relied on to open it until that record points here; everything in it is still there. Run 'git -C {ReportText.Printable(mainCheckoutRoot)} worktree repair {ReportText.Printable(directory)}', "
+            + "which points git's record and its .git file back at each other";
+
+    /// <summary>
     /// What is below <paramref name="path"/>, which is not a worktree itself: the address of each worktree git records
     /// strictly inside it and of each agent's repository directly in it, and - in the directory named for an orchestrator -
     /// each other directory directly in it holding a .git entry of its own that git records no worktree at, since an
@@ -276,6 +392,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         }
 
         var unrecorded = new List<string>();
+        var moved = new List<(string Path, string Recorded)>();
         var repositories = new AgentRepositories(_gitClient, _fileSystem, _platform);
 
         foreach (var child in holdingGit.Where(child => RecordAt(listed, ResolveLinks(child)) is null))
@@ -286,6 +403,11 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             {
                 found.Add(address.Name);
             }
+            else if (await MovedFromAsync(mainCheckoutRoot, child, cancellationToken).ConfigureAwait(false) is { } recorded)
+            {
+                // A worktree git records elsewhere is one, whatever directory it is in: never a person's to delete.
+                moved.Add((child, recorded));
+            }
             else if (orchestrators)
             {
                 // Each git does not record is told apart, whatever its name: nothing here can say what it holds, so it is a
@@ -294,7 +416,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             }
         }
 
-        return new WorktreesBelow([.. found], unrecorded);
+        return new WorktreesBelow([.. found], unrecorded, moved);
 
         string AddressOf(string root, string tree)
             => WorktreeAddress.OfTree(root, tree, _platform.PathComparison)?.Name

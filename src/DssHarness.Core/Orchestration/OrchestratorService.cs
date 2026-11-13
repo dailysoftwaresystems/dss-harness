@@ -264,7 +264,7 @@ public sealed class OrchestratorService(
         // git cannot give is raised, never read as no worktree below.
         var below = _fileSystem.DirectoryExists(group)
             ? await new WorktreeInspector(_gitClient, _fileSystem, _platform, _output).FindWorktreesBelowAsync(layout.MainCheckoutRoot, worktreesDirectory, group, orchestrators: true, cancellationToken).ConfigureAwait(false)
-            : new WorktreesBelow([], []);
+            : WorktreesBelow.None;
 
         // Decided and done with no other command deciding about this orchestrator meanwhile: an agent made beside this
         // deletion would be made into a directory being removed. Inside the repository's one section too, taken before
@@ -315,6 +315,12 @@ public sealed class OrchestratorService(
                 return CommandOutcome.Refused(
                     $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {ReportText.Listed(below.Worktrees)}. Delete each with "
                     + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, "<address>")} first. Nothing was changed.");
+            }
+
+            // A worktree git records elsewhere, as after the checkout was moved by hand, holds its work still.
+            if (below.Moved.Count > 0)
+            {
+                return CommandOutcome.Refused($"Orchestrator '{name}' was not deleted: {below.SaidMoved(layout.MainCheckoutRoot)}. Nothing was changed.");
             }
 
             // Nothing here can tell what such a directory holds, whatever it is named: it is a person's to look in and delete.
@@ -535,11 +541,17 @@ public sealed class OrchestratorService(
         {
             var record = _store.ReadOrchestrator(orchestrator)!;
             var agents = _store.Agents(orchestrator);
+            var inventories = new List<AgentInventory>();
+
+            foreach (var agent in agents)
+            {
+                inventories.Add(await InventoryAsync(context, orchestrator, agent, cancellationToken).ConfigureAwait(false));
+            }
 
             inventory.Add(new OrchestratorInventory(
                 orchestrator,
                 record,
-                [.. agents.Select(agent => Inventory(layout, context.Config.Worktrees.Root, orchestrator, agent))],
+                inventories,
                 [.. listed.Where(worktree => WorktreeAddress.AgentOf(orchestrator.Name, worktree.Name) is { } agent && !agents.Any(entry => entry.Name == agent))],
                 OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name)),
                 Run: _store.ReadFlow(orchestrator) is { } flow
@@ -597,15 +609,36 @@ public sealed class OrchestratorService(
     /// <summary>
     /// One agent as the listing reports it: where its worktree is, from its own record - the worktrees root it was made
     /// under - and whether anything is there, asked of that path; for a record that does not read, the configured root.
-    /// An agent that reads the main tree has no worktree, so it names none.
+    /// An agent that reads the main tree has no worktree, so it names none. A live agent's worktree that is there is asked
+    /// of git as every agent command asks it (<see cref="AgentWorktrees.StandingAsync"/>), and why it cannot be worked on is
+    /// said where it cannot: a live agent is never said to stand at a worktree git cannot open.
     /// </summary>
-    private AgentInventory Inventory(HarnessLayout layout, string configuredRoot, OrchestratorLayout orchestrator, AgentEntry agent)
+    private async Task<AgentInventory> InventoryAsync(HarnessContext context, OrchestratorLayout orchestrator, AgentEntry agent, CancellationToken cancellationToken)
     {
+        var layout = context.Layout;
         var path = agent.Record is { Reads: true }
             ? null
-            : agent.Record?.WorktreePath(layout) ?? WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(configuredRoot));
+            : agent.Record?.WorktreePath(layout) ?? WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root));
+        var exists = path is not null && WorktreeExists(path);
+        string? problem = null;
 
-        return new AgentInventory(agent, path is not null && WorktreeExists(path), path, Evidence(orchestrator, agent.Name), Files(orchestrator.TranscriptsDirectory(agent.Name)));
+        if (exists && agent.Record is { State: AgentStates.Live } live)
+        {
+            var standing = await AgentWorktrees.StandingAsync(
+                _fileSystem,
+                new WorktreeInspector(_gitClient, _fileSystem, _platform, _output),
+                layout.MainCheckoutRoot,
+                live,
+                path!,
+                cancellationToken).ConfigureAwait(false);
+
+            problem = standing.Kind is AgentWorktrees.Standing.Registered or AgentWorktrees.Standing.Gone ? null : standing.Why;
+        }
+
+        return new AgentInventory(agent, exists, path, Evidence(orchestrator, agent.Name), Files(orchestrator.TranscriptsDirectory(agent.Name)))
+        {
+            WorktreeProblem = problem,
+        };
     }
 
     /// <summary>Whether anything is at an agent's worktree path; a path that cannot be looked at is said to be there, never gone.</summary>
@@ -741,7 +774,11 @@ public sealed record AgentInventory(
     bool WorktreeExists,
     string? WorktreePath,
     IReadOnlyList<string> Evidence,
-    int Transcripts);
+    int Transcripts)
+{
+    /// <summary>Why a live agent's worktree, which is there, cannot be worked on as it stands; null where it can, or where nothing is there.</summary>
+    public string? WorktreeProblem { get; init; }
+}
 
 /// <summary>The context every orchestrator command works in: the main checkout's, whichever tree it was started in.</summary>
 internal static class MainTree

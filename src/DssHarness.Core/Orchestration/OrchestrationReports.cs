@@ -175,6 +175,7 @@ public static class OrchestrationReports
         {
             AgentStates.Live when record.Reads => $"{record.Name}  live, reads the main tree (no worktree){kept}",
             AgentStates.Live when !agent.WorktreeExists => $"{record.Name}  live, and its worktree is gone from '{agent.WorktreePath}'{kept}",
+            AgentStates.Live when agent.WorktreeProblem is { } problem => $"{record.Name}  live, and its worktree at '{agent.WorktreePath}' cannot be worked on: {problem.TrimEnd('.')}{kept}",
             AgentStates.Live => $"{record.Name}  live at '{agent.WorktreePath}', base {Base(record.Base)}{Session(record.Session)}{kept}",
             AgentStates.Closed => $"{record.Name}  closed at {Moment(record.Closing!.At)}{abandoned}, and its removal did not finish{(agent.WorktreeExists ? $": its worktree is still at '{agent.WorktreePath}'" : string.Empty)}{kept}",
             _ => $"{record.Name}  deleted at {Moment(record.DeletedAt!.Value)}{abandoned}{kept}",
@@ -287,6 +288,7 @@ public static class OrchestrationReports
             ["kind"] = record.Reads ? null : record.OwnRepository ? Worktrees.WorktreeListing.RepositoryKind : Worktrees.WorktreeListing.WorktreeKind,
             ["path"] = agent.WorktreePath,
             ["worktreeExists"] = agent.WorktreeExists,
+            ["worktreeProblem"] = agent.WorktreeProblem,
             ["baseCommit"] = record.Base,
             ["session"] = record.Session,
             ["closedAt"] = record.Closing is { } closing ? Moment(closing.At) : null,

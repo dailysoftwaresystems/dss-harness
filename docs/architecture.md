@@ -857,6 +857,19 @@ worktree, names everything it found on one line, each with its remedy, and exits
   `git -C <main checkout> worktree repair`, which helps only while git still has the worktree's
   record: when it was moved or its `.git` file was lost. A clone at the path would pass a status
   check and take its whole history with it.
+- **A worktree of a checkout moved by hand.** Moving the checkout, its worktrees in it, leaves
+  each worktree's `.git` file and git's record of it naming where they were, and git may not open
+  the worktree at all, though all its work is in it. `WorktreeInspector.MovedFromAsync` reads it
+  as git's own repair does: the `.git` file names a record in a `worktrees` directory; where that
+  record is gone, the record of the same name in this checkout's git directory is the one meant,
+  and where it is there it must be that one; a record whose worktree is still where it says is
+  another worktree's and is never taken. Such a worktree is never said to be a directory to look
+  in and delete: `list-worktree` warns of it, `delete-worktree` refuses it (`--force` aside),
+  `delete-orchestrator` refuses its orchestrator, and every agent verb refuses its agent, each
+  naming `git -C <main checkout> worktree repair <path>`. `list-orchestrator` asks each live
+  agent's worktree of git by the one rule the agent verbs use (`AgentWorktrees.StandingAsync`),
+  and says one git cannot open, or holds as another kind than its record names, cannot be worked
+  on and why (`worktreeProblem` in `--json`), never that the agent stands live at it.
 
 - **Evidence.** The directories `worktrees.evidenceRoots` declares are checked before git is asked
   anything, because they hold files git was never told about. One of them holding anything refuses
@@ -932,7 +945,8 @@ history of a repository nested inside one included.
   `delete-worktree <name> --force` finishes it, which is safe because every check passed before
   removal began. Run again without `--force`, the command names that same way for a directory
   that holds no `.git` of its own and that git records no worktree at, which is what such a
-  removal leaves; `git worktree repair` is named only while git still records a worktree there,
+  removal leaves; `git worktree repair` is named only while git still records a worktree there -
+  at that path, or, after the checkout was moved by hand, at another place that holds none now -
   since it rebuilds a lost `.git` file from that record and has nothing to rebuild from without
   it.
 - Forced, it is `git worktree remove --force --force`, which overrides a lock. A directory git

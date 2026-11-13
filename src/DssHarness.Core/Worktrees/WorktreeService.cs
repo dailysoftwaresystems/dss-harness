@@ -548,6 +548,14 @@ public sealed class WorktreeService(
                 return Refused(
                     $"'{ReportText.Printable(path)}' is not deleted, --force or not: it holds worktrees below it - {ReportText.Listed(below.Worktrees)} - and deleting it would "
                     + $"delete each of them. Delete each on its own, with '{ToolPackage.Command} {DeleteCommand} <address>' or, for an orchestrator's agent, delete-agent."
+                    + (below.Moved.Count > 0 ? $" And {below.SaidMoved(layout.MainCheckoutRoot)}." : string.Empty)
+                    + (below.Unrecorded.Count > 0 ? $" And {WorktreeInspector.SaidUnrecorded(below.Unrecorded)}." : string.Empty));
+            }
+
+            if (below.Moved.Count > 0)
+            {
+                return Refused(
+                    $"'{ReportText.Printable(path)}' is not deleted, --force or not: {below.SaidMoved(layout.MainCheckoutRoot)}. Deleting the directory would delete each with it."
                     + (below.Unrecorded.Count > 0 ? $" And {WorktreeInspector.SaidUnrecorded(below.Unrecorded)}." : string.Empty));
             }
 
@@ -1060,6 +1068,16 @@ public sealed class WorktreeService(
                 return true;
             }
 
+            if (await inspector.MovedFromAsync(context.Layout.MainCheckoutRoot, directory, cancellationToken).ConfigureAwait(false) is { } recorded)
+            {
+                // Said without being asked, and never as a directory to delete: a worktree whose checkout was moved by hand
+                // is still one, its work all in it, and git's record of it names where it was.
+                _output.Warn(
+                    ListCommand,
+                    $"'{address.Name}' is not listed: {WorktreeInspector.SaidMoved(context.Layout.MainCheckoutRoot, directory, recorded)}.");
+                return true;
+            }
+
             if (WorktreeInspector.HoldsOwnGit(_fileSystem, directory))
             {
                 // Said without being asked. A directory holding a .git entry that git no longer
@@ -1139,6 +1157,24 @@ public sealed class WorktreeService(
             return Refused(
                 $"'{ReportText.Printable(path)}' is not a worktree git can find, so what it holds cannot be checked, though git still records a worktree there. "
                 + $"Run 'git -C {ReportText.Printable(layout.MainCheckoutRoot)} worktree repair', which rebuilds its .git file from that record, as after it was moved or its .git file was lost; "
+                + "or pass --force to delete it anyway.");
+        }
+
+        string? moved;
+
+        try
+        {
+            moved = await inspector.MovedFromAsync(layout.MainCheckoutRoot, path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            return Unchecked(name, ex.Message);
+        }
+
+        if (moved is not null)
+        {
+            return Refused(
+                $"{WorktreeInspector.SaidMoved(layout.MainCheckoutRoot, path, moved)}, after which its work is checked as any worktree's is; "
                 + "or pass --force to delete it anyway.");
         }
 
