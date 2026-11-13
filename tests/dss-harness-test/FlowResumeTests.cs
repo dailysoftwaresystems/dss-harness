@@ -3600,6 +3600,170 @@ public sealed class FlowResumeTests
         Assert.Equal("Done | started think, after | q1 runBudget answered more", Standing(end, granted.Started, harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions));
     }
 
+    /// <summary>The loop of the deciding-step resume tests: review, revise and commit, its until read on what revise did, deciding at review.</summary>
+    private static WorkflowDefinition DecidingLoop(int bound, bool accepts)
+        => Parse($$"""
+            name: flow{{(accepts ? "\nanswers:\n  loopBound: accept" : string.Empty)}}
+            steps:
+              - name: fix
+                repeat:
+                  until: 'revise.done ?? false'
+                  maxIterations: {{bound}}
+                  decideAfter: review
+                steps:
+                  - name: review
+                    type: orient
+                  - name: revise
+                    type: orient
+                    dependsOn: [review]
+                  - name: commit
+                    type: orient
+                    dependsOn: [revise]
+            """);
+
+    /// <summary>
+    /// A loop that decides after a step decides once for that step's visit, and a resume never decides it again over
+    /// what has run since: the first session read its until at review, before revise turned it true, and went on; the
+    /// crash came while the iteration's commit ran, and the resume finishes the iteration and makes the next one - it
+    /// never reads the until again on the iteration as it now stands, which would end the loop the first session went on
+    /// with.
+    /// </summary>
+    [Fact]
+    public async Task ALoopsDecisionAtItsDecidingStep_IsTheResumesToo_NeverReadAgainOverWhatRanSince()
+    {
+        using var temp = new TempDirectory();
+        var definition = DecidingLoop(bound: 2, accepts: true);
+        var first = new Runner()
+            .On("revise", run => FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["done"] = true }))
+            .Hold("commit");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: records);
+            _ = coordinator.RunAsync(Token);
+            await first.StartedAsync("fix#1.commit").WaitAsync(Bound, Token);
+
+            // The crash, with the commit running and revise's done standing.
+        }
+
+        var next = new Runner().On("revise", run => FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["done"] = true }));
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            // The first iteration ran to its end, none of it withdrawn, and the second was made and decided at its own
+            // review - at the loop's bound, which its answers accept, so its rest never ran.
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["fix#1.commit", "fix#2.review"], next.Started);
+            Assert.DoesNotContain(coordinator.Instances, instance => instance.Key.StartsWith("fix#1.", StringComparison.Ordinal) && instance.Value.State != FlowInstanceState.Done);
+            Assert.Equal((FlowInstanceState.NotRun, FlowNotRunCause.LoopDecided), (coordinator.Instances["fix#2.revise"].State, coordinator.Instances["fix#2.revise"].NotRunCause));
+        }
+    }
+
+    /// <summary>
+    /// A loop that asked at its bound where its deciding step ended asks once: the session ends paused with the question
+    /// open, the resume finds it still open rather than asking again, and the answer <c>more</c> runs the rest of that
+    /// iteration once - then the next iteration, which asks at its own deciding step.
+    /// </summary>
+    [Fact]
+    public async Task ABoundAskedAtTheDecidingStep_IsAskedOnce_AndMoreRunsTheRestOfTheIterationOnceAfterAResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = DecidingLoop(bound: 1, accepts: false);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var end = await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+        }
+
+        var next = new Runner();
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var bound = Assert.Single(coordinator.OpenQuestions);
+
+            Assert.Equal("loopBound", bound.Kind);
+            Assert.True(coordinator.TryAnswer(bound.Id, "more", null, out _));
+
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+            Assert.Equal(["fix#1.revise", "fix#1.commit", "fix#2.review"], next.Started);
+            Assert.Equal(2, coordinator.Questions.Count);
+        }
+    }
+
+    /// <summary>
+    /// The inputs a use's with filled are the use's own from the session that filled them: a resume takes them back from
+    /// the use's record, never fills them again from what the with reads now - a text that changed since, here, which a
+    /// step of the use still to run would otherwise read in their place.
+    /// </summary>
+    [Fact]
+    public async Task TheInputsAUseFilled_AreTakenBackByAResume_NeverFilledAgain()
+    {
+        using var temp = new TempDirectory();
+        var pipeline = """
+            name: pipeline
+            inputs:
+              - name: title
+                kind: text
+                required: true
+            steps:
+              - name: first
+                type: orient
+              - name: second
+                type: orient
+                dependsOn: [first]
+                when: 'input.title == "the first session''s"'
+            """;
+        var definition = WorkflowResolver.Resolve(
+            Parse("""
+                name: flow
+                texts:
+                  title: texts/title.md
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    with:
+                      title: '{text.title}'
+                """),
+            "flow",
+            path => path == "flow/pipeline/pipeline.yml" ? pipeline : null).Definition;
+        var first = new Runner().Hold("first");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: records, workflowFile: (_, _) => "the first session's");
+            _ = coordinator.RunAsync(Token);
+            await first.StartedAsync("items.first").WaitAsync(Bound, Token);
+
+            // The crash, with the use's first step running on the inputs its with filled.
+        }
+
+        var next = new Runner();
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            // The text the with reads changed since: the use's steps still read what the first session filled.
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, workflowFile: (_, _) => "changed since");
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["items.first", "items.second"], next.Started);
+        }
+    }
+
     /// <summary>The run's records, cut: the writes up to the cut reach the disk, and none after it - a process ended there.</summary>
     /// <param name="inner">The records the writes up to the cut reach.</param>
     /// <param name="writes">How many writes reach them.</param>

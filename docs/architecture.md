@@ -1656,14 +1656,22 @@ and `outputs`, what the whole workflow produces, each from a step of the flow. I
 one `type` - from `orient` and `reason` through the leg steps, the fold family, the checks, git
 and the forge, to `pause` - or groups holding steps of their own: a group runs its steps once for
 each work item a `forEach` yields, again and again until a `repeat`'s bound is met, or once as a
-block that `gathers` its members' findings into one list. A repeat that says `decideAfter` reads
-its decision - its `until`, its `blocking` and its bound - where that step of each iteration ends,
-not at the iteration's end: the rest of that iteration starts only where the loop goes on, a loop
-that ends at its bound leaves what its deciding step found with none of it acted on (`DecideAt`,
-called where the deciding step ends and again by the schedule's walk for a session that takes the
-run up from its records), and no iteration's end re-reads the decision, for it was made - the
-shipped review loop decides at its `review`, so the last rework of a loop that ends at its bound
-is reviewed by the round after it and what it leaves is what its last review found. A step raised by another step's ending
+block that `gathers` its members' findings into one list. A repeat that says `decideAfter` decides
+at that step of each iteration, not at the iteration's end: where the step's newest visit ends
+done, its `until`, its `blocking` and its bound are read there, on the iteration as it then stands
+(`DecideAt`, called where the deciding step ends done and again by the schedule's walk for a session
+that takes the run up from its records), and the decision is kept with that visit in the
+iteration's own record (`Scope.Decision`, written through `Decide`, persisted as the step record's
+`decided`), so a resume never reads it again over what has run since and a later visit of the step
+in the same iteration is decided anew. The rest of that iteration starts only where the loop goes
+on; a loop that ends there withdraws what of the iteration has not started, waits for what is in
+flight (`FinishTheDecision`) and leaves what its deciding step found, none of it acted on; at its
+bound, work a plan update owes the loop has its iteration added first, as at an iteration's end;
+and no iteration's end re-reads a decision made. Where the deciding step ends any other way -
+skipped, failed and passed over, never run - nothing is decided there, and the iteration's end
+reads them as for a loop that names no deciding step. The shipped review loop decides at its
+`review`, so the last rework of a loop that ends at its bound is reviewed by the round after it and
+what it leaves is what its last review found. A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
 schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own.
@@ -1673,36 +1681,73 @@ relative to the calling workflow's directory and resolving inside the workflows 
 workflow lives in a folder of its own beside the one that uses it - and `with`, the values its
 inputs are filled with, each read as the input it fills declares: an expression for a `value`, a
 template for a `text`, a path of the used workflow's directory for a `file`, and a single name
-for a `step`, which a step of the used workflow reads as `{input.<name>}` in its `onFailure` or
-`then`, filled where it runs. The file a step is asked with may be read the same way (V63): one
-whole input of the kind `file` naming its `prompt`, so one pipeline is asked with a different
-prompt by each workflow that uses it; and a step of the used workflow may say a `when` that reads
-one input of it alone, its own gate, held off where a use fills that input so - the way the
-shipped flow's item pipeline holds its `redo` and `undo` off where its recovery uses it. The used
-workflow is read as a definition of its own and resolved
-into the step before anything is checked or run: its steps become the step's members - instances
-named under the use as a group's are - its files are read in its own directory, its declared
-outputs are the step's own once it ends, and its recovery takes a failure inside it before the
-caller's handling of the step. Its steps read only its inputs, its params and its own steps,
-never the calling run's; every fact of the caller they need comes through an input. Its budget,
-limits, advisor, amend and answers are never applied - the calling run's own hold - and
-`validate-workflow` says so beside the fingerprint of the file it read, one line for each use -
-unless the use says `useParentLimits: false`, and then the used workflow's own settings govern
-its steps, each key it declares replacing the caller's for them and each it declares none for
-staying the caller's (a use cannot widen a run's limits by declaring nothing): its limits and
-its `maxInstances` gate its steps alone, counted across every instance of the use, and the
-caller's gates count them no more (`FlowCoordinator.OwnOf` walks the scope chain for the
-governing use, `CounterFull` counts its gate, `UseBound` holds its cap); the retries and
-backoff its steps fall back to where they say neither (`RetryCap`, and the reason runner's
-`FlowUse.Around`); the handoff bound of its paused reasoning steps; its answers are
-consulted for its steps' questions after the step's own and the groups around it and before
-the run's (`ConfiguredFor`); its advisor serves its steps' questions, its agent and prompt
-files read in its own directory (`SeekAdvice` picks it and routes the call's workflow,
-`AdvisorRunner` reading by the name it names); and the run's one graph takes the shape it
-declares where the run's own workflow says none (`FlowGraphSyncs.RequestOf`'s governing
-shape, passed by the reason steps' serving and the graphify runner through `FlowUse.Around`).
-An amend is refused where the key says false - an amend is a run's
-own, and no step of a run applies one - said at validation; `preapproved` is a run's input
+for a `step`, which a step of the used workflow reads as `{input.<name>}` whole in its `onFailure`
+or a handler's `then`. The file a step is asked with may be read the same way (V63): one whole
+input of the kind `file` naming its `prompt`, so one pipeline is asked with a different prompt by
+each workflow that uses it; and a step of the used workflow may say a `when` that reads one input
+of it alone, its own gate, held off where a use fills that input so - the way the shipped flow's
+item pipeline holds its `redo` and `undo` off where its recovery uses it. The used workflow is
+read as a definition of its own and resolved into the step before anything is checked or run: its
+steps become the step's members - instances named under the use as a group's are - its files are
+read in its own directory, and its declared outputs are the step's own once it ends (`UseOutputs`,
+read where the use ends done: one that reads nothing, from a step its item skipped, is absent, and
+one that cannot be read fails the use). A failure inside it that is given to a recovery is taken by
+its own recovery, where it declares one, before any around it and the run's (`RecoveryReaching`
+walks the scopes as the workflow declares them, `Scope.World`).
+
+Its `with` values are read once for each scope its steps run in - the block, each item of a
+`forEach`, each iteration of a `repeat`, each raising of a handler, each item a plan update places
+- by one owner (`FillUse`, reading past the use's own boundary, for the values are the caller's),
+and kept in the record of the instance that scope is (the step record's `inputs`), so a resume
+takes them back and never reads them again over what has run since. Every item's are read before
+any item opens: a value that cannot be read fails the use, saying which input and for which item,
+with nothing of it opened, and a read inside a scope whose inputs were never filled - an always
+step of the failed use - is refused naming the use, never handed the caller's input of the same
+name. A failure policy or a `then` read from a `step` input is filled in the scope that declares
+it (`DeclaringScopeOf`) - a group's `onFailure: '{input.failTo}'` reads the input of the workflow
+that declares the group, however deep the failing step - and one that reads nothing, or fills with
+no policy, is said: the step's error and record say which and why, and the failure goes where the
+top level sends what nothing else decides (`Unpolicied`); a handler whose `then` cannot be read
+ends failed, its code `ConfigInvalid`, and its failure decides as any failure does (`ThenUnread`).
+Its steps read only its inputs, its params and its own steps, never the calling run's; every fact
+of the caller they need comes through an input. A visit of a recovery stands in the scope its
+source failed in, but every lookup across a use's boundary - inputs, params, texts, a failure
+policy, the answers - is made in the scope that declares the recovery (`Scope.World`, which a
+recovery visit's scope takes from the recovery's declaring scope and every other scope from its
+parent), so the run's own recovery reads the run's inputs wherever the failure happened. A
+`{text.<name>}` is the nearest used workflow's own around the reading step that declares the name,
+else the next one out's, else the run's (`TextsAt`, the one owner the templates, the bar and the
+advisor's prompt read by).
+
+Its budget, limits, advisor, reporter, amend, answers and codebaseGraph are never applied - the
+calling run's own hold - and `validate-workflow` says so beside the fingerprint of the file it
+read, one line for each use - unless the use says `useParentLimits: false`, and then the used
+workflow's own settings govern its steps key by key: a key is governed by the nearest such use
+around a step, by its declaration path, that declares it - one that declares none of it governs
+nothing of it, so the next one out that declares it does - and a key no such use declares stays
+the run's, for a use cannot widen a run's limits by declaring nothing (`FlowUse.Governing`, the one
+owner of which use governs a key, walking the root's and each use's `recover` as the definition
+names them, which the engine asks through `GoverningOf` and each runner by the step's declaration
+path). Its `maxReasoningAgents`, `maxParallelProcesses` and `maxOpenAgents` gate its steps as pools
+of their own in the place of the run's, counted across every instance of the use (`CounterFull`);
+its `maxInstances` caps the instances its steps open, across every instance of the use and in the
+place of the run's own cap for them (`InstanceBoundOf`); its `maxRetries` and `backoffSeconds` are
+what its steps fall back to where they say neither (`FlowUse.RetriesOf` and `BackoffSecondsOf`,
+which `RetryCap` and the reason runner both read); its `handoffSeconds` bounds the handoff of its
+paused reasoning steps; and its advisor recommends for its steps' questions in the place of the
+run's (`SeekAdvice`): its agent and prompt files read in its own directory, its prompt handed the
+inputs the use filled and the texts its steps see, its bar the workflow's own `texts.recommendations`
+where it declares one (`BarOf`, reading `texts.recommendations` first, then the run's
+`recommendations`, then `recommendations.md`), and each recommendation credited to the advisor that
+gave it. A question of its steps is answered nearest first (`ConfiguredFor`): the step's own
+answers, the groups around it within the workflow, the workflow's own `answers`, and then the use
+step's own, the caller's groups and the run's. The run's one codebase graph has one shape
+(`FlowUse.GraphOf`): the run's own workflow's, else the first a governing use declares in
+declaration order, and every sync at a step's start or end, every serving and every graphify step
+of the run is made under it (`FlowGraphSyncs.RequestOf`). Its budget and its reporter are carried
+and not applied (`FlowUseOwn.Unapplied`): the run's budget counts its steps' spend and the run's
+reporter words the run as a whole. An amend is refused where the key says false - an amend is a
+run's own, and no step of a run applies one - said at validation; `preapproved` is a run's input
 alone, whatever the key says. A
 workflow that uses itself, directly or through others, is refused with the chain of the uses that
 close the circle, and uses nest at most ten deep in all, across the workflows they name. A run

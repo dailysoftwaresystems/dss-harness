@@ -343,10 +343,10 @@ public sealed class ReasonStepRunner(
             Spend = spend.RecordingIn(context.Layout),
             Compaction = compaction,
 
-            // What the step falls back to where it says neither: the use's that governs it, where a use that governs
-            // itself declares one, else the run's.
-            Retries = run.Step.Retries ?? FlowUse.Around(place.Definition, run.DeclarationPath)?.Use?.Own?.MaxRetries ?? place.Definition.RetriesOf(run.Step),
-            BackoffSeconds = run.Step.BackoffSeconds ?? FlowUse.Around(place.Definition, run.DeclarationPath)?.Use?.Own?.BackoffSeconds ?? place.Definition.BackoffSeconds,
+            // What the step falls back to where it says neither: the governing use's where one declares the key, else
+            // the run's - the one rule the engine's retry table reads too.
+            Retries = FlowUse.RetriesOf(place.Definition, run.DeclarationPath, run.Step),
+            BackoffSeconds = FlowUse.BackoffSecondsOf(place.Definition, run.DeclarationPath, run.Step),
             Program = program.Program,
             ProgramVersion = program.Version,
             Skills = skills,

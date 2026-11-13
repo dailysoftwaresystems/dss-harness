@@ -134,7 +134,7 @@ public static class WorkflowStepTypes
         new("steps", $"the group's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))} - a step that says 'use' takes none, for the workflow it uses brings its own"),
         new("use", "the workflow this step is: a path to its yml file, relative to the calling workflow's directory and resolving inside the workflows root; the step takes the workflow's steps as its own, and its recovery and its declared outputs with them"),
         new("with", "the values the used workflow's inputs are filled with, each read as the input it fills declares: an expression for a value, a template for a text, a path into the used workflow's directory for a file, and a name its steps say in onFailure or then for a step"),
-        new("useParentLimits", "which run's settings govern the used workflow's steps: true (the default) the calling run's, with each run-level key the used workflow declares said as not applied, or false the used workflow's own - each key it declares replacing the caller's for its steps, and an amend refused, for an amend is a run's own"),
+        new("useParentLimits", "which run's settings govern the used workflow's steps: true (the default) the calling run's, with each run-level key the used workflow declares said as not applied, or false the used workflow's own, key by key - a key is governed by the nearest such use around a step that declares it, and one none declares stays the run's - its budget and reporter carried and not applied, and an amend refused, for an amend is a run's own"),
         new("forEach", "an expression yielding the work items the group runs its steps for, once each"),
         new("repeat", "the group's bound: when its iterations end, and what is left") { Keys = RepeatKeys },
         new("gather", "members gathered from the group's steps into one list, named as its members read them"),
@@ -497,7 +497,7 @@ public static class WorkflowStepTypes
         new("blocking", "the expression that says, past the rounds, whether what is left must still be dealt with"),
         new("blockersLimitRounds", "further rounds past rounds while blocking holds, from 1 to 20 (absent, 3); false, none but the workflow's budget"),
         new("leftover", "where what the loop left is written"),
-        new("decideAfter", "the step of each iteration the loop's until, blocking and bound are read at when it ends; what follows it in the iteration starts only where the loop goes on"),
+        new("decideAfter", "the step of each iteration the loop decides at: where its newest visit ends done, the loop's until, blocking and bound are read there and kept in the iteration's record, and what follows it in the iteration starts only where the loop goes on; where it ends any other way they are read at the iteration's end"),
     ];
 
     /// <summary>What one <c>allow</c> block takes.</summary>

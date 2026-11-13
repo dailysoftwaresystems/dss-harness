@@ -324,13 +324,6 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal int ExtraIterations;
 
     /// <summary>
-    /// The iteration a loop that decides at a step of its own (<c>decideAfter</c>) last read its decision in: no
-    /// iteration after it re-reads the <c>until</c>, the <c>blocking</c> or the bound, for the decision stands as it
-    /// was read where the deciding step ended. 0 where none was read.
-    /// </summary>
-    internal int DecidedIteration;
-
-    /// <summary>
     /// The updates that owe this loop work - each one's id, added where a piece it places finds the work-item group's
     /// round ended, so the work is owed to the loop's next iteration: the loop then runs again whatever its
     /// <c>until</c> says, and where it is at its bound one iteration is added for the update.
@@ -536,6 +529,9 @@ public sealed class FlowCoordinator
     private readonly List<Wake> _wakes = [];
     private readonly Dictionary<string, FlowInstance> _agentsOpen = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _declarationOrder = new(StringComparer.Ordinal);
+
+    /// <summary>The use that governs each key for each declaration path, read once a run: the definition never changes under it.</summary>
+    private readonly Dictionary<(string Path, FlowUseKey Key), FlowGoverning?> _governing = [];
 
     /// <summary>
     /// How many times a configuration has given each counted answer, by where it is counted
@@ -1498,8 +1494,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// One safe pause, in order: recorded before anything is touched; nothing more started from here on, and every
     /// advice still running ended, its question saying the recommendation is sought at the resume; every reason step in
-    /// progress asked for its handoff in its own conversation, all at once, each answered within the run's
-    /// <c>handoffSeconds</c> - an agent that gives no account in that time is ended and leaves a handoff the engine
+    /// progress asked for its handoff in its own conversation, all at once, each answered within the
+    /// <c>handoffSeconds</c> that governs it (<see cref="HandoffSecondsOf"/>: the governing use's, else the run's) - an
+    /// agent that gives no account in that time is ended and leaves a handoff the engine
     /// writes, and what a runner that has not ended claimed stays held until it answers; the machine steps in progress left to finish - or stopped, where the request says <c>all</c> - and
     /// recorded as they end; a <c>ci-wait</c> ends Stopped at once, for it runs nothing between two reads. A step its
     /// time limit stopped already is left to end as that stop ends it. The loop has marked the run pausing already, as
@@ -1558,7 +1555,7 @@ public sealed class FlowCoordinator
         {
             // All the turns at once, each bounded; what each spent is counted, for the budget counts a handoff turn
             // as it counts the attempt it ends.
-            var turns = handingOff.Select(each => HandoffTurnAsync(each.Instance, OwnOf(each.Instance)?.HandoffSeconds ?? _definition.HandoffSeconds ?? 180, each.Asked)).ToList();
+            var turns = handingOff.Select(each => HandoffTurnAsync(each.Instance, HandoffSecondsOf(each.Instance), each.Asked)).ToList();
             var accounts = await Task.WhenAll(turns).ConfigureAwait(false);
 
             for (var at = 0; at < handingOff.Count; at++)
@@ -1659,7 +1656,7 @@ public sealed class FlowCoordinator
     /// and - where it gave none - why, as the handoff the engine writes says it.
     /// </summary>
     /// <param name="instance">The reason step being handed off.</param>
-    /// <param name="seconds">The run's <c>handoffSeconds</c>.</param>
+    /// <param name="seconds">The <c>handoffSeconds</c> that governs the step (<see cref="HandoffSecondsOf"/>).</param>
     /// <param name="asked">Whether its agent was asked for the handoff in its own conversation.</param>
     private async Task<(string? Text, TimeSpan Minutes, string Why)> HandoffTurnAsync(FlowInstance instance, int seconds, bool asked)
     {
@@ -3523,19 +3520,33 @@ public sealed class FlowCoordinator
     /// </summary>
     private void AnswerLoopBound(FlowInstance instance, string answer)
     {
+        // The question a loop that decides at a step of its own asked there, where it did: the iteration's own record says
+        // what the answer made of the decision, so a resume goes on from it rather than asking again.
+        var atTheStep = instance.Children.Count > 0 && instance.Children[^1].Decision is { To: FlowLoopDecision.Asks } asked
+            ? (Body: instance.Children[^1], Asked: asked)
+            : ((Scope Body, FlowLoopDecision Asked)?)null;
+
         switch (answer)
         {
             case "more":
-                // The loop was granted one more iteration (Grant): it goes on to make it.
+                // The loop was granted one more iteration (Grant): it goes on to make it - asked at its deciding step,
+                // the rest of the iteration runs first, and its end makes the next with no second reading.
                 instance.State = FlowInstanceState.Running;
+
+                if (atTheStep is { } goingOn)
+                {
+                    Decide(goingOn.Body, goingOn.Asked with { To = FlowLoopDecision.GoesOn });
+                }
+
                 break;
             case "accept":
-                if (instance.Step.Repeat?.DecideAfter is not null && instance.Children.Count > 0 && instance.Children[^1].GroupInstance is { State: FlowInstanceState.Running })
+                if (atTheStep is { } ending)
                 {
                     // The loop asked at its deciding step, with the rest of the iteration never started: it ends there,
                     // the rest NotRun, and what its leftover names is what that step found, none of it acted on.
-                    EndTheIterationAt(instance, instance.Children[^1]);
-                    EndRepeat(instance);
+                    instance.State = FlowInstanceState.Running;
+                    Decide(ending.Body, ending.Asked with { To = FlowLoopDecision.EndsLeaving });
+                    EndAtTheDecision(instance, ending.Body);
                     break;
                 }
 
@@ -3545,7 +3556,7 @@ public sealed class FlowCoordinator
                 }
 
                 // A loop ends on what its last iteration left, with its leftover said where it names one.
-                EndRepeat(instance);
+                EndLoop(instance, leaving: true);
                 break;
         }
     }
@@ -4362,11 +4373,13 @@ public sealed class FlowCoordinator
         item.Piece = piece;
         item.PieceOf = update.Id;
         round.Children.Add(item);
+        _ = Create(item, round.Step, FlowInstanceState.Running, item.Id);
 
         // A use inside a forEach fills its inputs per item, an update-placed work item as much as one the group's own
-        // list drew: the piece's item is the scope's, and the use reads it as any item's.
-        OpenUse(item, round.Step, item.GroupInstance!);
-        _ = Create(item, round.Step, FlowInstanceState.Running, item.Id);
+        // list drew: the piece's item is the scope's, and the use reads it as any item's. Filled once the item's own
+        // record is made, so a value that cannot be read fails the round - as one of its own list's items would - over
+        // records a resume can place.
+        _ = FillUse(item, round.Step, round);
 
         Record(
             FlowChangeKind.Step,
@@ -4579,7 +4592,7 @@ public sealed class FlowCoordinator
 
         if (handingOff.Count > 0)
         {
-            var accounts = await Task.WhenAll(handingOff.Select(each => HandoffTurnAsync(each.Member, OwnOf(each.Member)?.HandoffSeconds ?? _definition.HandoffSeconds ?? 180, each.Asked))).ConfigureAwait(false);
+            var accounts = await Task.WhenAll(handingOff.Select(each => HandoffTurnAsync(each.Member, HandoffSecondsOf(each.Member), each.Asked))).ConfigureAwait(false);
 
             for (var at = 0; at < handingOff.Count; at++)
             {
@@ -4628,11 +4641,12 @@ public sealed class FlowCoordinator
                 again.PieceOf = update;
                 again.AgainOf = item;
                 round.Children.Add(again);
+                _ = Create(again, round.Step, FlowInstanceState.Running, again.Id);
 
                 // The use's inputs are filled for the visit again as for the item it takes the place of: its with
-                // values read the piece's item of their own.
-                OpenUse(again, round.Step, again.GroupInstance!);
-                _ = Create(again, round.Step, FlowInstanceState.Running, again.Id);
+                // values read the piece's item of their own, once its record is made, and one that cannot be read
+                // fails the round.
+                _ = FillUse(again, round.Step, round);
                 Record(
                     FlowChangeKind.Step,
                     again.GroupInstance!,
@@ -4793,12 +4807,23 @@ public sealed class FlowCoordinator
             return false;
         }
 
-        if (scope.LoopOf is { Step.Repeat.DecideAfter: not null, WaitingQuestion: not null })
+        if (scope.LoopOf is { Step.Repeat.DecideAfter: not null } deciding
+            && deciding.Children.Count > 0
+            && ReferenceEquals(deciding.Children[^1], scope))
         {
-            // The loop around this iteration stands on its bound's question, read where the iteration's deciding step
-            // ended (decideAfter): nothing more of the iteration starts while the answer is unset, for on 'accept' the
-            // rest is never started at all, and its leftover is what the deciding step found, none of it acted on.
-            return false;
+            // The loop around this iteration decides at a step of it (decideAfter): where that step's newest visit has
+            // ended done and its decision is not yet read, it is read before anything after it is drawn - a step
+            // skipped as it was drawn, a session that took the run up between the step's ending and its decision - so
+            // nothing of the rest starts where the loop ends.
+            changed |= DecideAt(deciding);
+
+            if (deciding.WaitingQuestion is not null || scope.Decision is { EndsTheLoop: true })
+            {
+                // The loop stands on its bound's question, read at the deciding step, or ended there: nothing more of
+                // the iteration starts - on 'accept' the rest is never started at all, and its leftover is what the
+                // deciding step found, none of it acted on.
+                return changed;
+            }
         }
 
         foreach (var declaration in DeclarationsOf(scope))
@@ -5192,33 +5217,33 @@ public sealed class FlowCoordinator
                 list = [.. list.Where(item => FlowWorkItems.NameOf(item.ToNode()) is { } named && owed.Contains(named))];
             }
 
-            var members = SubtreeSize(PathOf(scope, declaration));
-            var wouldBring = _created.Count + list.Count * (1 + members);
-
-            if (wouldBring > Limit().MaxInstances)
+            if (InstanceBoundOf(instance.Id, scope, declaration, list.Count) is { } bound)
             {
-                FailGroup(instance, HarnessExit.Refused, InstanceBound(instance.Id, wouldBring, Limit().MaxInstances), instance.Path);
+                FailGroup(instance, HarnessExit.Refused, bound, instance.Path);
                 return;
             }
 
-            if (UseBound(instance.Id, scope, declaration, list.Count * (1 + members)) is { } useBound)
-            {
-                FailGroup(instance, HarnessExit.Refused, useBound, instance.Path);
-                return;
-            }
+            // A use inside a forEach fills its inputs per item, for its with values read the item of their own - every
+            // item's read before any item is opened, so one that cannot be read fails the group with none of its items
+            // made: no record is left of a scope the run never opened.
+            var opened = new List<Scope>();
 
             for (var index = 0; index < list.Count; index++)
             {
-                var item = NewScope($"{instance.Id}[{index}]", PathOf(scope, declaration), scope, declaration, list[index], index, null, instance);
-                instance.Children.Add(item);
+                var item = MakeScope($"{instance.Id}[{index}]", PathOf(scope, declaration), scope, declaration, list[index], index, null, instance);
 
-                // A use inside a forEach fills its inputs per item, for its with values read the item of their own.
-                OpenUse(item, declaration, instance);
-
-                if (instance.Failing is not null)
+                if (!FillUse(item, declaration, instance))
                 {
                     return;
                 }
+
+                opened.Add(item);
+            }
+
+            foreach (var item in opened)
+            {
+                _ = Adopt(item);
+                instance.Children.Add(item);
 
                 // The pieces owed a work item of this name - the newest update's carries it, and an older one's work
                 // goes on as the newest places it.
@@ -5273,73 +5298,49 @@ public sealed class FlowCoordinator
 
         // A workflow used as a step runs on what the use fills its inputs with: the values are read in the scope its
         // members run in, and a use inside a forEach reads the item of its own.
-        OpenUse(instance.OwnScope, declaration, instance);
+        _ = FillUse(instance.OwnScope, declaration, instance);
     }
 
     /// <summary>
-    /// Fills a used workflow's inputs into the scope its members run in: each <c>with</c> value read as the input it
-    /// fills declares - an expression's value, a filled template, a path, a name - and the workflow's own params with
-    /// their defaults. A value that cannot be read fails the use step as a whole, said with the input's name.
+    /// Fills a used workflow's inputs into the scope its members run in, where <paramref name="declaration"/> is a use -
+    /// a block, one item or iteration of a loop, a handler raised for an ending: each <c>with</c> value read as the input
+    /// it fills declares - an expression's value, a filled template, a path, a name - and the workflow's own params with
+    /// their defaults. A value that cannot be read fails <paramref name="group"/> - the use step's instance - said with
+    /// the input's name, and leaves the scope's inputs unfilled, which a read inside refuses rather than reading another
+    /// workflow's. The one owner of a use's inputs, on every path a scope of one is opened by. Whether they were filled,
+    /// or there was nothing to fill.
     /// </summary>
-    private void OpenUse(Scope scope, WorkflowStep declaration, FlowInstance group)
+    private bool FillUse(Scope scope, WorkflowStep declaration, FlowInstance group)
     {
-        var use = declaration.Use;
-
-        if (use is null)
+        if (declaration.Use is null)
         {
-            return;
+            return true;
         }
 
-        var inputs = new JsonObject();
-
-        foreach (var input in use.Inputs)
+        if (UseInputsOf(scope, declaration, out var problem) is not { } inputs)
         {
-            var raw = declaration.With.TryGetValue(input.Name, out var withValue) ? withValue : input.Default;
-
-            if (raw is null)
-            {
-                if (input.Required)
-                {
-                    FailGroup(group, HarnessExit.ConfigInvalid, $"'{group.Id}' names no '{input.Name}' in with, and '{use.Name}' requires the input", group.Path);
-                    return;
-                }
-
-                // An input the use fills none for, that requires none, is absent: nothing inside reads a value for it.
-                continue;
-            }
-
-            FlowValue value;
-
-            if (input.Kind is FlowInput.TextKind)
-            {
-                if (FlowTemplate.Fill(raw, path => Read(path, scope), out var unfilled) is not { } filled)
-                {
-                    FailGroup(group, HarnessExit.ConfigInvalid, Unreadable($"with.{input.Name}", group.Id, unfilled!), group.Path);
-                    return;
-                }
-
-                value = FlowValue.Of(filled);
-            }
-            else if (input.Kind is FlowInput.ValueKind)
-            {
-                value = Evaluate(raw, scope, out var problem);
-
-                if (problem is not null)
-                {
-                    FailGroup(group, HarnessExit.ConfigInvalid, Unreadable($"with.{input.Name}", group.Id, problem), group.Path);
-                    return;
-                }
-            }
-            else
-            {
-                // A file is a path of the used workflow's directory and a step a single name: both are read as written,
-                // held to their shape where the definition is checked.
-                value = FlowValue.Of(raw);
-            }
-
-            inputs[input.Name] = value.ToNode()?.DeepClone();
+            FailGroup(group, HarnessExit.ConfigInvalid, problem!, group.Path);
+            return false;
         }
 
+        scope.UseInputs = inputs;
+        scope.UseParams = UseParamsOf(declaration.Use);
+
+        // The inputs are the use's own from here on, kept in the record of the instance the scope is, so a resume takes
+        // them back from it and never fills them again from what the with reads then: an item's or an iteration's
+        // instance is made after this and its first record holds them, and a block's or a handler's, made before, is
+        // written again.
+        if ((scope.OwnGroupInstance ?? scope.GroupInstance) is { } owner)
+        {
+            WriteStepRecordOf(owner);
+        }
+
+        return true;
+    }
+
+    /// <summary>A used workflow's params, as its steps read them: its own defaults, never the calling run's.</summary>
+    private static JsonObject UseParamsOf(FlowUse use)
+    {
         var @params = new JsonObject();
 
         foreach (var parameter in use.Params)
@@ -5347,8 +5348,78 @@ public sealed class FlowCoordinator
             @params[parameter.Name] = parameter.Default;
         }
 
-        scope.UseInputs = inputs;
-        scope.UseParams = @params;
+        return @params;
+    }
+
+    /// <summary>
+    /// What <paramref name="declaration"/>'s <c>with</c> fills its used workflow's inputs with, read in
+    /// <paramref name="scope"/> - the scope its members run in, whose item is the with values' own - and read past the
+    /// use's own boundary, for the values are the caller's. Null where one cannot be read, with why in
+    /// <paramref name="problem"/>, said of the scope by its id - the item, the iteration or the block it was read for.
+    /// </summary>
+    private JsonObject? UseInputsOf(Scope scope, WorkflowStep declaration, out string? problem)
+    {
+        var use = declaration.Use!;
+        var inputs = new JsonObject();
+        problem = null;
+        scope.Filling = true;
+
+        try
+        {
+            foreach (var input in use.Inputs)
+            {
+                var raw = declaration.With.TryGetValue(input.Name, out var withValue) ? withValue : input.Default;
+
+                if (raw is null)
+                {
+                    if (input.Required)
+                    {
+                        problem = $"'{scope.Id}' names no '{input.Name}' in with, and '{use.Name}' requires the input";
+                        return null;
+                    }
+
+                    // An input the use fills none for, that requires none, is absent: nothing inside reads a value for it.
+                    continue;
+                }
+
+                FlowValue value;
+
+                if (input.Kind is FlowInput.TextKind)
+                {
+                    if (FlowTemplate.Fill(raw, path => Read(path, scope), out var unfilled) is not { } filled)
+                    {
+                        problem = Unreadable($"with.{input.Name}", scope.Id, unfilled!);
+                        return null;
+                    }
+
+                    value = FlowValue.Of(filled);
+                }
+                else if (input.Kind is FlowInput.ValueKind)
+                {
+                    value = Evaluate(raw, scope, out var unread);
+
+                    if (unread is not null)
+                    {
+                        problem = Unreadable($"with.{input.Name}", scope.Id, unread);
+                        return null;
+                    }
+                }
+                else
+                {
+                    // A file is a path of the used workflow's directory and a step a single name: both are read as
+                    // written, held to their shape where the definition is checked.
+                    value = FlowValue.Of(raw);
+                }
+
+                inputs[input.Name] = value.ToNode()?.DeepClone();
+            }
+
+            return inputs;
+        }
+        finally
+        {
+            scope.Filling = false;
+        }
     }
 
     /// <summary>The iterations a repeat's own bound allows: its maxIterations, or its rounds and the further ones its blocking holds for.</summary>
@@ -5363,7 +5434,6 @@ public sealed class FlowCoordinator
     {
         var iteration = instance.Children.Count + 1;
         var bound = BoundOf(declaration, instance);
-        var wouldBring = _created.Count + 1 + SubtreeSize(PathOf(scope, declaration));
 
         // The loop's own bound is said first: at it the run asks, and only an iteration the loop may have is held to
         // the instance bound.
@@ -5373,19 +5443,22 @@ public sealed class FlowCoordinator
             return false;
         }
 
-        if (wouldBring > Limit().MaxInstances)
+        if (InstanceBoundOf(instance.Id, scope, declaration, 1) is { } instanceBound)
         {
-            FailGroup(instance, HarnessExit.Refused, InstanceBound(instance.Id, wouldBring, Limit().MaxInstances), instance.Path);
+            FailGroup(instance, HarnessExit.Refused, instanceBound, instance.Path);
             return true;
         }
 
-        if (UseBound(instance.Id, scope, declaration, 1 + SubtreeSize(PathOf(scope, declaration))) is { } iterationBound)
+        // A repeat that is a use fills its inputs for each iteration before the iteration is opened, as a forEach's
+        // items are: one that cannot be read fails the loop with no iteration made.
+        var body = MakeScope($"{instance.Id}#{iteration}", PathOf(scope, declaration), scope, declaration, FlowValue.Missing, null, iteration, instance);
+
+        if (!FillUse(body, declaration, instance))
         {
-            FailGroup(instance, HarnessExit.Refused, iterationBound, instance.Path);
             return true;
         }
 
-        var body = NewScope($"{instance.Id}#{iteration}", PathOf(scope, declaration), scope, declaration, FlowValue.Missing, null, iteration, instance);
+        _ = Adopt(body);
         instance.Children.Add(body);
         _ = Create(body, declaration, FlowInstanceState.Running, body.Id);
         return true;
@@ -5416,14 +5489,20 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Reads the decision of a repeat that decides at a step of its own (<c>decideAfter</c>), where that step of its
-    /// current iteration has ended: its <c>until</c>, its <c>blocking</c> past the rounds, and its bound are read on
-    /// the iteration as it stands at that step - what the step found, nothing after it yet - for that is where the
-    /// workflow says the loop decides. A loop that ends here ends on the spot: the rest of the iteration is never
-    /// started, and what its <c>leftover</c> names is what the deciding step found, none of it acted on. One that goes
-    /// on runs the rest of the iteration as it always did, and the iteration's end makes the next iteration with no
-    /// second reading - the decision was made. A loop at its bound asks here, and its question holds the iteration
-    /// from starting anything more until it is answered.
+    /// Reads the decision of a repeat that decides at a step of its own (<c>decideAfter</c>), where that step's newest
+    /// visit in the current iteration has ended done: its <c>until</c>, its <c>blocking</c> past the rounds, and its
+    /// bound are read on the iteration as it stands at that step - what the step found, nothing after it yet - for that
+    /// is where the workflow says the loop decides. The decision is kept with the visit it was read at, in the
+    /// iteration's own record (<see cref="Scope.Decision"/>): read once for that visit, and never again by a resume over
+    /// what has run since; a later visit of the step in the same iteration - a handler sending the run back to it - is
+    /// decided anew. A loop that ends here ends where it decided: the rest of the iteration is never started, and what its
+    /// <c>leftover</c> names is what the deciding step found, none of it acted on. One that goes on runs the rest of the
+    /// iteration as it always did, and the iteration's end makes the next iteration with no second reading. A loop at its
+    /// bound asks here - or, where a plan update owes it work, has the iteration that work is owed added first, as an
+    /// iteration's end would - and its question holds the iteration from starting anything more until it is answered. A
+    /// deciding step that ends any way but done - skipped, failed and passed over, never run - decides nothing here: the
+    /// iteration runs to its end, and the loop reads its until, its blocking and its bound there, as a loop that names no
+    /// deciding step does, so no loop runs to its bound without its until read.
     /// </summary>
     /// <param name="instance">The repeat.</param>
     /// <returns>Whether anything changed.</returns>
@@ -5434,23 +5513,23 @@ public sealed class FlowCoordinator
         if (repeat.DecideAfter is not { } after
             || instance.State is not FlowInstanceState.Running
             || instance.WaitingQuestion is not null
-            || instance.Children.Count == 0
-            || instance.DecidedIteration >= instance.Children.Count)
+            || instance.Children.Count == 0)
         {
             return false;
         }
 
         var body = instance.Children[^1];
 
-        if (body.Members.GetValueOrDefault(after) is not { State: FlowInstanceState.Done or FlowInstanceState.Skipped }
-            || body.GroupInstance is not { State: FlowInstanceState.Running })
+        if (body.GroupInstance is not { State: FlowInstanceState.Running }
+            || body.Members.GetValueOrDefault(after) is not { State: FlowInstanceState.Done } decider
+            || string.Equals(body.Decision?.At, decider.Id, StringComparison.Ordinal)
+            || BeingEndedAround(body) is not null)
         {
-            // The deciding step has not ended - the iteration still works towards the decision - or the iteration is
-            // over, and the next iteration is what the decision said.
+            // The deciding step's newest visit has not ended done - the iteration still works towards the decision, or
+            // reads it at its end - or its decision was read, or the iteration is being brought to rest for a plan
+            // update, which no decision is read over.
             return false;
         }
-
-        instance.DecidedIteration = instance.Children.Count;
 
         var until = Holds(repeat.Until, body, out var problem);
 
@@ -5461,15 +5540,9 @@ public sealed class FlowCoordinator
         }
 
         var owed = IterationOwed(instance);
+        var to = until && !owed ? FlowLoopDecision.Ends : null;
 
-        if (until && !owed)
-        {
-            EndTheIterationAt(instance, body);
-            End(instance, FlowInstanceState.Done, null, null);
-            return true;
-        }
-
-        if (repeat.Rounds is { } rounds && instance.Children.Count >= rounds)
+        if (to is null && repeat.Rounds is { } rounds && instance.Children.Count >= rounds)
         {
             var blocking = Holds(repeat.Blocking!, body, out var unreadable);
 
@@ -5482,65 +5555,145 @@ public sealed class FlowCoordinator
             if (!blocking && !owed)
             {
                 // Where blocking is false the repeat ends as it stands, with no question, and what it left is said.
-                EndTheIterationAt(instance, body);
-                EndRepeat(instance);
-                return true;
+                to = FlowLoopDecision.EndsLeaving;
             }
         }
 
-        if (instance.Children.Count + 1 > BoundOf(instance.Step, instance))
+        if (to is null)
         {
-            AskAtTheBound(
-                instance,
-                $"'{instance.Id}' has run {instance.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} iterations, its '{after}' ended among them, and its until still reads false");
-            return true;
+            if (owed)
+            {
+                // Work a plan update owes the loop's next iteration carries it there whatever its until says: at the
+                // loop's own bound one iteration is added for the update that owes it, as at an iteration's end.
+                AddIterationsOwedTo(instance);
+            }
+
+            to = instance.Children.Count + 1 > BoundOf(instance.Step, instance) ? FlowLoopDecision.Asks : FlowLoopDecision.GoesOn;
         }
 
-        // The loop goes on: the rest of the iteration runs as it always did, and its end makes the next iteration.
-        return false;
+        // The decision is the iteration's own, in its record, before anything follows from it.
+        Decide(body, new FlowLoopDecision(decider.Id, to));
+
+        switch (to)
+        {
+            case FlowLoopDecision.Asks:
+                AskAtTheBound(
+                    instance,
+                    $"'{instance.Id}' has run {instance.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} iterations, its '{after}' ended among them, and its until still reads false");
+                break;
+            case FlowLoopDecision.Ends or FlowLoopDecision.EndsLeaving:
+                EndAtTheDecision(instance, body);
+                break;
+        }
+
+        return true;
     }
 
     /// <summary>
-    /// Ends the body scope of a repeat's current iteration at its deciding step (<c>decideAfter</c>): every step of it
-    /// the schedule had not drawn is NotRun, saying the loop ended where it decided, and the iteration's own record
-    /// ends done - the rest of the iteration is not started, and nothing of it is left unsaid.
+    /// Keeps <paramref name="decision"/> as the decision of the iteration <paramref name="body"/> is, written to the
+    /// iteration's own record at once - the one place a decision is set, read at the deciding step or changed by the
+    /// answer to the question it asked - so a resume takes it back from that record and never reads it again on the
+    /// iteration as it stands then, whatever has run since and whenever the session ended.
+    /// </summary>
+    private void Decide(Scope body, FlowLoopDecision decision)
+    {
+        body.Decision = decision;
+
+        if (body.GroupInstance is { } iteration)
+        {
+            WriteStepRecordOf(iteration);
+        }
+    }
+
+    /// <summary>
+    /// The decision the current iteration of <paramref name="loop"/> was read at, where its deciding step's newest visit
+    /// ended done and was read (<see cref="DecideAt"/>); null where none stands - the loop names no deciding step, or that
+    /// visit ended any other way, or has not been read.
+    /// </summary>
+    private static FlowLoopDecision? DecisionOf(FlowInstance loop, Scope body)
+        => loop.Step.Repeat?.DecideAfter is { } after
+            && body.Decision is { } decision
+            && body.Members.GetValueOrDefault(after) is { State: FlowInstanceState.Done } decider
+            && string.Equals(decision.At, decider.Id, StringComparison.Ordinal)
+                ? decision
+                : null;
+
+    /// <summary>
+    /// Ends the current iteration of a repeat where its decision ended the loop (<c>decideAfter</c>): every step of it the
+    /// schedule had not drawn is NotRun, saying the loop ended where it decided, and so is every one drawn that has not
+    /// started - a handler the deciding step's ending raised among them. What is in flight runs to its end, and the
+    /// iteration and the loop end once nothing of it is (<see cref="FinishTheDecision"/>): no step goes on working in an
+    /// iteration that has ended.
     /// </summary>
     /// <param name="instance">The repeat ending.</param>
     /// <param name="body">The iteration's body scope, its deciding step ended.</param>
-    private void EndTheIterationAt(FlowInstance instance, Scope body)
+    private void EndAtTheDecision(FlowInstance instance, Scope body)
     {
-        var after = instance.Step.Repeat!.DecideAfter!;
+        var because = $"the loop ended at '{instance.Step.Repeat!.DecideAfter}' (decideAfter) before it started";
 
         foreach (var declaration in DeclarationsOf(body).Where(declaration => !body.Instantiated.Contains(declaration.Name)))
         {
             body.Instantiated.Add(declaration.Name);
-            CreateNotRun(body, declaration, FlowNotRunCause.LoopDecided, $"the loop ended at '{after}' (decideAfter) before it started");
+            CreateNotRun(body, declaration, FlowNotRunCause.LoopDecided, because);
+        }
+
+        foreach (var drawn in body.Members.Values.Where(member => member.State is FlowInstanceState.NotStarted).ToList())
+        {
+            NotRun(drawn, FlowNotRunCause.LoopDecided, because);
+        }
+
+        _ = FinishTheDecision(instance, body);
+    }
+
+    /// <summary>
+    /// Ends the loop its decision ended, once nothing of its current iteration is in flight: the iteration's own record
+    /// ends done, and the loop ends - done where its until read true, with its leftover said where it ended with its
+    /// until still false (<see cref="EndLoop"/>). Whether it ended.
+    /// </summary>
+    private bool FinishTheDecision(FlowInstance instance, Scope body)
+    {
+        if (!ScopeEnded(body))
+        {
+            return false;
         }
 
         if (body.GroupInstance is { State: FlowInstanceState.Running } record)
         {
             End(record, FlowInstanceState.Done, null, null);
         }
+
+        EndLoop(instance, leaving: body.Decision?.To == FlowLoopDecision.EndsLeaving);
+        return true;
     }
 
     /// <summary>
-    /// Ends a repeat that ends with its until still false: what its leftover expression says it left is kept in its
-    /// record. A leftover that cannot be read fails the repeat as an unreadable until does, for what a loop left is
-    /// never dropped unsaid.
+    /// Ends a repeat done, the one place one does: where it ends with its until still false (<paramref name="leaving"/>)
+    /// what its leftover expression says it left is kept in its record, and where the repeat is a use its declared
+    /// outputs are read from its last iteration (<see cref="UseOutputs"/>). A leftover or an output that cannot be read
+    /// fails the repeat instead, which then ends failed as any failing group does, for what a loop left is never dropped
+    /// unsaid.
     /// </summary>
-    private void EndRepeat(FlowInstance instance)
+    private void EndLoop(FlowInstance instance, bool leaving)
     {
-        if (instance.Step.Repeat?.Leftover is { } leftover && instance.Children.Count > 0)
+        var last = instance.Children.Count > 0 ? instance.Children[^1] : null;
+
+        if (leaving && instance.Step.Repeat?.Leftover is { } leftover && last is not null)
         {
-            var left = Evaluate(leftover, instance.Children[^1], out var problem);
+            var left = Evaluate(leftover, last, out var problem);
 
             if (problem is not null)
             {
-                FailGroup(instance, HarnessExit.ConfigInvalid, Unreadable("leftover", instance.Children[^1].GroupInstance?.Id ?? instance.Id, problem), instance.Path);
+                FailGroup(instance, HarnessExit.ConfigInvalid, Unreadable("leftover", last.GroupInstance?.Id ?? instance.Id, problem), instance.Path);
                 return;
             }
 
             instance.Leftover = left.ToNode();
+        }
+
+        if (UseOutputs(instance, last) is { } unread)
+        {
+            FailGroup(instance, unread.Exit, unread.Error, instance.Path);
+            return;
         }
 
         End(instance, FlowInstanceState.Done, null, null);
@@ -5586,14 +5739,28 @@ public sealed class FlowCoordinator
         }
 
         // A loop that decides at a step of its own (decideAfter) read its until, its blocking and its bound where that
-        // step ended: no end of an iteration re-reads them, for the decision was made, and the iteration's end makes
-        // the next iteration alone.
-        var decided = instance.Step.Repeat!.DecideAfter is not null;
+        // step's newest visit ended done: what the decision said holds at the iteration's end, which reads none of them
+        // again. Where that step ended any other way nothing was decided, and they are read here as for a loop that
+        // names no deciding step.
+        var decision = DecisionOf(instance, instance.Children[^1]);
+
+        if (decision is { EndsTheLoop: true })
+        {
+            return FinishTheDecision(instance, instance.Children[^1]);
+        }
+
+        if (decision is { To: FlowLoopDecision.Asks })
+        {
+            // The loop stands on its bound's question, read at its deciding step: the answer says what follows.
+            return false;
+        }
+
+        var decided = decision is not null;
         var until = false;
 
         if (!decided)
         {
-            until = Holds(instance.Step.Repeat.Until, instance.Children[^1], out var problem);
+            until = Holds(instance.Step.Repeat!.Until, instance.Children[^1], out var problem);
 
             if (problem is not null)
             {
@@ -5613,11 +5780,11 @@ public sealed class FlowCoordinator
 
         if (until && !owed)
         {
-            End(instance, FlowInstanceState.Done, null, null);
+            EndLoop(instance, leaving: false);
             return true;
         }
 
-        if (!decided && instance.Step.Repeat.Rounds is { } rounds && instance.Children.Count >= rounds)
+        if (!decided && instance.Step.Repeat!.Rounds is { } rounds && instance.Children.Count >= rounds)
         {
             // Past the rounds another iteration is created only while blocking holds: whether what is left has to be
             // dealt with before the loop may end, worked out by the engine from what the body's steps answered.
@@ -5632,7 +5799,7 @@ public sealed class FlowCoordinator
             if (!blocking && !owed)
             {
                 // Where it is false the repeat ends as it stands, with no question, and what it left is said.
-                EndRepeat(instance);
+                EndLoop(instance, leaving: true);
                 return true;
             }
         }
@@ -6075,10 +6242,20 @@ public sealed class FlowCoordinator
 
                 if (instance.Children.Count > 0 && instance.Children.All(ScopeEnded))
                 {
-                    foreach (var child in instance.Children.Select(child => child.GroupInstance).Where(child => child is { State: FlowInstanceState.Running }))
+                    var ending = instance.Children.Where(child => child.GroupInstance is { State: FlowInstanceState.Running }).ToList();
+
+                    // A used workflow's outputs are read onto each item before anything of the group ends: one that
+                    // cannot be read fails the group, which then ends failed as any failing group does.
+                    if (ending.Select(child => (Child: child, Unread: UseOutputs(child.GroupInstance!, child))).FirstOrDefault(read => read.Unread is not null) is { Unread: { } unread } failing)
                     {
-                        UseOutputs(child!);
-                        End(child!, FlowInstanceState.Done, null, null);
+                        FailGroup(instance, unread.Exit, unread.Error, failing.Child.GroupInstance!.Path);
+                        changed = true;
+                        continue;
+                    }
+
+                    foreach (var child in ending)
+                    {
+                        End(child.GroupInstance!, FlowInstanceState.Done, null, null);
                     }
 
                     End(instance, FlowInstanceState.Done, null, null);
@@ -6098,7 +6275,15 @@ public sealed class FlowCoordinator
             if ((instance.OwnScope ?? IterationScopeOf(instance)) is { } block && ScopeEnded(block))
             {
                 Gather(instance);
-                UseOutputs(instance);
+
+                if (UseOutputs(instance, block) is { } unread)
+                {
+                    // An output that cannot be read fails the use, which the next pass ends failed.
+                    FailGroup(instance, unread.Exit, unread.Error, instance.Path);
+                    changed = true;
+                    continue;
+                }
+
                 End(instance, FlowInstanceState.Done, null, null);
                 changed = true;
             }
@@ -6474,7 +6659,7 @@ public sealed class FlowCoordinator
             // conversation it is in, and the handoff where one ends the step in order - posted and raised through
             // this, one per attempt: a telling of an attempt that is over says nothing about the one the run is on
             // now.
-            instance.Telling = new FlowTelling(instance.Attempt, TimeSpan.FromSeconds(OwnOf(instance)?.HandoffSeconds ?? _definition.HandoffSeconds ?? 180));
+            instance.Telling = new FlowTelling(instance.Attempt, TimeSpan.FromSeconds(HandoffSecondsOf(instance)));
 
             // What a plan update that told this work said, read in the part of its own this attempt's first message
             // holds: recorded once of each update, however many attempts read it.
@@ -7406,7 +7591,7 @@ public sealed class FlowCoordinator
         ClearOwed(instance);
         instance.FailureSettled = true;
 
-        var own = FailurePolicyOf(instance.Step.OnFailure, instance);
+        var own = FailurePolicyOf(instance.Step.OnFailure, instance, DeclaringScopeOf(instance));
 
         if (own is { Policy: WorkflowStep.Recover })
         {
@@ -7421,14 +7606,31 @@ public sealed class FlowCoordinator
             return;
         }
 
+        if (own is { Problem: { } unread })
+        {
+            Unpolicied(instance, instance.Id, unread);
+            return;
+        }
+
         if (instance.GroupOf is { } group)
         {
-            if ((group.Step.ForEach is not null || group.Step.Repeat is not null) && PolicyAbove(instance) == WorkflowStep.Recover)
+            if (group.Step.ForEach is not null || group.Step.Repeat is not null)
             {
-                // The hand-over stops at a member of a forEach or a repeat: the recovery takes the failure there, for
-                // that step, so it never ends the loop's other items or iterations.
-                TakeRecovery(instance);
-                return;
+                var above = PolicyAbove(instance);
+
+                if (above is { Problem: { } unreadAbove, Group: { } writing })
+                {
+                    Unpolicied(instance, writing, unreadAbove);
+                    return;
+                }
+
+                if (above is { Policy: WorkflowStep.Recover })
+                {
+                    // The hand-over stops at a member of a forEach or a repeat: the recovery takes the failure there, for
+                    // that step, so it never ends the loop's other items or iterations.
+                    TakeRecovery(instance);
+                    return;
+                }
             }
 
             // A group that has ended takes no failure: an always member of a group that is not always runs after its
@@ -7449,7 +7651,9 @@ public sealed class FlowCoordinator
                     return;
                 }
 
-                var handed = FailurePolicyOf(taking.Step.OnFailure, instance);
+                // A group's onFailure is filled in the scope that declares the group, never where its member failed: a
+                // used workflow's group reads its own workflow's inputs however deep the failing member is.
+                var handed = FailurePolicyOf(taking.Step.OnFailure, instance, DeclaringScopeOf(taking));
 
                 if (handed is { Policy: WorkflowStep.Recover })
                 {
@@ -7463,6 +7667,12 @@ public sealed class FlowCoordinator
                     MaybeSettle(instance);
                     return;
                 }
+
+                if (handed is { Problem: { } unreadGroup })
+                {
+                    Unpolicied(instance, taking.Id, unreadGroup);
+                    return;
+                }
             }
         }
 
@@ -7472,11 +7682,34 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// One failure policy as it reads for <paramref name="instance"/>: written as one of the policies, or - for a step
-    /// of a workflow used as a step - read from one of its inputs, filled where the failure happened. One that is no
-    /// policy when it is read reads as none: the failure goes where a step that wrote nothing's goes, never to a guess.
+    /// Decides a failure whose policy could not be read - an <c>onFailure</c> filled from an input that reads nothing, or
+    /// that fills with no policy: never dropped in silence, nor routed by a guess at what the policy meant. The step's
+    /// error says which policy could not be read and why, its record says it, and the failure goes where the top level
+    /// sends what nothing else decides - <c>pause</c> where the workflow declares a recovery, for a person is asked,
+    /// <c>stop</c> where it does not.
     /// </summary>
-    private (string? Policy, string? Problem)? FailurePolicyOf(string? written, FlowInstance instance)
+    /// <param name="instance">The step that failed.</param>
+    /// <param name="writer">The instance whose <c>onFailure</c> could not be read: the step's own, or a group's around it.</param>
+    /// <param name="problem">Why it could not be read.</param>
+    private void Unpolicied(FlowInstance instance, string writer, string problem)
+    {
+        var unread = Unreadable("onFailure", writer, problem);
+        instance.Error = instance.Error is { Length: > 0 } failed ? $"{failed}; and its failure policy could not be read: {unread}" : unread;
+        Record(FlowChangeKind.Step, instance, detail: $"its failure policy could not be read ({unread}), and the failure goes where the top level sends it");
+        Apply(instance, _definition.Recover is null ? "stop" : "pause");
+        MaybeSettle(instance);
+    }
+
+    /// <summary>
+    /// One failure policy as it reads for <paramref name="instance"/>'s failure: written as one of the policies, or - for
+    /// a step of a workflow used as a step - read from one of its inputs, filled in <paramref name="scope"/>, the scope
+    /// that declares what wrote it. One that cannot be read, or that fills with no policy, is said in its problem, never
+    /// read as none.
+    /// </summary>
+    /// <param name="written">The <c>onFailure</c> as written; null where none is.</param>
+    /// <param name="instance">The step whose failure it decides.</param>
+    /// <param name="scope">The scope that declares the step or the group that wrote it.</param>
+    private (string? Policy, string? Problem)? FailurePolicyOf(string? written, FlowInstance instance, Scope scope)
     {
         if (written is null)
         {
@@ -7488,7 +7721,7 @@ public sealed class FlowCoordinator
             return (written, null);
         }
 
-        if (Filled(instance, written, out var problem) is not { } filled)
+        if (FlowTemplate.Fill(written, path => Read(path, scope, reader: instance), out var problem) is not { } filled)
         {
             return (null, problem);
         }
@@ -7497,6 +7730,15 @@ public sealed class FlowCoordinator
             ? (filled, null)
             : (null, $"'{written}' fills with '{filled}', which is none of {string.Join(", ", WorkflowStep.FailurePolicies.Select(known => $"'{known}'"))}");
     }
+
+    /// <summary>
+    /// The scope that declares <paramref name="instance"/>, where what it writes is filled: a step's or a group's own
+    /// scope; for a visit of a recovery, the scope that declares the recovery, wherever its source failed; for one item or
+    /// iteration of a loop, the scope the loop is declared in.
+    /// </summary>
+    private Scope DeclaringScopeOf(FlowInstance instance)
+        => IsRecovery(instance) && instance.OwnScope?.World is { } declaring ? declaring
+            : instance.DeclaredScope ?? instance.ScopeOf?.Parent ?? _top;
 
     /// <summary>Takes back the owed mark a failure is recorded with as it ends, once it is being decided: what decides it writes the step's record.</summary>
     private static void ClearOwed(FlowInstance instance)
@@ -7508,16 +7750,19 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The first <c>onFailure</c> written on <paramref name="instance"/>'s scope or any scope around it, filled where
-    /// the failure it decides for happened, and where the scopes hold none.
+    /// The first <c>onFailure</c> written on a group around <paramref name="instance"/>'s scope, walked as the workflow
+    /// declares its scopes (<see cref="Scope.World"/>) - so a step of the flow's own recovery never reads the groups of
+    /// the used workflow its source failed in - filled in the scope that declares that group, with the group that wrote
+    /// it; null where none does.
     /// </summary>
-    private string? PolicyAbove(FlowInstance instance)
+    private (string? Policy, string? Problem, string? Group)? PolicyAbove(FlowInstance instance)
     {
-        for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
+        for (var at = instance.DeclaredScope; at is not null; at = at.World)
         {
             if (at.Group?.OnFailure is { } written)
             {
-                return FailurePolicyOf(written, instance) is { Policy: { } policy } ? policy : null;
+                var (policy, problem) = FailurePolicyOf(written, instance, at.World ?? _top)!.Value;
+                return (policy, problem, (at.OwnGroupInstance ?? at.GroupInstance)?.Id ?? at.Id);
             }
         }
 
@@ -7611,10 +7856,11 @@ public sealed class FlowCoordinator
 
             if (RaisedVisits(scope, handler) >= handler.VisitsAllowed + scope.ExtraVisits.GetValueOrDefault(handler.Name))
             {
-                if (failed && _definition.Recover is not null)
+                if (failed && RecoveryReaching(scope) is not null)
                 {
-                    // A handler at its bound after a failure is not asked about in a workflow that declares a
-                    // recovery: the source's failure is left unhandled and the recovery takes it.
+                    // A handler at its bound after a failure is not asked about where a recovery reaches the failure -
+                    // the flow's own, or a used workflow's around it: the source's failure is left unhandled and the
+                    // recovery takes it.
                     SetHandlerState(instance, handler.Name, "passed");
                     continue;
                 }
@@ -7668,9 +7914,11 @@ public sealed class FlowCoordinator
 
             if (handler.IsGroup && raised.State is FlowInstanceState.Running && raised.OwnScope is null)
             {
-                // The block of a visit made now; one a resume holds was given its block as it was read back.
+                // The block of a visit made now; one a resume holds was given its block as it was read back. A handler
+                // that is a use runs on what its with fills, read in its block as any use's are.
                 raised.OwnScope = NewScope(raised.Id, PathOf(scope, handler), scope, handler, FlowValue.Missing, null, null, null);
                 raised.OwnScope.OwnGroupInstance = raised;
+                _ = FillUse(raised.OwnScope, handler, raised);
             }
 
             raisedFor.Add(raised);
@@ -7827,6 +8075,20 @@ public sealed class FlowCoordinator
     /// </summary>
     private void SettleEnding(PendingEnding pending)
     {
+        if (pending.Then is { } unresolved
+            && unresolved.State == FlowInstanceState.Done
+            && unresolved.Step.Then is not null
+            && !_redirects.Any(owed => ReferenceEquals(owed.Handler, unresolved))
+            && ResolveThen(unresolved, out var problem) is null
+            && problem is not null)
+        {
+            // A then that names no step - one filled from an input that reads nothing, or that names a step no scope
+            // around the handler declares - is never dropped in silence: the handler ends failed, saying so in its
+            // record, its failure decides as any failure does, and the ending settles once that failure has.
+            ThenUnread(unresolved, problem);
+            return;
+        }
+
         _ = _pendingEndings.Remove(pending.Source.Id);
 
         if (pending.Then is { } then && then.State == FlowInstanceState.Done && then.Step.Then is not null && !_redirects.Any(owed => ReferenceEquals(owed.Handler, then)))
@@ -7857,6 +8119,22 @@ public sealed class FlowCoordinator
         WriteStepRecordOf(source);
     }
 
+    /// <summary>
+    /// Ends a handler that ended done failed, where the step its <c>then</c> names cannot be read: its code says the
+    /// definition could not be read (<see cref="HarnessExit.ConfigInvalid"/>), its error and its record say why, and its
+    /// failure goes to its handlers and its policy as any failure's does.
+    /// </summary>
+    private void ThenUnread(FlowInstance handler, string problem)
+    {
+        var was = handler.State;
+        handler.State = FlowInstanceState.Failed;
+        handler.Exit = HarnessExit.ConfigInvalid;
+        handler.Error = Unreadable("then", handler.Id, problem);
+        handler.FailureSettled = false;
+        Record(FlowChangeKind.Step, handler, from: was, to: FlowInstanceState.Failed, detail: handler.Error);
+        HandleFailure(handler);
+    }
+
     /// <summary>Where an instance's ending leaves what waits on it: a handler that ended settles its source's ending.</summary>
     private void MaybeSettle(FlowInstance instance)
     {
@@ -7874,9 +8152,14 @@ public sealed class FlowCoordinator
     private WorkflowStep RecoveryDeclaration()
         => _definition.Recover!.Declaration;
 
-    private (FlowRecover Recover, Scope PathScope) RecoveryAt(Scope from)
+    /// <summary>
+    /// The recovery a failure in <paramref name="from"/> reaches, with the scope that declares it: the nearest used
+    /// workflow's around it that declares one, walked as the workflow declares its scopes (<see cref="Scope.World"/>),
+    /// else the flow's own at its root; null where none does.
+    /// </summary>
+    private (FlowRecover Recover, Scope PathScope)? RecoveryReaching(Scope from)
     {
-        for (var at = from; at is not null; at = at.Parent)
+        for (var at = from; at is not null; at = at.World)
         {
             if (at.Group?.Use?.Recover is { } called)
             {
@@ -7884,9 +8167,16 @@ public sealed class FlowCoordinator
             }
         }
 
-        if (_definition.Recover is { } own)
+        return _definition.Recover is { } own ? (own, _top) : null;
+    }
+
+    /// <summary>The recovery a failure in <paramref name="from"/> reaches (<see cref="RecoveryReaching"/>), which its taking holds there is.</summary>
+    /// <exception cref="HarnessException">No recovery reaches it: the run's state and the definition do not agree.</exception>
+    private (FlowRecover Recover, Scope PathScope) RecoveryAt(Scope from)
+    {
+        if (RecoveryReaching(from) is { } reached)
         {
-            return (own, _top);
+            return reached;
         }
 
         throw new HarnessException(
@@ -7897,7 +8187,7 @@ public sealed class FlowCoordinator
     /// <summary>Decides the redirect a handler that ended done names: what it resets is written to the run's records before the first reset.</summary>
     private void DecideRedirect(FlowInstance handler)
     {
-        if (ResolveThen(handler) is not { } target)
+        if (ResolveThen(handler, out _) is not { } target)
         {
             return;
         }
@@ -7905,21 +8195,32 @@ public sealed class FlowCoordinator
         DecideRedirectOf(handler, target.Scope, target.Declaration);
     }
 
-    /// <summary>The step a handler's <c>then</c> names, with the scope that declares it: siblings first, then outward.</summary>
-    private (Scope Scope, WorkflowStep Declaration)? ResolveThen(FlowInstance handler)
+    /// <summary>
+    /// The step a handler's <c>then</c> names, with the scope that declares it: siblings first, then outward, walked as
+    /// the workflow declares its scopes (<see cref="Scope.World"/>). A <c>then</c> read from one of a used workflow's
+    /// inputs - <c>{input.failTo}</c> - is filled in the scope that declares the handler. Null where it names none,
+    /// with why in <paramref name="problem"/>: a fill that reads nothing, or a name no scope around the handler declares.
+    /// </summary>
+    private (Scope Scope, WorkflowStep Declaration)? ResolveThen(FlowInstance handler, out string? problem)
     {
-        // The target may come from one of the used workflow's inputs - {input.failTo} - filled where the handler ran;
-        // a fill that names no step resolves to nothing, and the handler ends holding the redirect it could not make.
-        var then = handler.Step.Then is { } written
-            ? written.Contains('{') ? Filled(handler, written, out _) : written
-            : null;
+        problem = null;
+
+        if (handler.Step.Then is not { } written)
+        {
+            return null;
+        }
+
+        var declaring = DeclaringScopeOf(handler);
+        var then = written.Contains('{')
+            ? FlowTemplate.Fill(written, path => Read(path, declaring, reader: handler), out problem)
+            : written;
 
         if (then is null)
         {
             return null;
         }
 
-        for (var at = handler.DeclaredScope; at is not null; at = at.Parent)
+        for (var at = handler.DeclaredScope; at is not null; at = at.World)
         {
             if (DeclarationsOf(at).FirstOrDefault(declaration => declaration.Name == then) is { } declaration)
             {
@@ -7927,6 +8228,7 @@ public sealed class FlowCoordinator
             }
         }
 
+        problem = $"'{written}' names '{then}', which no scope around '{handler.Id}' declares";
         return null;
     }
 
@@ -8226,7 +8528,9 @@ public sealed class FlowCoordinator
             visit.Direction = direction;
         });
 
-        instance.OwnScope = NewScope(instance.Id, PathOf(pathScope, declaration), scope, declaration, FlowValue.Missing, null, null, null);
+        // Its lookups across a use's boundary - inputs, params, texts, answers, the policy a group writes - are made in
+        // the scope that declares the recovery (Scope.World), never inside the used workflow its source failed in.
+        instance.OwnScope = NewScope(instance.Id, PathOf(pathScope, declaration), scope, declaration, FlowValue.Missing, null, null, null, world: pathScope);
         instance.OwnScope.OwnGroupInstance = instance;
         Record(FlowChangeKind.Step, instance, detail: issue is null
             ? $"the failure of '{source.Id}' is given to the recovery (visit {visits.ToString(System.Globalization.CultureInfo.InvariantCulture)})"
@@ -8539,10 +8843,10 @@ public sealed class FlowCoordinator
             return;
         }
 
-        // The advisor the question is recommended with: the workflow a use that governs the asking step runs declares
-        // one, and it replaces the run's for its steps - its files read in its own directory - while each the use
-        // declares none for stays the run's.
-        var governing = GoverningUseOf(instance?.DeclaredScope);
+        // The advisor the question is recommended with: the nearest use governing the asking step that declares one,
+        // which replaces the run's for its steps - its files read in its own directory, its prompt reading the inputs the
+        // use filled and the texts it sees - and the run's where none does.
+        var governing = instance is null ? null : GoverningOf(instance, FlowUseKey.Advisor);
         var useAdvisor = governing?.Own.Advisor;
         var advisor = useAdvisor ?? _definition.Advisor;
 
@@ -8582,6 +8886,10 @@ public sealed class FlowCoordinator
             return;
         }
 
+        // Where the advisor's own workflow stands: the scope the governing use's steps run in, whose inputs and texts its
+        // prompt reads; the run's own, outside every use, for the run's advisor.
+        var advising = AdvisorScopeOf(instance, governing);
+
         // The bar is read where the question is raised, as the prompt reads it: one that cannot be read - a file the
         // orchestrator names gone, one the file system would not let be looked at - leaves the question saying why, and
         // no advisor is started without it.
@@ -8589,7 +8897,7 @@ public sealed class FlowCoordinator
 
         try
         {
-            bar = BarOf();
+            bar = BarOf(advising);
         }
         catch (HarnessException unread)
         {
@@ -8605,7 +8913,7 @@ public sealed class FlowCoordinator
         var call = new FlowAdvisorCall(
             advisor,
             _runName ?? "run",
-            useAdvisor is not null ? governing?.Use.Use?.Name ?? _definition.Name : _definition.Name,
+            governing?.Step.Use!.Name ?? _definition.Name,
             asked.Id,
             asked.Kind,
             asked.Problem,
@@ -8614,10 +8922,10 @@ public sealed class FlowCoordinator
             asked.Held,
             WorksInOf(instance) ?? instance.Made,
             instance.Id,
-            Inputs(),
+            advising is null ? Inputs() : advising.UseInputs ?? [],
             Record: null,
             bar,
-            useAdvisor is not null ? governing?.Use.Use?.Texts : _definition.Texts,
+            TextsAt(advising).ToDictionary(text => text.Key, text => new FlowAdvisorText(text.Value.Owner ?? _definition.Name, text.Value.File), StringComparer.Ordinal),
             _place,
             BudgetLeftUsd(),
             RunValues());
@@ -8625,7 +8933,30 @@ public sealed class FlowCoordinator
         var cancel = CancellationTokenSource.CreateLinkedTokenSource(_sessionToken, _adviceStop.Token);
         var task = Task.Run(() => _advisor!.AdviseAsync(call, cancel.Token), CancellationToken.None);
         _ = task.ContinueWith(_ => WakeTheLoop(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-        _advising.Add(new Advising(asked, instance, cancel, task));
+        _advising.Add(new Advising(asked, instance, advisor, cancel, task));
+    }
+
+    /// <summary>
+    /// The scope the advisor that recommends for <paramref name="instance"/> stands in: the one the governing use's steps
+    /// run in - the nearest scope around the asking step, walked as the workflow declares its scopes, whose group is that
+    /// use - and null for the run's own advisor, outside every use.
+    /// </summary>
+    private static Scope? AdvisorScopeOf(FlowInstance instance, FlowGoverning? governing)
+    {
+        if (governing is null)
+        {
+            return null;
+        }
+
+        for (var at = instance.DeclaredScope ?? instance.ScopeOf; at is not null; at = at.World)
+        {
+            if (ReferenceEquals(at.Group, governing.Step) && string.Equals(at.GroupPath, governing.Path, StringComparison.Ordinal))
+            {
+                return at;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -8665,7 +8996,7 @@ public sealed class FlowCoordinator
             }
 
             pending.Asked.Recommendation = advice.Answer is { } answer
-                ? new FlowRecommendation("given", answer, advice.Text, advice.Why, "advisor", _definition.Advisor?.Agent, advice.Model, advice.Directory)
+                ? new FlowRecommendation("given", answer, advice.Text, advice.Why, "advisor", pending.Advisor.Agent, advice.Model, advice.Directory)
                 : new FlowRecommendation("notObtained", Why: $"no recommendation: one was sought and not obtained ({advice.NotObtained})");
             WriteQuestions();
             Record(FlowChangeKind.Advised, _answerable.GetValueOrDefault(pending.Asked.Id), detail: $"{pending.Asked.Id} {(advice.Answer is { } said ? $"advised '{said}'" : "left without a recommendation")}");
@@ -8940,10 +9271,13 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The configured answer a question of <paramref name="kind"/> on <paramref name="instance"/> is given at once:
     /// the nearest <c>answers</c> that names the kind - the step's own, then each group around it from the inside out,
-    /// then the workflow's - and none where the kind is a person's alone, or answered by the step's own key
-    /// (<c>failure</c> by <c>onFailure</c>, <c>ask</c> by <c>ask</c>), or a <c>pause</c> step answered anywhere but on
-    /// the step itself and never one that says <c>person</c>, or the run's budget answered anywhere but on the
-    /// workflow. A step of a use that governs itself is answered by the workflow it runs in before the run's own.
+    /// where a use that governs itself is met the answers of the workflow it runs - after the groups within it and
+    /// before the use step's own and the caller's groups - and the run's own last; and none where the kind is a person's
+    /// alone, or answered by the step's own key (<c>failure</c> by <c>onFailure</c>, <c>ask</c> by <c>ask</c>), or a
+    /// <c>pause</c> step answered anywhere but on the step itself and never one that says <c>person</c>, or the run's
+    /// budget answered anywhere but on the workflow. The groups are walked as the workflow declares them
+    /// (<see cref="Scope.World"/>): a step of the flow's own recovery is answered by the recovery's and the run's, never
+    /// by the groups of the used workflow its source failed in.
     /// </summary>
     private (FlowAnswer Entry, string Where)? ConfiguredFor(FlowInstance? instance, string kind)
     {
@@ -8974,20 +9308,18 @@ public sealed class FlowCoordinator
             return (nearest, $"step '{instance.Step.Name}'");
         }
 
-        for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
+        for (var at = instance.DeclaredScope; at is not null; at = at.World)
         {
-            if (at.Group?.Answers.TryGetValue(kind, out var group) == true)
-            {
-                return (group, $"group '{at.Group.Name}'");
-            }
-        }
-
-        // The workflow a use that governs itself runs, consulted for its steps' questions before the run's own.
-        for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
-        {
+            // The workflow a use that governs itself runs answers its steps' questions once the groups within it have
+            // had their say, and before the use step's own key and the caller's groups around it.
             if (at.Group?.Use is { Own.Answers: { } own } use && own.TryGetValue(kind, out var answer))
             {
                 return (answer, $"the workflow '{use.Name}'");
+            }
+
+            if (at.Group?.Answers.TryGetValue(kind, out var group) == true)
+            {
+                return (group, $"group '{at.Group.Name}'");
             }
         }
 
@@ -9081,13 +9413,13 @@ public sealed class FlowCoordinator
 
         MaybeSettle(instance);
 
-        if (state is FlowInstanceState.Done or FlowInstanceState.Skipped
+        if (state is FlowInstanceState.Done
             && instance.DeclaredScope is { LoopOf: { Step.Repeat.DecideAfter: { } deciding } loop }
             && string.Equals(instance.Step.Name, deciding, StringComparison.Ordinal))
         {
-            // The loop around this iteration decides at this step's ending (decideAfter): the decision is read now,
-            // before anything more of the iteration is drawn - and a session that takes the run up from its records
-            // reads it again where the schedule walks the loop, for nothing between the two changes it.
+            // The loop around this iteration decides at this step's ending done (decideAfter): the decision is read now,
+            // before anything more of the iteration is drawn, and kept in the iteration's record with this visit - a
+            // session that takes the run up between the two reads it where the schedule draws the iteration.
             _ = DecideAt(loop);
         }
 
@@ -9239,29 +9571,34 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The limit of the run that leaves no room for <paramref name="instance"/> beside <paramref name="running"/>, as its
     /// record names it - reasoning agents, parallel processes, open agents - or null where every limit it counts against
-    /// leaves room: all-or-nothing, so a step short of one of its resources starts with none of them. A step of a use
-    /// that governs itself counts against that use's own gates alone, across every instance of the use, and the run's
-    /// no more.
+    /// leaves room: all-or-nothing, so a step short of one of its resources starts with none of them. Each limit is a
+    /// pool of its own, by the rule every key of a use that governs itself follows (<see cref="FlowUse.Governing"/>): a
+    /// step counts against the pool of the nearest use around it that declares that limit, across every instance of the
+    /// use, and against the run's own where none does - so a use that declares no limit of a kind takes the run's pool of
+    /// it, never a fresh one beside it.
     /// </summary>
     private string? CounterFull(FlowInstance instance, IReadOnlyList<FlowInstance> running)
     {
-        var governing = GoverningUseOf(instance.DeclaredScope);
-        var own = governing?.Own;
-
-        // The steps of a use that governs itself count against that use's gates alone, across every instance of it;
-        // the run's steps count against the run's, as they always did.
-        List<FlowInstance> counted = governing is null
-            ? [.. running.Where(other => GoverningUseOf(other.DeclaredScope) is null)]
-            : [.. running.Where(other => Equals(GoverningUseOf(other.DeclaredScope)?.Use, governing?.Use))];
-
         return instance.Step.Type switch
         {
-            "reason" when counted.Count(step => step.Step.Type == "reason") >= (own?.MaxReasoningAgents ?? Limit().MaxReasoningAgents) => FlowWaits.ReasoningAgents,
+            "reason" when Full(FlowUseKey.MaxReasoningAgents, step => step.Step.Type == "reason", Limit().MaxReasoningAgents, own => own.MaxReasoningAgents) => FlowWaits.ReasoningAgents,
             "build" or "test" or "run" or "check-mutations"
-                when counted.Count(step => step.Step.Type is "build" or "test" or "run" or "check-mutations") >= (own?.MaxParallelProcesses ?? Limit().MaxParallelProcesses) => FlowWaits.ParallelProcesses,
-            "create-agent" when counted.Count(step => step.Step.Type == "create-agent") + _agentsOpen.Values.Count(open => Equals(GoverningUseOf(open.DeclaredScope)?.Use, governing?.Use)) >= (own?.MaxOpenAgents ?? Limit().MaxOpenAgents) => FlowWaits.OpenAgents,
+                when Full(FlowUseKey.MaxParallelProcesses, step => step.Step.Type is "build" or "test" or "run" or "check-mutations", Limit().MaxParallelProcesses, own => own.MaxParallelProcesses) => FlowWaits.ParallelProcesses,
+            "create-agent" when Full(FlowUseKey.MaxOpenAgents, step => step.Step.Type == "create-agent", Limit().MaxOpenAgents, own => own.MaxOpenAgents, open: true) => FlowWaits.OpenAgents,
             _ => null,
         };
+
+        // Whether the pool the step counts against for the key is full: the steps of that pool running, and - for open
+        // agents - the agents the pool's steps hold open, against the governing use's limit or the run's.
+        bool Full(FlowUseKey key, Func<FlowInstance, bool> counts, int runs, Func<FlowUseOwn, int?> declared, bool open = false)
+        {
+            var governing = GoverningOf(instance, key);
+            var pool = governing?.Path;
+            var taken = running.Count(other => counts(other) && string.Equals(GoverningOf(other, key)?.Path, pool, StringComparison.Ordinal))
+                + (open ? _agentsOpen.Values.Count(held => string.Equals(GoverningOf(held, key)?.Path, pool, StringComparison.Ordinal)) : 0);
+
+            return taken >= (governing is null ? runs : declared(governing.Own)!.Value);
+        }
     }
 
     /// <summary>Starts the always steps of the run, once, where the rest is quiescent in any state; a session runs them after everything else has ended.</summary>
@@ -9797,9 +10134,19 @@ public sealed class FlowCoordinator
         => scope.OwnGroupInstance ?? scope.Parent!.Members[scope.Group!.Name];
 
     /// <summary>Makes a scope of the run: the top, a block's members, or one item or iteration of a loop.</summary>
-    private Scope NewScope(string id, string groupPath, Scope? parent, WorkflowStep? group, FlowValue item, int? index, int? iteration, FlowInstance? loopOf)
+    private Scope NewScope(string id, string groupPath, Scope? parent, WorkflowStep? group, FlowValue item, int? index, int? iteration, FlowInstance? loopOf, Scope? world = null)
+        => Adopt(MakeScope(id, groupPath, parent, group, item, index, iteration, loopOf, world));
+
+    /// <summary>
+    /// A scope not yet one of the run's: what a loop's item or iteration is while its use's inputs are read, before it is
+    /// opened - the schedule draws nothing in it, and no record is made of it, until it is adopted.
+    /// </summary>
+    private static Scope MakeScope(string id, string groupPath, Scope? parent, WorkflowStep? group, FlowValue item, int? index, int? iteration, FlowInstance? loopOf, Scope? world = null)
+        => new(id, groupPath, parent, group, item, index, iteration, loopOf, world);
+
+    /// <summary>Makes <paramref name="scope"/> one of the run's, where the schedule draws its steps.</summary>
+    private Scope Adopt(Scope scope)
     {
-        var scope = new Scope(id, groupPath, parent, group, item, index, iteration, loopOf);
         _scopes.Add(scope);
         return scope;
     }
@@ -9967,29 +10314,13 @@ public sealed class FlowCoordinator
         switch (path.Root)
         {
             case "input":
-                // The inputs of the workflow a use made, nearest one first: a step of a used workflow reads what the use
+                // The inputs of the workflow a use made, the nearest use's: a step of a used workflow reads what the use
                 // filled, and never the calling run's own. At the top, past every use, they are the run's.
-                for (var at = scope; at is not null; at = at.Parent)
-                {
-                    if (at.UseInputs is { } given)
-                    {
-                        return new(FlowValue.Of(given), 0);
-                    }
-                }
-
-                return new(FlowValue.Of(Inputs()), 0);
+                return new(FlowValue.Of(InputsAt(scope)), 0);
             case "param":
                 // A used workflow's params are its own defaults, read inside it; the calling run's are read at its own
                 // levels, outside every use.
-                for (var at = scope; at is not null; at = at.Parent)
-                {
-                    if (at.UseParams is { } own)
-                    {
-                        return new(FlowValue.Of(own), 0);
-                    }
-                }
-
-                return new(FlowValue.Of(Params()), 0);
+                return new(FlowValue.Of(ParamsAt(scope)), 0);
             case "item":
                 // The work item of the nearest loop that bound one: a step inside a repeat within a work item - a review
                 // loop - reads the item its whole pipeline is one of.
@@ -10064,7 +10395,7 @@ public sealed class FlowCoordinator
                 // cannot be read reads nothing, saying why, as any name that reads nothing does.
                 try
                 {
-                    return new(FlowValue.Of(BarOf()), 0);
+                    return new(FlowValue.Of(BarOf(scope)), 0);
                 }
                 catch (HarnessException unread)
                 {
@@ -10072,54 +10403,16 @@ public sealed class FlowCoordinator
                 }
             case "text":
             {
-                // A text the workflow declares by name (texts), read live as the bar is: the used workflow's own where
-                // the reading step is one of its - the nearest use that declares the name - and else the run's.
+                // A text the workflow declares by name (texts), read live as the bar is: the nearest used workflow's
+                // around the reading step that declares the name, and else the run's (TextsAt).
                 if (path.Steps is not [{ Key: { } textName }])
                 {
                     throw new UnresolvedReadException("a text is read by its name alone: {text.<name>} with nothing under it");
                 }
 
-                for (var at = scope; at is not null; at = at.Parent)
-                {
-                    if (at.Group?.Use is { Texts: { } own } use && own.TryGetValue(textName, out var ownFile))
-                    {
-                        return TextOfRead(use.Name, ownFile);
-                    }
-                }
-
-                string? Owner()
-                {
-                    for (var at = scope; at is not null; at = at.Parent)
-                    {
-                        if (at.Group?.Use is { } parent)
-                        {
-                            return parent.Name;
-                        }
-                    }
-
-                    return null;
-                }
-
-                return _definition.Texts is { } texts && texts.TryGetValue(textName, out var file)
-                    ? TextOfRead(null, file)
-                    : throw new UnresolvedReadException($"the workflow '{Owner() ?? _definition.Name}' declares no text '{textName}'");
-
-                FlowExpression.PathRead TextOfRead(string? owner, string named)
-                {
-                    if (_workflowFile is null)
-                    {
-                        return new(FlowValue.Missing, 1);
-                    }
-
-                    try
-                    {
-                        return new(FlowValue.Of(_workflowFile(owner, named)), 1);
-                    }
-                    catch (HarnessException unread)
-                    {
-                        throw new UnresolvedReadException(unread.Message);
-                    }
-                }
+                return TextsAt(scope).TryGetValue(textName, out var text)
+                    ? new(FlowValue.Of(TextOf(text, textName)), 1)
+                    : throw new UnresolvedReadException($"the workflow '{NearestUseOf(scope)?.Name ?? _definition.Name}' declares no text '{textName}'");
             }
             case "update":
                 // What raised the update under way, what has run since, and the work of the run - read by the step
@@ -10899,41 +11192,47 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Writes the outputs a used workflow declares onto its step's instance as it ends: each one's <c>from</c> read in
-    /// the scope the use's members ran in, after every one of them - so a later step reads <c>{use.changed}</c> as any
-    /// step's output, beside what the step gathers. An unreadable one ends the group failed, said with the output's
-    /// name; nothing is written over what a visit before it already wrote, for the newest ending is the one read.
+    /// The outputs a used workflow declares, read onto its step's instance as it ends: each one's <c>from</c> read in
+    /// <paramref name="scope"/> - the scope the use's members ran in, its last iteration's for a repeat - after every one
+    /// of them, so a later step reads <c>{use.changed}</c> as any step's output. Each declared output is written over
+    /// whatever the step gathered under its name; one that reads nothing - from a step its item skipped, which never
+    /// produced it - is absent. One that cannot be read is answered - its code and why, said with the output's name - and
+    /// nothing is written: its caller fails the group, which never ends done over an output it could not read.
     /// </summary>
-    private void UseOutputs(FlowInstance group)
+    private (int Exit, string Error)? UseOutputs(FlowInstance group, Scope? scope)
     {
         if (group.Step.Use is not { } use || use.Outputs.Count == 0)
         {
-            return;
+            return null;
         }
-
-        var scope = group.OwnScope ?? group.ScopeOf;
 
         if (scope is null)
         {
-            return;
+            return (HarnessExit.InternalError, $"the outputs of the workflow '{use.Name}' that '{group.Id}' uses were not read: the run holds no scope its steps ran in");
         }
 
-        var outputs = group.Output as JsonObject ?? [];
+        var outputs = group.Output?.DeepClone() as JsonObject ?? [];
 
         foreach (var output in use.Outputs)
         {
-            var value = Evaluate(output.From, scope, out var problem);
+            var value = Evaluate(output.From, scope, out var problem, mayReadNothing: true);
 
             if (problem is not null)
             {
-                FailGroup(group, HarnessExit.ConfigInvalid, Unreadable($"outputs.{output.Name}", group.Id, problem), group.Path);
-                return;
+                return (HarnessExit.ConfigInvalid, Unreadable($"outputs.{output.Name}", group.Id, problem));
+            }
+
+            if (value.IsMissing)
+            {
+                _ = outputs.Remove(output.Name);
+                continue;
             }
 
             outputs[output.Name] = value.ToNode()?.DeepClone();
         }
 
         group.Output = outputs;
+        return null;
     }
 
     /// <summary>
@@ -11278,15 +11577,23 @@ public sealed class FlowCoordinator
         => FlowTemplate.Fill(template, path => Read(path, instance.DeclaredScope!, reader: instance), out problem);
 
     /// <summary>
-    /// The repository's bar for a recommendation, as a prompt reads it by <c>{recommendations}</c>: the file the
-    /// orchestrator names - which the definition's check holds to be there - or, where it names none, the
-    /// <c>recommendations.md</c> its folder has; where the folder was looked in and holds none, a sentence that says
-    /// so, for a recommendation then says it follows none. A file that could not be looked at or read is never taken for
-    /// one that is not there: that throws, saying why. Read each time it is given, never kept by the run.
+    /// The repository's bar for a recommendation, as a prompt read in <paramref name="scope"/> reads it by
+    /// <c>{recommendations}</c> - the shipped flow's name for its <c>texts.recommendations</c>: the text of that name the
+    /// reading step sees, as <c>{text.recommendations}</c> reads it (<see cref="TextsAt"/>); else the file the
+    /// orchestrator's own <c>recommendations</c> key names - which the definition's check holds to be there - or, where it
+    /// names none, the <c>recommendations.md</c> its folder has; where the folder was looked in and holds none, a sentence
+    /// that says so, for a recommendation then says it follows none. A file that could not be looked at or read is never
+    /// taken for one that is not there: that throws, saying why. Read each time it is given, never kept by the run.
     /// </summary>
-    /// <exception cref="HarnessException">The file the orchestrator names, or the folder's own, could not be read, saying why.</exception>
-    private string BarOf()
+    /// <param name="scope">The scope the bar is read in; null for the run's own, outside every use.</param>
+    /// <exception cref="HarnessException">The file the bar is read from could not be read, saying why.</exception>
+    private string BarOf(Scope? scope)
     {
+        if (TextsAt(scope).TryGetValue("recommendations", out var text))
+        {
+            return _workflowFile is { } readText ? readText(text.Owner, text.File) : NoBar();
+        }
+
         if (_definition.Recommendations is { } named)
         {
             return _workflowFile is { } read ? read(null, named) : NoBar();
@@ -11298,6 +11605,108 @@ public sealed class FlowCoordinator
 
         string NoBar()
             => $"(orchestrator '{_definition.Name}' has no recommendations file: no bar was written for this repository)";
+    }
+
+    /// <summary>
+    /// The texts a step read in <paramref name="scope"/> sees, each by its name with the workflow that declares it: the
+    /// nearest used workflow's around the scope that declares the name first, outward through the uses around it, and
+    /// the run's own last - walked as the workflow declares its scopes (<see cref="Scope.World"/>), so the flow's own
+    /// recovery sees the run's texts wherever its source failed. The one owner of which text a name means, that
+    /// <c>{text.&lt;name&gt;}</c>, the bar and the advisor's prompt all read by.
+    /// </summary>
+    /// <param name="scope">The scope the text is read in; null for the run's own, outside every use.</param>
+    private Dictionary<string, (string? Owner, string File)> TextsAt(Scope? scope)
+    {
+        var texts = new Dictionary<string, (string? Owner, string File)>(StringComparer.Ordinal);
+
+        for (var at = scope; at is not null; at = at.World)
+        {
+            if (!at.Filling && at.Group?.Use is { Texts: { } own } use)
+            {
+                foreach (var (name, file) in own)
+                {
+                    texts.TryAdd(name, (use.Name, file));
+                }
+            }
+        }
+
+        foreach (var (name, file) in _definition.Texts ?? new Dictionary<string, string>(StringComparer.Ordinal))
+        {
+            texts.TryAdd(name, (null, file));
+        }
+
+        return texts;
+    }
+
+    /// <summary>
+    /// The text <paramref name="text"/> names, read live from the directory of the workflow that declares it. One that
+    /// cannot be read, or that a run reading no workflow files cannot reach, throws saying why - never read as nothing.
+    /// </summary>
+    /// <exception cref="UnresolvedReadException">The text could not be read, saying why.</exception>
+    private string TextOf((string? Owner, string File) text, string name)
+    {
+        if (_workflowFile is not { } read)
+        {
+            throw new UnresolvedReadException($"the text '{name}' is not read: this run reads no workflow files");
+        }
+
+        try
+        {
+            return read(text.Owner, text.File);
+        }
+        catch (HarnessException unread)
+        {
+            throw new UnresolvedReadException(unread.Message);
+        }
+    }
+
+    /// <summary>The nearest used workflow around <paramref name="scope"/> whose steps it holds, walked as the workflow declares its scopes; null outside every use.</summary>
+    private static FlowUse? NearestUseOf(Scope? scope)
+    {
+        for (var at = scope; at is not null; at = at.World)
+        {
+            if (!at.Filling && at.Group?.Use is { } use)
+            {
+                return use;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The inputs a read of <c>input</c> in <paramref name="scope"/> finds: those of the nearest use around it - what its
+    /// with filled - and the run's own outside every use. A use's scope whose with values are being read is passed, for
+    /// they are the caller's; one whose inputs were never filled is refused there, naming the use, and never read
+    /// through to another workflow's inputs.
+    /// </summary>
+    /// <exception cref="UnresolvedReadException">The nearest use's inputs were never filled.</exception>
+    private JsonObject InputsAt(Scope scope)
+    {
+        for (var at = scope; at is not null; at = at.World)
+        {
+            if (!at.Filling && at.Group?.Use is { } use)
+            {
+                return at.UseInputs
+                    ?? throw new UnresolvedReadException($"the inputs of the workflow '{use.Name}' were never filled in '{at.Id}': its with could not be read, and another workflow's inputs are never read in their place");
+            }
+        }
+
+        return Inputs();
+    }
+
+    /// <summary>The params a read of <c>param</c> in <paramref name="scope"/> finds: the nearest used workflow's own defaults, and the run's outside every use.</summary>
+    private JsonObject ParamsAt(Scope scope)
+    {
+        for (var at = scope; at is not null; at = at.World)
+        {
+            if (!at.Filling && at.Group?.Use is { } use)
+            {
+                return at.UseParams ?? UseParamsOf(use);
+            }
+        }
+
+        return Params();
     }
 
     /// <summary>Says an unreadable expression the way a step's record keeps it: which expression of which instance could not be read, and why.</summary>
@@ -11326,9 +11735,19 @@ public sealed class FlowCoordinator
     private static string PathOf(Scope scope, WorkflowStep declaration)
         => scope.GroupPath.Length == 0 ? declaration.Name : $"{scope.GroupPath}.{declaration.Name}";
 
-    /// <summary>The retries a step is given: its own where it says, the workflow's where it does not, and three where neither does.</summary>
+    /// <summary>
+    /// The retries a step is given: its own where it says, the governing use's where one declares them, the workflow's
+    /// where neither does, and three where none says (<see cref="FlowUse.RetriesOf"/>, which the reason runner reads too).
+    /// </summary>
     private int RetryCap(FlowInstance instance)
-        => instance.Step.Retries ?? OwnOf(instance)?.MaxRetries ?? _definition.RetriesOf(instance.Step);
+        => FlowUse.RetriesOf(_definition, DeclarationPathOf(instance), instance.Step);
+
+    /// <summary>
+    /// How long a paused reasoning step is given to write its handoff: the governing use's <c>handoffSeconds</c> where
+    /// one declares it, else the run's, and 180 where neither says.
+    /// </summary>
+    private int HandoffSecondsOf(FlowInstance instance)
+        => GoverningOf(instance, FlowUseKey.HandoffSeconds)?.Own.HandoffSeconds ?? _definition.HandoffSeconds ?? 180;
 
     /// <summary>The limits of this run, as the definition says them and as the plan defaults them.</summary>
     private (int MaxReasoningAgents, int MaxParallelProcesses, int MaxOpenAgents, int MaxInstances) Limit()
@@ -11339,52 +11758,30 @@ public sealed class FlowCoordinator
             _definition.MaxInstances ?? WorkflowDefinition.DefaultMaxInstances);
 
     /// <summary>
-    /// The run-level settings that govern <paramref name="instance"/>'s steps: the nearest use around it that says
-    /// <c>useParentLimits: false</c>, each key it declares replacing the run's and each it declares none for staying the
-    /// run's - a use cannot widen a run's limits by declaring nothing. Null where the run's own hold, as they always did.
+    /// Where <paramref name="instance"/> is declared among the flow, which the use that governs it is read by: its own
+    /// path for a step and a group; the recovery's own place for a visit of a recovery - the flow's root for the run's,
+    /// under the use for a used workflow's - though its id nests in the scope its source failed in; and the loop's path for
+    /// one item or iteration of a loop, which is the loop's instance, never one of its members.
     /// </summary>
-    private FlowUseOwn? OwnOf(FlowInstance instance)
+    private string DeclarationPathOf(FlowInstance instance)
+        => IsRecovery(instance) && instance.OwnScope is { } recovery ? recovery.GroupPath
+            : instance.DeclaredScope is null && instance.ScopeOf is { } loop ? loop.GroupPath
+            : instance.Path;
+
+    /// <summary>The use that governs <paramref name="key"/> for <paramref name="instance"/>, by its declaration path (<see cref="FlowUse.Governing"/>); null where the run's own holds.</summary>
+    private FlowGoverning? GoverningOf(FlowInstance instance, FlowUseKey key)
+        => GoverningOf(DeclarationPathOf(instance), key);
+
+    /// <summary>The use that governs <paramref name="key"/> for the step declared at <paramref name="path"/>, read once a run for each path (<see cref="FlowUse.Governing"/>).</summary>
+    private FlowGoverning? GoverningOf(string path, FlowUseKey key)
     {
-        for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
+        if (!_governing.TryGetValue((path, key), out var governing))
         {
-            if (at.Group?.Use?.Own is { } own)
-            {
-                return own;
-            }
+            governing = FlowUse.Governing(_definition, path, key);
+            _governing[(path, key)] = governing;
         }
 
-        return null;
-    }
-
-    /// <summary>
-    /// The use that governs <paramref name="scope"/>'s steps and its declared settings: the nearest use around the scope
-    /// that says <c>useParentLimits: false</c>. Null where the run's own settings hold.
-    /// </summary>
-    private (WorkflowStep Use, FlowUseOwn Own)? GoverningUseOf(Scope? scope)
-    {
-        for (var at = scope; at is not null; at = at.Parent)
-        {
-            if (at.Group?.Use is { Own: { } own } use)
-            {
-                return (at.Group, own);
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>Whether <paramref name="created"/> is a step of the workflow <paramref name="use"/> runs - a member of any instance of it.</summary>
-    private static bool UnderUse(FlowInstance created, WorkflowStep use)
-    {
-        for (var at = created.DeclaredScope; at is not null; at = at.Parent)
-        {
-            if (ReferenceEquals(at.Group, use))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return governing;
     }
 
     /// <summary>The refusal at the instance bound, worded once.</summary>
@@ -11393,30 +11790,53 @@ public sealed class FlowCoordinator
             + "A step instance is one run of a step: one for each work item, each iteration and each visit. Raise maxInstances, or lower a loop's bounds";
 
     /// <summary>
-    /// The refusal at a use's own instance bound: a use that governs itself caps the instances its steps may open,
-    /// beside the run's own cap, counted across every instance of the use. Null where no use governs or its cap leaves
-    /// room for the <paramref name="bringing"/> the group would open.
+    /// The refusal at an instance cap where opening <paramref name="scopes"/> items or iterations of the loop
+    /// <paramref name="declaration"/> declared in <paramref name="scope"/> would pass one; null where every cap leaves room.
+    /// Each instance is counted against one cap, by the rule every key of a use that governs itself follows
+    /// (<see cref="FlowUse.Governing"/>): the cap of the nearest use around it that declares <c>maxInstances</c>, across
+    /// every instance of that use, and the run's own where none does - an item or iteration by the loop's place, each step
+    /// declared in it by its own. A use that declares no cap never widens the run's.
     /// </summary>
-    /// <param name="group">The group being opened, as its refusal names it.</param>
-    /// <param name="scope">The scope the group is declared in.</param>
-    /// <param name="declaration">The group being opened - a loop, a forEach, or the use itself.</param>
-    /// <param name="bringing">The instances the group would open.</param>
-    private string? UseBound(string group, Scope scope, WorkflowStep declaration, int bringing)
+    /// <param name="group">The loop's instance, as its refusal names it.</param>
+    /// <param name="scope">The scope the loop is declared in.</param>
+    /// <param name="declaration">The loop.</param>
+    /// <param name="scopes">The items or iterations it would open.</param>
+    private string? InstanceBoundOf(string group, Scope scope, WorkflowStep declaration, int scopes)
     {
-        // The use that governs the group's steps: the use itself where it is one, else the nearest one around it.
-        var governing = declaration.Use is { Own: { } declared } ? (Use: declaration, Own: declared) : GoverningUseOf(scope);
+        var loop = PathOf(scope, declaration);
+        var bringing = new Dictionary<string, (FlowGoverning? Governing, int Count)>(StringComparer.Ordinal);
 
-        if (governing is not { Use.Use.Name: { } name, Own.MaxInstances: { } cap })
+        Bring(GoverningOf(loop, FlowUseKey.MaxInstances));
+
+        foreach (var (path, _) in FlowScope.Declared(_definition).Where(declared => declared.Path.StartsWith(loop + ".", StringComparison.Ordinal)))
         {
-            return null;
+            Bring(GoverningOf(path, FlowUseKey.MaxInstances));
         }
 
-        var wouldBring = _created.Count(created => UnderUse(created, governing.Value.Use)) + bringing;
+        // The run's own cap is read first, then each use's by its place, so the refusal a run meets is the same each time.
+        foreach (var (pool, (governing, count)) in bringing.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+        {
+            var wouldBring = _created.Count(created => string.Equals(GoverningOf(created, FlowUseKey.MaxInstances)?.Path ?? string.Empty, pool, StringComparison.Ordinal)) + count;
 
-        return wouldBring > cap
-            ? $"group '{group}' would bring the workflow '{name}' to {wouldBring} step instances, and at most {cap} are allowed (its maxInstances, beside the run's own cap). "
-                + "Raise the workflow's maxInstances, or lower a loop's bounds"
-            : null;
+            if (governing is null && wouldBring > Limit().MaxInstances)
+            {
+                return InstanceBound(group, wouldBring, Limit().MaxInstances);
+            }
+
+            if (governing is { Own.MaxInstances: { } cap } && wouldBring > cap)
+            {
+                return $"group '{group}' would bring the workflow '{governing.Step.Use!.Name}' to {wouldBring} step instances, and at most {cap} are allowed (its maxInstances, counted across every instance of the use in the place of the run's own cap). "
+                    + "Raise the workflow's maxInstances, or lower a loop's bounds";
+            }
+        }
+
+        return null;
+
+        void Bring(FlowGoverning? governing)
+        {
+            var pool = governing?.Path ?? string.Empty;
+            bringing[pool] = (governing, (bringing.TryGetValue(pool, out var held) ? held.Count : 0) + scopes);
+        }
     }
 
     /// <summary>Records one change of the run where its records are, whole: the snapshot is the run as it stands, and the records own the order they are written in.</summary>
@@ -11589,7 +12009,16 @@ public sealed class FlowCoordinator
             instance.Graph?.DeepClone(),
             instance.AttemptBegan == 0 ? null : instance.AttemptBegan,
             instance.EndedIn == 0 ? null : instance.EndedIn,
-            instance.ReportedIn == 0 ? null : instance.ReportedIn);
+            instance.ReportedIn == 0 ? null : instance.ReportedIn,
+            OwnScopeOf(instance)?.UseInputs?.DeepClone().AsObject(),
+            instance.ScopeOf?.Decision);
+
+    /// <summary>
+    /// The scope a group instance's own record speaks for: a block's, a handler's or a recovery visit's own, or the item or
+    /// iteration the instance is; null for a step's.
+    /// </summary>
+    private static Scope? OwnScopeOf(FlowInstance instance)
+        => instance.OwnScope ?? instance.ScopeOf;
 
     /// <summary>
     /// The agent this step works in: the one stored on it (<see cref="FlowInstance.WorksIn"/>), or - before it was stored -
@@ -12040,7 +12469,9 @@ public sealed class FlowCoordinator
                     // scope is read from where its workflow declares it - the flow's root, or the step that uses the
                     // workflow whose recovery it is - wherever its visit was taken.
                     instance = Create(declaring, declaration, StateOf(record), memberId: record.Instance);
-                    instance.OwnScope = NewScope(instance.Id, recovery ? PathOf(pathScope, declaration) : PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, null, null);
+                    instance.OwnScope = recovery
+                        ? NewScope(instance.Id, PathOf(pathScope, declaration), declaring, declaration, FlowValue.Missing, null, null, null, world: pathScope)
+                        : NewScope(instance.Id, PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, null, null);
                     instance.OwnScope.OwnGroupInstance = instance;
                     scopes[instance.Id] = instance.OwnScope;
                 }
@@ -12315,15 +12746,20 @@ public sealed class FlowCoordinator
 
             CountTheAnswers();
 
-            // The inputs a use filled its workflow with are read again, from the same values over the same records: the
-            // scopes the replay rebuilt hold them as the session that made them did.
+            // The inputs a use filled its workflow with are given back from the record of the scope they were filled in,
+            // as the session that filled them read them - never read again over what has run since - and its params are
+            // its own defaults. A scope whose record holds none had none filled before that session ended: one still
+            // open has them filled now, as that session would have filled them next, and one whose filling failed
+            // keeps none, which a read inside it refuses.
             foreach (var scope in scopes.Values.Where(scope => scope.Group?.Use is not null))
             {
-                var group = scope.OwnGroupInstance ?? scope.GroupInstance;
+                scope.UseParams = UseParamsOf(scope.Group!.Use!);
 
-                if (group is { } && !group.Failing.HasValue)
+                if (scope.UseInputs is null
+                    && (scope.OwnGroupInstance ?? scope.GroupInstance) is { State: FlowInstanceState.Running, Failing: null } opened
+                    && (scope.LoopOf ?? opened) is { State: FlowInstanceState.Running, Failing: null } group)
                 {
-                    OpenUse(scope, scope.Group!, group);
+                    _ = FillUse(scope, scope.Group, group);
                 }
             }
 
@@ -12400,6 +12836,14 @@ public sealed class FlowCoordinator
             instance.EndedFor = record.EndedFor;
             instance.Targets = record.Targets;
             instance.FromResume = true;
+
+            if (OwnScopeOf(instance) is { } own)
+            {
+                // What a use's scope was filled with, and what an iteration's deciding step decided, as the records say.
+                own.UseInputs = record.Inputs?.DeepClone().AsObject();
+                own.Decision = record.Decided;
+            }
+
             instance._handlers.AddRange(record.Handlers ?? []);
             instance._answers.AddRange(record.Answers);
             instance.Assumptions = record.Assumptions ?? [];
@@ -12588,12 +13032,13 @@ public sealed class FlowCoordinator
     /// <param name="Drain">Whether it bounds a stopped step's drain rather than a retry's turn.</param>
     private sealed record Wake(FlowInstance Instance, DateTimeOffset At, Task Delay, bool Drain = false);
 
-    /// <summary>One asking of the run's advisor the session began: its question, the step that asked, how to end it, and its answer.</summary>
+    /// <summary>One asking of an advisor the session began: its question, the step that asked, the advisor asked, how to end it, and its answer.</summary>
     /// <param name="Asked">The question advised on.</param>
     /// <param name="Instance">The step that asked, which is not started again while the asking's runner has not ended.</param>
+    /// <param name="Advisor">The advisor asked - the run's, or a governing use's - which a recommendation it gives is credited to.</param>
     /// <param name="Cancel">Ends the asking.</param>
     /// <param name="Task">The asking, answering the advice.</param>
-    private sealed record Advising(FlowQuestion Asked, FlowInstance Instance, CancellationTokenSource Cancel, Task<FlowAdvice> Task)
+    private sealed record Advising(FlowQuestion Asked, FlowInstance Instance, FlowAdvisor Advisor, CancellationTokenSource Cancel, Task<FlowAdvice> Task)
     {
         /// <summary>Whether the asking was ended - an answer was given, or the run paused or stopped - and its advice is not the question's.</summary>
         public bool Dropped { get; private set; }
@@ -12663,7 +13108,8 @@ internal sealed class Scope(
     FlowValue item,
     int? index,
     int? iteration,
-    FlowInstance? loopOf)
+    FlowInstance? loopOf,
+    Scope? world = null)
 {
     /// <summary>The scope's id.</summary>
     public string Id { get; } = id;
@@ -12673,6 +13119,16 @@ internal sealed class Scope(
 
     /// <summary>The scope around this one; null at the top.</summary>
     public Scope? Parent { get; } = parent;
+
+    /// <summary>
+    /// The scope around this one as the workflow declares it, which every lookup across a use's boundary walks - the
+    /// inputs, params and texts a read finds, the recovery a failure reaches, the answers a question is given, the policy
+    /// a group writes: <see cref="Parent"/>, save for a visit of a recovery, whose own scope stands in the scope its source
+    /// failed in (its id nests there, and its <c>item</c> and <c>source</c> are read there) while it is declared by the
+    /// workflow that declares the recovery - the flow's root for the run's own, the use's scope for a used workflow's -
+    /// so none of its lookups reaches into the used workflow its source failed in. Null at the top.
+    /// </summary>
+    public Scope? World { get; } = world ?? parent;
 
     /// <summary>The group whose steps the scope holds; null at the top.</summary>
     public WorkflowStep? Group { get; } = group;
@@ -12728,10 +13184,25 @@ internal sealed class Scope(
 
     /// <summary>
     /// The inputs of the workflow the scope's group is, where that group is a use: what its <c>with</c> filled, each
-    /// read as the input it fills declares - an expression's value, a filled template, a path, a name. Null in every
-    /// other scope, and the run's own inputs are read instead.
+    /// read as the input it fills declares - an expression's value, a filled template, a path, a name - kept in the
+    /// record of the scope's own instance, so a resume reads what the session that filled them read. Null in every
+    /// other scope, and in a use's scope whose with values could not be read, which a read inside refuses.
     /// </summary>
     internal JsonObject? UseInputs;
+
+    /// <summary>
+    /// Whether the scope's <c>with</c> values are being read: they are the caller's, read in the scope the use's members
+    /// run in for the item of their own, so a read of an input, a param or a text passes this use's boundary to the
+    /// caller's instead of refusing at inputs not yet filled.
+    /// </summary>
+    internal bool Filling;
+
+    /// <summary>
+    /// Where the scope is an iteration of a repeat that decides at a step of its own (<c>decideAfter</c>), the decision
+    /// read at that step's ending: the visit it was read at, and what it said - kept in the iteration's own record, so a
+    /// resume never reads it again on the iteration as it stands later. Null until one is read.
+    /// </summary>
+    internal FlowLoopDecision? Decision;
 
     /// <summary>
     /// The params of the workflow the scope's group is, where that group is a use: its own defaults, for its steps read

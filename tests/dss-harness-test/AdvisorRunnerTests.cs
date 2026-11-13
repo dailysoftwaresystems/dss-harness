@@ -190,6 +190,40 @@ public sealed class AdvisorRunnerTests
     }
 
     /// <summary>
+    /// The advisor's prompt reads each text by its name as the call names it - the workflow that declares it and its file
+    /// there, the used workflow's own and the run's alike, each read in its own workflow's directory - and a name the call
+    /// names no text for is refused saying which workflow declares none, never read as nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheAdvisorsPromptReadsEachTextInTheDirectoryOfTheWorkflowThatDeclaresIt()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "prompts", "texts.md"), "{text.closure}|{text.shared}");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "pipeline", "texts", "closure.md"), "the pipeline's closure");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "texts", "shared.md"), "the run's shared");
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: """{"answer":"more","why":"nearly done"}""");
+        var call = Call(kit) with
+        {
+            Advisor = Call(kit).Advisor with { Prompt = "prompts/texts.md" },
+            Texts = new Dictionary<string, FlowAdvisorText>(StringComparer.Ordinal)
+            {
+                ["closure"] = new("flow/pipeline", "texts/closure.md"),
+                ["shared"] = new("flow", "texts/shared.md"),
+            },
+        };
+
+        _ = await Runner(kit, agents).AdviseAsync(call, Token);
+
+        Assert.Equal("the pipeline's closure|the run's shared", agents.Asked.Single().Prompt);
+
+        var undeclared = await Assert.ThrowsAsync<HarnessException>(() => Runner(kit, agents).AdviseAsync(call with { Texts = null }, Token));
+
+        Assert.Equal("'{text.closure}': the workflow 'flow' declares no text 'closure', and the run declares none either", undeclared.Message);
+    }
+
+    /// <summary>
     /// The advice asked of a step whose agent writes in a worktree works where that agent works - the worktree's path on
     /// the disk, never its record's address - and only reads it: its own work directory is all it writes. The tool's
     /// own Claude Code directory and the places the user keeps credentials in are kept from it, and every secret the slot

@@ -47,8 +47,8 @@ public sealed class GraphifyCodebaseRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.Refused, refusal);
         }
 
-        // The shape a use that governs this step declares stands where the run's own workflow says none.
-        var request = FlowGraphSyncs.RequestOf(context, place, run.Instance, rebuild: run.Step.Rebuild == true, governing: FlowUse.Around(place.Definition, run.DeclarationPath)?.Use?.Own?.CodebaseGraph);
+        // The run's one shape, the same every sync of its graph is made under (FlowUse.GraphOf).
+        var request = FlowGraphSyncs.RequestOf(context, place, run.Instance, rebuild: run.Step.Rebuild == true);
 
         if (run.Step.In is { } named)
         {

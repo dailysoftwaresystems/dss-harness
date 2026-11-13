@@ -1043,18 +1043,90 @@ public sealed class FlowUseTests
     }
 
     /// <summary>
-    /// WF4: the limits of a use that governs itself gate its steps alone, counted across every instance of the use, and
-    /// its steps are counted against the caller's gates no more - a step of the caller's runs beside the use's own,
-    /// held to the run's own gate.
+    /// WF4: the reasoning gate of a use that governs itself and declares one gates its steps alone, and its steps are
+    /// counted against the caller's gate no more: the use's second step waits for its first though the run's gate (2)
+    /// has room, and a step of the caller's starts beside the use's first, for the use's step holds none of the run's
+    /// slots. Read from the run's own order of attempts begun and instances ended, never from what a runner saw when.
     /// </summary>
     [Fact]
     public async Task TheStepsOfAUseThatGovernsItself_CountAgainstTheirOwnGateAlone()
     {
-        var pipeline = Swap(Pipeline, "steps:\n  - name: implement\n", "steps:\n  - name: first\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n  - name: second\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n  - name: implement\n");
+        var run = new FlowCoordinator(
+            Resolved(GatedCaller(runGate: 2), Swap(TwoReasoners, "name: pipeline\n", "name: pipeline\nmaxReasoningAgents: 1\n")),
+            new FakeRunner(),
+            Facts(),
+            new JumpingClock());
+        _ = await run.RunAsync(TestContext.Current.CancellationToken);
 
-        var caller = $"""
+        // The use's gate (1): no two of its reasoning steps at once - the run's gate of 2 never governed them.
+        Assert.Empty(Overlapping(run, ["items.first", "items.second", "items.implement"]));
+
+        // The run's gate counts the caller's step alone: it began with the use's first, in the same admission.
+        Assert.Equal([("items.first", "beside")], Overlapping(run, ["items.first", "beside"]));
+    }
+
+    /// <summary>
+    /// WF4: a use that governs itself and declares no reasoning gate of its own counts its reasoning steps against the
+    /// run's gate, with the caller's own - a use never widens the run's limits by declaring nothing: under the run's gate
+    /// of 1, no two reasoning steps of the run, the use's or the caller's, ever run at once.
+    /// </summary>
+    [Fact]
+    public async Task TheStepsOfAUseThatDeclaresNoGate_CountAgainstTheRunsGate()
+    {
+        var run = new FlowCoordinator(
+            Resolved(GatedCaller(runGate: 1), Swap(TwoReasoners, "name: pipeline\n", "name: pipeline\nmaxRetries: 1\n")),
+            new FakeRunner(),
+            Facts(),
+            new JumpingClock());
+        _ = await run.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowInstanceState.Done, run.Instances["beside"].State);
+        Assert.Empty(Overlapping(run, ["items.first", "items.second", "items.implement", "beside"]));
+    }
+
+    /// <summary>
+    /// WF4: the gate of a use that governs itself is counted across every instance of the use - each work item of a
+    /// forEach that uses it is one, and the use's gate of 1 runs their reasoning steps one at a time, under a run's gate
+    /// of 4 that would have let them all start at once.
+    /// </summary>
+    [Fact]
+    public async Task TheGateOfAUseThatGovernsItself_IsCountedAcrossEveryItemOfItsForEach()
+    {
+        var runner = new FakeRunner().On("listing", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["list"] = new JsonArray(1, 2, 3) }));
+        var run = new FlowCoordinator(
+            Resolved("""
+                name: flow
+                maxReasoningAgents: 4
+                steps:
+                  - name: listing
+                    type: orient
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    useParentLimits: false
+                    forEach: listing.list
+                    dependsOn: [listing]
+                    with:
+                      item: item
+                      title: t
+                      prompt: prompts/implement.md
+                """, Swap(Pipeline, "name: pipeline\n", "name: pipeline\nmaxReasoningAgents: 1\n")),
+            runner,
+            Facts(),
+            new JumpingClock());
+        _ = await run.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowInstanceState.Done, run.Instances["items"].State);
+        Assert.Empty(Overlapping(run, ["items[0].implement", "items[1].implement", "items[2].implement"]));
+    }
+
+    /// <summary>The pipeline with two reasoning steps of its own before its implement step, for the tests of its gates.</summary>
+    private static readonly string TwoReasoners = Swap(Pipeline, "steps:\n  - name: implement\n", "steps:\n  - name: first\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n  - name: second\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n  - name: implement\n");
+
+    /// <summary>A caller that uses the pipeline governing itself, with a reasoning step of its own declared after it, under the run's reasoning gate.</summary>
+    private static string GatedCaller(int runGate)
+        => $"""
             name: flow
-            maxReasoningAgents: 2
+            maxReasoningAgents: {runGate}
             steps:
               - name: items
                 use: ./pipeline/pipeline.yml
@@ -1062,28 +1134,37 @@ public sealed class FlowUseTests
                 with:
                   title: t
                   prompt: prompts/implement.md
+              - name: beside
+                type: reason
+                agent: worker
+                prompt: prompts/implement.md
+                outputs: schemas/implement.json
             """;
 
-        var governed = new FakeRunner();
-        var gate = governed.Hold("first");
-        var run = new FlowCoordinator(
-            Resolved(caller, Swap(pipeline, "name: pipeline\n", "name: pipeline\nmaxReasoningAgents: 1\n")),
-            governed,
-            Facts(),
-            new JumpingClock());
-        var going = run.RunAsync(TestContext.Current.CancellationToken);
+    /// <summary>
+    /// Each two of <paramref name="instances"/> that ran at once, in the order given: one began before the other ended,
+    /// by the run's own order of attempts begun and instances ended - which no runner's thread changes.
+    /// </summary>
+    private static List<(string, string)> Overlapping(FlowCoordinator run, IReadOnlyList<string> instances)
+    {
+        var overlapping = new List<(string, string)>();
 
-        // A run that ends without starting the held step fails here rather than waiting on a start that cannot come.
-        Assert.Same(gate.StartedAsync(), await Task.WhenAny(gate.StartedAsync(), going));
+        for (var one = 0; one < instances.Count; one++)
+        {
+            for (var other = one + 1; other < instances.Count; other++)
+            {
+                var (a, b) = (run.Instances[instances[one]], run.Instances[instances[other]]);
+                Assert.NotEqual(0, a.EndedIn);
+                Assert.NotEqual(0, b.EndedIn);
 
-        // The use's gate (1) holds its second step; the run's (2) is not the one that governs it, for where the use's
-        // steps are counted against their own gate alone, the run's own steps still have the run's.
-        Assert.DoesNotContain("items.second", governed.Started);
+                if (a.AttemptBegan < b.EndedIn && b.AttemptBegan < a.EndedIn)
+                {
+                    overlapping.Add((instances[one], instances[other]));
+                }
+            }
+        }
 
-        gate.Open(passed: true);
-        _ = await going;
-
-        Assert.Equal(["items.first", "items.second"], [.. governed.Started.Where(started => started.Split('.')[^1] is "first" or "second")]);
+        return overlapping;
     }
 
     /// <summary>
@@ -1133,8 +1214,9 @@ public sealed class FlowUseTests
 
     /// <summary>
     /// WF4b: a question a step of a use that governs itself raises is recommended by the advisor the workflow it runs in
-    /// declares - its files read in its own directory - and where it declares none, the run's own advisor stands as it
-    /// always did.
+    /// declares - its files read in its own directory, its prompt handed the inputs the use filled and the bar the
+    /// workflow's own <c>texts.recommendations</c> names, and what it recommends credited to it - and where it declares
+    /// none, the run's own advisor stands as it always did, handed the run's inputs and bar.
     /// </summary>
     [Fact]
     public async Task TheQuestionsOfAStepOfAUseThatGovernsItself_AreRecommendedByItsAdvisor()
@@ -1145,6 +1227,8 @@ public sealed class FlowUseTests
             advisor:
               agent: consul
               prompt: prompts/advise.md
+            texts:
+              recommendations: texts/bar.md
 
             """ + "\n");
 
@@ -1154,6 +1238,9 @@ public sealed class FlowUseTests
                 advisor:
                   agent: helper
                   prompt: prompts/advise.md
+                inputs:
+                  - name: title
+                    kind: text
                 steps:
                   - name: items
                     use: ./pipeline/pipeline.yml{{(governs ? "\n    useParentLimits: false" : string.Empty)}}
@@ -1162,88 +1249,718 @@ public sealed class FlowUseTests
                       prompt: prompts/implement.md
                 """;
 
-        var governed = new FakeAdvisor();
+        var governed = new FakeAdvisor(answer: "accept");
         var governedRun = new FlowCoordinator(
             Resolved(Caller(governs: true), pipeline),
             new FakeRunner(),
             Facts(),
             new JumpingClock(),
+            workflowFile: (owner, file) => $"{owner ?? "the run"}: {file}",
             advisor: governed,
             workflowFileIfThere: _ => "the bar");
         _ = await governedRun.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(("consul", "flow/pipeline"), governed.Called.Single());
+        var call = governed.Calls.Single();
+        Assert.Equal("flow/pipeline: texts/bar.md", call.Bar);
+        Assert.Equal("t", call.Inputs["title"]?.GetValue<string>());
+        Assert.Equal(("given", "consul"), (governedRun.Questions.Single().Recommendation?.State, governedRun.Questions.Single().Recommendation?.Agent));
 
-        var plain = new FakeAdvisor();
+        var plain = new FakeAdvisor(answer: "accept");
         var plainRun = new FlowCoordinator(
             Resolved(Caller(governs: false), pipeline),
             new FakeRunner(),
             Facts(),
             new JumpingClock(),
+            workflowFile: (owner, file) => $"{owner ?? "the run"}: {file}",
             advisor: plain,
-            workflowFileIfThere: _ => "the bar");
+            workflowFileIfThere: _ => "the bar",
+            inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["title"] = "the run's own" });
         _ = await plainRun.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(("helper", "flow"), plain.Called.Single());
+        Assert.Equal("the bar", plain.Calls.Single().Bar);
+        Assert.Equal("the run's own", plain.Calls.Single().Inputs["title"]?.GetValue<string>());
+        Assert.Equal(("given", "helper"), (plainRun.Questions.Single().Recommendation?.State, plainRun.Questions.Single().Recommendation?.Agent));
     }
 
     /// <summary>
-    /// WF4b: the run's one graph takes the shape a use that governs itself declares where the run's own workflow says
-    /// none - its reason steps' serving and its graphify steps fall back to it - and the run's own shape stands wherever
-    /// it declares one.
+    /// A question of a step of a use that governs itself is answered in one order, nearest first: the step's own answers,
+    /// the groups around it within the used workflow, the used workflow's own answers, and then the caller's groups -
+    /// the use step's own key among them - and the run's. A group within the workflow answers before the workflow, and
+    /// the workflow before the use step that calls it.
     /// </summary>
     [Fact]
-    public async Task TheGraphOfAStepOfAUseThatGovernsItself_FallsBackToTheShapeItDeclares()
+    public async Task AQuestionOfAStepOfAUseThatGovernsItself_IsAnsweredNearestFirst()
+    {
+        async Task<string?> AnsweredWhereAsync(bool groupAnswers, bool workflowAnswers)
+        {
+            var hold = groupAnswers ? "  - name: hold\n    answers:\n      loopBound: accept\n" : "  - name: hold\n";
+            var pipeline = Swap(Pipeline, "steps:\n  - name: implement\n", $"steps:\n{hold}    steps:\n      - name: spin\n        repeat:\n          until: 'false'\n          maxIterations: 1\n        steps:\n          - name: once\n            type: orient\n  - name: implement\n");
+            pipeline = workflowAnswers ? Swap(pipeline, "name: pipeline\n", "name: pipeline\nanswers:\n  loopBound: accept\n") : pipeline;
+            var run = new FlowCoordinator(Resolved("""
+                name: flow
+                answers:
+                  loopBound: accept
+                steps:
+                  - name: around
+                    answers:
+                      loopBound: accept
+                    steps:
+                      - name: items
+                        use: ./pipeline/pipeline.yml
+                        useParentLimits: false
+                        answers:
+                          loopBound: accept
+                        with:
+                          title: t
+                          prompt: prompts/implement.md
+                """, pipeline), new FakeRunner(), Facts(), new JumpingClock());
+            _ = await run.RunAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowInstanceState.Done, run.Instances["around.items.hold.spin"].State);
+            return Assert.Single(Assert.Single(run.Questions).Given).Where;
+        }
+
+        // A group within the used workflow answers first, then the workflow's own answers, then the use step's own key,
+        // the caller's groups around it and the run's.
+        Assert.Equal("group 'hold'", await AnsweredWhereAsync(groupAnswers: true, workflowAnswers: true));
+        Assert.Equal("the workflow 'flow/pipeline'", await AnsweredWhereAsync(groupAnswers: false, workflowAnswers: true));
+        Assert.Equal("group 'items'", await AnsweredWhereAsync(groupAnswers: false, workflowAnswers: false));
+    }
+
+    /// <summary>
+    /// A text a step reads by its name at run time is the nearest used workflow's that declares the name, and else the
+    /// run's: a step of the caller reads the run's text, a step of the used workflow reads its own workflow's text of
+    /// the same name, and a name only the run declares reaches the used workflow's steps - each read live, from the
+    /// directory of the workflow that declares it.
+    /// </summary>
+    [Fact]
+    public async Task ATextReadAtRunTime_IsTheUsedWorkflowsOwnFirst_AndElseTheRuns()
+    {
+        var pipeline = Swap(Pipeline, "name: pipeline\n", "name: pipeline\ntexts:\n  closure: texts/closure.md\n");
+        pipeline = Swap(pipeline, "    outputs: schemas/implement.json\n", "    outputs: schemas/implement.json\n    when: 'text.closure == \"the pipeline''s closure\" && text.shared == \"the run''s shared\"'\n");
+        var files = new Dictionary<(string?, string), string>
+        {
+            [(null, "texts/closure.md")] = "the run's closure",
+            [(null, "texts/shared.md")] = "the run's shared",
+            [("flow/pipeline", "texts/closure.md")] = "the pipeline's closure",
+        };
+        var definition = Resolved("""
+            name: flow
+            texts:
+              closure: texts/closure.md
+              shared: texts/shared.md
+            steps:
+              - name: first
+                type: orient
+                when: 'text.closure == "the run''s closure"'
+              - name: items
+                use: ./pipeline/pipeline.yml
+                dependsOn: [first]
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            """, pipeline);
+        var coordinator = new FlowCoordinator(
+            definition,
+            new FakeRunner(),
+            Facts(),
+            new JumpingClock(),
+            workflowFile: (owner, file) => files.GetValueOrDefault((owner, file), $"the file {file}"));
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal((FlowInstanceState.Done, (string?)null), (coordinator.Instances["first"].State, coordinator.Instances["first"].Error));
+        Assert.Equal((FlowInstanceState.Done, (string?)null), (coordinator.Instances["items.implement"].State, coordinator.Instances["items.implement"].Error));
+
+        // A run that reads no workflow files reads no text, and says so: never a text read as nothing.
+        var unread = new FlowCoordinator(definition, new FakeRunner(), Facts(), new JumpingClock());
+        _ = await unread.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowInstanceState.Failed, unread.Instances["first"].State);
+        Assert.Contains("the text 'closure' is not read: this run reads no workflow files", unread.Instances["first"].Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// WF4b: the run's one graph has one shape, settled once for the run - the run's own workflow's where it declares one,
+    /// else the shape a use that governs itself declares - and every request of it is made under that shape, whoever
+    /// asks: a sync at a step's start or end, a step's serving, a graphify step. One graph synced under two shapes would
+    /// list files and drop them again between its syncs.
+    /// </summary>
+    [Fact]
+    public async Task TheRunsOneGraph_TakesTheShapeAGoverningUseDeclares_WhereTheRunDeclaresNone()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var token = TestContext.Current.CancellationToken;
         await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig());
         var context = await harness.ContextLoader.LoadAsync(temp.Path, token);
-        var place = new FlowRunPlace(temp.Path, "r1", "0123456789abcdef0123456789abcdef01234567", WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n"), null);
-        var governing = new FlowCodebaseGraph(Include: ["src/**"]);
+        var pipeline = Swap(Pipeline, "name: pipeline\n", "name: pipeline\ncodebaseGraph:\n  include: ['src/**']\n");
 
-        Assert.Equal(["src/**"], [.. FlowGraphSyncs.RequestOf(context, place, "why", governing: governing).Shape.Include!.Select(pattern => pattern.ToString())]);
-        Assert.Empty(FlowGraphSyncs.RequestOf(context, place, "why").Shape.Include ?? []);
+        string Caller(bool governs)
+            => $$"""
+                name: flow
+                steps:
+                  - name: items
+                    use: ./pipeline/pipeline.yml{{(governs ? "\n    useParentLimits: false" : string.Empty)}}
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """;
 
-        var own = place with { Definition = place.Definition with { CodebaseGraph = new FlowCodebaseGraph(Include: ["tests/**"]) } };
-        Assert.Equal(["tests/**"], [.. FlowGraphSyncs.RequestOf(context, own, "why", governing: governing).Shape.Include!.Select(pattern => pattern.ToString())]);
+        FlowRunPlace PlaceOf(WorkflowDefinition definition)
+            => new(temp.Path, "r1", "0123456789abcdef0123456789abcdef01234567", definition, null);
+
+        static IReadOnlyList<string> Included(DssHarness.Core.Codebase.CodebaseGraphSync request)
+            => [.. (request.Shape.Include ?? []).Select(pattern => pattern.ToString())];
+
+        var governed = PlaceOf(Resolved(Caller(governs: true), pipeline));
+
+        // Every request of the run's graph, whatever asks it, is made under the use's shape.
+        Assert.Equal(["src/**"], Included(FlowGraphSyncs.RequestOf(context, governed, "items.implement:start")));
+        Assert.Equal(["src/**"], Included(FlowGraphSyncs.RequestOf(context, governed, "items.implement:graph", rebuild: true)));
+
+        // The run's own shape stands where it declares one, and a use that does not govern itself shapes nothing.
+        var own = governed with { Definition = governed.Definition with { CodebaseGraph = new FlowCodebaseGraph(Include: ["tests/**"]) } };
+        Assert.Equal(["tests/**"], Included(FlowGraphSyncs.RequestOf(context, own, "why")));
+        Assert.Empty(Included(FlowGraphSyncs.RequestOf(context, PlaceOf(Resolved(Caller(governs: false), pipeline)), "why")));
     }
 
     /// <summary>
-    /// WF4: a use that governs itself caps the instances its steps may open, beside the run's own cap, counted across
-    /// every instance of the use - a group of it past the cap is refused naming the workflow and its maxInstances.
+    /// WF4: a use that governs itself and declares maxInstances caps the instances its steps open, counted across every
+    /// instance of the use and in the place of the run's own cap - a group of it past its cap is refused naming the
+    /// workflow, and one within its cap opens though the run's cap alone would have refused it - while a use that
+    /// declares no cap leaves its steps counted against the run's, for a use never widens the run's limits by declaring
+    /// nothing.
     /// </summary>
     [Fact]
-    public async Task AUseThatGovernsItself_CapsItsOwnInstances()
+    public async Task AUseThatGovernsItself_CapsItsOwnInstances_InThePlaceOfTheRunsCap()
     {
         var pipeline = Swap(Pipeline, "  - name: item\n    kind: value\n", "  - name: item\n    kind: value\n  - name: many\n    kind: value\n    required: true\n");
         pipeline = Swap(pipeline, "steps:\n  - name: implement\n", "steps:\n  - name: batch\n    forEach: 'input.many'\n    steps:\n      - name: one\n        type: orient\n  - name: implement\n");
-        pipeline = Swap(pipeline, "name: pipeline\n", "name: pipeline\nmaxInstances: 4\n");
 
-        var runner = new FakeRunner();
-        var run = new FlowCoordinator(Resolved($"""
+        async Task<FlowCoordinator> RunAsync(int? runCap, string pipelineText)
+        {
+            var runner = new FakeRunner().On("list", () => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["items"] = new JsonArray([1, 2, 3]) }));
+            var run = new FlowCoordinator(Resolved($"""
+                name: flow{(runCap is { } cap ? $"\nmaxInstances: {cap}" : string.Empty)}
+                steps:
+                  - name: list
+                    type: orient
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    useParentLimits: false
+                    dependsOn: [list]
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                      many: 'list.items'
+                """, pipelineText), runner, Facts(), new JumpingClock());
+            _ = await run.RunAsync(TestContext.Current.CancellationToken);
+            return run;
+        }
+
+        // The use's own cap (4): items.batch itself, then three items and three members of them, are the use's seven.
+        var capped = await RunAsync(runCap: null, Swap(pipeline, "name: pipeline\n", "name: pipeline\nmaxInstances: 4\n"));
+        Assert.Equal(FlowInstanceState.Failed, capped.Instances["items"].State);
+        Assert.Equal(
+            "group 'items.batch' would bring the workflow 'flow/pipeline' to 7 step instances, and at most 4 are allowed (its maxInstances, counted across every instance of the use in the place of the run's own cap). Raise the workflow's maxInstances, or lower a loop's bounds",
+            capped.Instances["items.batch"].Error);
+
+        // Within the use's cap (20) the run's own (5) counts only list and items: the use's eleven open and run.
+        var within = await RunAsync(runCap: 5, Swap(pipeline, "name: pipeline\n", "name: pipeline\nmaxInstances: 20\n"));
+        Assert.Equal(FlowInstanceState.Done, within.Instances["items"].State);
+        Assert.Equal(FlowInstanceState.Done, within.Instances["items.batch"].State);
+
+        // A use that declares no cap is counted against the run's: list, items and items.batch, then six more, pass 5.
+        var uncapped = await RunAsync(runCap: 5, Swap(pipeline, "name: pipeline\n", "name: pipeline\nmaxRetries: 1\n"));
+        Assert.Equal(FlowInstanceState.Failed, uncapped.Instances["items"].State);
+        Assert.Equal(
+            "group 'items.batch' would bring this run to 9 step instances, and at most 5 are allowed (maxInstances). A step instance is one run of a step: one for each work item, each iteration and each visit. Raise maxInstances, or lower a loop's bounds",
+            uncapped.Instances["items.batch"].Error);
+    }
+
+    /// <summary>
+    /// The run's own recovery, taken for a failure inside a used workflow, reads the run's own inputs and params: its
+    /// visit stands in the scope the failure happened in, and every lookup across a use's boundary is made in the scope
+    /// that declares the recovery - the flow's root - never in the used workflow its source failed in, whose own input
+    /// and param of other values it would otherwise read.
+    /// </summary>
+    [Fact]
+    public async Task TheRunsRecovery_TakenForAStepOfAUsedWorkflow_ReadsTheRunsOwnInputsAndParams()
+    {
+        var failures = 0;
+        var runner = new FakeRunner().On("verify", () => ++failures == 1
+            ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed)
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var definition = Resolved("""
             name: flow
+            inputs:
+              - name: title
+                kind: text
+            params:
+              - name: tone
+                default: loud
             steps:
-              - name: list
-                type: orient
               - name: items
                 use: ./pipeline/pipeline.yml
-                useParentLimits: false
-                dependsOn: [list]
+                onFailure: recover
+                with:
+                  title: the pipeline's own
+                  prompt: prompts/implement.md
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: heal
+                  type: orient
+                  when: 'input.title == "the run''s own" && param.tone == "loud"'
+            """, Pipeline[..Pipeline.IndexOf("\nrecover:", StringComparison.Ordinal)]);
+
+        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["title"] = "the run's own" });
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // The recovery's step read the run's title and tone - the pipeline's are 'the pipeline's own' and 'plain' - and ran.
+        Assert.Equal(["items.implement", "items.verify", "items.recover.heal", "items.verify+2"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["items.recover.heal"].State);
+    }
+
+    /// <summary>
+    /// A failure policy a group of a used workflow writes is filled in the scope that declares the group - from that
+    /// workflow's own inputs - however deep the failing member is: a member of a workflow nested in it, with no policy
+    /// of its own, reads the group's <c>{input.failTo}</c> as the used workflow filled it (<c>recover</c>, here, so the
+    /// recovery takes the member's failure where it happened), never as the nested workflow fills an input of the same
+    /// name.
+    /// </summary>
+    [Fact]
+    public async Task APolicyAGroupOfAUsedWorkflowWrites_IsFilledFromThatWorkflowsInputs_HoweverDeepTheFailure()
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["flow/outer/outer.yml"] = """
+                name: outer
+                inputs:
+                  - name: failTo
+                    kind: step
+                    default: stop
+                steps:
+                  - name: listing
+                    type: orient
+                  - name: sub
+                    use: ./inner/inner.yml
+                    forEach: listing.list
+                    dependsOn: [listing]
+                    onFailure: '{input.failTo}'
+                    with:
+                      failTo: pause
+                """,
+            ["flow/outer/inner/inner.yml"] = """
+                name: inner
+                inputs:
+                  - name: failTo
+                    kind: step
+                    default: stop
+                steps:
+                  - name: work
+                    type: orient
+                    retries: 0
+                """,
+        };
+        var failures = 0;
+        var runner = new FakeRunner()
+            .On("listing", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["list"] = new JsonArray(1) }))
+            .On("work", () => ++failures == 1 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed) : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var definition = WorkflowResolver.Resolve(Parse("""
+            name: flow
+            steps:
+              - name: items
+                use: ./outer/outer.yml
+                with:
+                  failTo: recover
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: heal
+                  type: orient
+            """), "flow", path => files.GetValueOrDefault(path)).Definition;
+
+        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // The recovery took the member's failure in the item it failed in, and the member ran again there.
+        Assert.Equal(["items.listing", "items.sub[0].work", "items.sub[0].recover.heal", "items.sub[0].work+2"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["items"].State);
+    }
+
+    /// <summary>
+    /// A failure policy read from an input that fills with no policy is never dropped in silence nor routed by a guess:
+    /// the step's error says which policy could not be read and why, and the failure goes where the top level sends
+    /// what nothing else decides - the run stops, for it declares no recovery - rather than to the group around it as
+    /// though the step wrote none.
+    /// </summary>
+    [Fact]
+    public async Task AFailurePolicyThatCannotBeRead_IsSaid_AndGoesWhereTheTopLevelSendsIt()
+    {
+        var pipeline = Swap(Pipeline, "    retries: 1\n    onFailure: recover\n", "    retries: 0\n    onFailure: '{input.failTo}'\n");
+        var runner = new FakeRunner().On("verify", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "verify failed"));
+        var coordinator = new FlowCoordinator(Resolved("""
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
                 with:
                   title: t
                   prompt: prompts/implement.md
-                  many: 'list.items'
-            """, pipeline), runner.On("list", () => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new System.Text.Json.Nodes.JsonObject { ["items"] = new System.Text.Json.Nodes.JsonArray([1, 2, 3]) })), Facts(), new JumpingClock());
-        _ = await run.RunAsync(TestContext.Current.CancellationToken);
+                  failTo: onward
+            """, pipeline), runner, Facts(), new JumpingClock());
 
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(FlowInstanceState.Failed, run.Instances["items"].State);
-        Assert.Contains(
-            "would bring the workflow 'flow/pipeline' to 7 step instances, and at most 4 are allowed (its maxInstances, beside the run's own cap)",
-            run.Instances["items.batch"].Error,
-            StringComparison.Ordinal);
+        var verify = coordinator.Instances["items.verify"];
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal(
+            "verify failed; and its failure policy could not be read: expression 'onFailure' of 'items.verify': '{input.failTo}' fills with 'onward', which is none of "
+                + string.Join(", ", WorkflowStep.FailurePolicies.Select(policy => $"'{policy}'")),
+            verify.Error);
+        Assert.NotEqual(FlowFailure.TakenByGroup, verify.Failure);
+    }
+
+    /// <summary>
+    /// A handler's <c>then</c> read from an input that reads nothing is never dropped in silence: the handler ends failed,
+    /// saying which <c>then</c> could not be read and why, and its failure decides as any failure does - the redirect it
+    /// could not make is never taken for one made.
+    /// </summary>
+    [Fact]
+    public async Task AThenThatCannotBeRead_EndsItsHandlerFailed_SayingWhy()
+    {
+        var pipeline = Swap(Pipeline, "  - name: failTo\n    kind: step\n    default: continue\n", "  - name: failTo\n    kind: step\n    default: continue\n  - name: back\n    kind: step\n");
+        pipeline = Swap(pipeline, "    retries: 1\n    onFailure: recover\n", "    retries: 0\n  - name: mend\n    type: orient\n    on:\n      step: verify\n      outcome: failure\n    then: '{input.back}'\n");
+        var runner = new FakeRunner().On("verify", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "verify failed"));
+        var coordinator = new FlowCoordinator(Resolved("""
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            """, pipeline), runner, Facts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        var mend = coordinator.Instances["items.mend"];
+        Assert.Equal((FlowInstanceState.Failed, (int?)HarnessExit.ConfigInvalid), (mend.State, mend.Exit));
+        Assert.Equal("expression 'then' of 'items.mend': '{input.back}' reads nothing", mend.Error);
+        Assert.Equal(["items.implement", "items.verify", "items.mend"], runner.Started);
+    }
+
+    /// <summary>
+    /// A handler of a used workflow takes the step its <c>then</c> sends the run to from one of that workflow's step-kind
+    /// inputs, <c>{input.back}</c> whole, filled by the use's with: the file reads, and the run goes back to the step the
+    /// use names.
+    /// </summary>
+    [Fact]
+    public async Task AThenReadFromAStepInput_SendsTheRunToTheStepTheUseNames()
+    {
+        var pipeline = Swap(Pipeline, "  - name: failTo\n    kind: step\n    default: continue\n", "  - name: failTo\n    kind: step\n    default: continue\n  - name: back\n    kind: step\n");
+        pipeline = Swap(pipeline, "    retries: 1\n    onFailure: recover\n", "    retries: 0\n  - name: mend\n    type: orient\n    on:\n      step: verify\n      outcome: failure\n    then: '{input.back}'\n");
+        var failures = 0;
+        var runner = new FakeRunner().On("verify", () => ++failures == 1 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed) : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var (definition, problems) = ResolvedWithProblems("""
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+                  back: implement
+            """, pipeline);
+
+        Assert.Empty(problems);
+
+        var coordinator = new FlowCoordinator(definition, runner, Facts(), new JumpingClock());
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["items.implement", "items.verify", "items.mend", "items.implement+2", "items.verify+2"], runner.Started);
+    }
+
+    /// <summary>
+    /// A handler of a used workflow at its bound after a failure is not asked about where the used workflow's own
+    /// recovery reaches the failure - though the run declares none: the failure is left to that recovery, which takes
+    /// it, and no question of the handler's bound is raised.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerAtItsBoundInsideAUse_LeavesTheFailureToTheUsedWorkflowsRecovery()
+    {
+        var pipeline = Swap(Pipeline, "    retries: 1\n    onFailure: recover\n", "    retries: 0\n    onFailure: recover\n  - name: mend\n    type: orient\n    maxVisits: 1\n    on:\n      step: verify\n      outcome: failure\n    then: implement\n");
+        var failures = 0;
+        var runner = new FakeRunner().On("verify", () => ++failures <= 2 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed) : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(Resolved("""
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            """, pipeline), runner, Facts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Empty(coordinator.Questions);
+        Assert.Equal(["items.implement", "items.verify", "items.mend", "items.implement+2", "items.verify+2", "items.recover.diagnose", "items.verify+3"], runner.Started);
+    }
+
+    /// <summary>
+    /// A step of a used workflow whose with could not be read reads no input at all: an always step of it, which runs
+    /// though its use failed, is refused naming the use whose inputs were never filled - never handed the calling run's
+    /// input of the same name in their place.
+    /// </summary>
+    [Fact]
+    public async Task AnInputReadInsideAUseWhoseWithCouldNotBeRead_IsRefused_NeverTheCallersInput()
+    {
+        var pipeline = Swap(Pipeline, "  - name: verify\n", "  - name: tidy\n    type: orient\n    always: true\n    when: 'input.title == \"the run''s own\"'\n  - name: verify\n");
+        var coordinator = new FlowCoordinator(Resolved("""
+            name: flow
+            inputs:
+              - name: title
+                kind: text
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: '{nothing.here}'
+                  prompt: prompts/implement.md
+            """, pipeline), new FakeRunner(), Facts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["title"] = "the run's own" });
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["items"].State);
+        var tidy = coordinator.Instances["items.tidy"];
+        Assert.Equal((FlowInstanceState.Failed, (int?)HarnessExit.ConfigInvalid), (tidy.State, tidy.Exit));
+        Assert.Equal(
+            "expression 'when' of 'items.tidy': the inputs of the workflow 'flow/pipeline' were never filled in 'items': its with could not be read, and another workflow's inputs are never read in their place",
+            tidy.Error);
+    }
+
+    /// <summary>
+    /// A forEach that uses a workflow reads every item's with values before it opens any item: one item's that cannot be
+    /// read fails the group with none of its items opened - no instance, and no record a resume could not place - said
+    /// with the input and the item it was read for.
+    /// </summary>
+    [Fact]
+    public async Task AForEachWhoseItemsWithCannotBeRead_FailsWithNoneOfItsItemsOpened()
+    {
+        var runner = new FakeRunner().On("listing", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["list"] = new JsonArray(new JsonObject { ["label"] = "a" }, new JsonObject()) }));
+        var coordinator = new FlowCoordinator(Resolved("""
+            name: flow
+            steps:
+              - name: listing
+                type: orient
+              - name: items
+                use: ./pipeline/pipeline.yml
+                forEach: listing.list
+                dependsOn: [listing]
+                with:
+                  title: '{item.label}'
+                  prompt: prompts/implement.md
+            """), runner, Facts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        var items = coordinator.Instances["items"];
+        Assert.Equal((FlowInstanceState.Failed, (int?)HarnessExit.ConfigInvalid), (items.State, items.Exit));
+        Assert.Equal("expression 'with.title' of 'items[1]': '{item.label}' reads nothing", items.Error);
+        Assert.DoesNotContain(coordinator.Instances.Keys, id => id.StartsWith("items[", StringComparison.Ordinal));
+        Assert.Equal(["listing"], runner.Started);
+    }
+
+    /// <summary>
+    /// A used workflow's declared output read from a step its item skipped - which never produced it - is absent, and the
+    /// use ends done: what a skipped step never wrote is nothing to read, not a failure.
+    /// </summary>
+    [Fact]
+    public async Task AUsedWorkflowsOutput_FromAStepItSkipped_IsAbsent_AndTheUseEndsDone()
+    {
+        var pipeline = Swap(Pipeline, "    outputs: schemas/implement.json\n", "    outputs: schemas/implement.json\n    when: 'false'\n");
+        var coordinator = new FlowCoordinator(Resolved("""
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            """, pipeline), new FakeRunner(), Facts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["items.implement"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["items"].State);
+        Assert.False((coordinator.Instances["items"].Output as JsonObject)?.ContainsKey("changed") ?? false);
+    }
+
+    /// <summary>
+    /// A used workflow's declared output that cannot be read fails the use, said with the output's name - never ends it
+    /// done over an output it could not read.
+    /// </summary>
+    [Fact]
+    public async Task AUsedWorkflowsOutput_ThatCannotBeRead_FailsTheUse()
+    {
+        var pipeline = Swap(Pipeline, "outputs:\n  - name: changed\n    from: implement.latest.changed\n", "outputs:\n  - name: changed\n    from: implement.latest.changed\n  - name: notes\n    from: text.notes\n");
+        var coordinator = new FlowCoordinator(Resolved("""
+            name: flow
+            steps:
+              - name: items
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            """, pipeline), new FakeRunner(), Facts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        var items = coordinator.Instances["items"];
+        Assert.Equal((FlowInstanceState.Failed, (int?)HarnessExit.ConfigInvalid), (items.State, items.Exit));
+        Assert.Equal("expression 'outputs.notes' of 'items': the workflow 'flow/pipeline' declares no text 'notes'", items.Error);
+    }
+
+    /// <summary>
+    /// A repeat that uses a workflow fills its inputs for each iteration - its steps read the use's values, never the
+    /// calling run's - and its declared outputs are read from its last iteration as the loop ends, the step's own for a
+    /// later step to read.
+    /// </summary>
+    [Fact]
+    public async Task ARepeatThatUsesAWorkflow_FillsItsInputsEachIteration_AndItsOutputsAsItEnds()
+    {
+        var pipeline = Swap(Pipeline, "    outputs: schemas/implement.json\n", "    outputs: schemas/implement.json\n    when: 'input.title == \"filled\"'\n");
+        var runner = new FakeRunner().On("implement", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["changed"] = new JsonArray("src/a.cs") }));
+        var coordinator = new FlowCoordinator(Resolved("""
+            name: flow
+            inputs:
+              - name: title
+                kind: text
+            steps:
+              - name: loop
+                use: ./pipeline/pipeline.yml
+                repeat:
+                  until: 'iteration == 2'
+                  maxIterations: 3
+                with:
+                  title: filled
+                  prompt: prompts/implement.md
+              - name: after
+                type: orient
+                dependsOn: [loop]
+                when: 'loop.changed[0] == "src/a.cs"'
+            """, pipeline), runner, Facts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["title"] = "the run's own" });
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["loop#1.implement", "loop#1.verify", "loop#2.implement", "loop#2.verify", "after"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["loop"].State);
+        Assert.Equal("""["src/a.cs"]""", (coordinator.Instances["loop"].Output as JsonObject)?["changed"]?.ToJsonString());
+    }
+
+    /// <summary>
+    /// A handler that uses a workflow fills its inputs where it is raised, as any use does - its steps read the values
+    /// its with gives, never the calling run's input of the same name.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerThatUsesAWorkflow_FillsItsInputs()
+    {
+        var pipeline = Swap(Pipeline, "    outputs: schemas/implement.json\n", "    outputs: schemas/implement.json\n    when: 'input.title == \"filled\"'\n");
+        var runner = new FakeRunner().On("probe", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed));
+        var coordinator = new FlowCoordinator(Resolved("""
+            name: flow
+            inputs:
+              - name: title
+                kind: text
+            steps:
+              - name: probe
+                type: orient
+                retries: 0
+              - name: heal
+                use: ./pipeline/pipeline.yml
+                on:
+                  step: probe
+                  outcome: failure
+                with:
+                  title: filled
+                  prompt: prompts/implement.md
+            """, pipeline), runner, Facts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["title"] = "the run's own" });
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["probe", "heal.implement", "heal.verify"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["heal.implement"].State);
+    }
+
+    /// <summary>
+    /// Which use governs a step is read key by key, by the step's declaration path, through recoveries as through any
+    /// group: the nearest use around the step that declares the key - one that declares nothing of it governs nothing of
+    /// it, and the next one out does - a use in the run's own recovery governing its steps there, and a used workflow's
+    /// own recovery governed by that workflow. The one owner every reader asks: the engine's gates, retries, handoffs,
+    /// caps and advisor, and each step's runner.
+    /// </summary>
+    [Fact]
+    public void TheUseThatGovernsAKey_IsTheNearestThatDeclaresIt_RecoveriesIncluded()
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["flow/pipeline/pipeline.yml"] = Swap(Pipeline, "name: pipeline\n", "name: pipeline\nmaxRetries: 1\nhandoffSeconds: 30\n"),
+            ["flow/outer/pipeline/pipeline.yml"] = Swap(Pipeline, "name: pipeline\n", "name: pipeline\nmaxRetries: 1\nhandoffSeconds: 30\n"),
+            ["flow/outer/outer.yml"] = """
+                name: outer
+                maxRetries: 2
+                steps:
+                  - name: inner
+                    use: ./pipeline/pipeline.yml
+                    useParentLimits: false
+                    with:
+                      title: t
+                      prompt: prompts/implement.md
+                """,
+        };
+        var definition = WorkflowResolver.Resolve(Parse("""
+            name: flow
+            steps:
+              - name: items
+                use: ./outer/outer.yml
+                useParentLimits: false
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: heal
+                  use: ./pipeline/pipeline.yml
+                  useParentLimits: false
+                  with:
+                    title: t
+                    prompt: prompts/implement.md
+            """), "flow", path => files.GetValueOrDefault(path)).Definition;
+
+        string? Governing(string path, FlowUseKey key) => FlowUse.Governing(definition, path, key)?.Path;
+
+        // In the run's own recovery, and in the used workflow's recovery under it.
+        Assert.Equal("recover.heal", Governing("recover.heal.implement", FlowUseKey.MaxRetries));
+        Assert.Equal("recover.heal", Governing("recover.heal.recover.diagnose", FlowUseKey.MaxRetries));
+        Assert.Null(Governing("recover.heal.implement", FlowUseKey.MaxReasoningAgents));
+
+        // Key by key through nested uses: the inner declares maxRetries and handoffSeconds, the outer maxRetries alone.
+        Assert.Equal("items.inner", Governing("items.inner.implement", FlowUseKey.MaxRetries));
+        Assert.Equal("items.inner", Governing("items.inner.implement", FlowUseKey.HandoffSeconds));
+        Assert.Equal("items", Governing("items.other", FlowUseKey.MaxRetries));
+        Assert.Null(Governing("items.inner.implement", FlowUseKey.MaxParallelProcesses));
+
+        // The retry rule every reader shares follows it.
+        var implement = FlowScope.At("recover.heal.implement", definition)!.Step;
+        Assert.Equal(1, FlowUse.RetriesOf(definition, "recover.heal.implement", implement));
     }
 
     /// <summary>The facts a run of these definitions needs, with nothing configured.</summary>
@@ -1274,6 +1991,9 @@ public sealed class FlowUseTests
 
         /// <summary>Each reason step's asked-for files, by its instance: the prompt and resume prompt, in their pieces.</summary>
         public Dictionary<string, IReadOnlyDictionary<string, IReadOnlyList<FlowTemplate.Piece>>> Asked { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Every run the coordinator asked for, whole, in the order it asked.</summary>
+        public List<FlowStepRun> Ran { get; } = [];
 
         /// <summary>Answers <paramref name="step"/> with one result, every time it is asked.</summary>
         public FakeRunner On(string step, FlowStepResult result)
@@ -1323,11 +2043,18 @@ public sealed class FlowUseTests
         /// <inheritdoc/>
         public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
-            Started.Add(run.Instance);
-
-            if (run.Prompts is { } asked)
+            // The coordinator may ask two runners at once, each on a thread of its own: what they record is written one
+            // at a time, and read once the run has ended.
+            lock (Started)
             {
-                Asked[run.Instance] = asked;
+                Started.Add(run.Instance);
+
+                if (run.Prompts is { } asked)
+                {
+                    Asked[run.Instance] = asked;
+                }
+
+                Ran.Add(run);
             }
 
             if (_holds.TryGetValue(run.Step.Name, out var held))
@@ -1344,18 +2071,31 @@ public sealed class FlowUseTests
             => Task.FromResult<string?>(null);
     }
 
-    /// <summary>An advisor runner that records each asking's advisor and workflow and obtains nothing.</summary>
-    private sealed class FakeAdvisor : IFlowAdvisorRunner
+    /// <summary>
+    /// An advisor runner that records each asking's advisor and workflow, and the call whole, and recommends the answer
+    /// it was made with - or obtains nothing, where it was made with none.
+    /// </summary>
+    /// <param name="answer">The answer it recommends; null to obtain none.</param>
+    private sealed class FakeAdvisor(string? answer = null) : IFlowAdvisorRunner
     {
         /// <summary>Each asking's advisor agent and the workflow its files are read in, in the order they were asked.</summary>
         public List<(string Agent, string Workflow)> Called { get; } = [];
 
+        /// <summary>Each asking's call, whole, in the order they were asked.</summary>
+        public List<FlowAdvisorCall> Calls { get; } = [];
+
         /// <inheritdoc/>
         public Task<FlowAdvice> AdviseAsync(FlowAdvisorCall call, CancellationToken cancellationToken)
         {
-            Called.Add((call.Advisor.Agent, call.Workflow));
+            lock (Calls)
+            {
+                Called.Add((call.Advisor.Agent, call.Workflow));
+                Calls.Add(call);
+            }
 
-            return Task.FromResult(new FlowAdvice(Answer: null, Why: null, Text: null, NotObtained: "the test sought none"));
+            return Task.FromResult(answer is null
+                ? new FlowAdvice(Answer: null, Why: null, Text: null, NotObtained: "the test sought none")
+                : new FlowAdvice(Answer: answer, Why: "the test recommends it", Text: null));
         }
     }
 }
