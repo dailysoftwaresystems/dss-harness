@@ -68,64 +68,125 @@ internal static class Ninja
     /// <param name="program">The program as CMake's cache records it, or <see langword="null"/>.</param>
     private static string ToolOf(string? program) => Path.GetFileNameWithoutExtension(program) is { Length: > 0 } named ? named : OwnName;
 
-    /// <summary>
-    /// What the build's own ninja wrote of its own steps, apart from what a build nested in one of them printed as that
-    /// step's output - an external project's, whose step runs a ninja of its own: each step it said failed, by its first
-    /// output as the manifest canonicalizes it, in the order said, and how far it said it got.
-    /// </summary>
-    /// <param name="Failed">Each step of this build its ninja said failed.</param>
-    /// <param name="Progress">
-    /// How many of its steps it ran, and how many it planned, as the last status line it wrote of a step of its own says
-    /// them; <see langword="null"/> where it wrote none - one <c>NINJA_STATUS</c> spells otherwise among them.
-    /// </param>
-    internal sealed record OwnSteps(IReadOnlyList<string> Failed, (int Run, int Planned)? Progress);
+    /// <summary>Whose a failing line of a ninja build's output is, as <see cref="Own"/> reads it.</summary>
+    internal enum Failing
+    {
+        /// <summary>A step of this build's own, which its ninja said failed.</summary>
+        Own,
+
+        /// <summary>A step of a build nested in one of this build's steps, printed as that step's output.</summary>
+        Nested,
+
+        /// <summary>A failing line that cannot be told this build's own or a nested build's.</summary>
+        Unattributed,
+    }
 
     /// <summary>
-    /// The steps of this build its own ninja said failed, and how far it said it got, read from its
-    /// <paramref name="lines"/> apart from a nested build's (<see cref="OwnSteps"/>).
+    /// Every failing line of a ninja build's output, each told this build's own, a nested build's, or neither, in the
+    /// order said; and how far the build said it got.
+    /// </summary>
+    /// <param name="Said">Each failing line, by the step it names - its first output as the manifest canonicalizes it, or as listed - and whose it is.</param>
+    /// <param name="Progress">
+    /// How many of its steps it ran, and how many it planned, as the last status line it wrote of a step of its own says
+    /// them - one more where a step in the console pool ended after it, which ninja writes no status for: one whose
+    /// <c>FAILED:</c> line came after it, or whose start it was; <see langword="null"/> where it wrote none, or where a console
+    /// step that did not fail started and statuses of its own followed, for whether that step ended before the last of
+    /// them is not written.
+    /// </param>
+    /// <param name="StatusRead">Whether any status line was read as one of the build's own - none is where <c>NINJA_STATUS</c> spells the status otherwise.</param>
+    internal sealed record OwnSteps(IReadOnlyList<(string Step, Failing Whose)> Said, (int Run, int Planned)? Progress, bool StatusRead)
+    {
+        /// <summary>Each step of this build's own its ninja said failed, once each, in the order said.</summary>
+        public IReadOnlyList<string> Failed => Of(Failing.Own);
+
+        /// <summary>Each step a failing line named that cannot be told this build's own or a nested build's, once each, and none of its own.</summary>
+        public IReadOnlyList<string> Unattributed => [.. Of(Failing.Unattributed).Except(Failed, StringComparer.Ordinal)];
+
+        /// <summary>
+        /// Every step that could be this build's own that failed, once each, in the order said: its own and those that
+        /// cannot be told apart, so none that could be one of its own is lost - every failing line, where nothing is nested.
+        /// </summary>
+        public IReadOnlyList<string> NotNested => [.. Said.Where(said => said.Whose != Failing.Nested).Select(said => said.Step).Distinct(StringComparer.Ordinal)];
+
+        private IReadOnlyList<string> Of(Failing whose) => [.. Said.Where(said => said.Whose == whose).Select(said => said.Step).Distinct(StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// Every failing line of this build's output, told its own ninja's, a nested build's or neither, and how far it said it
+    /// got (<see cref="OwnSteps"/>).
     /// </summary>
     /// <param name="lines">The build's output, a line at a time, as its log keeps it.</param>
     /// <param name="program">The program CMake ran for ninja, as its cache records it, or <see langword="null"/>.</param>
-    /// <param name="manifest">The build directory's manifest.</param>
+    /// <param name="manifest">The build directory's manifest, or <see langword="null"/> where none could be read.</param>
     /// <remarks>
     /// <para>
     /// A nested build's lines reach this build's output as one of its steps' output, shaped as this build's own: a status
     /// line, a <c>FAILED:</c> line naming an object relative to its own directory - one this manifest may name too, where
     /// both projects build a target of one name from a source of one name - and its own end. So a line is this build's own
     /// only where it can be nothing else. A status line is, where what it prints after the count is what one of this
-    /// manifest's build lines prints - its description, or its command where it has none - and its count is the one
-    /// this build stands at or one more: ninja counts each step as it ends, and a step in the console pool as it starts at
-    /// the count it stands at, a regenerated manifest's build starting again at one. How many it plans moves either way -
-    /// up as dynamic dependencies are found, down as a step that restats leaves others nothing to do - so only the count
-    /// is held to. A nested build counts from one beside it, so its line passes both only where it prints what one of
-    /// this build's prints, at this build's count.
+    /// manifest's build lines prints - its description, or its command where it has none - and its count is no lower than
+    /// the one this build stands at and no higher than one more: ninja counts each step as it ends, and a step in the
+    /// console pool as it starts, at the count it stands at; a regenerated manifest's build starts again at one. A console
+    /// step's end has no status, so after its <c>FAILED:</c> line the count may be one more again; and while a console step
+    /// runs, ninja holds back every other step's lines, and at its end writes those of each step that failed or printed
+    /// something and the status of the last to end, never the others' - so from a console step's start, which no
+    /// <c>FAILED:</c> line of its own has yet ended, how far the count goes is not known, and it is held to from below
+    /// alone. How many it plans moves either way - up as dynamic dependencies are found, down as a step that restats leaves
+    /// others nothing to do - so only the count is held to. A nested build counts from one beside it, so its line passes
+    /// both only where it prints what one of this build's prints, at this build's count.
     /// </para>
     /// <para>
-    /// A <c>FAILED:</c> line is this build's own only where it follows a status line of its own directly, as ninja writes
-    /// a failed step's - or, for a step in the console pool, whose output went to the terminal as it ran between the two,
-    /// where it names that step and its status was this build's own. A nested build's comes after its own status line,
-    /// within this build's step's output, never directly after one of this build's. samurai names no outputs, and says
-    /// which command failed: its line is this build's only where a build line of this manifest runs that command.
+    /// A <c>FAILED:</c> line is this build's own where it follows a status line of its own directly, as ninja writes a
+    /// failed step's - or, for a step in the console pool, where it names that step and its start was this build's own.
+    /// samurai names no outputs, and says which command failed: its line is this build's own where a build line of the
+    /// manifest runs that command. A failing line is a nested build's only where it is provably within one: in the output
+    /// of a step of this build's own that failed - after that step's <c>FAILED:</c> line, or, in the console pool, after its
+    /// start - and before that output's nested build said its own end (<c>build stopped:</c>, or an error, under ninja's
+    /// name), where something of this build's followed that end: a line of its own, or another under ninja's name - for this
+    /// build's own end is the last, and a console step's own <c>FAILED:</c> line follows all it printed. Every other
+    /// failing line is unattributed: it cannot be told this build's own or a nested build's, and is never read as neither -
+    /// where NINJA_STATUS spells the status otherwise, no line is this build's own, and every failing line is unattributed.
     /// </para>
     /// <para>
     /// The last status of its own is the build's progress, never the largest count: a build whose dynamic dependencies are
-    /// discovered as it goes plans more steps once it has run some.
+    /// discovered as it goes plans more steps once it has run some. ninja ends a failed build only once every step it
+    /// started has ended, so a console step whose <c>FAILED:</c> line, or whose start, came after the last status is one
+    /// more run; one that did not fail, followed by statuses of its own, may have ended before or after the last of them,
+    /// and how far the build got is not said.
     /// </para>
     /// </remarks>
-    public static OwnSteps Own(IEnumerable<string> lines, string? program, NinjaManifest manifest)
+    public static OwnSteps Own(IEnumerable<string> lines, string? program, NinjaManifest? manifest)
     {
         ArgumentNullException.ThrowIfNull(lines);
-        ArgumentNullException.ThrowIfNull(manifest);
 
         var file = Path.GetFileName(program);
         string[] names = string.IsNullOrEmpty(file) ? [OwnName] : [OwnName, file];
-        var edges = manifest.Edges.Where(edge => edge.Rule != NinjaManifest.PhonyRule).ToList();
+        var edges = manifest?.Edges.Where(edge => edge.Rule != NinjaManifest.PhonyRule).ToList() ?? [];
         var printed = new HashSet<string>(edges.SelectMany(edge => new[] { Printed(edge.Description), Printed(edge.Command) }), StringComparer.Ordinal);
         var consoleStarted = new HashSet<NinjaEdge>(ReferenceEqualityComparer.Instance);
-        var failed = new List<string>();
+        var said = new List<(string Step, Failing Whose)>();
         (int Run, int Planned) at = (0, 0);
-        (int Run, int Planned)? progress = null;
+        var statusRead = false;
         var afterOwnStatus = false;
+        StepOutput? output = null;
+
+        // The console step running - from its own start until its own FAILED line, while ninja holds back every other
+        // step's lines - and whether no status of this build's own has followed its start; and whether a console step's
+        // FAILED line, its end, came after the last status of its own.
+        IReadOnlyList<NinjaEdge>? running = null;
+        var runningUnfollowed = false;
+        var consoleEnded = false;
+
+        // What a step's output held that may be a nested build's, settled as nested or unattributed once it can be.
+        void Settle(Failing whose)
+        {
+            foreach (var held in output!.Held)
+            {
+                said[held] = (said[held].Step, whose);
+            }
+
+            output = null;
+        }
 
         foreach (var raw in lines)
         {
@@ -140,39 +201,156 @@ internal static class Ninja
             {
                 var text = Printed(line[status.Length..]);
 
-                if (printed.Contains(text) && run >= at.Run && run <= at.Run + 1)
+                // While a console step runs, how far ninja's count goes by the lines it held back is not known: from below
+                // alone; and a console step's end, after its FAILED line, has no status, so the count may be one more again.
+                if (!printed.Contains(text) || run < at.Run || running is null && run > at.Run + (consoleEnded ? 2 : 1))
                 {
-                    at = (run, planned);
-                    progress = at;
-                    afterOwnStatus = true;
-                    consoleStarted.UnionWith(edges.Where(edge => edge.Console && Printed(edge.Description) == text));
+                    continue;
+                }
+
+                var started = edges.Where(edge => edge.Console && Printed(edge.Description) == text).ToList();
+
+                at = (run, planned);
+                statusRead = true;
+                afterOwnStatus = true;
+                consoleEnded = false;
+                runningUnfollowed = started.Count > 0;
+                consoleStarted.UnionWith(started);
+
+                // The console pool runs one step at a time: one that starts is the one running, the last having ended.
+                if (started.Count > 0)
+                {
+                    running = started;
+                }
+
+                // A status of this build's own ends a step's output: what a nested build in it said is settled - nested
+                // where it said its end before this line, which is something of this build's after it - unless the step
+                // is in the console pool, whose output other steps' lines, held while it ran, may follow before its own
+                // FAILED line.
+                if (output is { Console: false } || output is { Ended: false })
+                {
+                    Settle(output.Ended ? Failing.Nested : Failing.Unattributed);
+                }
+
+                if (started.Count > 0)
+                {
+                    output = new StepOutput(started[0], Console: true);
                 }
 
                 continue;
             }
 
-            string? own = null;
-
             if (line.StartsWith(FailedStep, StringComparison.Ordinal))
             {
                 var listed = FailedCode.Replace(line[FailedStep.Length..], string.Empty).Trim();
                 var edge = EdgeListed(listed, manifest);
+                var step = FirstOutput(listed, manifest);
 
-                own = ownStatus || edge is { Console: true } && consoleStarted.Contains(edge) ? FirstOutput(listed, manifest) : null;
-            }
-            else if (Said(line, names) is { } said && JobFailed.Match(said) is { Success: true } job
-                && CommandEdge(said[job.Length..], manifest) is { } ran)
-            {
-                own = NinjaManifest.Normalize(ran.Outputs[0]);
+                if (ownStatus || edge is { Console: true } && consoleStarted.Contains(edge))
+                {
+                    if (output is { } open && (!open.Console || ReferenceEquals(open.Edge, edge)))
+                    {
+                        Settle(open.Ended ? Failing.Nested : Failing.Unattributed);
+                    }
+
+                    said.Add((step, Failing.Own));
+
+                    // A console step's FAILED line is its end, which ninja writes no status for.
+                    if (edge is { Console: true } && running?.Contains(edge) == true)
+                    {
+                        running = null;
+                        runningUnfollowed = false;
+                        consoleEnded = true;
+                    }
+
+                    // Its output follows - unless a console step's still does, whose own FAILED line is still to come.
+                    if (edge is not { Console: true } && output is null)
+                    {
+                        output = new StepOutput(edge, Console: false);
+                    }
+                }
+                else
+                {
+                    Hold(step);
+                }
+
+                continue;
             }
 
-            if (own is { Length: > 0 } && !failed.Contains(own, StringComparer.Ordinal))
+            if (Said(line, names) is not { } ninja || Asides.Any(aside => ninja.StartsWith(aside, StringComparison.Ordinal)))
             {
-                failed.Add(own);
+                continue;
+            }
+
+            if (JobFailed.Match(ninja) is { Success: true } job)
+            {
+                var command = ninja[job.Length..];
+
+                if (CommandEdge(command, manifest) is { } ran)
+                {
+                    said.Add((NinjaManifest.Normalize(ran.Outputs[0]), Failing.Own));
+                }
+                else
+                {
+                    Hold(command);
+                }
+
+                continue;
+            }
+
+            // Something under ninja's name after a nested build's end is this build's own: the end was the nested one's.
+            if (output is { Ended: true, Console: false })
+            {
+                Settle(Failing.Nested);
+            }
+            else if (output is { Ended: false } && (ninja.StartsWith("build stopped: ", StringComparison.Ordinal) || ninja.StartsWith("error: ", StringComparison.Ordinal)))
+            {
+                output.Ended = true;
             }
         }
 
-        return new(failed, progress);
+        if (output is not null)
+        {
+            Settle(Failing.Unattributed);
+        }
+
+        // ninja ends a failed build once every step it started has ended: a console step ended after the last status of
+        // its own where its FAILED line, or its start, came after it; one followed by statuses may have ended before them.
+        (int Run, int Planned)? progress = !statusRead ? null
+            : running is not null ? runningUnfollowed ? (at.Run + 1, at.Planned) : null
+            : consoleEnded ? (at.Run + 1, at.Planned) : at;
+
+        return new(said, progress, statusRead);
+
+        // A failing line that is no step of this build's own: held as perhaps a nested build's where it falls in a failed
+        // step's output before that output's nested build ended, else unattributed.
+        void Hold(string step)
+        {
+            if (output is { Ended: false } open)
+            {
+                open.Held.Add(said.Count);
+                said.Add((step, Failing.Unattributed));
+            }
+            else
+            {
+                said.Add((step, Failing.Unattributed));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The output of a step of this build's own that failed, or of a console step that started, as it is read for a build
+    /// nested in it: the failing lines it held, and whether a nested build in it said its end.
+    /// </summary>
+    /// <param name="Edge">The step, where the manifest names it.</param>
+    /// <param name="Console">Whether the step is in the console pool, whose own FAILED line follows its output.</param>
+    private sealed record StepOutput(NinjaEdge? Edge, bool Console)
+    {
+        /// <summary>Where in what was said each failing line the output held is.</summary>
+        public List<int> Held { get; } = [];
+
+        /// <summary>Whether a nested build in the output said its end.</summary>
+        public bool Ended { get; set; }
     }
 
     /// <summary>
@@ -184,7 +362,8 @@ internal static class Ninja
     /// <summary>
     /// The units a build ninja failed says it failed to build: each step its own lines say failed (<see cref="Own"/>), a
     /// compile named by the source its build line compiles as the manifest says it, and every other step by its output;
-    /// with how far the build got, and whether its tool went on past failing steps.
+    /// with how many failing lines could not be told its own or a nested build's, how far the build got, and whether its
+    /// tool went on past failing steps.
     /// </summary>
     /// <param name="failed">The build phase ninja failed.</param>
     /// <param name="keptGoing">Whether ninja was given its way to go on, as what the phase ran with says.</param>
@@ -210,7 +389,16 @@ internal static class Ninja
                     : new FailedUnit(null, output))
                 .ToList();
 
-            return new(tool, units, null, keptGoing, StopsAtFirst: true, own.Progress?.Run, own.Progress?.Planned);
+            var unattributed = own.Unattributed.Count;
+
+            // No status line of its own, and failing lines all the same: none can be told its own, which is said, never
+            // that no unit failed.
+            var unread = !own.StatusRead && units.Count == 0 && unattributed > 0
+                ? $"{tool} wrote no status line read as its own - as where NINJA_STATUS spells its status otherwise - so none of the "
+                  + $"{ReportText.Counted(unattributed, "failing line")} it wrote could be told its own or a nested build's: its log names each"
+                : null;
+
+            return new(tool, units, unread, keptGoing, StopsAtFirst: true, own.Progress?.Run, own.Progress?.Planned, unattributed);
         }
         catch (PhaseOutputUnreadException ex)
         {
@@ -364,11 +552,14 @@ internal static class Ninja
     }
 
     /// <summary>
-    /// The outputs of every step a build's <paramref name="lines"/> say failed, each as the manifest canonicalizes the first
-    /// output of the build line that failed, in the order the build said them. ninja names a failed step's outputs on its
-    /// <c>FAILED:</c> line; samurai names none, and says under its name which command failed, which is matched to the build
-    /// line that runs it. A failure no build line of <paramref name="manifest"/> answers to is named as the build said it,
-    /// so it is never lost for being unknown.
+    /// The outputs of every step a build's <paramref name="lines"/> say failed that could be the build's own, each as the
+    /// manifest canonicalizes the first output of the build line that failed, in the order the build said them - by the
+    /// one reading of its failing lines (<see cref="Own"/>): its own, and every one that cannot be told its own or a
+    /// nested build's, so none that could be its own is lost; a nested build's alone are left out, and where nothing is
+    /// nested, every failing line is here. ninja names a failed step's outputs on its <c>FAILED:</c> line; samurai names
+    /// none, and says under its name which command failed, which is matched to the build line that runs it. A failure no
+    /// build line of <paramref name="manifest"/> answers to is named as the build said it, so it is never lost for being
+    /// unknown.
     /// </summary>
     /// <param name="lines">The build's output, a line at a time, as its log keeps it.</param>
     /// <param name="program">The program CMake ran for ninja, as its cache records it, or <see langword="null"/>.</param>
@@ -380,30 +571,7 @@ internal static class Ninja
     /// one output, and a shorter path that is another step's own is not taken for it.
     /// </remarks>
     public static IReadOnlyList<string> FailedOutputs(IEnumerable<string> lines, string? program, NinjaManifest? manifest)
-    {
-        ArgumentNullException.ThrowIfNull(lines);
-
-        var file = Path.GetFileName(program);
-        string[] names = string.IsNullOrEmpty(file) ? [OwnName] : [OwnName, file];
-        var failed = new List<string>();
-
-        foreach (var raw in lines)
-        {
-            var line = Colour.Replace(raw, string.Empty).TrimEnd('\r');
-            var named = line.StartsWith(FailedStep, StringComparison.Ordinal)
-                ? FirstOutput(FailedCode.Replace(line[FailedStep.Length..], string.Empty).Trim(), manifest)
-                : Said(line, names) is { } said && JobFailed.Match(said) is { Success: true } job
-                    ? CommandOutput(said[job.Length..], manifest)
-                    : null;
-
-            if (named is { Length: > 0 } && !failed.Contains(named, StringComparer.Ordinal))
-            {
-                failed.Add(named);
-            }
-        }
-
-        return failed;
-    }
+        => Own(lines, program, manifest).NotNested;
 
     /// <summary>
     /// The first output of the build line whose outputs are exactly what <paramref name="outputs"/> lists, as the manifest
@@ -436,14 +604,6 @@ internal static class Ninja
 
         return null;
     }
-
-    /// <summary>
-    /// The first output of the build line that runs <paramref name="command"/>, as the manifest canonicalizes it - its
-    /// command alone, or with what its response file holds after it, as <see cref="NinjaEdge.Command"/> keeps it - or the
-    /// command itself where no build line runs it.
-    /// </summary>
-    private static string CommandOutput(string command, NinjaManifest? manifest)
-        => CommandEdge(command, manifest) is { } edge ? NinjaManifest.Normalize(edge.Outputs[0]) : command;
 
     /// <summary>
     /// The build line that runs <paramref name="command"/> - its command alone, or with what its response file holds after

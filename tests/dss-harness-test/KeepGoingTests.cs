@@ -202,6 +202,30 @@ public sealed class KeepGoingTests
     }
 
     /// <summary>
+    /// Failing lines that could not be told the build's own or a nested build's are said on the line as each perhaps a unit
+    /// of its own, and counted in its document - so the line never reads as clean for them; where no unit of its own was
+    /// read beside them, which units failed is said not read.
+    /// </summary>
+    [Fact]
+    public void FailingLinesNotToldItsOwn_AreSaid_NeverReadAsClean()
+    {
+        var beside = new FailedUnits("ninja", [new FailedUnit("src/a.c", "CMakeFiles/app.dir/a.c.o")], null, KeptGoing: true, StopsAtFirst: true, Unattributed: 2);
+        var alone = new FailedUnits("ninja", [], null, KeptGoing: true, StopsAtFirst: true, Unattributed: 1);
+
+        Assert.Equal(
+            "1 unit(s) failed to build; ninja went on past them; and 2 failing line(s) could not be told its own or a nested build's, each perhaps a "
+            + "unit of its own - its log names each",
+            beside.Describe());
+        Assert.Equal((1, 2), (beside.Document(path => path).Count, beside.Document(path => path).Unattributed));
+        Assert.Equal(
+            "which units failed to build was not read: ninja named no unit of its own that failed, and 1 failing line(s) could not be told its own or a "
+            + "nested build's - its log names each",
+            alone.Describe());
+        Assert.Equal(((int?)null, 1), (alone.Document(path => path).Count, alone.Document(path => path).Unattributed));
+        Assert.Null(new FailedUnits("ninja", [new FailedUnit(null, "app")], null, KeptGoing: false, StopsAtFirst: true).Document(path => path).Unattributed);
+    }
+
+    /// <summary>
     /// Whether a tool went on past failing units is read from what its build phase ran with: told, only where its way's
     /// arguments follow the '--' that hands them to it; by itself, always; and a way none is known for, never.
     /// </summary>

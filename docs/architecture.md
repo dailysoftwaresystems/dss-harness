@@ -7595,8 +7595,10 @@ why, since no mutation of it could prove anything. Its run bounds theirs (see *T
    input dated no later than what its last build left, starts from clean, saying so;
 4. is built - its target, and a TEST-RED arm's runner beside it, so the binary run links the
    mutation - through the build every leg builds by, every guard included;
-5. is witnessed: a build that failed is read for the steps ninja said failed, and one that passed
-   is held to ninja's log, read before and after, for every object depending on a site;
+5. is witnessed: a build that failed is read for the steps ninja said failed that could be the
+   build's own - a nested build's alone left out, by the reading a failed build's units are named by
+   (`Ninja.FailedOutputs`) - and one that passed is held to ninja's log, read before and after, for
+   every object depending on a site;
 6. is run whole with `mutations.reportArgs`, its JUnit report a new file for every run, or for a
    BUILD-RED arm, has its paired control applied to the site as it was and built. The sweep starts
    the binary itself, never through ctest: see below;
@@ -8069,16 +8071,39 @@ console pool, whose status ninja writes as it starts and whose `FAILED:` line af
 one naming that step where its start was its own - and, for samurai, which names no outputs, a
 failed command a build line of the manifest runs. A status line is its own where what it prints
 after the count is what one of the manifest's build lines prints (`NinjaEdge.Description`, or its
-command where it has none) and its count is the one the build stands at or one more: ninja counts
-each step as it ends, a console step as it starts, and a nested build counts from one beside it, so
-its line passes both only where it prints what one of the outer build's prints at the outer build's
-count. How many it plans moves either way, up as dynamic dependencies are found and down as a step
-that restats leaves others nothing to do, so only the count is held to; and the last status of its
-own says how far it got. A unit is named by the source its build line in the manifest compiles
+command where it has none) and its count is no lower than the one the build stands at and no more
+than one higher: ninja counts each step as it ends, a console step as it starts, and a nested build
+counts from one beside it, so its line passes both only where it prints what one of the outer
+build's prints at the outer build's count. A console step's end has no status, so after its
+`FAILED:` line the count may be two higher; and while a console step runs, ninja holds back every
+other step's lines - its line printer is locked to the console step - and at its end writes those of
+each step that failed or printed something and the status of the last to end, never the others':
+piped to a file, ninja 1.11 wrote a console step's start at 0, then nothing of the five steps that
+ended while it ran but a failed one's status at 3 and the last one's at 5, and the next at 7. So from
+a console step's start until its own `FAILED:` line, the count is held to from below alone. How many
+it plans moves either way, up as dynamic dependencies are found and down as a step that restats
+leaves others nothing to do, so only the count is held to. The last status of its own says how far
+it got - one more where a console step's `FAILED:` line, or its start, came after it, for ninja ends
+a failed build once every step it started has ended; where a console step that did not fail was
+followed by statuses of its own, whether it ended before the last of them is not written, and how far
+the build got is not said. A unit is named by the source its build line in the manifest compiles
 where its rule is a CMake compile (`CMakeNinjaRule.Compiles`) - relative to the tree where it is in
 it - and by its output where it links or runs a command, an external project's step among them.
-Where `NINJA_STATUS` spells the status otherwise, no line is known for the build's own, and the
-units are said not read.
+
+Every failing line ninja wrote is told the build's own, a nested build's, or neither (`Ninja.Own`,
+its `OwnSteps`). A nested build's line is one provably within one: in the output of a failed step of
+the build's own - after its `FAILED:` line, or a console step's after its start - before that output's
+nested build said its end (`build stopped:`, or an error, under ninja's name), where something of the
+build's followed that end: a line of its own or another under ninja's name, for the build's own end
+is the last, and a console step's `FAILED:` line follows all it printed. Every other failing line -
+after a status line not its own, as every one is where `NINJA_STATUS` spells the status otherwise, a
+nested build's end nothing followed, a samurai failure whose command no build line runs - cannot be
+told either: the line counts it as perhaps a unit of its own (`FailedUnits.Unattributed`), never as
+clean, and where no status line was its own at all and no unit was read, the units are said not read,
+naming how many failing lines it wrote. `check-mutations` judges an arm's failed build by the same
+reading (`Ninja.FailedOutputs`, `OwnSteps.NotNested`): its own failing steps and every one that
+cannot be told apart, so none that could be a step not depending on a site is lost, and a nested
+build's alone left out - where nothing is nested, every failing line, as before.
 
 Under make each unit is a target the build's own makes said failed (`Make.FailedTargets`), read by
 the structure GNU make writes in every language - `make[2]: *** [makefile:line: target]` and
@@ -8095,14 +8120,14 @@ no source, so the unit is named by its target, the object.
 
 The leg's line says how many, the units are listed beneath the table, and `--json` carries them on
 the leg as `failedUnits`: `tool`, `count`, `units` - each one's `source` and `step` - `unread`,
-`keptGoing`, `stopsAtFirst`, `stepsRun`, `stepsPlanned` and `said`, the line's own words
-(`FailedUnits.Document`, which a workflow step's red entry carries too). Where which units failed is
-not read - MSBuild's, dotnet's and dart's output is not, nor a log that could not be read back, nor
-one in which no line of the build's own named a failed unit (`FailedUnits.WhyUnread`) - `count` is
-left out and `unread` says why, never that none failed. ninja and make stop at their first
-failures, so a build of theirs not told to go on says that every unit it never reached was not built
-and says nothing of the code, and, where ninja's last status of its own said it, how many of the
-steps it had to run it ran.
+`keptGoing`, `stopsAtFirst`, `stepsRun`, `stepsPlanned`, `unattributed` and `said`, the line's own
+words (`FailedUnits.Document`, which a workflow step's red entry carries too). Where which units
+failed is not read - MSBuild's, dotnet's and dart's output is not, nor a log that could not be read
+back, nor one in which no line of the build's own named a failed unit (`FailedUnits.WhyUnread`) -
+`count` is left out and `unread` says why, never that none failed. ninja and make stop at their
+first failures, so a build of theirs not told to go on says that every unit it never reached was not
+built and says nothing of the code, and, where ninja's last status of its own said it, how many of
+the steps it had to run it ran.
 
 `--keep-going` (`KeepGoing.Option`), on `build`, `test` and `run`, and `keepGoing` on a workflow's
 `build`, `test` and `run` steps, has each leg's build go on past its failing units. It rides the

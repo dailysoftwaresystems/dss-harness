@@ -166,8 +166,12 @@ public sealed class NinjaTests
     /// under ninja 1.13's code; the last status of its own, whose plan may grow or shrink as the build goes; and none of a
     /// nested build's lines, which reach the output as one of its steps' - the nested build's object named as one of this
     /// build's is, its count starting again from one. A step in the console pool, whose status ninja writes as it starts
-    /// and whose FAILED line after all it printed, is this build's where its start was. Where NINJA_STATUS spells its
-    /// status otherwise, no line is known for this build's own.
+    /// and whose FAILED line after all it printed, is this build's where its start was; while it runs ninja holds back
+    /// the other steps' lines, writing at its end only some of their statuses, so a failure after it is this build's at
+    /// whatever count it follows; its end has no status, so after its FAILED line the count may be one more again, and
+    /// where its FAILED line, or its start, came after the last status it was one more step run - but one that did not
+    /// fail, followed by statuses, may have ended before or after them, and how far the build got is not said. Where
+    /// NINJA_STATUS spells its status otherwise, no line is known for this build's own.
     /// </summary>
     [Theory]
     [InlineData(
@@ -189,8 +193,22 @@ public sealed class NinjaTests
         "[1/4] Building C object CMakeFiles/app.dir/a.c.o\n[2/4] Linking C executable app\n[2/4] Performing build step for 'term'\n"
         + "[1/3] Building C object CMakeFiles/app.dir/b.c.o\nFAILED: CMakeFiles/app.dir/b.c.o \ncc -c /term/b.c\nninja: build stopped: subcommand failed.\n"
         + "FAILED: term-prefix/src/term-stamp/term-build \ncd /b/term && cmake --build .\n",
-        new[] { "term-prefix/src/term-stamp/term-build" }, 2, 4)]
+        new[] { "term-prefix/src/term-stamp/term-build" }, 3, 4)]
     [InlineData("(1 of 7) Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \n", new string[0], null, null)]
+    [InlineData(
+        "[0/5] Performing build step for 'term'\n"
+        + "[1/2] Building C object CMakeFiles/x.dir/x.c.o\n[2/2] Linking C static library libx.a\n"
+        + "[3/5] Building C object CMakeFiles/app.dir/b.c.o\nFAILED: CMakeFiles/app.dir/b.c.o \ncc -c b.c\nninja: build stopped: subcommand failed.\n",
+        new[] { "CMakeFiles/app.dir/b.c.o" }, null, null)]
+    [InlineData(
+        "[1/5] Building C object CMakeFiles/app.dir/a.c.o\n[1/5] Performing build step for 'term'\n"
+        + "FAILED: term-prefix/src/term-stamp/term-build \ncd /b/term && cmake --build .\n"
+        + "[3/5] Building C object CMakeFiles/app.dir/b.c.o\nFAILED: CMakeFiles/app.dir/b.c.o \ncc -c b.c\n",
+        new[] { "term-prefix/src/term-stamp/term-build", "CMakeFiles/app.dir/b.c.o" }, 3, 5)]
+    [InlineData(
+        "[1/3] Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \ncc -c a.c\n[1/3] Performing build step for 'term'\n"
+        + "ninja: build stopped: cannot make progress due to previously encountered errors.\n",
+        new[] { "CMakeFiles/app.dir/a.c.o" }, 2, 3)]
     public void OwnSteps_AreThoseItsOwnNinjaSaid_NeverANestedBuilds(string output, string[] failed, int? run, int? planned)
     {
         using var temp = new TempDirectory();
@@ -199,6 +217,112 @@ public sealed class NinjaTests
 
         Assert.Equal(failed, own.Failed);
         Assert.Equal(run is null ? null : (run.Value, planned!.Value), own.Progress);
+    }
+
+    /// <summary>
+    /// What ninja 1.11 wrote, piped to a file, for a manifest whose console step ran while five other steps ended, one
+    /// failing: the console step's start at the count the build stood at, then nothing of any other step until it ended -
+    /// then the failed step's status and lines, and the last step's status, the three others' never written - so the count
+    /// jumps from 0 to 3 and on to 5, and to 7 past the console step's end. Each failure is this build's own, and how far
+    /// it got is not said: whether the console step ended before its last status is not written.
+    /// </summary>
+    [Fact]
+    public void WhatNinjaHeldBackWhileAConsoleStepRan_IsTheBuildsOwn_AtWhateverCountItIsWritten()
+    {
+        using var temp = new TempDirectory();
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+
+        temp.WriteFile(
+            Path.Combine("build", NinjaDependencyCheck.ManifestFileName),
+            "rule cons\n  command = sleep 0.3; echo nested-one; sleep 2; echo nested-two\n  description = CONSOLE $out\n  pool = console\n"
+            + "rule quick\n  command = sleep $delay; touch $out\n  description = QUICK $out\n"
+            + "rule bad\n  command = sleep $delay; echo bad-output; false\n  description = BAD $out\n"
+            + "build c1: cons\nbuild q1: quick\n  delay = 0.6\nbuild q2: quick\n  delay = 0.9\nbuild q3: quick\n  delay = 1.2\n"
+            + "build b1: bad\n  delay = 1.0\nbuild q4: quick\n  delay = 1.5\nbuild after1: quick c1\n  delay = 0.1\nbuild after2: bad c1\n  delay = 0.2\n");
+
+        var own = Ninja.Own(
+            ("[0/8] CONSOLE c1\nnested-one\nnested-two\n[3/8] BAD b1\nFAILED: b1 \nsleep 1.0; echo bad-output; false\nbad-output\n"
+             + "[5/8] QUICK q4\n[7/8] QUICK after1\n[8/8] BAD after2\nFAILED: after2 \nsleep 0.2; echo bad-output; false\nbad-output\n"
+             + "ninja: build stopped: cannot make progress due to previous errors.\n").Split('\n'),
+            "/usr/bin/ninja",
+            NinjaManifest.Read(fileSystem, temp.Combine("build")));
+
+        Assert.Equal(["b1=Own", "after2=Own"], own.Said.Select(line => $"{line.Step}={line.Whose}"));
+        Assert.Null(own.Progress);
+        Assert.True(own.StatusRead);
+    }
+
+    /// <summary>
+    /// Every failing line is told this build's own, a nested build's or neither: a nested build's only where it is provably
+    /// within one - in a failed step's output, after its FAILED line, or a console step's after its start, and before that
+    /// output's nested build said its end, which something of this build's then followed: its own end, or the console
+    /// step's own FAILED line. A failing line after a status line that is no status of this build's, a nested build's end
+    /// nothing followed - the build killed right after it - and every failing line where NINJA_STATUS spells the status
+    /// otherwise, cannot be told either, and is unattributed; and so is a samurai failure whose command no build line runs.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        "[1/4] Building C object CMakeFiles/app.dir/b.c.o\nFAILED: CMakeFiles/app.dir/b.c.o \ncc -c b.c\n"
+        + "[2/4] Performing build step for 'ext'\nFAILED: ext-prefix/src/ext-stamp/ext-build \ncd /b/ext && cmake --build .\n"
+        + "[1/2] Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \ncc -c /ext/a.c\nninja: build stopped: subcommand failed.\n"
+        + "ninja: build stopped: cannot make progress due to previously encountered errors.\n",
+        new[] { "CMakeFiles/app.dir/b.c.o=Own", "ext-prefix/src/ext-stamp/ext-build=Own", "CMakeFiles/app.dir/a.c.o=Nested" })]
+    [InlineData(
+        "[1/4] Building C object CMakeFiles/app.dir/b.c.o\n[2/4] Performing build step for 'ext'\nFAILED: ext-prefix/src/ext-stamp/ext-build \ncd /b/ext && cmake --build .\n"
+        + "[1/2] Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \ncc -c /ext/a.c\nninja: build stopped: subcommand failed.\n",
+        new[] { "ext-prefix/src/ext-stamp/ext-build=Own", "CMakeFiles/app.dir/a.c.o=Unattributed" })]
+    [InlineData(
+        "[1/4] Building C object CMakeFiles/app.dir/b.c.o\n[2/4] Performing build step for 'ext'\nFAILED: ext-prefix/src/ext-stamp/ext-build \ncd /b/ext && cmake --build .\n"
+        + "[1/2] Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \ncc -c /ext/a.c\nninja: build stopped: subcommand failed.\n"
+        + "[3/4] Linking C executable app\n",
+        new[] { "ext-prefix/src/ext-stamp/ext-build=Own", "CMakeFiles/app.dir/a.c.o=Nested" })]
+    [InlineData(
+        "[1/4] Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \ncc -c a.c\n"
+        + "[2/4] Building something no build line describes\nFAILED: weird.o \nninja: build stopped: subcommand failed.\n",
+        new[] { "CMakeFiles/app.dir/a.c.o=Own", "weird.o=Unattributed" })]
+    [InlineData(
+        "[1/4] Building C object CMakeFiles/app.dir/a.c.o\n[2/4] Linking C executable app\n[2/4] Performing build step for 'term'\n"
+        + "[1/3] Building C object CMakeFiles/x.dir/x.c.o\nFAILED: CMakeFiles/x.dir/x.c.o \ncc -c /term/x.c\nninja: build stopped: subcommand failed.\n"
+        + "FAILED: term-prefix/src/term-stamp/term-build \ncd /b/term && cmake --build .\n",
+        new[] { "CMakeFiles/x.dir/x.c.o=Nested", "term-prefix/src/term-stamp/term-build=Own" })]
+    [InlineData(
+        "(1 of 7) Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \n(2 of 7) Building C object CMakeFiles/app.dir/b.c.o\nFAILED: CMakeFiles/app.dir/b.c.o \n",
+        new[] { "CMakeFiles/app.dir/a.c.o=Unattributed", "CMakeFiles/app.dir/b.c.o=Unattributed" })]
+    [InlineData("[1/2] Building C object CMakeFiles/app.dir/a.c.o\nsamu: job failed with status 1: cc -c /ext/x.c -o x.o\n", new[] { "cc -c /ext/x.c -o x.o=Unattributed" })]
+    public void EveryFailingLine_IsToldOwnNestedOrUnattributed(string output, string[] said)
+    {
+        using var temp = new TempDirectory();
+
+        var own = Ninja.Own(output.Split('\n'), "/usr/bin/samu", OwnManifest(temp));
+
+        Assert.Equal(said, own.Said.Select(line => $"{line.Step}={line.Whose}"));
+    }
+
+    /// <summary>
+    /// The steps a sweep judges an arm's build by are read by the same reading as a failed build's units: every failing
+    /// line that could be the build's own - its own and every one that cannot be told apart, so none that could be a step
+    /// not depending on a site is lost - and a nested build's alone left out; where nothing is nested, every failing line,
+    /// as before.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        "[1/4] Building C object CMakeFiles/app.dir/b.c.o\nFAILED: CMakeFiles/app.dir/b.c.o \ncc -c b.c\n"
+        + "[2/4] Performing build step for 'ext'\nFAILED: ext-prefix/src/ext-stamp/ext-build \ncd /b/ext && cmake --build .\n"
+        + "[1/2] Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \ncc -c /ext/a.c\nninja: build stopped: subcommand failed.\n"
+        + "ninja: build stopped: cannot make progress due to previously encountered errors.\n",
+        new[] { "CMakeFiles/app.dir/b.c.o", "ext-prefix/src/ext-stamp/ext-build" })]
+    [InlineData(
+        "[1/4] Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \ncc -c a.c\n"
+        + "[2/4] Building something no build line describes\nFAILED: weird.o \nninja: build stopped: subcommand failed.\n",
+        new[] { "CMakeFiles/app.dir/a.c.o", "weird.o" })]
+    [InlineData(
+        "(1 of 7) Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \n(2 of 7) Building C object CMakeFiles/app.dir/b.c.o\nFAILED: CMakeFiles/app.dir/b.c.o \n",
+        new[] { "CMakeFiles/app.dir/a.c.o", "CMakeFiles/app.dir/b.c.o" })]
+    public void TheStepsASweepJudges_AreEveryFailingLineThatCouldBeTheBuildsOwn(string output, string[] judged)
+    {
+        using var temp = new TempDirectory();
+
+        Assert.Equal(judged, Ninja.FailedOutputs(output.Split('\n'), "/usr/bin/ninja", OwnManifest(temp)));
     }
 
     /// <summary>
@@ -255,6 +379,30 @@ public sealed class NinjaTests
         var none = Ninja.FailedUnitsOf(failed with { Phase = Phase(1, stalled: false, "ninja: error: loading 'build.ninja': no such file\n") }, keptGoing: false);
 
         Assert.Equal("ninja named no unit that failed in any line read for them - its log says what failed", none.WhyUnread);
+
+        // Where NINJA_STATUS spells the status otherwise no line is the build's own, and each failing line is said as one
+        // that could not be told its own: never that no unit failed.
+        var spelled = Ninja.FailedUnitsOf(failed with { Phase = Phase(1, stalled: false, "(1 of 7) Building C object CMakeFiles/app.dir/a.c.o\nFAILED: CMakeFiles/app.dir/a.c.o \n") }, keptGoing: false);
+
+        Assert.Equal((0, 1), (spelled.Units.Count, spelled.Unattributed));
+        Assert.Equal(
+            "ninja wrote no status line read as its own - as where NINJA_STATUS spells its status otherwise - so none of the 1 failing line(s) it wrote "
+            + "could be told its own or a nested build's: its log names each",
+            spelled.WhyUnread);
+
+        // Status lines of its own, a console step's run leaving how far it got unsaid, and a failure after one that is not:
+        // never said as a build whose status was spelled otherwise.
+        var followed = Ninja.FailedUnitsOf(
+            failed with
+            {
+                Phase = Phase(1, stalled: false, "[0/5] Performing build step for 'term'\n[3/5] Building C object CMakeFiles/app.dir/b.c.o\n[3/5] Building something no build line describes\nFAILED: weird.o \n"),
+            },
+            keptGoing: false);
+
+        Assert.Equal((0, 1, (int?)null), (followed.Units.Count, followed.Unattributed, followed.StepsRun));
+        Assert.Equal(
+            "ninja named no unit of its own that failed, and 1 failing line(s) could not be told its own or a nested build's - its log names each",
+            followed.WhyUnread);
         Assert.Equal("which units failed to build was not read: ninja named no unit that failed in any line read for them - its log says what failed", none.Describe());
     }
 

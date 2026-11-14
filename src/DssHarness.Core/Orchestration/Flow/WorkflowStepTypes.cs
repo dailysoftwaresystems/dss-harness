@@ -638,6 +638,7 @@ public static class WorkflowStepTypes
         ("stopsAtFirst", Flag),
         ("stepsRun", WholeNumber),
         ("stepsPlanned", WholeNumber),
+        ("unattributed", WholeNumber),
         ("said", Text));
 
     /// <summary>A schema of an object holding exactly <paramref name="properties"/>, each named and none other, as the subset closes every object.</summary>

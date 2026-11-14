@@ -70,7 +70,10 @@ public sealed record ArmPreflight
 
 /// <summary>One build of an arm's target in its worker: the mutated build, or a BUILD-RED arm's paired control.</summary>
 /// <param name="Verdict">The build's own verdict: passed, failed, stopped, or one a guard of the build reached.</param>
-/// <param name="Failed">Every step the build said failed, by its first output, as <c>Ninja.FailedOutputs</c> names them.</param>
+/// <param name="Failed">
+/// Every step the build said failed that could be its own - a nested build's alone left out - by its first output, as
+/// <c>Ninja.FailedOutputs</c> names them.
+/// </param>
 /// <param name="NotRebuilt">The dependent objects ninja's log shows no step run for, where the build passed.</param>
 public sealed record ArmBuild(ReachedVerdict Verdict, IReadOnlyList<string> Failed, IReadOnlyList<string> NotRebuilt);
 

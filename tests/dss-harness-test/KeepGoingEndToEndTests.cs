@@ -168,6 +168,42 @@ public sealed class KeepGoingEndToEndTests
     }
 
     /// <summary>
+    /// The ninja on this machine, its output piped, holds back every other step's lines while a step in the console pool
+    /// runs - here one that sleeps while the others end, one of them failing after two that pass - and writes at its end
+    /// only the failed step's status and lines and the last one's status, so the failed step's status is written at a count
+    /// the build never wrote before it; and a step after the console step fails too. Each failure is the build's own, and
+    /// how far it got is not said, for whether the console step ended before the last status is not written.
+    /// </summary>
+    [Fact]
+    public async Task WhatARealNinjaHoldsBackWhileAConsoleStepRuns_IsTheBuildsOwn()
+    {
+        var harness = new HarnessFactory();
+
+        BuildTools.Need(harness.ProcessRunner, "a real ninja build with a console step", "cmake", "ninja");
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var cmake = "\"" + harness.ProcessRunner.FindExecutable("cmake")!.Replace("$", "$$", StringComparison.Ordinal) + "\"";
+
+        temp.WriteFile(
+            "build.ninja",
+            $"rule cons\n  command = {cmake} -E sleep 4\n  description = CONSOLE $out\n  pool = console\n"
+            + $"rule quick\n  command = {cmake} -E touch $out\n  description = QUICK $out\n"
+            + $"rule bad\n  command = {cmake} -E false\n  description = BAD $out\n"
+            + "build c1: cons\nbuild q1: quick\nbuild q2: quick\nbuild b1: bad q1 q2\nbuild after: bad c1\n");
+
+        var built = await harness.ProcessRunner.RunAsync(
+            new Core.Processes.ProcessRequest { FileName = harness.ProcessRunner.FindExecutable("ninja")!, Arguments = ["-k", "0", "-j", "8"], WorkingDirectory = temp.Path },
+            token);
+        var lines = (built.StandardOutput + "\n" + built.StandardError).Split('\n');
+        var own = Ninja.Own(lines, "ninja", NinjaManifest.Read(harness.FileSystem, temp.Path));
+
+        Assert.True(built.ExitCode != 0, built.StandardOutput);
+        Assert.Equal(["b1=Own", "after=Own"], own.Said.Select(line => $"{line.Step}={line.Whose}"));
+        Assert.Null(own.Progress);
+    }
+
+    /// <summary>
     /// A tree whose one leg builds, with <paramref name="generator"/> and <paramref name="compiler"/> on one core, a static
     /// library 'probe' of a source that compiles, and an external project, built after it, whose own static library
     /// 'probe' is of a source of the same name that fails to compile - committed, its build directory ignored.

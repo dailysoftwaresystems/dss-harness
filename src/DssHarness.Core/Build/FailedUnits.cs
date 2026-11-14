@@ -37,6 +37,10 @@ public sealed record FailedUnit(string? Source, string Step)
 /// </param>
 /// <param name="StepsRun">How many of its steps the build ran, as ninja's <c>[run/planned]</c> progress last said it; <see langword="null"/> where nothing says.</param>
 /// <param name="StepsPlanned">How many steps the build planned to run, as the same progress said it; <see langword="null"/> where nothing says.</param>
+/// <param name="Unattributed">
+/// How many failing lines named a step that could not be told the build's own or a nested build's - ninja's reading of its
+/// lines (<c>Ninja.Own</c>) - each of which may be a unit of its own: so the line never reads as clean for them.
+/// </param>
 /// <remarks>
 /// A tool that stops at its first failures hides every unit after them: measured on a consumer's MinGW build under ninja,
 /// it stopped with 22 of its 1093 steps run and 3 units failed, and every unit it never reached would have read as clean.
@@ -52,7 +56,8 @@ public sealed record FailedUnits(
     bool KeptGoing,
     bool StopsAtFirst,
     int? StepsRun = null,
-    int? StepsPlanned = null)
+    int? StepsPlanned = null,
+    int Unattributed = 0)
 {
     /// <summary>
     /// What a build whose tool's output is not read for its units says: which tool it is, and that its log names each it
@@ -74,8 +79,13 @@ public sealed record FailedUnits(
     /// none failed; <see langword="null"/> where units were read.
     /// </summary>
     public string? WhyUnread => Unread ?? (Units.Count == 0
-        ? $"{Tool} named no unit that failed in any line read for them - its log says what failed"
+        ? Unattributed > 0
+            ? $"{Tool} named no unit of its own that failed, and {Unattributedly} - its log names each"
+            : $"{Tool} named no unit that failed in any line read for them - its log says what failed"
         : null);
+
+    /// <summary>The failing lines that could not be told the build's own or a nested build's, as a clause says them.</summary>
+    private string Unattributedly => $"{ReportText.Counted(Unattributed, "failing line")} could not be told its own or a nested build's";
 
     /// <summary>
     /// What a leg's line says of the units: how many failed, or why which is not known; and, where the tool stops at its
@@ -89,6 +99,12 @@ public sealed record FailedUnits(
             return $"which units failed to build was not read: {unread}";
         }
 
+        return Unattributed > 0 ? $"{Counted()}; and {Unattributedly}, each perhaps a unit of its own - its log names each" : Counted();
+    }
+
+    /// <summary>What the line says of the units read: how many, and how far a tool that stops at its first failures got.</summary>
+    private string Counted()
+    {
         var failed = $"{ReportText.Counted(Units.Count, "unit")} failed to build";
 
         if (KeptGoing)
@@ -158,6 +174,7 @@ public sealed record FailedUnits(
             StopsAtFirst,
             StepsRun,
             StepsPlanned,
+            Unattributed > 0 ? Unattributed : null,
             show(Describe()));
     }
 }
@@ -174,6 +191,7 @@ public sealed record FailedUnits(
 /// <param name="StopsAtFirst">Whether the tool stops at its first failures unless told otherwise.</param>
 /// <param name="StepsRun">How many of its steps the build ran, where its tool's own status says it.</param>
 /// <param name="StepsPlanned">How many steps it planned to run, where the same status says it.</param>
+/// <param name="Unattributed">How many failing lines could not be told the build's own or a nested build's; <see langword="null"/> where none.</param>
 /// <param name="Said">What the leg's line says of them (<see cref="FailedUnits.Describe"/>).</param>
 public sealed record FailedUnitsDocument(
     string Tool,
@@ -184,6 +202,7 @@ public sealed record FailedUnitsDocument(
     bool StopsAtFirst,
     int? StepsRun,
     int? StepsPlanned,
+    int? Unattributed,
     string Said);
 
 /// <summary>One unit as a document says it.</summary>
