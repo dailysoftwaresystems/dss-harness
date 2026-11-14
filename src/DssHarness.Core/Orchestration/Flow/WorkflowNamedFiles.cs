@@ -10,19 +10,34 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// read: spelt as a path inside the workflow's own directory, kept there once every link along it is followed, and there.
 /// What a reviewer reads there is what the workflow runs, as an action's files are to its own directory. The definition's
 /// check reads each file's problem here, and a run the text of one it needs as it runs. A workflow resolved from a remote
-/// source keeps its files in the workflow cache, and they are read there under the same rule, their blobs hashed again
-/// as they are.
+/// source keeps its files in a cache of the workflow cache's shape - for a run, the copy it keeps of the remote workflows
+/// it began with (<see cref="OfRun"/>) - and they are read there under the same rule, their blobs hashed again as they are.
 /// </summary>
 /// <param name="fileSystem">Follows links and reads the files.</param>
 /// <param name="pathComparison">How this machine compares paths.</param>
 /// <param name="cache">
-/// The hash cache of remote workflows, where a remote workflow's files are read; null where the reader serves a
-/// definition whose workflows are local only.
+/// Where a remote workflow's files are read: a run's own copy of the remote workflows it began with; null where the reader
+/// serves a definition whose workflows are local only.
 /// </param>
 public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison pathComparison, WorkflowCache? cache = null)
 {
-    /// <summary>The workflow cache of remote workflows' files; null where none is read here.</summary>
+    /// <summary>Where a remote workflow's files are read; null where none is read here.</summary>
     private readonly WorkflowCache? _cache = cache;
+
+    /// <summary>
+    /// The reader a run reads its files by as it runs: the repository's own for a local workflow, and for a remote one the
+    /// copy the run keeps of the remote workflows it began with (<see cref="OrchestratorLayout.RemoteWorkflowsDirectory"/>),
+    /// never the user's workflow cache, which a pruning may change while the run goes on.
+    /// </summary>
+    /// <param name="fileSystem">Follows links and reads the files.</param>
+    /// <param name="pathComparison">How this machine compares paths.</param>
+    /// <param name="run">The run.</param>
+    public static WorkflowNamedFiles OfRun(IFileSystem fileSystem, StringComparison pathComparison, OrchestratorLayout run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        return new WorkflowNamedFiles(fileSystem, pathComparison, WorkflowCache.OfRun(fileSystem, run));
+    }
     /// <summary>The workflow's directory, every link along it followed, as a file it names is held to it.</summary>
     /// <param name="layout">The repository's layout.</param>
     /// <param name="name">The workflow.</param>
@@ -140,15 +155,14 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
 
         if (WorkflowRemote.Is(name))
         {
-            // A workflow resolved from a remote source: its files are those of the cache entry that holds it, read
-            // under its own directory in its repository - a workflow a relative use inside a remote one names sits in
-            // a directory of that one's entry - hashed again as they are read, and no directory of the repository's own
-            // is asked for them.
+            // A workflow resolved from a remote source: its files are those of the entry that holds it, read under its
+            // own directory in its repository - a workflow a relative use inside a remote one names sits in a directory of
+            // that one's entry - hashed again as they are read, and no directory of the repository's own is asked for them.
             if (_cache?.FindNamed(name) is not { } entry || WorkflowRemote.PartsOf(name) is not { } parts)
             {
                 return missingIsNone ? null : throw new HarnessException(
                     HarnessExit.ConfigInvalid,
-                    $"'{named}', {what}, is of the workflow '{name}', which the workflow cache holds no entry for; fetch it again where a use names it");
+                    $"'{named}', {what}, is of the workflow '{name}', which {(_cache is null ? "no reader of remote workflows is given here" : $"the remote workflows at '{_cache.DirectoryIfNamed}' hold no entry for")}; a run keeps every remote workflow it began with in its own, and the check a resume goes through keeps it again");
             }
 
             try

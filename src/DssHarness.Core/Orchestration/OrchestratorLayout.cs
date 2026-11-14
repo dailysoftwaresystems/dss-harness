@@ -213,6 +213,12 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The directory a run's codebase graph is kept in: made from the tree, and made again whenever asked.</summary>
     public const string GraphDirectoryName = "graph";
 
+    /// <summary>
+    /// The name of the directory a run keeps the remote workflows it began with in, in the workflow cache's own shape: what
+    /// its steps read as they run, so no pruning of the user's cache takes a file from a run that started.
+    /// </summary>
+    public const string RemoteWorkflowsDirectoryName = "remote-workflows";
+
     /// <summary>The name of the file the base's manifest is kept in, in the graph's directory.</summary>
     public const string GraphManifestFileName = "graph.json";
 
@@ -468,6 +474,13 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The run's codebase graph: derived from the tree, so removed with the run and kept by nothing else.</summary>
     public string GraphDirectory => Path.Combine(Directory, GraphDirectoryName);
+
+    /// <summary>
+    /// The remote workflows the run began with, every file of each as the check that let it start read and hashed it, kept
+    /// in the workflow cache's own shape beside its frozen definition: what its steps read a remote workflow's files from
+    /// as they run, and what no pruning of the user's cache reaches. Removed with the run.
+    /// </summary>
+    public string RemoteWorkflowsDirectory => Path.Combine(Directory, RemoteWorkflowsDirectoryName);
 
     /// <summary>The base's manifest: every file the graph keeps, with its blob, its state and its extract's name.</summary>
     public string GraphManifestFile => Path.Combine(GraphDirectory, GraphManifestFileName);

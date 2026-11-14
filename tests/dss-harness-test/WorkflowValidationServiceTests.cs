@@ -390,7 +390,8 @@ public sealed class WorkflowValidationServiceTests
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
 
-        Assert.Equal("""{"workflows":[],"passed":false}""", JsonSerializer.Serialize(document.RootElement));
+        // A check given no workflow cache names none; one given the cache names it on every report (RemoteWorkflowUseTests).
+        Assert.Equal("""{"workflows":[],"passed":false,"cache":null}""", JsonSerializer.Serialize(document.RootElement));
     }
 
     /// <summary>

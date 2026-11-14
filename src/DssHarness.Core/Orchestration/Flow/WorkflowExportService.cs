@@ -39,7 +39,12 @@ public sealed record WorkflowExportRequest(string? Workflow, string To, bool Shi
 /// Where a vendored remote workflow came from: its repository, its ref, and the commit it resolved to - said where that
 /// commit is the cache's last resolution standing in, or the ref a branch, which moves.
 /// </param>
-public sealed record WorkflowExport(string Workflow, bool Shipped, string Destination, IReadOnlyList<string> Files, string? Vendored = null);
+/// <param name="Cache">
+/// The workflow cache's directory, where the remote workflows an export resolves are read from and fetched into - named
+/// for every export of a repository's workflow or a remote one; null for the shipped one, which reads none, and where no
+/// directory of this user's own can be named.
+/// </param>
+public sealed record WorkflowExport(string Workflow, bool Shipped, string Destination, IReadOnlyList<string> Files, string? Vendored = null, string? Cache = null);
 
 /// <summary>
 /// Copies a workflow - its yml and every file it names - into a folder of its own, so a person or a repository has it to
@@ -61,13 +66,16 @@ public interface IWorkflowExportService : DssHarness.Core.Application.IUseCase
     /// <returns>Where the workflow was written, and each file.</returns>
     /// <exception cref="HarnessException">
     /// A workflow nobody declared, the shipped one asked for under a name it does not have, no workflow named, a workflow
-    /// name or <c>--shipped</c> given beside <c>--from</c>, or no folder to write to (<see cref="HarnessExit.UsageError"/>);
-    /// a declared workflow that does not hold (<see cref="HarnessExit.ConfigInvalid"/>, naming each problem); a workflow
-    /// that uses one outside its folder or a remote one, a vendored directory holding a file named as the note, a folder
-    /// for it that is there already or could not be looked at, or a file that could not be written
-    /// (<see cref="HarnessExit.Refused"/>); stopped while it wrote (<see cref="HarnessExit.Cancelled"/>, where
-    /// what it wrote could not be taken back; otherwise the cancellation itself). What was written before a failure is
-    /// taken back, every folder the export made with it, or the refusal says why it could not be.
+    /// name or <c>--shipped</c> given beside <c>--from</c>, a <c>--from</c> that names no remote workflow, or no folder to
+    /// write to (<see cref="HarnessExit.UsageError"/>); a declared workflow that does not hold
+    /// (<see cref="HarnessExit.ConfigInvalid"/>, naming each problem); a workflow that uses one outside its folder or a
+    /// remote one, a vendored directory holding a file named as the note, a folder for it that is there already or could
+    /// not be looked at - looked at before anything is fetched - or a file that could not be written
+    /// (<see cref="HarnessExit.Refused"/>); a remote workflow's fetch that could not run, with its own code
+    /// (<see cref="WorkflowRemoteFetcher.ResolveAsync"/>); stopped while it wrote (<see cref="HarnessExit.Cancelled"/>,
+    /// where what it wrote could not be taken back; otherwise the cancellation itself). What was written before a failure
+    /// is taken back, every folder the export made with it, or the refusal says why it could not be; a failure after a
+    /// remote workflow was fetched names the workflow cache it was fetched into.
     /// </exception>
     Task<WorkflowExport> ExportAsync(string startDirectory, WorkflowExportRequest request, CancellationToken cancellationToken = default);
 }
@@ -120,9 +128,22 @@ public sealed class WorkflowExportService(
                         + $"'{ToolPackage.Command} {CommandName} --from <use> --to <dir>' vendors a remote one, and '{ToolPackage.Command} {CommandName} <workflow> --to <dir> [--shipped]' exports one of the repository's or this tool's. Nothing was written.");
             }
 
-            var from = await VendoredAsync(startDirectory, vendored, cancellationToken).ConfigureAwait(false);
+            if (WorkflowRemote.Source(vendored) is not { } parsed)
+            {
+                throw new HarnessException(
+                    HarnessExit.UsageError,
+                    (string.IsNullOrWhiteSpace(vendored) ? "--from names nothing" : $"'{vendored}' is no remote workflow source")
+                        + ": it names a remote workflow as a use does, owner/repo/path/workflow.yml@ref - an owner, a repository, a workflow file's path in it, and a ref after @. Nothing was written.");
+            }
 
-            return await WriteAsync(new WorkflowExportRequest(from.Folder, request.To, Shipped: false, From: vendored), from.Files, from.Said, cancellationToken).ConfigureAwait(false);
+            // The folder is looked at before anything is fetched, so a folder that is there refuses with nothing written
+            // anywhere - the workflow cache included.
+            var folder = parsed.Directory[(parsed.Directory.LastIndexOf('/') + 1)..];
+            _ = Unclaimed(DestinationOf(request.To, folder), fetchedInto: null);
+
+            var from = await VendoredAsync(startDirectory, parsed, vendored, cancellationToken).ConfigureAwait(false);
+
+            return await WriteAsync(new WorkflowExportRequest(folder, request.To, Shipped: false, From: vendored), from.Files, from.Said, from.FetchedInto, cancellationToken).ConfigureAwait(false);
         }
 
         if (string.IsNullOrWhiteSpace(request.Workflow))
@@ -132,40 +153,64 @@ public sealed class WorkflowExportService(
                 $"no workflow is named; '{ToolPackage.Command} {CommandName} <workflow> --to <dir> [--shipped]' exports one of the repository's or this tool's, and '{ToolPackage.Command} {CommandName} --from <use> --to <dir>' vendors a remote one. Nothing was written.");
         }
 
-        var files = request.Shipped
-            ? Shipped(request.Workflow)
-            : await DeclaredAsync(startDirectory, request.Workflow, cancellationToken).ConfigureAwait(false);
+        if (request.Shipped)
+        {
+            return await WriteAsync(request, Shipped(request.Workflow), vendored: null, fetchedInto: null, cancellationToken).ConfigureAwait(false);
+        }
 
-        return await WriteAsync(request, files, vendored: null, cancellationToken).ConfigureAwait(false);
+        var (files, fetchedInto) = await DeclaredAsync(startDirectory, request.Workflow, cancellationToken).ConfigureAwait(false);
+
+        return await WriteAsync(request, files, vendored: null, fetchedInto, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>What vendoring a remote workflow read: where it came from, said as one line; its folder's name; and its files.</summary>
-    private sealed record Vendored(string Said, string Folder, IReadOnlyList<(string File, Func<string, Task> Write)> Files);
+    /// <summary>
+    /// What vendoring a remote workflow read: where it came from, said as one line; its files; and the workflow cache it was
+    /// read from or fetched into.
+    /// </summary>
+    private sealed record Vendored(string Said, IReadOnlyList<(string File, Func<string, Task> Write)> Files, string? FetchedInto);
 
-    /// <summary>Writes <paramref name="files"/> into the folder of the workflow's own the request asks for, taking back what a failure leaves.</summary>
-    private async Task<WorkflowExport> WriteAsync(WorkflowExportRequest request, IReadOnlyList<(string File, Func<string, Task> Write)> files, string? vendored, CancellationToken cancellationToken)
+    /// <summary>The folder made for the workflow <paramref name="workflow"/>: the folder <paramref name="to"/> names, the workflow's name under it.</summary>
+    private string DestinationOf(string to, string workflow)
+        => Path.Combine(Path.GetFullPath(to, _process.CurrentDirectory), workflow);
+
+    /// <summary>
+    /// The outermost folder the export makes on the way to <paramref name="destination"/>, once it is told that nothing is
+    /// there - a folder of its own, never one that is there, so what is written is the workflow and nothing else, and
+    /// nothing a person put there is written over or mixed with it; refused, nothing written to it, where something is
+    /// there or it could not be looked at, naming the workflow cache where a remote workflow was fetched into it first.
+    /// </summary>
+    private string Unclaimed(string destination, string? fetchedInto)
     {
-        var destination = Path.Combine(Path.GetFullPath(request.To, _process.CurrentDirectory), request.Workflow!);
-        string made;
-
         try
         {
-            // A folder of its own, never one that is there: what is written is the workflow and nothing else, and nothing a
-            // person put there is written over or mixed with it.
             if (_fileSystem.KindOf(destination) != PathKind.None)
             {
                 throw new HarnessException(
                     HarnessExit.Refused,
-                    $"'{destination}' is there already; {CommandName} writes a workflow into a folder of its own that it makes, and never into or over one that is there. Nothing was written.");
+                    $"'{destination}' is there already; {CommandName} writes a workflow into a folder of its own that it makes, and never into or over one that is there. {NothingWritten(fetchedInto)}");
             }
 
-            made = Outermost(destination);
+            return Outermost(destination);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new HarnessException(HarnessExit.Refused, $"'{destination}' could not be looked at: {ex.Message.TrimEnd('.')}. Nothing was written.", ex);
+            throw new HarnessException(HarnessExit.Refused, $"'{destination}' could not be looked at: {ex.Message.TrimEnd('.')}. {NothingWritten(fetchedInto)}", ex);
         }
+    }
 
+    /// <summary>What a refusal after a fetch says of the workflow cache it was fetched into; nothing where none was.</summary>
+    private static string Kept(string? fetchedInto)
+        => fetchedInto is null ? string.Empty : $" What was fetched is kept in the workflow cache '{fetchedInto}'.";
+
+    /// <summary>What a refusal that wrote nothing of the workflow says, and of the workflow cache where it fetched into it first.</summary>
+    private static string NothingWritten(string? fetchedInto)
+        => fetchedInto is null ? "Nothing was written." : $"Nothing of the workflow was written, and what was fetched is kept in the workflow cache '{fetchedInto}'.";
+
+    /// <summary>Writes <paramref name="files"/> into the folder of the workflow's own the request asks for, taking back what a failure leaves.</summary>
+    private async Task<WorkflowExport> WriteAsync(WorkflowExportRequest request, IReadOnlyList<(string File, Func<string, Task> Write)> files, string? vendored, string? fetchedInto, CancellationToken cancellationToken)
+    {
+        var destination = DestinationOf(request.To, request.Workflow!);
+        var made = Unclaimed(destination, fetchedInto);
         var written = new List<string>();
 
         foreach (var (file, write) in files)
@@ -191,45 +236,53 @@ public sealed class WorkflowExportService(
                 var why = stopped ? "the export was stopped" : ex.Message.TrimEnd('.');
                 var after = left ?? $"what was written before it was taken back, and '{made}' is not there";
 
-                throw new HarnessException(stopped ? HarnessExit.Cancelled : HarnessExit.Refused, $"'{file}' could not be written to '{destination}': {why}; {after}.", ex);
+                throw new HarnessException(stopped ? HarnessExit.Cancelled : HarnessExit.Refused, $"'{file}' could not be written to '{destination}': {why}; {after}.{Kept(fetchedInto)}", ex);
             }
 
             written.Add(file);
         }
 
-        return new WorkflowExport(request.Workflow!, request.Shipped, destination, written, vendored);
+        return new WorkflowExport(request.Workflow!, request.Shipped, destination, written, vendored, request.Shipped ? null : _cache?.DirectoryIfNamed);
     }
 
     /// <summary>
-    /// The remote workflow <paramref name="source"/> names, fetched at its resolved commit: every file of its directory,
-    /// read from the workflow cache, and the note that says where it came from - a team can review what is written and
-    /// use it as <c>./</c>.
+    /// The remote workflow <paramref name="parsed"/> names, fetched at its resolved commit: every file of its directory,
+    /// as the resolution read and hashed it, and the note that says where it came from - a team can review what is written
+    /// and use it as <c>./</c>.
     /// </summary>
-    private async Task<Vendored> VendoredAsync(string startDirectory, string source, CancellationToken cancellationToken)
+    private async Task<Vendored> VendoredAsync(string startDirectory, WorkflowRemoteSource parsed, string source, CancellationToken cancellationToken)
     {
         if (_contextLoader is null || _remotes is null || _cache is null)
         {
-            throw new HarnessException(HarnessExit.Refused, $"'{source}' names a remote workflow, and this export reaches no fetcher for one");
-        }
-
-        if (WorkflowRemote.Source(source) is not { } parsed)
-        {
-            throw new HarnessException(HarnessExit.UsageError, $"'{source}' is no remote workflow source: an owner, a repository, a workflow file's path in it, and a ref after @");
+            throw new HarnessException(HarnessExit.Refused, $"'{source}' names a remote workflow, and this export reaches no fetcher for one. Nothing was written.");
         }
 
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
-        var resolution = await _remotes.ResolveAsync(parsed, context.Config.WorkflowSources, context.Layout.MainCheckoutRoot, Environment.GetEnvironmentVariable, recorded: null, cancellationToken).ConfigureAwait(false);
+        WorkflowRemoteResolution resolution;
+
+        try
+        {
+            resolution = await _remotes.ResolveAsync(parsed, context.Config.WorkflowSources, context.Layout.MainCheckoutRoot, Environment.GetEnvironmentVariable, recorded: null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException failed) when (!WorkflowResolution.RefusesTheSource(failed) && _cache.DirectoryIfNamed is { } kept)
+        {
+            // A fetch that could not run names the cache, where what it fetched before it stopped is kept.
+            throw new HarnessException(failed.ExitCode, $"{failed.Message.TrimEnd('.')}; {WorkflowValidationService.CacheSaid(kept)}. Nothing was written.", failed);
+        }
+
+        var fetchedInto = _cache.DirectoryIfNamed;
         var entry = resolution.Entry;
         var folder = parsed.Directory[(parsed.Directory.LastIndexOf('/') + 1)..];
         var files = new List<(string, Func<string, Task>)>();
 
         foreach (var file in entry.Files)
         {
-            // As the bytes the forge gave, hashed again as they are read: a vendored file is the commit's, byte for byte,
-            // whatever it holds - a byte order mark, or bytes that are no text at all.
-            var bytes = _cache.ReadBytes(entry, file.Path) ?? throw new HarnessException(
+            // As the bytes the forge gave, hashed as the resolution read them: a vendored file is the commit's, byte for
+            // byte, whatever it holds - a byte order mark, or bytes that are no text at all - and never read from the cache
+            // again, which a pruning may have changed since.
+            var bytes = resolution.Files.TryGetValue(file.Path, out var read) ? read : throw new HarnessException(
                 HarnessExit.Refused,
-                $"'{source}' resolved to the commit '{entry.Commit}', whose cache entry names no '{file.Path}'");
+                $"'{source}' resolved to the commit '{entry.Commit}', whose directory as it was read holds no '{file.Path}'.{Kept(fetchedInto)}");
             var relative = file.Path[entry.Path.Length..].TrimStart('/');
 
             // The note of where the workflow came from is written beside its files, never over one of them.
@@ -237,7 +290,7 @@ public sealed class WorkflowExportService(
             {
                 throw new HarnessException(
                     HarnessExit.Refused,
-                    $"'{source}' holds a '{relative}' of its own in its directory, the name the note of where a vendored workflow came from is written as; {CommandName} writes that note beside a workflow's files and never over one of them. Nothing was written.");
+                    $"'{source}' holds a '{relative}' of its own in its directory, the name the note of where a vendored workflow came from is written as; {CommandName} writes that note beside a workflow's files and never over one of them. {NothingWritten(fetchedInto)}");
             }
 
             files.Add((relative, path =>
@@ -264,7 +317,7 @@ public sealed class WorkflowExportService(
             return Task.CompletedTask;
         }));
 
-        return new Vendored(said, folder, [.. files]);
+        return new Vendored(said, [.. files], fetchedInto);
     }
 
     /// <summary>
@@ -286,15 +339,17 @@ public sealed class WorkflowExportService(
 
     /// <summary>
     /// The files of the declared workflow <paramref name="name"/>, once its check holds, each copied from the directory its
-    /// check found it in: what is exported is what was checked.
+    /// check found it in: what is exported is what was checked - and the workflow cache the check read and fetched into,
+    /// where it went to resolve a remote use, which every exit after it names.
     /// </summary>
-    private async Task<IReadOnlyList<(string File, Func<string, Task> Write)>> DeclaredAsync(
+    private async Task<(IReadOnlyList<(string File, Func<string, Task> Write)> Files, string? FetchedInto)> DeclaredAsync(
         string startDirectory,
         string name,
         CancellationToken cancellationToken)
     {
         var report = await _validation.CheckAsync(startDirectory, name, cancellationToken).ConfigureAwait(false);
         var check = report.Workflows.Single();
+        var fetchedInto = check.ResolvedRemote ? report.Cache : null;
 
         if (check is not { Holds: true, Definition: { } definition, Directory: { } directory })
         {
@@ -302,17 +357,17 @@ public sealed class WorkflowExportService(
 
             throw new HarnessException(
                 HarnessExit.ConfigInvalid,
-                $"the workflow '{name}' does not hold, so it was not exported and nothing was written; '{ToolPackage.Command} {WorkflowValidationService.CommandName} {name}' says the same:{Environment.NewLine}{problems}");
+                $"the workflow '{name}' does not hold, so it was not exported and nothing was written{(fetchedInto is null ? string.Empty : $" of it - {WorkflowValidationService.CacheSaid(fetchedInto)} -")}; '{ToolPackage.Command} {WorkflowValidationService.CommandName} {name}' says the same:{Environment.NewLine}{problems}");
         }
 
-        return
+        return (
         [
-            .. Named(definition, name).Select(file => (file, (Func<string, Task>)(path => VerifiedFileCopy.CopyAsync(
+            .. Named(definition, name, fetchedInto).Select(file => (file, (Func<string, Task>)(path => VerifiedFileCopy.CopyAsync(
                 _fileSystem,
                 Path.Combine(directory, file.Replace('/', Path.DirectorySeparatorChar)),
                 path,
                 cancellationToken: cancellationToken)))),
-        ];
+        ], fetchedInto);
     }
 
     /// <summary>
@@ -359,9 +414,9 @@ public sealed class WorkflowExportService(
     /// <exception cref="HarnessException">
     /// A use names a workflow outside the workflow's folder, or a remote one (<see cref="HarnessExit.Refused"/>): the
     /// folder does not hold it, so a copy of the folder would name a workflow it has not got - said for each, a remote
-    /// one with the <c>--from</c> that vendors it.
+    /// one with the <c>--from</c> that vendors it, and the workflow cache named where the check fetched into it.
     /// </exception>
-    private static IReadOnlyList<string> Named(WorkflowDefinition definition, string name)
+    private static IReadOnlyList<string> Named(WorkflowDefinition definition, string name, string? fetchedInto = null)
     {
         var placed = WorkflowFiles.AllUnder(definition);
 
@@ -373,7 +428,7 @@ public sealed class WorkflowExportService(
 
             throw new HarnessException(
                 HarnessExit.Refused,
-                $"the workflow '{name}' uses what its folder does not hold - {string.Join("; ", said)} - and {CommandName} copies the workflow's own folder, which would then name a workflow it has not got. Nothing was written.");
+                $"the workflow '{name}' uses what its folder does not hold - {string.Join("; ", said)} - and {CommandName} copies the workflow's own folder, which would then name a workflow it has not got. {NothingWritten(fetchedInto)}");
         }
 
         return [.. placed.Files, $"{name}{HarnessLayout.WorkflowFileExtension}"];
@@ -413,7 +468,11 @@ public sealed class WorkflowExportService(
 /// <summary>Turns what export-workflow wrote into what it prints.</summary>
 public static class WorkflowExportReports
 {
-    /// <summary>What export-workflow reports: where the workflow went, and each file, or the document alone.</summary>
+    /// <summary>
+    /// What export-workflow reports: where the workflow went, and each file, or the document alone - a vendored one's line
+    /// naming the workflow cache it was fetched into, and the document naming the cache for every export but the shipped
+    /// one's.
+    /// </summary>
     /// <param name="export">What was written.</param>
     /// <param name="json">Whether to write the result as JSON instead of as lines.</param>
     public static CommandOutcome Render(WorkflowExport export, bool json)
@@ -422,10 +481,11 @@ public static class WorkflowExportReports
 
         var shipped = export.Shipped ? ", as this tool ships it," : string.Empty;
         var vendored = export.Vendored is { } from ? $", vendored from {from}," : string.Empty;
+        var cached = export is { Vendored: not null, Cache: { } directory } ? $"; it was fetched into the workflow cache '{directory}'" : string.Empty;
 
-        return CommandOutcome.Ok($"'{export.Workflow}'{shipped}{vendored} exported to '{export.Destination}': {ReportText.Counted(export.Files.Count, "file")}") with
+        return CommandOutcome.Ok($"'{export.Workflow}'{shipped}{vendored} exported to '{export.Destination}': {ReportText.Counted(export.Files.Count, "file")}{cached}") with
         {
-            Data = json ? [Document(export, export.Shipped).ToJsonString(ReportJson.Options)] : [],
+            Data = json ? [Document(export, export.Shipped, export.Cache).ToJsonString(ReportJson.Options)] : [],
             Quiet = json,
             Details = json ? null : export.Files,
             Facts = export,
@@ -434,15 +494,16 @@ public static class WorkflowExportReports
 
     /// <summary>
     /// The document export-workflow answers with where it stops before it wrote anything: its own, nothing exported, after
-    /// the code it exits with and the line it ends on, and whether the shipped workflow was asked for.
+    /// the code it exits with and the line it ends on, whether the shipped workflow was asked for, and - for any other - the
+    /// workflow cache's directory where one can be named, where a remote workflow it resolved is read from and fetched into.
     /// </summary>
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line it ends on.</param>
     /// <param name="shipped">Whether its command line asked for the shipped workflow.</param>
     public static string Stopped(int exitCode, string summary, bool shipped)
-        => ReportJson.Stopped(exitCode, summary, Document(export: null, shipped));
+        => ReportJson.Stopped(exitCode, summary, Document(export: null, shipped, shipped ? null : WorkflowCache.DefaultDirectoryIfNamed()));
 
-    private static JsonObject Document(WorkflowExport? export, bool shipped)
+    private static JsonObject Document(WorkflowExport? export, bool shipped, string? cache)
         => new()
         {
             ["workflow"] = export?.Workflow,
@@ -450,5 +511,6 @@ public static class WorkflowExportReports
             ["destination"] = export?.Destination,
             ["files"] = new JsonArray([.. (export?.Files ?? []).Select(file => (JsonNode)file!)]),
             ["vendored"] = export?.Vendored,
+            ["cache"] = cache,
         };
 }

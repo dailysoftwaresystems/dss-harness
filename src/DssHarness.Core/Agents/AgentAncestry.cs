@@ -33,6 +33,25 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
     }
 
     /// <summary>
+    /// The one rule a command tells it runs under an agent by: the mark every agent's child is given
+    /// (<see cref="AgentChildEnvironment.AgentMarker"/>), read by its presence whatever it holds - a child that cleared its
+    /// value is still an agent's - and where it is not there, the process tree (<see cref="ReadAsync"/>), which no form of
+    /// taking the mark away reaches. A tree that could not be read is said (<see cref="AgentAncestryAnswer.Unread"/>), never
+    /// read as one with no agent in it, and each reader treats it as no person's: <c>run-side-task</c> refuses itself, and
+    /// the fetch of a remote workflow reads the workflow cache alone and writes nothing - both by this one rule.
+    /// </summary>
+    /// <param name="environment">Reads this process's environment, where the mark is looked for.</param>
+    /// <param name="cancellationToken">Stops the reading of the process table.</param>
+    public async Task<AgentAncestryAnswer> UnderAnAgentAsync(Func<string, string?> environment, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+
+        return environment(AgentChildEnvironment.AgentMarker) is not null
+            ? new AgentAncestryAnswer(null, null, Marked: true)
+            : await ReadAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// The nearest ancestor of <paramref name="currentId"/> in <paramref name="table"/> that is a process of this tool's
     /// (<see cref="IsTheTool"/>), walked by each process's parent: a process whose id is its child's parent's but that
     /// started after that child is another process that inherited a freed id, not the parent, and ends the walk - ids are
@@ -214,7 +233,12 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
     }
 }
 
-/// <summary>What the process tree says of this process.</summary>
-/// <param name="Tool">The nearest ancestor that is a process of this tool's; null where none is, or the tree could not be read.</param>
-/// <param name="Unread">Why which processes started this one could not be read, as the opening of a refusal's sentence, before its "so"; null where it was read.</param>
-public sealed record AgentAncestryAnswer(SampledProcess? Tool, string? Unread);
+/// <summary>What the process tree, and the agent's mark where it was asked of, say of this process.</summary>
+/// <param name="Tool">The nearest ancestor that is a process of this tool's; null where none is, the tree could not be read, or the mark answered first.</param>
+/// <param name="Unread">Why which processes started this one could not be read, as the opening of a refusal's sentence, before its "so"; null where it was read, or the mark answered first.</param>
+/// <param name="Marked">Whether this process carries the agent's mark (<see cref="AgentAncestry.UnderAnAgentAsync"/>), the tree then not read.</param>
+public sealed record AgentAncestryAnswer(SampledProcess? Tool, string? Unread, bool Marked = false)
+{
+    /// <summary>Whether the command runs under an agent: it carries the mark, or a process of this tool's started it.</summary>
+    public bool UnderAnAgent => Marked || Tool is not null;
+}

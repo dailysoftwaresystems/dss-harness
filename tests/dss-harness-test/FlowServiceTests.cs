@@ -24,7 +24,7 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class FlowServiceTests
 {
-    private const string Workflow = "flow";
+    internal const string Workflow = "flow";
 
     /// <summary>
     /// How long a test here waits for the engine - a step started, an answer taken, a session ended. Two roles in one
@@ -35,7 +35,7 @@ public sealed class FlowServiceTests
     /// (<c>--long-running</c> only reports). 120 s: the suite's own "long running" threshold, so a test that reaches the
     /// bound was already flagged twice as slow before it failed.
     /// </summary>
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(120);
+    internal static readonly TimeSpan Bound = TimeSpan.FromSeconds(120);
 
     /// <summary>The engine's own looks, made quick: a poll and a look every 10 ms; the stop waited for as the tool waits.</summary>
     private static readonly FlowTimings Quick = new(TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30));
@@ -57,7 +57,7 @@ public sealed class FlowServiceTests
         return (repository, Service(repository.Harness, runner), runner);
     }
 
-    private static async Task<(Repository Repository, SteppedRunner Runner)> RepositoryAsync(string flow, HarnessConfig? config = null, IReadOnlyDictionary<string, string>? files = null)
+    internal static async Task<(Repository Repository, SteppedRunner Runner)> RepositoryAsync(string flow, HarnessConfig? config = null, IReadOnlyDictionary<string, string>? files = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -79,7 +79,7 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>The service over <paramref name="harness"/>, with what a test changes of it.</summary>
-    private static FlowService Service(
+    internal static FlowService Service(
         HarnessFactory harness,
         IFlowStepRunner runner,
         TimeProvider? clock = null,
@@ -147,7 +147,7 @@ public sealed class FlowServiceTests
         }
     }
 
-    private static OrchestratorLayout RunOf(Repository repository, string run = "r1")
+    internal static OrchestratorLayout RunOf(Repository repository, string run = "r1")
         => new(run, Path.Combine(repository.Path, ".orchestrators", run));
 
     /// <summary>
@@ -4902,7 +4902,7 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>A repository initialized with one workflow declared, and its harness.</summary>
-    private sealed record Repository(HarnessFactory Harness, TempDirectory Tree) : IDisposable
+    internal sealed record Repository(HarnessFactory Harness, TempDirectory Tree) : IDisposable
     {
         /// <summary>The repository's root.</summary>
         public string Path => Tree.Path;

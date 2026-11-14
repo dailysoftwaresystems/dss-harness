@@ -17,9 +17,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Fetch">
 /// Fetches a remote source as written to a commit and a cached directory; null where the resolution reads local
 /// workflows only, so a remote source is refused saying that - or left as written, where
-/// <paramref name="RemoteLeftAsWritten"/> says so. A refusal of the source itself (<see cref="HarnessExit.Refused"/>,
-/// <see cref="HarnessExit.ConfigInvalid"/>) is the use's problem; any other failure - the forge's tool missing, the
-/// network not there, a call that failed - is no problem of the definition's, and goes on with its own code.
+/// <paramref name="RemoteLeftAsWritten"/> says so. A refusal of the source itself (<see cref="RefusesTheSource"/>) is the
+/// use's problem; any other failure - the forge's tool missing, the forge not reached with nothing standing in, an answer
+/// of the forge's that does not read, the workflow cache that could not be worked on - is no problem of the definition's,
+/// and goes on with its own code.
 /// </param>
 /// <param name="ReadCached">
 /// Reads a file of a remote workflow's cache entry by its path in the remote repository, keyed by the name of the
@@ -43,7 +44,24 @@ public sealed record WorkflowResolution(
     Func<string, Task<WorkflowRemoteResolution>>? Fetch = null,
     Func<string, string, string?>? ReadCached = null,
     StringComparison PathComparison = StringComparison.Ordinal,
-    bool RemoteLeftAsWritten = false);
+    bool RemoteLeftAsWritten = false)
+{
+    /// <summary>
+    /// Whether a fetch's failure is a refusal of the source itself, said as the use's problem: a refusal
+    /// (<see cref="HarnessExit.Refused"/>) - not allowed, a host or credential not named, a ref the pin refuses or that is
+    /// not the repository's own, a file not in the directory, a forge that answered and refused - or a workflow file that
+    /// is no text (<see cref="HarnessExit.ConfigInvalid"/>). Every other code is a fetch that could not run, which the
+    /// fetcher raises with a code of its own (<see cref="WorkflowRemoteFetcher.ResolveAsync"/>): the one line between the
+    /// two, which the resolution and every command that resolves a remote use read.
+    /// </summary>
+    /// <param name="failed">What the fetch raised.</param>
+    public static bool RefusesTheSource(HarnessException failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+
+        return failed.ExitCode is HarnessExit.Refused or HarnessExit.ConfigInvalid;
+    }
+}
 
 /// <summary>
 /// The one owner of what a step that says <c>use:</c> is: it resolves every such step of a parsed definition into the
@@ -358,10 +376,11 @@ public static class WorkflowResolver
         {
             resolution = await walk.Reads.Fetch(step.UseSource!).ConfigureAwait(false);
         }
-        catch (HarnessException refused) when (refused.ExitCode is HarnessExit.Refused or HarnessExit.ConfigInvalid)
+        catch (HarnessException refused) when (WorkflowResolution.RefusesTheSource(refused))
         {
-            // Only a refusal of the source itself is the definition's problem; a fetch that could not run - the forge's
-            // tool missing, the network not there, a call that failed - goes on with its own code.
+            // Only a refusal of the source itself is the definition's problem; a fetch that could not run - gh missing
+            // (14), the forge not reached with nothing standing in (21, or 20 where gh said no connection was made), an
+            // answer that does not read (20), the workflow cache that could not be worked on (21) - goes on with its own code.
             walk.Problems.Add($"step '{where}' uses '{step.UseSource}', which could not be resolved: {refused.Message}");
             return null;
         }

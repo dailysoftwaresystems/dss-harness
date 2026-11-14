@@ -250,6 +250,16 @@ public static class ServiceRegistration
                 provider.GetRequiredService<IHostPlatform>(),
                 provider.GetRequiredService<DssHarness.Core.Secrets.AgentKeyStore>())));
 
+        // The one rule a command tells it runs under an agent by - the agent's mark, or a process of this tool's above it
+        // in the process tree - which run-side-task refuses itself by and the fetch of a remote workflow reads the cache
+        // alone by.
+        services.AddSingleton(provider => new AgentAncestry(
+            provider.GetRequiredService<IProcessTable>(),
+            provider.GetRequiredService<IProcessIdentity>(),
+            provider.GetRequiredService<IOwnProgram>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<IFileSystem>()));
+
         // A side-task: an agent outside every workflow, a conversation between a person and one agent over the main tree,
         // through the same runner every step is worked by. Its chat is the person's, on this machine, so no host serves
         // its verbs (HostAgentProtocol.NotForwardable).
@@ -266,12 +276,7 @@ public static class ServiceRegistration
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHarnessOutput>(),
             provider.GetRequiredService<Git.IGitClient>(),
-            new AgentAncestry(
-                provider.GetRequiredService<IProcessTable>(),
-                provider.GetRequiredService<IProcessIdentity>(),
-                provider.GetRequiredService<IOwnProgram>(),
-                provider.GetRequiredService<IHostPlatform>(),
-                provider.GetRequiredService<IFileSystem>()),
+            provider.GetRequiredService<AgentAncestry>(),
             provider.GetRequiredService<Agents.Isolation.IAgentIsolation>(),
             provider.GetRequiredService<Codebase.ICodebaseGraphService>(),
             provider.GetRequiredService<TimeProvider>()));
@@ -325,6 +330,7 @@ public static class ServiceRegistration
         services.AddSingleton(provider => new WorkflowRemoteFetcher(
             provider.GetRequiredService<GhProcess>(),
             provider.GetRequiredService<WorkflowCache>(),
+            provider.GetRequiredService<AgentAncestry>(),
             provider.GetRequiredService<IHarnessOutput>(),
             provider.GetRequiredService<TimeProvider>()));
 
