@@ -300,7 +300,10 @@ public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
     /// <inheritdoc/>
     protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken)
-        => builds.RunAsync(new BuildLegsRequest { Directory = tree, LegNames = LegsOf(run.Step), Watch = watch, Isolation = isolation }, RunId.New(), cancellationToken);
+        => builds.RunAsync(
+            new BuildLegsRequest { Directory = tree, LegNames = LegsOf(run.Step), KeepGoing = run.Step.KeepGoing == true, Watch = watch, Isolation = isolation },
+            RunId.New(),
+            cancellationToken);
 }
 
 /// <summary>
@@ -332,6 +335,7 @@ public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPla
                 Excludes = run.Step.Exclude,
                 Labels = run.Step.Labels,
                 SkipBuild = run.Step.SkipBuild == true,
+                KeepGoing = run.Step.KeepGoing == true,
                 Watch = watch,
                 Isolation = isolation,
             },
@@ -372,6 +376,7 @@ public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlat
                 Runner = runner,
                 Inputs = run.Step.Inputs,
                 InPlace = context.Config.WritingRunners(runner).Count > 0,
+                KeepGoing = run.Step.KeepGoing == true,
                 Watch = watch,
                 Isolation = isolation,
             },

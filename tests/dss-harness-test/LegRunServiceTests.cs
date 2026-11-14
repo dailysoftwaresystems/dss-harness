@@ -3853,6 +3853,75 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A run asked to keep going past failing units hands --keep-going to the host that builds a leg of it, with the rest of
+    /// its command line, and has the work of each leg it builds here keep going; asked nothing, it hands nothing on.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ARunAskedToKeepGoing_HandsItToEachLegItBuilds_HereAndOnAHost(bool keepGoing)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        HostCommand? sent = null;
+        bool? keptHere = null;
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly, KeepGoing = keepGoing },
+            hosts: hosts,
+            work: work =>
+            {
+                keptHere = work.KeepGoing;
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(keepGoing, keptHere);
+
+        var arguments = JsonSerializer.Deserialize<HostAgentRequest>(sent!.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.Arguments.Select(argument => argument.Text).ToList();
+
+        Assert.Equal(keepGoing ? 1 : 0, arguments.Count(argument => argument == KeepGoing.Option));
+    }
+
+    /// <summary>
+    /// A run asked to keep going that builds none of the legs it selects is refused before any host is measured, as a run
+    /// asked to set up that nothing names a set-up for is: the option would change nothing while the command line says it did.
+    /// </summary>
+    [Fact]
+    public async Task ARunAskedToKeepGoing_ThatBuildsNoLeg_IsRefusedBeforeAnyHostIsMeasured()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var inspector = SshAndLocal(harness);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => OutcomeAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy, KeepGoing = true },
+            work: _ => throw new InvalidOperationException("a leg ran for a run refused before anything ran")));
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.Equal(
+            "--keep-going goes on past the units a leg's build fails, and this run builds none of the legs it selects. Leave --keep-going out.",
+            refused.Message);
+        Assert.Empty(inspector.Inspected);
+    }
+
+    /// <summary>
     /// A leg brings a set-up up with the values what names it gives its inputs, over their defaults, and brings it down
     /// with the same; its line and document say them.
     /// </summary>

@@ -95,6 +95,9 @@ public sealed record LedgerLine(
     /// <summary>What the leg's test invocation kept as failure evidence, as <see cref="LegEntry.KeptOnFailure"/> says.</summary>
     public KeptOnFailure? KeptOnFailure { get; init; }
 
+    /// <summary>The units the leg's build failed to build, as <see cref="LegEntry.FailedUnits"/> says.</summary>
+    public Build.FailedUnits? FailedUnits { get; init; }
+
     /// <summary>Each mutation arm the leg was asked about, as <see cref="LegEntry.Arms"/> says.</summary>
     public IReadOnlyList<ArmEntry> Arms { get; init; } = [];
 
@@ -392,6 +395,7 @@ public sealed class LedgerReport
                     Space = entry.Space,
                     KeptOutputs = entry.KeptOutputs,
                     KeptOnFailure = entry.KeptOnFailure,
+                    FailedUnits = entry.FailedUnits,
                     Arms = entry.Arms,
                     Tree = entry.Tree,
                     PendingSweep = entry.PendingSweep,
@@ -462,15 +466,37 @@ public sealed class LedgerReport
             line.Leg,
             Verdicts.Display(line.Verdict),
             FormatDuration(line.Duration),
-            Marked(line.Detail, line.Tree, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.SetUps, line.Admission, line.TestCountNote),
+            Marked(line.Detail, line.Tree, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.SetUps, line.Admission, line.TestCountNote, line.FailedUnits),
             leg,
             verdict,
             duration)));
 
         rows.AddRange(RenderArms());
         rows.AddRange(RenderTimings());
+        rows.AddRange(RenderFailedUnits());
         rows.AddRange(RenderTails());
         rows.AddRange(RenderKeptOnFailure());
+
+        return rows;
+    }
+
+    /// <summary>
+    /// Each unit each leg's build failed to build, as a block below the table: the count under the leg, then each unit by
+    /// its source - or by its step, where the build names no source - in the order the build said them. Below rather than
+    /// in the table, as the timings are: a build can fail hundreds of units, and the leg's line says how many.
+    /// </summary>
+    private IReadOnlyList<string> RenderFailedUnits()
+    {
+        var rows = new List<string>();
+
+        foreach (var line in Lines.Where(line => line.FailedUnits is { Units.Count: > 0 }))
+        {
+            var units = line.FailedUnits!.Units;
+
+            rows.Add(string.Empty);
+            rows.Add($"{line.Leg}: {ReportText.Counted(units.Count, "unit")} failed to build");
+            rows.AddRange(units.Select(unit => "  " + unit.Named));
+        }
 
         return rows;
     }
@@ -851,6 +877,22 @@ public sealed class LedgerReport
                     keptEvidence.LeftAtStop,
                 } : null,
 
+                // Only where the leg's build was failed by its own tool: each unit it failed to build, by its source where the
+                // build says one and its step always, how many - or why which is not known - and how far a tool that stops at
+                // its first failures got, so a unit it never reached is never read as one that built.
+                FailedUnits = line.FailedUnits is { } failed ? new
+                {
+                    failed.Tool,
+                    Count = failed.Unread is null ? failed.Units.Count : (int?)null,
+                    Units = failed.Units.Select(unit => new { Source = unit.Source is { } source ? show(source) : null, Step = show(unit.Step) }),
+                    Unread = failed.Unread is { } unread ? show(unread) : null,
+                    failed.KeptGoing,
+                    failed.StopsAtFirst,
+                    failed.StepsRun,
+                    failed.StepsPlanned,
+                    Said = show(failed.Describe()),
+                } : null,
+
                 // Where the leg worked: its path alone for a leg in its tree, and for a copy the tree it is a copy of and the
                 // reading it holds, where that is known - this run's, or what a run on what is staged found there.
                 Tree = line.Tree is { } tree
@@ -1094,9 +1136,9 @@ public sealed class LedgerReport
             : entry.Detail;
 
     /// <summary>
-    /// <paramref name="detail"/> with the compilers the leg built with, the developer environment it
-    /// started in, how its machine admitted it, a test count that stands apart and the timing mark, for a
-    /// line that shows one leg.
+    /// <paramref name="detail"/> with what its build said of the units it failed to build, the compilers
+    /// the leg built with, the developer environment it started in, how its machine admitted it, a test
+    /// count that stands apart and the timing mark, for a line that shows one leg.
     /// </summary>
     /// <param name="detail">What the leg said.</param>
     /// <param name="tree">The tree it worked in, whose reading it says where it worked in a copy.</param>
@@ -1106,6 +1148,7 @@ public sealed class LedgerReport
     /// <param name="setUps">What it did with each set-up its work named.</param>
     /// <param name="admission">How its machine took it, where it is heavy and the machine declares admission.</param>
     /// <param name="testCountNote">Why its test count stands apart from its siblings', if it does.</param>
+    /// <param name="failedUnits">The units its build failed to build, where its build's own tool failed it.</param>
     /// <remarks>
     /// Composed here, from fields that travel beside the detail rather than inside it, so a ledger a
     /// host reported and this machine reports again names each once.
@@ -1118,13 +1161,20 @@ public sealed class LedgerReport
         Hosts.DeveloperEnvironmentFact? developerEnvironment,
         IReadOnlyList<SetUps.SetUpFact> setUps,
         AdmissionFact? admission,
-        string? testCountNote)
+        string? testCountNote,
+        Build.FailedUnits? failedUnits = null)
     {
         var parts = new List<string>();
 
         if (detail.Length > 0)
         {
             parts.Add(detail);
+        }
+
+        // Beside the failure it explains: how many units failed, and how far a tool that stops at its first failures got.
+        if (failedUnits is not null)
+        {
+            parts.Add(failedUnits.Describe());
         }
 
         // Which tree a leg on a copy tested, as its machine was told it: a run's legs here and on hosts can be read for

@@ -1967,6 +1967,8 @@ public static class HelpTopics
         builder.AppendLine("check that did not run has established nothing. A build directory that is not");
         builder.AppendLine("ninja's is skipped and says so.");
         builder.AppendLine();
+        AppendFailedUnits(builder);
+        builder.AppendLine();
         builder.AppendLine("A leg no host can run is a warning that names it and says why; the other legs");
         builder.AppendLine("still go ahead. The check fails when a leg named with --legs cannot run, or when");
         builder.AppendLine("no selected leg can - and, with exit 70, when whether a leg can run was never");
@@ -2157,6 +2159,56 @@ public static class HelpTopics
         builder.AppendLine("       host-exec otherwise returns the exit code of the command it ran");
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// What a build that failed says of the units it failed to build, and how <see cref="KeepGoing.Option"/> has each build
+    /// tool go on past them: every way, from the adapters' own (<see cref="IBuildAdapter.KeepGoingWays"/>), so help names no
+    /// way the code does not go by.
+    /// </summary>
+    private static void AppendFailedUnits(StringBuilder builder)
+    {
+        builder.AppendLine("Units a build failed");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A leg whose build its own tool failed names each unit it failed to build: by its source, as ninja's manifest "
+            + "names the source a failed step compiles - a step that links or runs a command by its output - or by the "
+            + "target make says failed, which is the object it was building. Its line says how many, they are listed "
+            + "beneath the table, and --json carries them as failedUnits: each unit's source and step, the count, the tool, "
+            + "whether the build kept going, and how far it got. Where which units failed is not read - MSBuild's, dotnet's "
+            + "and dart's output is not, nor a log that could not be read back - the line says so and why, never that none "
+            + "failed. ninja and make stop at their first failures, so the line of a build of theirs not kept going says that "
+            + "every unit it never reached was not built and says nothing of the code, and - where ninja's own [run/planned] "
+            + "status says it - how many of the steps it had to run it ran: 'ran 22 of the 1093 steps it had to run'.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{KeepGoing.Option}, on build, test and run - and keepGoing on a workflow's build, test and run steps - has each "
+            + "leg's build go on past its failing units, so its line names every one. Each build tool goes on its own way, "
+            + "by the generator the leg's toolchain names or its project's type:");
+        builder.AppendLine();
+
+        foreach (var way in BuildAdapters.All.SelectMany(adapter => adapter.KeepGoingWays))
+        {
+            var how = way.How switch
+            {
+                KeepGoingHow.WhenTold => $"given {string.Join(' ', way.Arguments)}",
+                KeepGoingHow.ByItself => "given nothing",
+                _ => $"refused ({HarnessExit.Refused})",
+            };
+
+            builder.AppendLine($"  {way.Builds}");
+            AppendWrapped(builder, $"{how}: {way.Said}.", lead: "    ");
+        }
+
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"A toolchain that names no generator - CMake would pick its build tool as it configures - and a generator no way "
+            + $"is known for, Xcode's among them, refuse {KeepGoing.Option} for each leg they build before anything runs "
+            + $"({HarnessExit.Refused}), naming every one; and a run that builds none of its legs refuses it too ({HarnessExit.UsageError}). "
+            + "check-mutations takes none: an arm's build is judged by whether, and where, it fails.");
     }
 
     private static string RenderSpace()

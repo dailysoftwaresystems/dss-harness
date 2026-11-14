@@ -457,6 +457,46 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
+    /// keepGoing is read on each step that builds its legs - a build, a test, a run - as their commands read --keep-going,
+    /// and refused on a sweep, whose arms are judged by where their builds fail, never kept going past it.
+    /// </summary>
+    [Fact]
+    public void KeepGoing_IsReadOnEveryStepThatBuildsItsLegs_AndRefusedOnASweep()
+    {
+        var definition = WorkflowFileParser.Parse(
+            "workflows/default/default.yml",
+            """
+            name: default
+            steps:
+              - name: compile
+                type: build
+                keepGoing: true
+              - name: suite
+                type: test
+                keepGoing: false
+              - name: bench
+                type: run
+                runner: corpus
+                keepGoing: true
+              - name: plain
+                type: build
+            """);
+
+        Assert.Equal([true, false, true, null], definition.Steps.Select(step => step.KeepGoing));
+
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: sweep
+                type: check-mutations
+                keepGoing: true
+            """);
+
+        Assert.Equal(["line 5, column 16: 'keepGoing' is not a key of a check-mutations step; it is one of a build step."], problems);
+    }
+
+    /// <summary>
     /// A time limit is a key of every step that runs, read on each - a reason step, a leg step, a machine step and one that
     /// takes no key of its own alike - and refused on a group, which runs nothing of its own, and on a pause step, which
     /// only asks: each saying why, never that another type takes it.

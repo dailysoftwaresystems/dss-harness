@@ -76,6 +76,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
                 LocalTrees = LegTrees.Asked(request.LocalCopy, request.InPlace),
                 Watch = request.Watch,
                 Isolation = request.Isolation,
+                KeepGoing = request.KeepGoing,
             },
             (work, token) => RunLegAsync(_builds, _tests, _toolchains, work, filter, request.Excludes, request.Labels, request.SkipBuild, token),
             cancellationToken).ConfigureAwait(false);
@@ -148,7 +149,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
         if (!skipBuild)
         {
             var build = await builds
-                .BuildAsync(config, leg.BuildRequestFor(config, work.RunDirectory), cancellationToken)
+                .BuildAsync(config, work.BuildRequest(), cancellationToken)
                 .ConfigureAwait(false);
 
             compilers = build.Compilers;
@@ -156,18 +157,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
 
             if (build.Verdict.Verdict != LegVerdict.Passed)
             {
-                return new LegEntry
-                {
-                    Leg = leg.Name,
-                    Verdict = build.Verdict.Verdict,
-                    Detail = build.Verdict.Detail,
-                    Duration = Stopwatch.GetElapsedTime(started),
-                    Emulated = leg.Emulated,
-                    TimingNotes = built,
-                    Compilers = compilers,
-                    LogTail = build.Tail,
-                    TailPhase = build.TailPhase,
-                };
+                return build.Line(leg.Name, leg.Emulated, Stopwatch.GetElapsedTime(started));
             }
         }
         else

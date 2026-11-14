@@ -40,9 +40,92 @@ internal static class Ninja
     /// <summary>What samurai says under its name of a step that failed, before the command the step ran.</summary>
     private static readonly Regex JobFailed = new(@"\Ajob failed with status -?[0-9]+: ", RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// What ninja, and samurai, begin a step's line with as its status says it where <c>NINJA_STATUS</c> sets none of its
+    /// own: <c>[run/planned] </c> - ninja's <c>[%f/%t] </c> written as each step ends, where its output is no terminal, and
+    /// samurai's <c>[%s/%t] </c> as each starts.
+    /// </summary>
+    private static readonly Regex Status = new(@"\A\[(?<run>[0-9]+)/(?<planned>[0-9]+)\] ", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// What ninja, and samurai, are given to go on past every step that fails, until nothing more can be built: <c>-k 0</c>,
+    /// a limit of failures where 0 is none.
+    /// </summary>
+    public static IReadOnlyList<string> KeepGoingArguments { get; } = ["-k", "0"];
+
     /// <summary>Whether a CMake generator, as configuration or CMake's cache names it, is one of ninja's: Ninja, or Ninja Multi-Config.</summary>
     /// <param name="generator">The generator, or <see langword="null"/> where nothing names one.</param>
     public static bool Generates(string? generator) => generator?.StartsWith("Ninja", StringComparison.OrdinalIgnoreCase) == true;
+
+    /// <summary>The program CMake ran for ninja, as a line names it - <c>ninja</c>, or <c>samu</c> - or ninja where its cache names none.</summary>
+    /// <param name="program">The program as CMake's cache records it, or <see langword="null"/>.</param>
+    private static string ToolOf(string? program) => Path.GetFileNameWithoutExtension(program) is { Length: > 0 } named ? named : OwnName;
+
+    /// <summary>
+    /// How far a build got, as the status ninja last wrote on a step's line says it: how many of its steps it ran, and how
+    /// many it planned; <see langword="null"/> where no line carries ninja's own status - one <c>NINJA_STATUS</c> spells
+    /// otherwise among them.
+    /// </summary>
+    /// <param name="lines">The build's output, a line at a time, as its log keeps it.</param>
+    /// <remarks>
+    /// The last status read, never the largest count: a build whose dynamic dependencies are discovered as it goes plans more
+    /// steps once it has run some, and its last status says the plan it ended with.
+    /// </remarks>
+    public static (int Run, int Planned)? Progress(IEnumerable<string> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        (int Run, int Planned)? last = null;
+
+        foreach (var raw in lines)
+        {
+            if (Status.Match(Colour.Replace(raw, string.Empty)) is { Success: true } status
+                && int.TryParse(status.Groups["run"].ValueSpan, System.Globalization.CultureInfo.InvariantCulture, out var run)
+                && int.TryParse(status.Groups["planned"].ValueSpan, System.Globalization.CultureInfo.InvariantCulture, out var planned))
+            {
+                last = (run, planned);
+            }
+        }
+
+        return last;
+    }
+
+    /// <summary>
+    /// The units a build ninja failed says it failed to build: each step its lines say failed (<see cref="FailedOutputs"/>),
+    /// a compile named by the source its build line compiles as the manifest says it, and every other step by its output;
+    /// with how far the build got (<see cref="Progress"/>), and whether it was told to go on.
+    /// </summary>
+    /// <param name="failed">The build phase ninja failed.</param>
+    /// <remarks>
+    /// Read from the build directory's own manifest, never from what a compile's object is called: CMake names the object
+    /// of a source outside its directory by a hash of where it is, and only the build line says which source it compiles.
+    /// A log that cannot be read back says so, never that no unit failed.
+    /// </remarks>
+    public static FailedUnits FailedUnitsOf(FailedBuild failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+
+        var program = failed.Configured?.MakeProgram;
+        var tool = ToolOf(program);
+        var keptGoing = failed.Request.KeepGoing;
+
+        try
+        {
+            var manifest = NinjaManifest.Read(failed.FileSystem, failed.BuildDirectory);
+            var units = FailedOutputs(failed.Phase.Output.Lines(), program, manifest)
+                .Select(output => manifest.EdgeFor(output) is { Source: { } source } edge && CMakeNinjaRule.Compiles(edge)
+                    ? new FailedUnit(FailedUnits.SourceIn(source, failed.BuildDirectory, failed.Request.TreeRoot), output)
+                    : new FailedUnit(null, output))
+                .ToList();
+            var progress = Progress(failed.Phase.Output.Lines());
+
+            return new(tool, units, null, keptGoing, StopsAtFirst: true, progress?.Run, progress?.Planned);
+        }
+        catch (PhaseOutputUnreadException ex)
+        {
+            return new(tool, [], ex.Message, keptGoing, StopsAtFirst: true);
+        }
+    }
 
     /// <summary>
     /// The verdict of <paramref name="phase"/>, a build ninja ran that did not pass, where ninja did not end it for a
@@ -75,7 +158,7 @@ internal static class Ninja
 
         var file = Path.GetFileName(program);
         string[] names = string.IsNullOrEmpty(file) ? [OwnName] : [OwnName, file];
-        var tool = Path.GetFileNameWithoutExtension(program) is { Length: > 0 } named ? named : OwnName;
+        var tool = ToolOf(program);
         var interrupted = false;
 
         try

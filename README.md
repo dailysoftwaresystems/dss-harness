@@ -106,9 +106,9 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `install-missing-tools [--legs a,b] [--dry-run]` | Install or update what each configured leg's host is missing; `--dry-run` names each command and runs none |
 | `update-tool [--wait] [--tool-path <directory>]` | Update this machine's installed DssHarness to the newest release, only while no other `dssharness` process runs here: refused naming each (13), or waited for with `--wait`; refused while another update changes the same directory (13, with `--wait` or not); on Windows run it from beside the installed tool, as above (`help legs`) |
 | `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own; `--dry-run` lists what it would write and delete and exits as the sync would; `--pull <path>` instead brings a file back from it, or every file below a directory named with a `/` at its end |
-| `build [--legs a,b] [--time]` | Build every selected leg, in its own variant-keyed build directory |
-| `test [--legs a,b] [--time] [--set-up]` | Build and test every selected leg, with a witness for each verdict; `--set-up` brings up the set-ups its test invocation names around each leg's work, on the machine that runs it, and down after (`help setups`) |
-| `run <runner> [--legs a,b] [--time] [--input name=value] [--set-up]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run; `--set-up` brings up the set-ups the runner and its run checks' runners name around each leg's work, and down after (`help setups`). A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
+| `build [--legs a,b] [--time] [--keep-going]` | Build every selected leg, in its own variant-keyed build directory; `--keep-going` has each build go on past the units that fail to build, so a red leg names every one (`help legs`) |
+| `test [--legs a,b] [--time] [--set-up] [--keep-going]` | Build and test every selected leg, with a witness for each verdict; `--set-up` brings up the set-ups its test invocation names around each leg's work, on the machine that runs it, and down after (`help setups`) |
+| `run <runner> [--legs a,b] [--time] [--input name=value] [--set-up] [--keep-going]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run; `--set-up` brings up the set-ups the runner and its run checks' runners name around each leg's work, and down after (`help setups`). A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
 | `check-mutations [--legs a,b] [--arms a,b] [--self-test] [--list] [--pending]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain; `--list` says, without sweeping, each arm's last verdict on each leg and whether anything it was judged on has moved - of what a test binary reads at run time, only the files `mutations.runReads` names for its runner; `--pending` sweeps only the arms with no passed that still holds, and with nothing pending passes, sweeping nothing (`help mutations`) |
 | `stop-run <run> [--now] [--json]` | Stop a `build`, `test`, `run` or `check-mutations` run from another terminal, typed in the tree that ran it: asked of its dispatcher, which stops every leg where it stands as an interrupt does and writes its ledger, and waited for 60 s - said stopped only where its dispatcher took the stop; `--now` ends the dispatcher's process where it stands, with all it started - only on this machine, and only the process its owner file names by its start. On Windows a dispatcher that ends in any way, a kill among them, ends its local legs with it |
 | `query-codebase-graph <run> (--find <query> \| --node <symbol> \| --related <symbol> --relation <relation> [--depth <n>] \| --outline [<path or symbol>] \| --body <symbol>...) [--agent <agent>] [--json]` | Read a run's codebase graph by hand: one of the `graph` tool's read operations on the base or an agent's view, printing the answer an agent would be given - each node with its handle and `path:start-end #hash` - or with `--json` the same in one document. It reads only: no sync, no lock, nothing written; a view not made yet is said and the base answered; 13 where the run has no graph |
@@ -160,6 +160,18 @@ engine's 90 s and 30 s to write the end - which `resume-orchestrator` goes on fr
 the leg and phase that reported each one. `host-exec` needs no `--time` of its own: everything after
 `--` is the command run on the host, so `host-exec --ssh vps -- test --legs a,b --time` asks for it
 there.
+
+A leg whose build failed names each unit it failed to build - by its source, as ninja's manifest names
+the source a failed step compiles, or by the target make says failed - counts them on its line, lists
+them under the ledger, and carries them in `--json` as `failedUnits`; where which units failed is not
+read, as of MSBuild, dotnet and dart, the line says so. ninja and make stop at their first failures,
+so a build of theirs says that every unit it never reached was not built, and how many of the steps it
+had to run it ran where ninja's status says it. `--keep-going`, on `build`, `test` and `run` - and
+`keepGoing` on a workflow's `build`, `test` and `run` steps - has each leg's build go on past its
+failing units: ninja is given `-k 0` and make `-k`, MSBuild, dotnet and dart go on by themselves and
+are given nothing, and a leg whose toolchain names no generator, or one no way is known for - NMake's
+and Xcode's - is refused (13) before anything runs, as is the option on a run that builds none of its
+legs (10). `dssharness help legs` lists each generator's way.
 
 ## Running legs at once
 

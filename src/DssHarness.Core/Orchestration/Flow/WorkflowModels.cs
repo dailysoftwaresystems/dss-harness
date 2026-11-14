@@ -1007,6 +1007,12 @@ public sealed record WorkflowStep
     /// <summary>Whether a test step skips the build and tests what is there.</summary>
     public bool? SkipBuild { get; init; } = null;
 
+    /// <summary>
+    /// Whether a <c>build</c>, <c>test</c> or <c>run</c> step's builds of its legs go on past the units that fail to build,
+    /// as the command's <c>--keep-going</c> has them.
+    /// </summary>
+    public bool? KeepGoing { get; init; } = null;
+
     /// <summary>The predefined runner a <c>run</c> step runs.</summary>
     public string? Runner { get; init; } = null;
 

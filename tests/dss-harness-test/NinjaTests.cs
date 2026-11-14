@@ -1,4 +1,5 @@
 using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
@@ -135,6 +136,58 @@ public sealed class NinjaTests
                 ],
                 "/usr/bin/samu",
                 manifest));
+    }
+
+    /// <summary>
+    /// How far a build got is the status ninja last wrote on a step's line - its own <c>[run/planned]</c>, in colour or
+    /// not - never the largest, for a plan that grew as the build went says the plan it ended with; and nothing where no
+    /// line carries ninja's own status, as where <c>NINJA_STATUS</c> spells another.
+    /// </summary>
+    [Theory]
+    [InlineData("[1/7] Building C object a.o\nFAILED: a.o \n[2/7] Building C object b.o\nninja: build stopped: subcommand failed.\n", 2, 7)]
+    [InlineData("\u001b[32m[22/1093]\u001b[0m Building C object a.o\r\nFAILED: a.o \r\n", 22, 1093)]
+    [InlineData("[5/5] Linking C executable app\n[6/9] Building C object gen.o\n", 6, 9)]
+    [InlineData("FAILED: a.o \nninja: build stopped: subcommand failed.\n", null, null)]
+    [InlineData("(1 of 7) Building C object a.o\n", null, null)]
+    public void Progress_IsTheLastStatusNinjaWrote(string output, int? run, int? planned)
+        => Assert.Equal(run is null ? null : (run.Value, planned!.Value), Ninja.Progress(output.Split('\n')));
+
+    /// <summary>
+    /// The units a build ninja failed says it failed are its failed steps, a compile named by the source its build line
+    /// compiles - relative to the tree, however CMake named the object - and a step that links named by its output; with
+    /// how far the build got, and whether it was told to go on. A log that cannot be read back says so, never that no unit
+    /// failed.
+    /// </summary>
+    [Fact]
+    public void FailedUnits_AreEachFailedStepBySourceOrOutput_ThroughTheManifest()
+    {
+        using var temp = new TempDirectory();
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var build = temp.Combine("build");
+        var source = temp.Combine("src", "a.c").Replace('\\', '/').Replace(":", "$:", StringComparison.Ordinal);
+
+        temp.WriteFile(
+            Path.Combine("build", NinjaDependencyCheck.ManifestFileName),
+            "rule C_COMPILER__app_unscanned_Debug\n  command = cc -c $in -o $out\n"
+            + "rule C_EXECUTABLE_LINKER__app_Debug\n  command = cc $in -o $out\n"
+            + $"build CMakeFiles/app.dir/3d570c71/a.c.o: C_COMPILER__app_unscanned_Debug {source}\n"
+            + "build app: C_EXECUTABLE_LINKER__app_Debug CMakeFiles/app.dir/3d570c71/a.c.o\n");
+
+        var failed = new FailedBuild(
+            Phase(1, stalled: false, "[1/2] Building C object CMakeFiles/app.dir/3d570c71/a.c.o\nFAILED: CMakeFiles/app.dir/3d570c71/a.c.o \n[2/2] Linking C executable app\nFAILED: app \n"),
+            new BuildRequest("a", temp.Path, new ProjectConfig { Name = "app", Type = "cmake" }, new VariantKey("x86_64", "cc", "debug", null), "linux", 1, temp.Combine("runs")) { KeepGoing = true },
+            build,
+            new BuildDirectoryRecord(null, null, null, null, MakeProgram: "/usr/bin/ninja", Generator: "Ninja"),
+            fileSystem);
+
+        var units = Ninja.FailedUnitsOf(failed);
+
+        Assert.Equal([new FailedUnit("src/a.c", "CMakeFiles/app.dir/3d570c71/a.c.o"), new FailedUnit(null, "app")], units.Units);
+        Assert.Equal(("ninja", (string?)null, true, true, (int?)2, (int?)2), (units.Tool, units.Unread, units.KeptGoing, units.StopsAtFirst, units.StepsRun, units.StepsPlanned));
+
+        var unread = Ninja.FailedUnitsOf(failed with { Phase = failed.Phase with { Output = new PhaseOutputTests.Unread() }, Request = failed.Request with { KeepGoing = false } });
+
+        Assert.Equal(("ninja", 0, PhaseOutputTests.Unread.Said, false), (unread.Tool, unread.Units.Count, unread.Unread, unread.KeptGoing));
     }
 
     /// <summary>

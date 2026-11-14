@@ -65,6 +65,7 @@ internal static class RunCommand
         command.Options.Add(ManualStepOption);
         command.Options.Add(LocalCopyOption);
         command.Options.Add(InPlaceOption);
+        command.Options.Add(DispatchOptions.KeepGoing);
         command.Options.Add(DispatchOptions.Here);
         command.Options.Add(DispatchOptions.SetUp);
         GlobalOptions.AddTo(command);
@@ -97,6 +98,7 @@ internal static class RunCommand
                         SetUp = arguments.GetValue(DispatchOptions.SetUp),
                         LocalCopy = arguments.GetValue(DispatchOptions.LocalCopy),
                         InPlace = arguments.GetValue(DispatchOptions.InPlace),
+                        KeepGoing = arguments.GetValue(DispatchOptions.KeepGoing),
                         Inputs = inputs,
                         ManualSteps = manualSteps,
                     },

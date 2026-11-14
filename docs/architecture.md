@@ -8027,6 +8027,44 @@ own directory and the logs in it; `--json` carries the run's directory as `runDi
 top and on such a leg, and the leg's own as `records` and `logs` (see "Where a run's records
 live").
 
+**A build that failed names the units it failed to build.** A consumer's MinGW build under ninja
+stopped with 22 of its 1093 steps run and three units failed, and every unit it never reached read
+as one that built. So a leg whose build its own tool failed - not stopped, and ended by no bound of
+the harness's - carries what its adapter read of the units (`IBuildAdapter.FailedUnitsOf`, a
+`FailedUnits`). Under ninja each is a step ninja said failed (`Ninja.FailedOutputs`), named by the
+source its build line in the manifest compiles where its rule is a CMake compile
+(`CMakeNinjaRule.Compiles`) - relative to the tree where it is in it - and by its output where it
+links or runs a command. Under make each is a target the deepest make saying `*** [target] Error`
+said failed (`Make.FailedTargets`): the make that ran the target's own recipe, for CMake's makefiles
+start one make for the build and another for each target, and each above it failed only because one
+it started did; make names no source, so the unit is named by its target, the object. The leg's
+line says how many, the units are listed beneath the table, and `--json` carries them on the leg as
+`failedUnits`: `tool`, `count`, `units` - each one's `source` and `step` - `unread`, `keptGoing`,
+`stopsAtFirst`, `stepsRun`, `stepsPlanned` and `said`, the line's own words. Where which units
+failed is not read - MSBuild's, dotnet's and dart's output is not, nor a log that could not be read
+back - `count` is left out and `unread` says why, never that none failed. ninja and make stop at
+their first failures, so a build of theirs not told to go on says that every unit it never reached
+was not built and says nothing of the code, and, where ninja's last `[run/planned]` status said it
+(`Ninja.Progress`), how many of the steps it had to run it ran.
+
+`--keep-going` (`KeepGoing.Option`), on `build`, `test` and `run`, and `keepGoing` on a workflow's
+`build`, `test` and `run` steps, has each leg's build go on past its failing units. It rides the
+leg's build request (`BuildRequest.KeepGoing`, set in one place, `LegWork.BuildRequest`), and a leg
+a host runs is given the option on its command. How the tool goes on is its adapter's to say
+(`IBuildAdapter.KeepGoingFor`, a `KeepGoingWay`): CMake's by the generator the leg's toolchain
+names - ninja, and samurai where CMake runs it for ninja, given `-k 0` and make `-k`, after `--` on
+`cmake --build`; MSBuild under a Visual Studio generator given nothing, for it builds every project
+that does not need one that failed and cl compiles every source of a project it builds; NMake
+refused, for its `/K` does not reach the nmake CMake's makefiles start for each target. dotnet and
+dart go on by themselves and are given nothing. Each was measured over two sources that fail:
+ninja 1.12, mingw32-make 4.4, NMake 14.44, MSBuild 17.14 under Visual Studio 17 2022, the .NET 10
+SDK's dotnet build, and dart compile exe. A toolchain that names no generator - CMake picks its
+tool as it configures - and a generator no way is known for, Xcode's among them, are refused
+before anything is synced, locked or built (`KeepGoing.Require`, exit 13), naming every such leg at
+once, and the option on a run that builds none of its legs is a usage error (10). `help legs` lists
+every way from the adapters' own (`IBuildAdapter.KeepGoingWays`). `check-mutations` takes no
+`--keep-going`: an arm's build is judged by whether, and where, it fails.
+
 ## CI legs
 
 `check-ci-legs` reads each leg's verdict from the forge's job metadata, one job at a time and never

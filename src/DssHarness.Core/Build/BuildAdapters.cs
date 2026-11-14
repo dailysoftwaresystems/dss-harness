@@ -58,6 +58,28 @@ public interface IBuildAdapter
     /// <param name="toolchain">The toolchain the build builds with.</param>
     string? GeneratorOf(HarnessConfig config, string toolchain);
 
+    /// <summary>
+    /// Every build tool this adapter's builds run, each with how it goes on past a unit that fails to build: what help lists
+    /// for <see cref="KeepGoing.Option"/>, from the ways the adapter goes by.
+    /// </summary>
+    IReadOnlyList<KeepGoingWay> KeepGoingWays { get; }
+
+    /// <summary>
+    /// How a build with <paramref name="toolchain"/> goes on past a unit that fails to build, as
+    /// <see cref="KeepGoing.Option"/> asks, or - <see cref="KeepGoingHow.Never"/> - why no way is known: the way of the
+    /// build tool the configuration says builds it, never one guessed.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="toolchain">The toolchain the build builds with.</param>
+    KeepGoingWay KeepGoingFor(HarnessConfig config, string toolchain);
+
+    /// <summary>
+    /// What a build phase of this adapter's that its tool failed says of the units it failed to build: each by its source
+    /// where the tool's output says it, and why not where it cannot be read - never that none failed.
+    /// </summary>
+    /// <param name="failed">The build phase its tool failed.</param>
+    FailedUnits FailedUnitsOf(FailedBuild failed);
+
     /// <summary>The phases that configure and build this project, in order.</summary>
     /// <param name="config">The whole configuration.</param>
     /// <param name="request">The leg's build.</param>
@@ -180,6 +202,15 @@ public static class BuildAdapters
 {
     private static readonly IBuildAdapter[] Known = [new CMakeAdapter(), new DotnetAdapter(), new DartAdapter()];
 
+    /// <summary>
+    /// The phase of every adapter's that builds what the project is made of - after CMake's configure, after Dart's
+    /// <c>pub get</c> - whose failure is read for the units it failed to build.
+    /// </summary>
+    public const string BuildPhase = "build";
+
+    /// <summary>Every adapter this build knows, in the order help lists them.</summary>
+    public static IReadOnlyList<IBuildAdapter> All => Known;
+
     /// <summary>The adapter for a project type, or <see langword="null"/> when no adapter serves it.</summary>
     /// <param name="type">The project's declared type.</param>
     public static IBuildAdapter? Find(string? type)
@@ -230,7 +261,43 @@ public sealed class CMakeAdapter : IBuildAdapter
     public const string ConfigurePhase = "configure";
 
     /// <summary>The phase that builds what configure generated, with the build tool its generator names.</summary>
-    public const string BuildPhase = "build";
+    public const string BuildPhase = BuildAdapters.BuildPhase;
+
+    /// <summary>ninja's way, for the generators that build with it: told to go on, by <see cref="Ninja.KeepGoingArguments"/>.</summary>
+    private static readonly KeepGoingWay NinjaWay = new(
+        "Ninja, Ninja Multi-Config",
+        KeepGoingHow.WhenTold,
+        Ninja.KeepGoingArguments,
+        "ninja - and samurai, where CMake runs it for ninja - stops at its first failures, and -k 0 has it go on until nothing more can be built");
+
+    /// <summary>make's way, for the generators that build with it: told to go on, by <see cref="Make.KeepGoingArguments"/>.</summary>
+    private static readonly KeepGoingWay MakeWay = new(
+        "Unix Makefiles, MinGW Makefiles, MSYS Makefiles",
+        KeepGoingHow.WhenTold,
+        Make.KeepGoingArguments,
+        "make stops at its first failure, and -k has every make CMake's makefiles start go on with each target that does not need one that failed");
+
+    /// <summary>MSBuild's way, for the Visual Studio generators: it goes on by itself.</summary>
+    /// <remarks>
+    /// Measured with Visual Studio 17 2022's MSBuild under <c>--parallel 1</c>: of two libraries each with a failing source, both
+    /// were built and failed, and of one library with two, cl compiled and failed both.
+    /// </remarks>
+    private static readonly KeepGoingWay MsBuildWay = new(
+        "Visual Studio generators",
+        KeepGoingHow.ByItself,
+        [],
+        "MSBuild goes on by itself: it builds every project that does not need one that failed, and cl compiles every source of a project it builds");
+
+    /// <summary>nmake's way, for the NMake Makefiles generator: none.</summary>
+    /// <remarks>
+    /// Measured with CMake 4.3 and Visual Studio 17 2022's nmake: given <c>/K</c>, only the first nmake went on - the ones
+    /// CMake's makefiles start for each target were not given it, and stopped at their target's first failing source.
+    /// </remarks>
+    private static readonly KeepGoingWay NMakeWay = new(
+        "NMake Makefiles",
+        KeepGoingHow.Never,
+        [],
+        "nmake's /K does not reach the nmake CMake's makefiles start for each target, which stops at that target's first failing unit");
 
     /// <inheritdoc/>
     public string Type => "cmake";
@@ -275,6 +342,67 @@ public sealed class CMakeAdapter : IBuildAdapter
             ? generator
             : null;
     }
+
+    /// <inheritdoc/>
+    public IReadOnlyList<KeepGoingWay> KeepGoingWays { get; } = [NinjaWay, MakeWay, MsBuildWay, NMakeWay];
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// By the generator the toolchain names, never by one CMake would pick: where it names none, CMake's default for the
+    /// system, a <c>CMAKE_GENERATOR</c> in the environment, or the generator an earlier configure of the directory cached
+    /// decides the build tool as the build configures, so how it goes on is not known before it builds. A generator this
+    /// adapter knows no way for - Xcode's, whose way could not be measured, among them - is refused rather than guessed at.
+    /// </remarks>
+    public KeepGoingWay KeepGoingFor(HarnessConfig config, string toolchain)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        if (GeneratorOf(config, toolchain) is not { } generator)
+        {
+            return new(
+                "no generator",
+                KeepGoingHow.Never,
+                [],
+                $"toolchain '{toolchain}' names no generator, so the build tool CMake picks for it - its default for the system, CMAKE_GENERATOR, "
+                + $"or the one an earlier configure cached - and how that tool goes on past a failing unit are not known before it builds; "
+                + $"name one with toolchains.{toolchain}.generator");
+        }
+
+        return Ninja.Generates(generator) ? NinjaWay
+            : Make.Generates(generator) ? MakeWay
+            : VisualStudio(generator) ? MsBuildWay
+            : string.Equals(generator, NMakeWay.Builds, StringComparison.OrdinalIgnoreCase) ? NMakeWay
+            : new(generator, KeepGoingHow.Never, [], $"toolchain '{toolchain}' builds with generator '{generator}', and no way is known to have its build tool go on past a failing unit");
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// By the generator CMake's cache says the directory was configured with, which is the build tool that ran: ninja's
+    /// lines and make's are read; every other tool's are not, and said so.
+    /// </remarks>
+    public FailedUnits FailedUnitsOf(FailedBuild failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+
+        var generator = failed.Configured?.Generator;
+
+        if (Ninja.Generates(generator))
+        {
+            return Ninja.FailedUnitsOf(failed);
+        }
+
+        if (Make.Generates(generator))
+        {
+            return Make.FailedUnitsOf(failed);
+        }
+
+        return VisualStudio(generator)
+            ? FailedUnits.NotRead("MSBuild", failed.Request.KeepGoing, stopsAtFirst: false)
+            : FailedUnits.NotRead(generator is { Length: > 0 } named ? $"generator '{named}'" : "the build tool", failed.Request.KeepGoing, stopsAtFirst: false);
+    }
+
+    /// <summary>Whether a CMake generator is one of Visual Studio's, whose builds MSBuild runs: <c>Visual Studio 17 2022</c>.</summary>
+    private static bool VisualStudio(string? generator) => generator?.StartsWith("Visual Studio ", StringComparison.OrdinalIgnoreCase) == true;
 
     /// <inheritdoc/>
     public IEnumerable<PhaseRequest> Phases(
@@ -338,6 +466,15 @@ public sealed class CMakeAdapter : IBuildAdapter
             build.Add(target);
         }
 
+        // What the generator's own tool is given to go on past a failing unit, after the '--' that hands cmake --build's
+        // last arguments to it. A tool that goes on by itself is given nothing; one with no known way never gets here, for
+        // the run refuses the option before anything starts (KeepGoing.Require).
+        if (request.KeepGoing && KeepGoingFor(config, request.Variant.Toolchain) is { How: KeepGoingHow.WhenTold } way)
+        {
+            build.Add("--");
+            build.AddRange(way.Arguments);
+        }
+
         yield return new PhaseRequest
         {
             Leg = request.Leg,
@@ -391,6 +528,36 @@ public sealed class DotnetAdapter : IBuildAdapter
         return null;
     }
 
+    /// <summary>dotnet's way: it goes on by itself.</summary>
+    /// <remarks>
+    /// Measured with the .NET 10 SDK under <c>-m:1</c>: of a solution of two projects, each with a failing source, both were
+    /// built and failed, and the C# compiler named both failing sources of the one that has two.
+    /// </remarks>
+    private static readonly KeepGoingWay Way = new(
+        "dotnet",
+        KeepGoingHow.ByItself,
+        [],
+        "dotnet build goes on by itself: MSBuild builds every project that does not need one that failed, and the compiler reports every failing source of a project in one run");
+
+    /// <inheritdoc/>
+    public IReadOnlyList<KeepGoingWay> KeepGoingWays { get; } = [Way];
+
+    /// <inheritdoc/>
+    public KeepGoingWay KeepGoingFor(HarnessConfig config, string toolchain)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        return Way;
+    }
+
+    /// <inheritdoc/>
+    public FailedUnits FailedUnitsOf(FailedBuild failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+
+        return FailedUnits.NotRead(Program, failed.Request.KeepGoing, stopsAtFirst: false);
+    }
+
     /// <inheritdoc/>
     public IEnumerable<PhaseRequest> Phases(
         HarnessConfig config,
@@ -427,12 +594,12 @@ public sealed class DotnetAdapter : IBuildAdapter
         yield return new PhaseRequest
         {
             Leg = request.Leg,
-            Phase = "build",
+            Phase = BuildAdapters.BuildPhase,
             FileName = Program,
             Arguments = arguments,
             WorkingDirectory = request.TreeRoot,
             Environment = environment,
-            LogFile = BuildAdapters.LogFor(request, "build"),
+            LogFile = BuildAdapters.LogFor(request, BuildAdapters.BuildPhase),
             ProgramDirectories = request.ProgramDirectories,
         };
     }
@@ -469,6 +636,36 @@ public sealed class DartAdapter : IBuildAdapter
         ArgumentNullException.ThrowIfNull(config);
 
         return null;
+    }
+
+    /// <summary>dart's way: it goes on by itself.</summary>
+    /// <remarks>
+    /// Measured with the Dart SDK Flutter carries: a program importing two libraries, each with an error, had
+    /// <c>dart compile exe</c> name both errors before it failed.
+    /// </remarks>
+    private static readonly KeepGoingWay Way = new(
+        "dart",
+        KeepGoingHow.ByItself,
+        [],
+        "dart compile exe goes on by itself: its compiler reports every error it finds in the program in one run");
+
+    /// <inheritdoc/>
+    public IReadOnlyList<KeepGoingWay> KeepGoingWays { get; } = [Way];
+
+    /// <inheritdoc/>
+    public KeepGoingWay KeepGoingFor(HarnessConfig config, string toolchain)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        return Way;
+    }
+
+    /// <inheritdoc/>
+    public FailedUnits FailedUnitsOf(FailedBuild failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+
+        return FailedUnits.NotRead(Program, failed.Request.KeepGoing, stopsAtFirst: false);
     }
 
     /// <inheritdoc/>
@@ -515,12 +712,12 @@ public sealed class DartAdapter : IBuildAdapter
         yield return new PhaseRequest
         {
             Leg = request.Leg,
-            Phase = "build",
+            Phase = BuildAdapters.BuildPhase,
             FileName = Program,
             Arguments = arguments,
             WorkingDirectory = project,
             Environment = environment,
-            LogFile = BuildAdapters.LogFor(request, "build"),
+            LogFile = BuildAdapters.LogFor(request, BuildAdapters.BuildPhase),
             ProgramDirectories = request.ProgramDirectories,
         };
     }
