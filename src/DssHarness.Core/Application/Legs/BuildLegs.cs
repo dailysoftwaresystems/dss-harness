@@ -52,15 +52,23 @@ public abstract record LegCommandRequest
 
 /// <summary>
 /// What a build, a test run and a run of a runner were asked beyond what every command that runs legs takes: the timing,
-/// and the two options that say where this run's own legs work, whose rule
-/// (<see cref="DssHarness.Core.Legs.LegTrees.Asked(bool, bool)"/>) is asked in the core: by a build and a test before any
-/// configuration is read, and by a run of a runner once the runner it names is read, since whether that runner writes
-/// the tree is part of where its legs work. A sweep of check-mutations takes none of them, and its request has none.
+/// whether the legs they build go on past failing units, and the two options that say where this run's own legs work,
+/// whose rule (<see cref="DssHarness.Core.Legs.LegTrees.Asked(bool, bool)"/>) is asked in the core: by a build and a test
+/// before any configuration is read, and by a run of a runner once the runner it names is read, since whether that runner
+/// writes the tree is part of where its legs work. A sweep of check-mutations takes none of them, and its request has
+/// none: an arm's build is judged by whether, and where, it fails, which going on past its first failure would only
+/// make longer.
 /// </summary>
 public abstract record LegWorkRequest : LegCommandRequest
 {
     /// <summary>Report the profile timing.</summary>
     public bool Time { get; init; }
+
+    /// <summary>
+    /// Whether each leg the command builds goes on past the units that fail to build (<see cref="Build.KeepGoing.Option"/>), so
+    /// its line names every one: a build, a test that builds first and a run that builds its legs alike.
+    /// </summary>
+    public bool KeepGoing { get; init; }
 
     /// <summary>Whether <c>--local-copy</c> was given.</summary>
     public bool LocalCopy { get; init; }
@@ -128,6 +136,7 @@ public sealed class BuildLegs(IBuildService builds, LegRunService runs) : IBuild
                 LocalTrees = LegTrees.Asked(request.LocalCopy, request.InPlace),
                 Watch = request.Watch,
                 Isolation = request.Isolation,
+                KeepGoing = request.KeepGoing,
             },
             (work, token) => BuildLegAsync(_builds, work, token),
             cancellationToken).ConfigureAwait(false);
@@ -154,24 +163,16 @@ public sealed class BuildLegs(IBuildService builds, LegRunService runs) : IBuild
         var leg = work.Leg;
 
         var result = await builds
-            .BuildAsync(work.Context.Config, leg.BuildRequestFor(work.Context.Config, work.RunDirectory, work.Time), cancellationToken)
+            .BuildAsync(work.Context.Config, work.BuildRequest(time: work.Time), cancellationToken)
             .ConfigureAwait(false);
 
-        return new LegEntry
+        return result.Line(leg.Name, leg.Emulated, Stopwatch.GetElapsedTime(started)) with
         {
-            Leg = leg.Name,
-            Verdict = result.Verdict.Verdict,
             Detail = Detail(result),
-            Duration = Stopwatch.GetElapsedTime(started),
             CommandTime = result.Phases.Aggregate(TimeSpan.Zero, (total, phase) => total + phase.Duration),
-            Emulated = leg.Emulated,
             Phases = [.. result.Phases.Select(phase => new PhaseRecord(phase.Phase, phase.Duration, phase.ClockStepped))],
-            TimingNotes = result.Notes,
             Timings = [.. result.Phases.SelectMany(phase =>
                 phase.Timings.Select(timing => new TimingMark(phase.Phase, timing.Text, timing.Value)))],
-            Compilers = result.Compilers,
-            LogTail = result.Tail,
-            TailPhase = result.TailPhase,
         };
     }
 

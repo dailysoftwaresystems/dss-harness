@@ -195,9 +195,9 @@ public static class WorkflowStepTypes
             "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)",
             ["read main", "write the agent's tree where its access is write"],
             "maxReasoningAgents"),
-        new("build", LegKeys, [], "red", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners, IAgentIsolation.ForExecutionAsync", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("build", [.. LegKeys, KeepGoingKey], [], "red", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("test", [.. LegKeys, .. TestKeys, KeepGoingKey], ["filter", "exclude", "labels"], "red", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs, KeepGoingKey], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners, IAgentIsolation.ForExecutionAsync", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
         new(
             "check-mutations",
             [.. LegKeys, new("arms", "the arms it runs, by id; absent, every arm"), new("pending", "drive only the arms with no recorded passed that still holds")],
@@ -471,6 +471,9 @@ public static class WorkflowStepTypes
 
     /// <summary>The run step's <c>inputs</c> map.</summary>
     private static KeyDescription RunInputs => new("inputs", "the values it hands its runner's inputs");
+
+    /// <summary>The key a step that builds its legs takes - <c>build</c>, <c>test</c> and <c>run</c> - as their commands take <c>--keep-going</c>.</summary>
+    private static KeyDescription KeepGoingKey => new("keepGoing", "its builds of its legs go on past the units that fail to build, as --keep-going has them, and each red leg names every unit it failed");
 
     /// <summary>The keys the fold family takes, shared by <c>fold</c> and <c>delete-agent</c>.</summary>
     private static IReadOnlyList<KeyDescription> FoldKeys =>

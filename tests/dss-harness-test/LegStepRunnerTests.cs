@@ -406,8 +406,9 @@ public sealed class LegStepRunnerTests : IDisposable
 
     /// <summary>
     /// Each leg step asks its command's use case what its keys say, in the tree it works in: the legs it names, or none
-    /// for every leg; a test's filter, exclusions, labels and skipBuild; a run's runner, inputs and - for a run that writes
-    /// the tree, by its runner or a run check's - in place; a sweep's arms, or none for every arm, and pending.
+    /// for every leg; whether a build, a test or a run that builds keeps going past the units its builds fail; a test's
+    /// filter, exclusions, labels and skipBuild; a run's runner, inputs and - for a run that writes the tree, by its runner
+    /// or a run check's - in place; a sweep's arms, or none for every arm, and pending.
     /// </summary>
     [Fact]
     public async Task EachLegStep_AsksItsUseCase_WhatItsKeysSay()
@@ -427,8 +428,10 @@ public sealed class LegStepRunnerTests : IDisposable
         [
             new() { Name = "build", Type = "build" },
             new() { Name = "test", Type = "test", Legs = ["native"], Filter = "fast", Exclude = ["slow"], Labels = ["unit"], SkipBuild = true },
-            new() { Name = "run", Type = "run", Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" } },
+            new() { Name = "run", Type = "run", Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" }, KeepGoing = true },
             new() { Name = "tidy", Type = "run", Runner = "TIDY" },
+            new() { Name = "build past", Type = "build", KeepGoing = true },
+            new() { Name = "test past", Type = "test", KeepGoing = true },
             new() { Name = "sweep", Type = "check-mutations" },
             new() { Name = "pending", Type = "check-mutations", Arms = ["A-ONE"], Pending = true },
         ];
@@ -447,10 +450,12 @@ public sealed class LegStepRunnerTests : IDisposable
                 asked,
                 strict: true),
             asked => Assert.Equivalent(
-                new RunnerLegsRequest { Directory = repository.Path, Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" }, Watch = asked.Watch, Isolation = asked.Isolation },
+                new RunnerLegsRequest { Directory = repository.Path, Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" }, KeepGoing = true, Watch = asked.Watch, Isolation = asked.Isolation },
                 asked,
                 strict: true),
             asked => Assert.Equivalent(new RunnerLegsRequest { Directory = repository.Path, Runner = "TIDY", InPlace = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked, strict: true),
+            asked => Assert.Equal(new BuildLegsRequest { Directory = repository.Path, KeepGoing = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked),
+            asked => Assert.Equivalent(new TestLegsRequest { Directory = repository.Path, KeepGoing = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked, strict: true),
             asked => Assert.Equal(new MutationLegsRequest { Directory = repository.Path, Watch = asked.Watch, Isolation = asked.Isolation }, asked),
             asked => Assert.Equivalent(new MutationLegsRequest { Directory = repository.Path, ArmNames = ["A-ONE"], Pending = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked, strict: true));
         Assert.All(legs.Asked, asked => Assert.NotNull(asked.Watch));

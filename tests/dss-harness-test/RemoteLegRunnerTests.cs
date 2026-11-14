@@ -1,3 +1,4 @@
+using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -448,6 +449,45 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal(["corpus-out/huge.bin"], carried.RefusedOverCap);
         Assert.Empty(carried.Unreadable);
         Assert.Equal(["absent"], carried.NamedNothing);
+    }
+
+    /// <summary>
+    /// The units a host's build failed to build travel on its leg's line, read from the very document the host writes:
+    /// each by its source where the build named one and by its step always, whether it was kept going, and how far its
+    /// tool got - so this machine's line says them, and that a unit the tool never reached was not built, as the host's
+    /// said them. Where which units failed was not read there, the reason travels instead, never as none failing.
+    /// </summary>
+    [Fact]
+    public async Task TheUnitsAHostsBuildFailed_AreCarriedOnItsLine()
+    {
+        FailedUnits[] sent =
+        [
+            new("ninja", [new FailedUnit("src/a.c", "CMakeFiles/app.dir/src/a.c.o"), new FailedUnit(null, "app")], null, KeptGoing: false, StopsAtFirst: true, 22, 1093),
+            FailedUnits.NotRead("MSBuild", keptGoing: true, stopsAtFirst: false),
+        ];
+
+        foreach (var failed in sent)
+        {
+            var written = LedgerReport
+                .From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.Failed, Detail = "build exited 1", FailedUnits = failed }], durationWarningFactor: 0)
+                .ToJson(cancelled: false, unfinished: []);
+
+            var hosts = new ScriptedHostCommands((_, command) =>
+            {
+                Answer(command, written);
+
+                return HostResults.Finished(command, 0);
+            });
+
+            var carried = (await Runner(hosts).RunAsync("build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken)).FailedUnits;
+
+            Assert.NotNull(carried);
+            Assert.Equal(failed.Units, carried.Units);
+            Assert.Equal(
+                (failed.Tool, failed.Unread, failed.KeptGoing, failed.StopsAtFirst, failed.StepsRun, failed.StepsPlanned),
+                (carried.Tool, carried.Unread, carried.KeptGoing, carried.StopsAtFirst, carried.StepsRun, carried.StepsPlanned));
+            Assert.Equal(failed.Describe(), carried.Describe());
+        }
     }
 
     /// <summary>

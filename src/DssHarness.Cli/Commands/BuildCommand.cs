@@ -46,6 +46,7 @@ internal static class BuildCommand
         command.Options.Add(UseStagedOption);
         command.Options.Add(LocalCopyOption);
         command.Options.Add(InPlaceOption);
+        command.Options.Add(DispatchOptions.KeepGoing);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
@@ -68,6 +69,7 @@ internal static class BuildCommand
                         Here = arguments.GetValue(DispatchOptions.Here),
                         LocalCopy = arguments.GetValue(DispatchOptions.LocalCopy),
                         InPlace = arguments.GetValue(DispatchOptions.InPlace),
+                        KeepGoing = arguments.GetValue(DispatchOptions.KeepGoing),
                     },
                     run!,
                     cancellationToken)

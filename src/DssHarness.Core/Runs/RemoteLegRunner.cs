@@ -416,6 +416,13 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             // directory spelled as that host spells it, its home as ~, and each file it names.
             KeptOnFailure = entry.KeptOnFailure,
 
+            // The units the host's build failed to build there, as its ledger named them: relative to the tree, which is the
+            // same path in this machine's tree, and why which is not known named by the host this machine knows, as the
+            // leg's detail is.
+            FailedUnits = entry.FailedUnits is { } failed
+                ? failed with { Units = [.. failed.Units ?? []], Unread = failed.Unread is { } unread ? HostProbes.AsConfigured(unread, connection) : null }
+                : null,
+
             // Each arm the host's sweep was asked about, as it judged it there: its records stay on that host, named as
             // the host names them, and its detail named by the host this machine knows, as the leg's is.
             Arms = [.. (entry.Arms ?? []).Select(arm => new ArmEntry
@@ -517,7 +524,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         PendingSweep? PendingSweep = null,
         IReadOnlyList<RemoteLedgerControl>? Controls = null,
         IReadOnlyList<SetUps.SetUpFact>? SetUps = null,
-        string? TailPhase = null);
+        string? TailPhase = null,
+        Build.FailedUnits? FailedUnits = null);
 
     /// <summary>One control of a host's sweep that did not pass, beneath its leg's line.</summary>
     private sealed record RemoteLedgerControl(

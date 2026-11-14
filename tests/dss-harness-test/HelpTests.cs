@@ -3124,6 +3124,140 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// --keep-going is taken by each command that builds its legs, and by no other, and its help says what each build tool
+    /// is given - the arguments its adapter's way names - and what is refused, with the exits from the code.
+    /// </summary>
+    [Theory]
+    [InlineData("build", true)]
+    [InlineData("test", true)]
+    [InlineData("run", true)]
+    [InlineData("check-mutations", false)]
+    public async Task KeepGoing_IsTakenByEachCommandThatBuildsItsLegs_SayingWhatEachToolIsGiven(string command, bool takes)
+    {
+        var help = Prose.Words((await CliRunner.RunAsync([command, "--help"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        if (!takes)
+        {
+            Assert.DoesNotContain(DssHarness.Core.Build.KeepGoing.Option, help, StringComparison.Ordinal);
+            return;
+        }
+
+        var told = DssHarness.Core.Build.BuildAdapters.All
+            .SelectMany(adapter => adapter.KeepGoingWays)
+            .Where(way => way.How == DssHarness.Core.Build.KeepGoingHow.WhenTold)
+            .Select(way => string.Join(' ', way.Arguments))
+            .ToList();
+
+        Assert.Equal(new[] { "-k 0", "-k" }, told);
+        Assert.Contains(
+            $"{DssHarness.Core.Build.KeepGoing.Option} Have each leg's build go on past the units that fail to build, so its line names "
+                + "every one and counts them: ninja is given -k 0 and make -k; MSBuild, dotnet and dart go on by themselves; a leg "
+                + "whose toolchain names no generator, or a generator with no known way, NMake's and Xcode's among them, is refused "
+                + $"before anything runs ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}), and so is a run that builds "
+                + $"none of its legs ({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}). help legs lists each generator's way.",
+            help,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The legs topic says what a failed build names of the units it failed to build, and how --keep-going has each build
+    /// tool go on past them - every way an adapter answers, as the adapter says it - and the README and the architecture
+    /// say the same, the architecture naming each owner by the type that is it.
+    /// </summary>
+    [Fact]
+    public void LegsTopic_SaysWhatAFailedBuildNamesOfItsUnits_AndEachToolsWayToGoOn()
+    {
+        var help = HelpText.Of("legs").StandardOutput;
+        var prose = Prose.Words(help);
+
+        Assert.Contains(
+            "A leg whose build its own tool failed names each unit it failed to build: by its source, as ninja's manifest names "
+                + "the source a failed step compiles - a step that links or runs a command by its output - or by the target make "
+                + "says failed, which is the object it was building. Its line says how many, they are listed beneath the table, "
+                + "and --json carries them as failedUnits: each unit's source and step, the count, the tool, whether the build kept "
+                + "going, and how far it got. Where which units failed is not read - MSBuild's, dotnet's and dart's output is not, "
+                + "nor a log that could not be read back - the line says so and why, never that none failed. ninja and make stop at "
+                + "their first failures, so the line of a build of theirs not kept going says that every unit it never reached was "
+                + "not built and says nothing of the code, and - where ninja's own [run/planned] status says it - how many of the "
+                + "steps it had to run it ran: 'ran 22 of the 1093 steps it had to run'.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "--keep-going, on build, test and run - and keepGoing on a workflow's build, test and run steps - has each leg's "
+                + "build go on past its failing units, so its line names every one.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A toolchain that names no generator - CMake would pick its build tool as it configures - and a generator no way is "
+                + "known for, Xcode's among them, refuse --keep-going for each leg they build before anything runs "
+                + $"({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}), naming every one; and a run that builds none of "
+                + $"its legs refuses it too ({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}). check-mutations takes "
+                + "none: an arm's build is judged by whether, and where, it fails.",
+            prose,
+            StringComparison.Ordinal);
+
+        var ways = DssHarness.Core.Build.BuildAdapters.All.SelectMany(adapter => adapter.KeepGoingWays).ToList();
+        var lines = help.ReplaceLineEndings("\n").Split('\n');
+
+        Assert.Equal(6, ways.Count);
+        Assert.All(ways, way =>
+        {
+            var how = way.How switch
+            {
+                DssHarness.Core.Build.KeepGoingHow.WhenTold => $"given {string.Join(' ', way.Arguments)}",
+                DssHarness.Core.Build.KeepGoingHow.ByItself => "given nothing",
+                _ => $"refused ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)})",
+            };
+
+            Assert.Contains($"  {way.Builds}", lines);
+            Assert.Contains($"{way.Builds} {how}: {way.Said}.", prose, StringComparison.Ordinal);
+        });
+
+        var readme = Prose.Document("README.md");
+
+        Assert.Contains("| `build [--legs a,b] [--time] [--keep-going]` |", readme, StringComparison.Ordinal);
+        Assert.Contains("| `test [--legs a,b] [--time] [--set-up] [--keep-going]` |", readme, StringComparison.Ordinal);
+        Assert.Contains("| `run <runner> [--legs a,b] [--time] [--input name=value] [--set-up] [--keep-going]` |", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "`--keep-going`, on `build`, `test` and `run` - and `keepGoing` on a workflow's `build`, `test` and `run` steps - has "
+                + "each leg's build go on past its failing units: ninja is given `-k 0` and make `-k`, MSBuild, dotnet and dart go on "
+                + "by themselves and are given nothing, and a leg whose toolchain names no generator, or one no way is known for - "
+                + $"NMake's and Xcode's - is refused ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}) before anything "
+                + "runs, as is the option on a run that builds none of its legs "
+                + $"({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}).",
+            readme,
+            StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "and `--json` carries them on the leg as `failedUnits`: `tool`, `count`, `units` - each one's `source` and `step` - "
+                + "`unread`, `keptGoing`, `stopsAtFirst`, `stepsRun`, `stepsPlanned` and `said`, the line's own words.",
+            architecture,
+            StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            $"{nameof(DssHarness.Core.Build.IBuildAdapter)}.{nameof(DssHarness.Core.Build.IBuildAdapter.FailedUnitsOf)}",
+            $"{nameof(DssHarness.Core.Build.IBuildAdapter)}.{nameof(DssHarness.Core.Build.IBuildAdapter.KeepGoingFor)}",
+            $"{nameof(DssHarness.Core.Build.IBuildAdapter)}.{nameof(DssHarness.Core.Build.IBuildAdapter.KeepGoingWays)}",
+            nameof(DssHarness.Core.Build.FailedUnits),
+            nameof(DssHarness.Core.Build.KeepGoingWay),
+            $"{nameof(DssHarness.Core.Build.KeepGoing)}.{nameof(DssHarness.Core.Build.KeepGoing.Option)}",
+            $"{nameof(DssHarness.Core.Build.KeepGoing)}.{nameof(DssHarness.Core.Build.KeepGoing.Require)}",
+            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.FailedOutputs)}",
+            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.Progress)}",
+            $"{nameof(DssHarness.Core.Build.CMakeNinjaRule)}.{nameof(DssHarness.Core.Build.CMakeNinjaRule.Compiles)}",
+            $"{nameof(DssHarness.Core.Build.BuildRequest)}.{nameof(DssHarness.Core.Build.BuildRequest.KeepGoing)}",
+            $"{nameof(LegWork)}.{nameof(LegWork.BuildRequest)}",
+            $"{nameof(DssHarness.Core.Build.Make)}.{nameof(DssHarness.Core.Build.Make.FailedTargets)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The legs topic says where a leg works - its tree, its host's copy, or its own in the tree's .legs - and the order
     /// of precedence in one sentence: the command's option, a runner's writesTree, the leg's own key, the default, the
     /// tree.

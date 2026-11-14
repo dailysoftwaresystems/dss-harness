@@ -1237,7 +1237,8 @@ public static class WorkflowFileParser
                 break;
 
             case "build":
-                // Its keys are the leg keys every leg step shares, read before this switch.
+                // Its keys are the leg keys every leg step shares, read before this switch, and the one a step that builds takes.
+                step = step with { KeepGoing = BooleanIn(keys, $"{where}.keepGoing", problems) };
                 break;
 
             case "test":
@@ -1248,6 +1249,7 @@ public static class WorkflowFileParser
                     Exclude = StringListIn(keys, $"{where}.exclude", problems) ?? [],
                     Labels = StringListIn(keys, $"{where}.labels", problems) ?? [],
                     SkipBuild = BooleanIn(keys, $"{where}.skipBuild", problems),
+                    KeepGoing = BooleanIn(keys, $"{where}.keepGoing", problems),
                 };
                 break;
 
@@ -1256,6 +1258,7 @@ public static class WorkflowFileParser
                 {
                     Runner = ScalarIn(keys, $"{where}.runner", problems),
                     Inputs = StringMapIn(keys, $"{where}.inputs", problems),
+                    KeepGoing = BooleanIn(keys, $"{where}.keepGoing", problems),
                 };
                 break;
 
