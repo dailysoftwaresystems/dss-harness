@@ -345,6 +345,53 @@ public sealed class NinjaTests
     }
 
     /// <summary>
+    /// samurai writes its status as each step starts, its count the steps it has started, a console step's own among them,
+    /// and writes none for a step it starts while a console step runs: so its last status of its own is how far it got,
+    /// never one more for a console step's end - not said where that status is a console step's start and it planned more,
+    /// for what it started while the step ran is written nowhere, and exact where statuses came after it. A step a signal
+    /// ended, or whose status samurai could not tell, failed as one that exited non-zero did. It is samurai by its file's
+    /// name, or, started through a link named ninja, by its word that a job failed, which ninja never says.
+    /// </summary>
+    [Fact]
+    public void SamuraisProgress_IsTheStepsItStarted_NeverAConsoleStepsEndOnTop()
+    {
+        using var temp = new TempDirectory();
+        var manifest = OwnManifest(temp);
+        var a = manifest.EdgeFor("CMakeFiles/app.dir/a.c.o")!.Command;
+        var b = manifest.EdgeFor("CMakeFiles/app.dir/b.c.o")!.Command;
+        const string Term = "cd /b/term && cmake --build .";
+
+        var linkUnreached = Ninja.Own(
+            ["[1/3] Building C object CMakeFiles/app.dir/a.c.o", "[2/3] Performing build step for 'term'", $"samu: job failed with status 1: {a}", "samu: subcommand failed"],
+            "/usr/bin/samu",
+            manifest);
+        var everyOne = Ninja.Own(
+            ["[1/2] Building C object CMakeFiles/app.dir/a.c.o", "[2/2] Performing build step for 'term'", $"samu: job failed with status 1: {Term}"],
+            "/usr/bin/samu",
+            manifest);
+        var followed = Ninja.Own(
+            ["[1/4] Building C object CMakeFiles/app.dir/a.c.o", "[2/4] Performing build step for 'term'", "[4/4] Building C object CMakeFiles/app.dir/b.c.o", $"samu: job failed with status 1: {b}"],
+            "/usr/bin/samu",
+            manifest);
+        var linked = Ninja.Own(
+            ["[1/2] Building C object CMakeFiles/app.dir/a.c.o", "[2/2] Performing build step for 'term'", $"ninja: job failed with status 1: {Term}"],
+            "/usr/bin/ninja",
+            manifest);
+        var signalled = Ninja.Own(["[1/2] Building C object CMakeFiles/app.dir/a.c.o", $"samu: job terminated due to signal 9: {a}"], "/usr/bin/samu", manifest);
+        var named = Ninja.Own(["[1/2] Building C object CMakeFiles/app.dir/a.c.o", "[2/2] Performing build step for 'term'"], "/usr/bin/samu", manifest);
+
+        Assert.Equal(["CMakeFiles/app.dir/a.c.o"], linkUnreached.Failed);
+        Assert.Null(linkUnreached.Progress);
+        Assert.Equal(["term-prefix/src/term-stamp/term-build"], everyOne.Failed);
+        Assert.Equal((2, 2), everyOne.Progress);
+        Assert.Equal(["CMakeFiles/app.dir/b.c.o"], followed.Failed);
+        Assert.Equal((4, 4), followed.Progress);
+        Assert.Equal((2, 2), linked.Progress);
+        Assert.Equal((2, 2), named.Progress);
+        Assert.Equal(["CMakeFiles/app.dir/a.c.o"], signalled.Failed);
+    }
+
+    /// <summary>
     /// The units a build ninja failed says it failed are its own failed steps, a compile named by the source its build line
     /// compiles - relative to the tree, however CMake named the object - and a step that runs a command named by its output;
     /// with how far the build got, and whether ninja went on past failing steps as what the phase ran with says. A log that
@@ -423,6 +470,23 @@ public sealed class NinjaTests
     [InlineData("FAILED: a.o \n[2/9] Building C object b.o\n", false, null)]
     public void ABuildToldToGoOn_EndedOnlyWhereNinjasLastWordSaysItDid(string output, bool keptGoing, string? stopped)
         => AssertStopped(stopped, Ninja.Stopped(Phase(1, stalled: false, output), program: null, keptGoing));
+
+    /// <summary>
+    /// samurai told to go on writes its failed steps under its name - a status it exited with, a signal that ended it, or
+    /// one it could not tell - which are its FAILED lines, never its last word: killed after one, it said nothing of how
+    /// its build ended, and the build is stopped, whatever name it was started by. Its own end, given -k 0, is the end of a
+    /// build with no more it can make, never subcommand failed - its limit is the largest size, never reached - so a
+    /// nested build's subcommand failed is no end of its own.
+    /// </summary>
+    [Theory]
+    [InlineData("/usr/bin/samu", "[1/9] Building C object a.o\nsamu: job failed with status 1: cc -c a.c -o a.o\n[2/9] Building C object b.o\n", "build exited 1: samu was told to go on past failing steps and never said it had ended the build, as it says whenever it ends one itself: something stopped it from outside before it finished")]
+    [InlineData("/usr/bin/samu", "[1/9] Building C object a.o\nsamu: job terminated due to signal 9: cc -c a.c -o a.o\n", "build exited 1: samu was told to go on past failing steps and never said it had ended the build")]
+    [InlineData("/usr/bin/samu", "samu: job status unknown: cc -c a.c -o a.o\n", "build exited 1: samu was told to go on past failing steps and never said it had ended the build")]
+    [InlineData("/usr/bin/ninja", "[1/9] Building C object a.o\nninja: job failed with status 1: cc -c a.c -o a.o\n", "build exited 1: ninja was told to go on past failing steps and never said it had ended the build")]
+    [InlineData("/usr/bin/samu", "samu: job failed with status 1: cc -c a.c -o a.o\n[9/9] Linking C executable app\nsamu: cannot make progress due to previous errors\n", null)]
+    [InlineData("/usr/bin/samu", "samu: job failed with status 2: cd /b/ext && cmake --build .\nsamu: subcommand failed\n", "build exited 1: samu was told to go on past failing steps and never said it had ended the build")]
+    public void SamuraiToldToGoOn_EndedOnlyWhereItsLastWordSaysItDid_ItsFailedJobsNone(string program, string output, string? stopped)
+        => AssertStopped(stopped, Ninja.Stopped(Phase(1, stalled: false, output), program, keptGoing: true));
 
     /// <summary>
     /// A build that did not pass, whose log no longer holds what it printed, is unmeasured: nothing says whether ninja
