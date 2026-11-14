@@ -86,6 +86,45 @@ public sealed class MakeTests
         => Assert.Equal(expected, Make.FailedTargets(output.Split('\n')));
 
     /// <summary>
+    /// The makefile and line before the target are read as each of GNU make's catalogs parts them from it: French writes a
+    /// space before the colon, Simplified Chinese a full-width colon - so a translated build's driving makefiles are its
+    /// drivers, and its failing object its unit, never left out as a nested build's.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        "make[2]: *** [CMakeFiles/app.dir/build.make:76 : CMakeFiles/app.dir/a.c.o] Erreur 1\n"
+        + "make[1]: *** [CMakeFiles/Makefile2:83 : CMakeFiles/app.dir/all] Erreur 2\n"
+        + "make: *** [Makefile:91 : all] Erreur 2\n")]
+    [InlineData(
+        "make[2]: *** [CMakeFiles/app.dir/build.make:76：CMakeFiles/app.dir/a.c.o] 错误 1\n"
+        + "make[1]: *** [CMakeFiles/Makefile2:83：CMakeFiles/app.dir/all] 错误 2\n"
+        + "make: *** [Makefile:91：all] 错误 2\n")]
+    public void FailedTargets_AreReadAsEachCatalogPartsTheMakefileFromTheTarget(string output)
+        => Assert.Equal(["CMakeFiles/app.dir/a.c.o"], Make.FailedTargets(output.Split('\n')));
+
+    /// <summary>
+    /// A shallower failure proves a deeper one a nested build's only where it is known to be a step of this build's own:
+    /// its makefile read and none of CMake's driving ones, or - where no failure names a makefile, as GNU make before 4
+    /// writes them - its target no driving makefile's goal. A makefile named in a form not read, or no makefile among
+    /// failures that name theirs, proves nothing: each is kept as make said it, and no unit that failed is left out.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        "make[2]: *** [CMakeFiles/app.dir/build.make:76 - CMakeFiles/app.dir/a.c.o] Error 1\n"
+        + "make[1]: *** [CMakeFiles/Makefile2:83 - CMakeFiles/app.dir/all] Error 2\n"
+        + "make: *** [Makefile:91 - all] Error 2\n",
+        new[] { "CMakeFiles/app.dir/build.make:76 - CMakeFiles/app.dir/a.c.o", "CMakeFiles/Makefile2:83 - CMakeFiles/app.dir/all", "Makefile:91 - all" })]
+    [InlineData(
+        "make[3]: *** [CMakeFiles/app.dir/build.make:76: CMakeFiles/app.dir/a.c.o] Error 1\nmake[2]: *** [CMakeFiles/app.dir/b.c.o] Error 1\n",
+        new[] { "CMakeFiles/app.dir/a.c.o", "CMakeFiles/app.dir/b.c.o" })]
+    [InlineData(
+        "make[5]: *** [CMakeFiles/probe.dir/a.c.o] Error 1\nmake[4]: *** [CMakeFiles/probe.dir/all] Error 2\nmake[3]: *** [all] Error 2\n"
+        + "make[2]: *** [ext-prefix/src/ext-stamp/ext-build] Error 2\nmake[1]: *** [CMakeFiles/ext.dir/all] Error 2\nmake: *** [all] Error 2\n",
+        new[] { "ext-prefix/src/ext-stamp/ext-build" })]
+    public void ANestedBuildsFailure_IsProvedOnlyByAStepKnownToBeThisBuildsOwn(string output, string[] expected)
+        => Assert.Equal(expected, Make.FailedTargets(output.Split('\n')));
+
+    /// <summary>
     /// GNU make before 4 names no makefile, so a failure of CMake's driving makefiles is known by its target - the whole
     /// build's, a target's own goal, or one the build was asked for, whose rule the top makefiles name - and a step tied to
     /// a target by the directory its target lies under: a failing object is its target's unit, and so is a link named as

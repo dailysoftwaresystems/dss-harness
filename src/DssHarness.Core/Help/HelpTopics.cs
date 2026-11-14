@@ -2183,11 +2183,18 @@ public static class HelpTopics
             + "console step runs, for ninja holds back every other step's lines until it ends and then writes only some of "
             + "their statuses - and its last such status for how far it got, one more where a console step's FAILED line or "
             + "start came after it, and not said where a console step that did not fail was followed by statuses of its own, "
-            + "which it may have ended before or after; make's failing step of a target's own makefile, and a failure of "
-            + "CMake's driving makefiles that no deeper failure of its target explains, read by its structure in any language "
-            + "and whatever signal ended it. A build nested in a step - an external project's - is that step's unit, never its "
-            + "own lines: a failing line ninja wrote is a nested build's only within a failed step's output, before the nested "
-            + "build's own end. One that cannot be told the build's own or a nested build's - after a status line not its own, "
+            + "which it may have ended before or after; samurai's failed jobs whose commands a build line runs, and its last "
+            + "status of its own - written as each step starts, none for one it starts while a console step runs - for how far "
+            + "it got, never one more for a console step's end, and not said where that status is a console step's start before "
+            + "the last step it planned; make's failing step of a target's own makefile, and a failure of CMake's driving "
+            + "makefiles that no deeper failure of its target explains, read by its structure in any language - the makefile "
+            + "and line parted from the target as each catalog writes the colon, French's ' : ' and Simplified Chinese's "
+            + "full-width one among them - and whatever signal ended it. A build nested in a step - an external project's - is "
+            + "that step's unit, never its own lines: a failing line ninja wrote is a nested build's only within a failed step's "
+            + "output, before the nested build's own end, and a failure make wrote only where a shallower step known to be the "
+            + "build's own failed after it - its makefile read and none of the driving ones, or, where no failure names a "
+            + "makefile, as make before 4 writes them, its target no driving makefile's goal. One that cannot be told the "
+            + "build's own or a nested build's - after a status line not its own, "
             + "as every one is where NINJA_STATUS spells the status otherwise - is counted on the line as perhaps a unit of its "
             + "own, never read as clean; and check-mutations judges an arm's build by the same reading: its own failing steps "
             + "and every one that cannot be told apart, a nested build's alone left out. Where which units failed is not read "
@@ -2227,9 +2234,10 @@ public static class HelpTopics
             + $"tool no way, its build is refused before it starts ({HarnessExit.Refused}): no tool is run without its way "
             + "while the build was asked for it. Whether a tool went on is read from what its build ran with, and a ninja "
             + "told to go on ended its build only where its last word says so - 'cannot make progress due to previously "
-            + "encountered errors', or an error of its own: killed after a step failed, it says nothing, and the build is "
-            + "stopped, never one whose unrun steps need one that failed. check-mutations takes none: an arm's build is "
-            + "judged by whether, and where, it fails.");
+            + "encountered errors', or an error of its own - a failed step, ninja's FAILED line or samurai's failed job, never "
+            + "being its last word: killed after a step failed, it says nothing, and the build is stopped, never one whose "
+            + "unrun steps need one that failed. check-mutations takes none: an arm's build is judged by whether, and where, "
+            + "it fails.");
     }
 
     private static string RenderSpace()

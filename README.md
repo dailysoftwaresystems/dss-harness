@@ -168,20 +168,25 @@ units: a build nested in one of them, an external project's, is that step's unit
 a failing line ninja wrote that cannot be told the build's own or a nested build's - every one, where
 `NINJA_STATUS` spells its status otherwise - is counted on the line as perhaps a unit of its own,
 never read as clean, and `check-mutations` judges an arm's build by the same reading, a nested build's
-lines alone left out; make's lines are read by their structure, in any language and whatever signal
-ended a step. Where which units failed is not read - MSBuild's, dotnet's and dart's output is not, nor
-one in which no line of the build's own named a failed unit - the line says so, never that none
-failed. ninja and make stop at their first failures, so a build of theirs says that every unit it
-never reached was not built, and how many of the steps it had to run it ran where ninja's status says
-it - not where a step in the console pool that did not fail, whose end ninja writes no status for,
-may have ended after the last. `--keep-going`, on `build`,
+lines alone left out; make's lines are read by their structure, in any language - French's space
+before a colon and Simplified Chinese's full-width colon among them - and whatever signal ended a
+step. Where which units failed is not read - MSBuild's, dotnet's and dart's output is not, nor one in
+which no line of the build's own named a failed unit - the line says so, never that none failed.
+ninja and make stop at their first failures, so a build of theirs says that every unit it never
+reached was not built, and how many of the steps it had to run it ran where ninja's status says it -
+not where a step in the console pool that did not fail, whose end ninja writes no status for, may
+have ended after the last, nor where samurai's last status is a console step's start before the last
+step it planned, for samurai counts each step as it starts and writes no status for one it starts
+while that runs. `--keep-going`,
+on `build`,
 `test` and `run` - and `keepGoing` on a workflow's `build`, `test` and `run` steps - has each leg's
 build go on past its failing units: ninja is given `-k 0` and make `-k`, MSBuild, dotnet and dart go
 on by themselves and are given nothing, and a leg whose toolchain names no generator, or one no way is
 known for - NMake's and Xcode's - is refused (13) before anything runs, as is the option on a run that
 builds none of its legs (10); a leg built in a copy whose configuration gives its tool no way is
 refused before its build starts (13). Whether a tool went on is read from what its build ran with, and
-a ninja told to go on that never said it ended its build was stopped from outside. `dssharness help
+a ninja told to go on that never said it ended its build - a failed step, ninja's or samurai's, is no
+such word - was stopped from outside. `dssharness help
 legs` lists each generator's way.
 
 ## Running legs at once

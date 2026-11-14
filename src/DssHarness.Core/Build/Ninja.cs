@@ -19,6 +19,9 @@ internal static class Ninja
     /// <summary>The name ninja says everything of its own under, whatever its file is called.</summary>
     private const string OwnName = "ninja";
 
+    /// <summary>samurai's own file name, which CMake's cache records where it runs samurai for ninja.</summary>
+    private const string SamuraiName = "samu";
+
     /// <summary>
     /// What the program says after its name where it was interrupted, rather than ending the build for a failure:
     /// ninja's line, and samurai's, which names the signal.
@@ -28,7 +31,10 @@ internal static class Ninja
     /// <summary>
     /// How a build told to stop at its first failures ends, after the program's name - ninja's <c>build stopped:
     /// subcommand failed.</c>, samurai's <c>subcommand failed</c> - which a build told to go on without a limit never says
-    /// of its own: under one, it is a nested build's end, printed as a step's output.
+    /// of its own: under one, it is a nested build's end, printed as a step's output. Each says it only where its failures
+    /// reached the limit it was given, and <c>-k 0</c> gives none - ninja's is the largest int, samurai's the largest
+    /// size, never reached - so each ends such a build as having no more it can make: <c>cannot make progress due to
+    /// previous errors</c>.
     /// </summary>
     private static readonly string[] NestedEnds = ["subcommand failed", "subcommands failed"];
 
@@ -44,8 +50,13 @@ internal static class Ninja
     /// <summary>What ninja 1.13 and later writes between <c>FAILED: </c> and a failed step's outputs: its exit code.</summary>
     private static readonly Regex FailedCode = new(@"\A\[code=-?[0-9]+\] ", RegexOptions.CultureInvariant);
 
-    /// <summary>What samurai says under its name of a step that failed, before the command the step ran.</summary>
-    private static readonly Regex JobFailed = new(@"\Ajob failed with status -?[0-9]+: ", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// What samurai says under its name of a step that failed, before the command the step ran - its own <c>FAILED:</c>
+    /// line: the status it exited with, the signal that ended it, or a status samurai could not tell.
+    /// </summary>
+    private static readonly Regex JobFailed = new(
+        @"\Ajob (?:failed with status -?[0-9]+|terminated due to signal [0-9]+|status unknown): ",
+        RegexOptions.CultureInvariant);
 
     /// <summary>
     /// What ninja, and samurai, begin a step's line with as its status says it where <c>NINJA_STATUS</c> sets none of its
@@ -91,7 +102,9 @@ internal static class Ninja
     /// them - one more where a step in the console pool ended after it, which ninja writes no status for: one whose
     /// <c>FAILED:</c> line came after it, or whose start it was; <see langword="null"/> where it wrote none, or where a console
     /// step that did not fail started and statuses of its own followed, for whether that step ended before the last of
-    /// them is not written.
+    /// them is not written. samurai counts each step as it starts, a console step among them, so its last status of its
+    /// own is how many it ran - <see langword="null"/> where that status is a console step's start and it planned more,
+    /// for it writes no status for a step it starts while a console step runs.
     /// </param>
     /// <param name="StatusRead">Whether any status line was read as one of the build's own - none is where <c>NINJA_STATUS</c> spells the status otherwise.</param>
     internal sealed record OwnSteps(IReadOnlyList<(string Step, Failing Whose)> Said, (int Run, int Planned)? Progress, bool StatusRead)
@@ -154,6 +167,14 @@ internal static class Ninja
     /// more run; one that did not fail, followed by statuses of its own, may have ended before or after the last of them,
     /// and how far the build got is not said.
     /// </para>
+    /// <para>
+    /// samurai writes its <c>[%s/%t]</c> status as each step starts, its count the steps it has started with that one, and
+    /// writes none for a step it starts while a step in the console pool runs; it, too, ends a failed build only once every
+    /// step it started has ended. So its last status of its own is how far it got, a console step's start among them, never
+    /// one more for that step's end - and is not said where it is a console step's start and the build planned more, for
+    /// what it started while that step ran is written nowhere. It is samurai where its file is CMake's cache's
+    /// <c>samu</c>, or where it said a job of its own failed, which ninja never says - whatever its file is called.
+    /// </para>
     /// </remarks>
     public static OwnSteps Own(IEnumerable<string> lines, string? program, NinjaManifest? manifest)
     {
@@ -168,6 +189,7 @@ internal static class Ninja
         (int Run, int Planned) at = (0, 0);
         var statusRead = false;
         var afterOwnStatus = false;
+        var samurai = string.Equals(ToolOf(program), SamuraiName, StringComparison.Ordinal);
         StepOutput? output = null;
 
         // The console step running - from its own start until its own FAILED line, while ninja holds back every other
@@ -286,6 +308,9 @@ internal static class Ninja
             {
                 var command = ninja[job.Length..];
 
+                // ninja never says it: a build that does is samurai's, whatever its file is called.
+                samurai = true;
+
                 if (CommandEdge(command, manifest) is { } ran)
                 {
                     said.Add((NinjaManifest.Normalize(ran.Outputs[0]), Failing.Own));
@@ -316,7 +341,9 @@ internal static class Ninja
 
         // ninja ends a failed build once every step it started has ended: a console step ended after the last status of
         // its own where its FAILED line, or its start, came after it; one followed by statuses may have ended before them.
+        // samurai counts a step as it starts, the console's among them, and writes nothing of one it starts while that runs.
         (int Run, int Planned)? progress = !statusRead ? null
+            : samurai ? runningUnfollowed && at.Run < at.Planned ? null : at
             : running is not null ? runningUnfollowed ? (at.Run + 1, at.Planned) : null
             : consoleEnded ? (at.Run + 1, at.Planned) : at;
 
@@ -493,15 +520,18 @@ internal static class Ninja
     /// <summary>
     /// The verdict of a build ninja was told to go on past failing steps with, where ninja did not end it: told to go on,
     /// it builds on long after a step fails, so a failed step says nothing of how the build ended, and ninja's last word
-    /// under its name does. Its own end - <c>build stopped: cannot make progress due to previously encountered
-    /// errors</c>, or an error of its own - is <see langword="null"/>, its verdict standing; an interruption, or no last
+    /// under its name does. Its own end - ninja's <c>build stopped: cannot make progress due to previously encountered
+    /// errors</c>, samurai's <c>cannot make progress due to previous errors</c>, or an error of its own - is
+    /// <see langword="null"/>, its verdict standing; an interruption, or no last
     /// word at all - a ninja killed from outside after a step failed, which exits 1 and says nothing - is
     /// <see cref="LegVerdict.Stopped"/>, so the steps it never ran are never said to need one that failed.
     /// </summary>
     /// <remarks>
-    /// A nested build's end - <c>build stopped: subcommand failed</c>, which an external project's ninja says as its step
-    /// fails - is no last word of this build's: ninja told to go on without a limit never says it of its own, for it
-    /// counts failures against none.
+    /// A failed step is no last word, whichever says it: ninja's <c>FAILED:</c> line, or samurai's <c>job failed with
+    /// status</c>, <c>job terminated due to signal</c> or <c>job status unknown</c>, which it says under its name. A nested
+    /// build's end - <c>build stopped: subcommand failed</c>, which an external project's ninja says as its step fails, or
+    /// samurai's <c>subcommand failed</c> - is no last word of this build's: ninja, and samurai, told to go on without a
+    /// limit never say it of their own, for each counts failures against none it could reach.
     /// </remarks>
     private static ReachedVerdict? StoppedGoingOn(PhaseResult phase, IReadOnlyList<string> names, string tool)
     {
@@ -522,6 +552,13 @@ internal static class Ninja
                     || Asides.Any(aside => said.StartsWith(aside, StringComparison.Ordinal))
                     || NestedEnds.Any(end => said.TrimEnd('.').EndsWith(end, StringComparison.Ordinal)))
                 {
+                    continue;
+                }
+
+                // samurai's line for a step that failed is its FAILED line, under its name: a step, never how it ended.
+                if (JobFailed.IsMatch(said))
+                {
+                    failedStep = true;
                     continue;
                 }
 

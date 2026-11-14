@@ -8069,7 +8069,9 @@ Under ninja each unit is a step the build's own ninja said failed (`Ninja.Own`):
 directly after a status line of its own, as ninja writes a failed step's - or, for a step in the
 console pool, whose status ninja writes as it starts and whose `FAILED:` line after all it printed,
 one naming that step where its start was its own - and, for samurai, which names no outputs, a
-failed command a build line of the manifest runs. A status line is its own where what it prints
+failed command a build line of the manifest runs, in each of the lines samurai writes for a step that
+failed, under its name: `job failed with status`, `job terminated due to signal` and `job status
+unknown`. A status line is its own where what it prints
 after the count is what one of the manifest's build lines prints (`NinjaEdge.Description`, or its
 command where it has none) and its count is no lower than the one the build stands at and no more
 than one higher: ninja counts each step as it ends, a console step as it starts, and a nested build
@@ -8086,7 +8088,13 @@ leaves others nothing to do, so only the count is held to. The last status of it
 it got - one more where a console step's `FAILED:` line, or its start, came after it, for ninja ends
 a failed build once every step it started has ended; where a console step that did not fail was
 followed by statuses of its own, whether it ended before the last of them is not written, and how far
-the build got is not said. A unit is named by the source its build line in the manifest compiles
+the build got is not said. samurai counts otherwise: its `[%s/%t]` is written as each step starts,
+its count the steps it has started with that one, and it writes none for a step it starts while a
+console step runs - so its last status of its own is how far it got, a console step's start among
+them, never one more for that step's end, and is not said where it is a console step's start and the
+build planned more, for what samurai started while that step ran is written nowhere. It is samurai
+where CMake's cache names its file `samu`, or where it said a job failed, which ninja never says -
+whatever its file is called. A unit is named by the source its build line in the manifest compiles
 where its rule is a CMake compile (`CMakeNinjaRule.Compiles`) - relative to the tree where it is in
 it - and by its output where it links or runs a command, an external project's step among them.
 
@@ -8107,13 +8115,19 @@ build's alone left out - where nothing is nested, every failing line, as before.
 
 Under make each unit is a target the build's own makes said failed (`Make.FailedTargets`), read by
 the structure GNU make writes in every language - `make[2]: *** [makefile:line: target]` and
-whatever follows, `Error 1`, `Fehler 1` or a signal's name - and along each chain of makes, never
+whatever follows, `Error 1`, `Fehler 1` or a signal's name, the makefile and line parted from the
+target as each catalog writes the colon: `: ` in English and most, ` : ` in French, a full-width `：`
+in Simplified Chinese - and along each chain of makes, never
 over the whole build: a step of a target's own `build.make` that failed, and a failure of CMake's
 driving makefiles (`Makefile`, `CMakeFiles/Makefile2`) that no earlier, deeper failure of the same
 target explains - tied by the target's directory, `CMakeFiles/app.dir/`, in the driving makefile's
 target and the step's makefile - kept by its target, so a target whose make named no failing step,
 as one that found no rule for a header, still counts. A failure is a nested build's where a step of
-this build at a shallower depth failed after it, the step whose make ran that build. GNU make before
+this build at a shallower depth failed after it, the step whose make ran that build - one known to be
+a step: its makefile read and none of the driving ones, or, where no failure names a makefile, its
+target no driving makefile's goal. A failure whose makefile was named in a form not read, or one
+naming none among failures that name theirs, proves nothing, for either could be a driving
+makefile's and would leave out the very unit that failed: it is kept as make said it. GNU make before
 4 names no makefile, so its driving failures are known by their targets, and a step is tied to a
 target by its directory where its target lies under it, as an object does, else to any. make names
 no source, so the unit is named by its target, the object.
@@ -8149,12 +8163,15 @@ was weighed by: its build is refused before it starts where the copy's gives its
 (`KeepGoing.RequireFor`, 13), and the adapter never builds without its way while asked for it.
 Whether a tool went on is read from what the build phase ran with (`KeepGoingWay.GivenIn`,
 `CMakeAdapter.KeptGoing`), never from what was asked; and a ninja told to go on builds long after a
-step fails, so a failed step is no end of its build: it ended the build itself only where its last
-word under its name says so - `build stopped: cannot make progress due to previously encountered
+step fails, so a failed step is no end of its build - ninja's `FAILED:` line, or samurai's `job failed
+with status`, `job terminated due to signal` or `job status unknown` under its name: it ended the
+build itself only where its last word under its name says so - ninja's `build stopped: cannot make
+progress due to previously encountered errors`, samurai's `cannot make progress due to previous
 errors`, or an error of its own - and is stopped where it said nothing after a step failed, as a
 ninja killed from outside says nothing, or where its last word is a nested build's
-`subcommand failed`, which a ninja without a limit never says of its own (`Ninja.Stopped`): the
-steps it never ran are never said to need one that failed. `help legs` lists every way from the
+`subcommand failed`, which neither says of its own without a limit (`Ninja.Stopped`): `-k 0` gives
+ninja the largest int and samurai the largest size, neither ever reached. The steps it never ran are
+never said to need one that failed. `help legs` lists every way from the
 adapters' own (`IBuildAdapter.KeepGoingWays`). `check-mutations` takes no `--keep-going`: an arm's
 build is judged by whether, and where, it fails.
 

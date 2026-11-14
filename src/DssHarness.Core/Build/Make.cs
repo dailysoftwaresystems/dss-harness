@@ -41,8 +41,18 @@ internal static class Make
         @"\A\S+?(?:\[(?<depth>[0-9]+)\])?: \*\*\* \[(?<rule>.+?)\] \S.*\z",
         RegexOptions.CultureInvariant);
 
-    /// <summary>The makefile and line GNU make 4 and later writes before the target, in a failure's brackets.</summary>
-    private static readonly Regex RuleAt = new(@"\A(?<makefile>.+?):[0-9]+: ", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// The makefile and line GNU make 4 and later writes before the target, in a failure's brackets, parted from it as its
+    /// catalogs write the colon: <c>build.make:76: a.o</c> in English and most others, French's <c>build.make:76 : a.o</c>
+    /// with a space before it, Simplified Chinese's <c>build.make:76：a.o</c> with a full-width one.
+    /// </summary>
+    private static readonly Regex RuleAt = new(@"\A(?<makefile>.+?):[0-9]+\s*[:：]\s*", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A line number after a colon, which no target's name holds: where a failure's brackets hold one that
+    /// <see cref="RuleAt"/> could not part from the target, make named a makefile in a form this does not read.
+    /// </summary>
+    private static readonly Regex LineNumber = new(@":[0-9]+", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// The directory of a target's own makefiles in what a target's name or a makefile's path holds - <c>CMakeFiles/app.dir/</c>,
@@ -86,8 +96,9 @@ internal static class Make
     /// </para>
     /// <para>
     /// A build nested in a step - an external project's, whose step runs <c>$(MAKE)</c> - fails within that step, deeper,
-    /// before it: so a failure is a nested build's where a step of this build at a shallower depth failed after it, and
-    /// its units are that build's, relative to its own directory; the step that ran it is this build's unit.
+    /// before it: so a failure is a nested build's where a step of this build at a shallower depth failed after it - one
+    /// known to be a step, by a makefile read that drives nothing, or by its target where make names no makefile at all -
+    /// and its units are that build's, relative to its own directory; the step that ran it is this build's unit.
     /// </para>
     /// </remarks>
     public static IReadOnlyList<string> FailedTargets(IEnumerable<string> lines, IReadOnlyCollection<string>? targets = null)
@@ -119,11 +130,15 @@ internal static class Make
                 ? whole ? null : DirectoryOf(target)
                 : DirectoryOf(makefile ?? target);
 
-            said.Add(new Failure(said.Count, depth, driver, target, tie));
+            said.Add(new Failure(said.Count, depth, driver, target, tie, makefile is not null, !at.Success && LineNumber.IsMatch(rule)));
         }
 
+        // GNU make before 4 names no makefile in any failure, and a step is known by its target; one that names one in any
+        // is read by its makefiles alone.
+        var named = said.Any(failure => failure.MakefileRead || failure.MakefileUnread);
+
         return [.. said
-            .Where(failure => !Nested(failure, said) && !(failure.Driver && Explained(failure, said)))
+            .Where(failure => !Nested(failure, said, named) && !(failure.Driver && Explained(failure, said)))
             .Select(failure => failure.Target)
             .Distinct(StringComparer.Ordinal)];
     }
@@ -158,10 +173,20 @@ internal static class Make
 
     /// <summary>
     /// Whether <paramref name="failure"/> is a nested build's: a step of this build at a shallower depth failed after it,
-    /// the step whose make ran the build it is of.
+    /// the step whose make ran the build it is of - one known to be a step: its makefile read and none of CMake's driving
+    /// ones, or, where no failure of the build names a makefile, as GNU make before 4 writes them, its target no driving
+    /// makefile's goal. A failure whose makefile was named in a form not read proves nothing, nor does one naming no
+    /// makefile among failures that name theirs: either could be a driving makefile's, and would leave out the very unit
+    /// that failed.
     /// </summary>
-    private static bool Nested(Failure failure, IReadOnlyList<Failure> said)
-        => said.Any(step => !step.Driver && step.Order > failure.Order && step.Depth < failure.Depth);
+    /// <param name="failure">The failure.</param>
+    /// <param name="said">Every failure the build said, in order.</param>
+    /// <param name="named">Whether any failure of the build names a makefile, read or not.</param>
+    private static bool Nested(Failure failure, IReadOnlyList<Failure> said, bool named)
+        => said.Any(step => !step.Driver
+            && (step.MakefileRead || !named)
+            && step.Order > failure.Order
+            && step.Depth < failure.Depth);
 
     /// <summary>
     /// Whether a failure of a driving makefile is explained by an earlier, deeper failure along its chain: of its own
@@ -192,5 +217,7 @@ internal static class Make
     /// <param name="Driver">Whether it is a failure of CMake's driving makefiles, rather than of a target's own step.</param>
     /// <param name="Target">The target that failed, as make names it.</param>
     /// <param name="Tie">The directory of the target's own makefiles it is tied to; <see langword="null"/> where it is tied to none.</param>
-    private sealed record Failure(int Order, int Depth, bool Driver, string Target, string? Tie);
+    /// <param name="MakefileRead">Whether the makefile and line make wrote before the target were read apart from it.</param>
+    /// <param name="MakefileUnread">Whether make wrote a makefile and line in a form <see cref="RuleAt"/> does not read, so the target is the whole bracket.</param>
+    private sealed record Failure(int Order, int Depth, bool Driver, string Target, string? Tie, bool MakefileRead, bool MakefileUnread);
 }
