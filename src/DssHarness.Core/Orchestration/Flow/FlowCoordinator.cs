@@ -2121,9 +2121,7 @@ public sealed class FlowCoordinator
         {
             // A group that had ended is in progress again until it ends again: its scope draws its steps - the
             // planner's visit among them - and it ends once they have ended.
-            var was = group.State;
-            group.State = FlowInstanceState.Running;
-            Record(FlowChangeKind.Step, group, from: was, to: FlowInstanceState.Running, detail: $"in progress again for update {update.Id}");
+            InProgressAgain(group, $"in progress again for update {update.Id}");
         }
 
         for (var at = scope; at is not null; at = at.Parent)
@@ -2136,8 +2134,7 @@ public sealed class FlowCoordinator
             // failed one is left as its failure left it.
             if (at.LoopOf is { Step.Repeat: not null } loop && loop.State == FlowInstanceState.Done)
             {
-                loop.State = FlowInstanceState.Running;
-                Record(FlowChangeKind.Step, loop, from: FlowInstanceState.Done, to: FlowInstanceState.Running, detail: $"in progress again for update {update.Id}");
+                InProgressAgain(loop, $"in progress again for update {update.Id}");
             }
         }
 
@@ -5835,6 +5832,27 @@ public sealed class FlowCoordinator
         End(instance, FlowInstanceState.Done, null, null);
     }
 
+    /// <summary>
+    /// Puts <paramref name="group"/>, which had ended, in progress again - the one place an ended group is reopened: a
+    /// loop a plan update owes work (<see cref="CarryWhatTheLoopsOwe"/>), the scope and the loops around the step that
+    /// plans an update (<see cref="RaisePlanner"/>), and the groups around a round added to a work-item group
+    /// (<see cref="OpenTheRoundAgain"/>). Its end is undone with its state - when it ended, where it ended in the run's own
+    /// order, and what a loop said it left there - so nothing of that end is read while it runs, and its next end says
+    /// only what that end leaves (<see cref="EndLoop"/>): a loop that left something and then ends with its until true
+    /// leaves nothing.
+    /// </summary>
+    /// <param name="group">The group that had ended.</param>
+    /// <param name="detail">Why it is in progress again, as its record says it.</param>
+    private void InProgressAgain(FlowInstance group, string detail)
+    {
+        var was = group.State;
+        group.State = FlowInstanceState.Running;
+        group.FinishedAt = null;
+        group.EndedIn = 0;
+        group.Leftover = null;
+        Record(FlowChangeKind.Step, group, from: was, to: FlowInstanceState.Running, detail: detail);
+    }
+
     /// <summary>Reads the end of a repeat's last iteration: a true <c>until</c> ends it, a false one makes the next iteration, and a false one at its bound asks.</summary>
     private bool Iterate(FlowInstance instance)
     {
@@ -6158,10 +6176,7 @@ public sealed class FlowCoordinator
         {
             if ((at.OwnGroupInstance ?? at.GroupInstance) is { State: FlowInstanceState.Done } around)
             {
-                around.State = FlowInstanceState.Running;
-                around.FinishedAt = null;
-                around.EndedIn = 0;
-                Record(FlowChangeKind.Step, around, from: FlowInstanceState.Done, to: FlowInstanceState.Running, detail: $"in progress again: update {update} added a round of '{round.Step.Name}'");
+                InProgressAgain(around, $"in progress again: update {update} added a round of '{round.Step.Name}'");
             }
         }
     }
@@ -6251,11 +6266,7 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
-                var was = loop.State;
-                loop.State = FlowInstanceState.Running;
-                loop.FinishedAt = null;
-                loop.EndedIn = 0;
-                Record(FlowChangeKind.Step, loop, from: was, to: FlowInstanceState.Running, detail: $"the loop runs again: update {reopening} owes its next iteration work");
+                InProgressAgain(loop, $"the loop runs again: update {reopening} owes its next iteration work");
             }
 
             if (loop.State is FlowInstanceState.Running or FlowInstanceState.Paused)
