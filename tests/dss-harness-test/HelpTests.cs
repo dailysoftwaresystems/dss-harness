@@ -1243,8 +1243,9 @@ public sealed partial class HelpTests
                 + "are among them: where a person's run of either would fetch a remote workflow into the workflow cache, an agent's - "
                 + $"told as {DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand} tells it, by {DssHarness.Core.Agents.AgentChildEnvironment.AgentMarker}, "
                 + "which its every child carries, or a process of this tool's above it in the process tree, one whose tree cannot be read "
-                + "taken as no person's - reads the cache alone and writes nothing to it, and one the cache does not hold is refused naming "
-                + $"'dssharness {WorkflowValidationService.CommandName}', which a person runs to fetch it.",
+                + "taken as no person's - reads the cache alone and writes nothing to it, and one the cache does not hold is refused saying what "
+                + $"made the command an agent's and that a person fills the cache from {DssHarness.Core.Agents.AgentAncestryAnswer.APersonsShell}, with "
+                + $"'dssharness {WorkflowValidationService.CommandName}' or 'dssharness {WorkflowExportService.CommandName} --from'.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(WorkflowValidationService.CommandName, DssHarness.Core.Agents.Policy.AgentPolicy.OpenVerbs);
@@ -1403,7 +1404,10 @@ public sealed partial class HelpTests
                 + "process tree, walked parent by parent, a process that took a freed id never read as a parent, the tool's own runtime told by the "
                 + "file it runs where the table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by "
                 + "its name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is none; one detached from the agent's tree "
-                + "(at, a tmux server, a double fork) is told by the mark alone, and a tree that could not be read is refused saying why - a "
+                + "(at, a tmux server, a double fork) is told by the mark alone, and a tree that could not be read is refused saying why; each "
+                + "refusal says which made the command an agent's (the mark, the process of this tool's by its name and id, so a side-task any "
+                + "process of this tool's starts is refused, or why the tree could not be read) and that a person starts one from "
+                + $"{DssHarness.Core.Agents.AgentAncestryAnswer.APersonsShell} - a "
                 + "side-task is a person's own conversation, and no agent starts another. The "
                 + "main tree is the side-task's working directory and holds the credential slots: a command over it whole - named . or given no "
                 + "path, an archive of it or a search - is not told from one over its sources, and reaches their files; and code an interpreter "

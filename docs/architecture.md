@@ -1873,8 +1873,8 @@ keeps it; and a use is recorded under the lock with the look that its entry is s
 (`WorkflowCache.Hold`), so an entry a pruning removed as it was read is fetched again, never answered
 as held. A second run of a pinned SHA reads the cache with no network, and
 a tag needs one call at each run's start; a run records each use's resolution - the remote commit SHA
-stands in the fingerprint a local workflow's parsed digest holds - and `FlowService` hands the frozen definition to
-the check a resume goes through, so each remote use resolves to the commit the run began with and
+stands in the fingerprint a local workflow's parsed digest holds - and `FlowService` hands the frozen definition, with
+the run's own copy of its remote workflows, to the check a resume goes through, so each remote use resolves to the commit the run began with and
 never resolves again: a tag or branch that moved since changes no run already started, and only a
 change to what a local file says refuses it as before. A resolution carries every file of its
 directory as it fetched or read and hashed it (`WorkflowRemoteResolution.Files`), and nothing after
@@ -1888,7 +1888,14 @@ a pruning because freezing makes what a run reads the run's own, as its definiti
 pruning then decides by nothing but the cache's own records, never by a guess at which runs are live
 and which of them hold which entry - a run whose engine died, or one resumed on another day, would
 otherwise hold its entries forever or lose them - and a resume, which resolves each use to the commit
-it began with again, refetches anything the cache lost and keeps nothing the run's copy holds whole.
+it began with again, reads it from the run's own copy first (`WorkflowRecordedUse`, which
+`WorkflowRunRecord` hands the fetcher from the check), proved the repository's own, read and hashed
+when the run began, then from the user's cache, and from the forge - proved again as any commit named
+by its SHA is - only where neither holds it whole: one order of where a recorded resolution's files
+come from, whoever runs the command, so the check a session goes through reads the very bytes its
+steps read, and neither a pruning of the cache, the network not being there, nor a tag deleted or a
+branch pushed over since refuses a run that started; and the session keeps again only what the run's
+copy does not hold whole.
 Trust is a person's decision, never a response's: a remote workflow directs agents and machine
 steps in the calling repository, so `workflowSources` in
 `config.json` allows its owner (`allow`, empty by default); names each GitHub Enterprise host with its
@@ -1935,8 +1942,23 @@ cache: the fetcher tells it by the one rule `run-side-task` refuses itself by
 tool's above it in the process tree, which no form of taking the mark away reaches, one whose tree
 cannot be read taken as no person's - and resolves from the cache alone - a ref by its newest
 resolution the pin takes - writing nothing, not even the use's date, and refuses what the cache does
-not hold naming `dssharness validate-workflow`, which a person runs to fetch it; so `validate-workflow`
-and `export-workflow` stay among the verbs open to an agent (`AgentPolicy.OpenVerbs`).
+not hold whole saying what made the command an agent's and where a person fills the cache instead, in
+the one wording `run-side-task`'s refusal gives too (`AgentAncestryAnswer.Why`: the mark, the process
+of this tool's by its name and id, or why the tree could not be read; `AgentAncestryAnswer.APersonsShell`:
+a shell of the person's own, which no process of this tool's started and which carries no mark, where
+`dssharness validate-workflow` or `dssharness export-workflow --from` fetches it), so a person told no
+is never sent to run again the command that was refused; a record or a blob of the cache's that could
+not be read is the cache's own failure there as everywhere nothing is fetched over it (21), never a
+workflow the cache does not hold (`WorkflowCache.ReadBytes`: a blob gone or changed on disk leaves its
+entry not whole, one that could not be read is the cache's failure). So `validate-workflow` and
+`export-workflow` stay among the verbs open to an agent (`AgentPolicy.OpenVerbs`). The rule takes a
+command any process of this tool's starts for an agent's - a leg's, a check's or a machine step's as
+much as an agent's own - because the process tree is the one fact an agent's child cannot change, and
+no process of the tool's says which of its children are an agent's: a record the engine kept of its
+own processes - a file, or a word of the environment - an agent's command could take away wherever no
+isolation holds it, as it can the mark, and a list of the verbs that start agents would be a second
+hand-kept rule beside the code that starts them. The refusal says so, naming the process, rather than
+the rule being narrowed.
 `validate-workflow` names the workflow cache's directory on the line it ends on wherever it went to
 resolve a remote use, whether the workflows hold or not, and in `--json` (`cache`) on every exit; a
 stop of it that came of a fetch names it in its line too.
@@ -3143,7 +3165,9 @@ own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one
 `export-workflow`, which a person's command may have fetch a remote workflow into the workflow cache, are open because
 under an agent they do not: the fetcher tells it by the one rule `run-side-task` refuses itself by
 (`AgentAncestry.UnderAnAgentAsync`: the agent's mark, or a process of this tool's above it in the process tree, one whose
-tree cannot be read taken as no person's), and reads the cache alone and writes nothing to it (`WorkflowRemoteFetcher`).
+tree cannot be read taken as no person's), and reads the cache alone and writes nothing to it (`WorkflowRemoteFetcher`),
+refusing what the cache does not hold saying what made the command an agent's and where a person fills the cache instead
+(`AgentAncestryAnswer.Why`, `AgentAncestryAnswer.APersonsShell`).
 
 The same owner decides the isolation of the tool's own executions of what the agents wrote
 (`IAgentIsolation.ForExecutionAsync`, an `ExecutionIsolation`, from an `ExecutionGround` that `ExecutionGrounds` alone
@@ -3923,7 +3947,9 @@ update finds its running copies by) only where the table gives no file, so a lau
 process runs its interpreter, or another program's shim - is none; one detached from the agent's tree - `at`, a
 `tmux` server, a double fork - told by the mark alone, and a table read by names alone, or one without this
 process, refused saying why, never read as a tree with no agent in it - the mark and the tree read together by
-`AgentAncestry.UnderAnAgentAsync`, the one rule the fetch of a remote workflow reads the cache alone by too); code an interpreter runs and a process apart from the agent's tree
+`AgentAncestry.UnderAnAgentAsync`, the one rule the fetch of a remote workflow reads the cache alone by too, each
+refusal saying which made the command an agent's and that a person starts one from a shell of their own, in the one
+wording the fetch's refusal gives too, `AgentAncestryAnswer.Why` and `AgentAncestryAnswer.APersonsShell`); code an interpreter runs and a process apart from the agent's tree
 are where that reading of words ends); no limits, no output envelope; the web
 search of every configured source turned on, with one more asked beside them: `native`, the
 provider's own search - on the Claude API a request of the harness's own whose only tool is the

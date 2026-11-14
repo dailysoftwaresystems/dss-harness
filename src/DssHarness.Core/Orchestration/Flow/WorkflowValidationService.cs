@@ -34,9 +34,10 @@ public interface IWorkflowValidationService : DssHarness.Core.Application.IUseCa
     /// <param name="named">A workflow's name, as <c>workflows</c> declares it; <see langword="null"/> for every one.</param>
     /// <param name="cancellationToken">Stops the check.</param>
     /// <param name="recorded">
-    /// The definition a run already began with, where the check is one that goes on with it: each remote use it
-    /// holds is resolved to the commit the run recorded, so a tag or branch that moved since changes no run already
-    /// started. Null where no run's own record stands behind the check.
+    /// What a run already began with, where the check is one that goes on with it: each remote use its definition
+    /// holds is resolved to the commit the run recorded, read from the run's own copy first, so a tag or branch that
+    /// moved since, a pruning of the cache or the network not there changes no run already started. Null where no run's
+    /// own record stands behind the check.
     /// </param>
     /// <exception cref="HarnessException">
     /// <paramref name="named"/> is a workflow the configuration does not declare
@@ -44,8 +45,18 @@ public interface IWorkflowValidationService : DssHarness.Core.Application.IUseCa
     /// be resolved. A workflow with problems is reported, not thrown, and so is a configuration that
     /// declares none.
     /// </exception>
-    Task<WorkflowValidationReport> CheckAsync(string startDirectory, string? named, CancellationToken cancellationToken = default, WorkflowDefinition? recorded = null);
+    Task<WorkflowValidationReport> CheckAsync(string startDirectory, string? named, CancellationToken cancellationToken = default, WorkflowRunRecord? recorded = null);
 }
+
+/// <summary>
+/// What a run already began with, which a check that goes on with it is held to: the definition it froze, each remote
+/// use of which names the commit it resolved to, and the copy the run keeps of the remote workflows it began with
+/// (<see cref="WorkflowCache.OfRun"/>) - read first for each of those commits, before the user's workflow cache and the
+/// forge (<see cref="WorkflowRemoteFetcher.ResolveAsync"/>), so the check reads the very bytes the run's steps read.
+/// </summary>
+/// <param name="Definition">The definition the run began with, as it froze it.</param>
+/// <param name="Kept">The run's own copy of the remote workflows it began with.</param>
+public sealed record WorkflowRunRecord(WorkflowDefinition Definition, WorkflowCache Kept);
 
 /// <summary>What checking one declared workflow found.</summary>
 /// <param name="Name">The workflow, as <c>workflows</c> declares it.</param>
@@ -139,7 +150,7 @@ public sealed class WorkflowValidationService(
         string startDirectory,
         string? named,
         CancellationToken cancellationToken = default,
-        WorkflowDefinition? recorded = null)
+        WorkflowRunRecord? recorded = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
 
@@ -174,7 +185,7 @@ public sealed class WorkflowValidationService(
         WorkflowRemoteFetcher remotes,
         HarnessContext context,
         string source,
-        Func<string, string?>? recordedCommit,
+        Func<string, WorkflowRecordedUse?>? recordedUse,
         List<WorkflowRemoteResolution> resolved,
         CancellationToken cancellationToken)
     {
@@ -185,7 +196,7 @@ public sealed class WorkflowValidationService(
                 context.Config.WorkflowSources,
                 context.Layout.MainCheckoutRoot,
                 Environment.GetEnvironmentVariable,
-                recordedCommit?.Invoke(source),
+                recordedUse?.Invoke(source),
                 cancellationToken).ConfigureAwait(false);
 
             resolved.Add(resolution);
@@ -202,7 +213,7 @@ public sealed class WorkflowValidationService(
     /// <param name="directory">The cache's directory.</param>
     internal static string CacheSaid(string directory) => $"remote workflows are read from and fetched into the workflow cache '{directory}'";
 
-    private async Task<WorkflowCheck> CheckAsync(HarnessContext context, string name, WorkflowDefinition? recorded, CancellationToken cancellationToken)
+    private async Task<WorkflowCheck> CheckAsync(HarnessContext context, string name, WorkflowRunRecord? recorded, CancellationToken cancellationToken)
     {
         var file = context.Layout.WorkflowFile(name);
 
@@ -236,11 +247,12 @@ public sealed class WorkflowValidationService(
         // Every use is resolved before the definition is checked: the called workflows are read, parsed and placed, so
         // that the definition under the check is the one a run runs - and what a resume is refused by is what was read.
         // A local one is held to the workflows directory as the run's own is; a remote one is fetched into the workflow
-        // cache, or read from it at the commit this run's own record holds, where the check goes on with a run that
-        // began at one; and a use inside a remote one is read from the same directory as the resolution read it. Every
+        // cache, or - where the check goes on with a run that began at one - read at the commit this run's own record
+        // holds, from the run's own copy first; and a use inside a remote one is read from the same directory as the
+        // resolution read it. Every
         // file of a remote workflow is read from what its resolution read and hashed, never from the cache again, which
         // a pruning may change meanwhile.
-        var recordedCommit = RecordedCommit(recorded);
+        var recordedUse = RecordedUses(recorded);
         var fetched = new List<WorkflowRemoteResolution>();
         var asked = false;
         var (withUses, useProblems, remoteResolutions) = await WorkflowResolver.ResolveAsync(
@@ -253,7 +265,7 @@ public sealed class WorkflowValidationService(
                     : source =>
                     {
                         asked = true;
-                        return ResolveRemoteAsync(remotes, context, source, recordedCommit, fetched, cancellationToken);
+                        return ResolveRemoteAsync(remotes, context, source, recordedUse, fetched, cancellationToken);
                     },
                 (owner, path) => ReadFetched(fetched, owner, path),
                 _platform.PathComparison)).ConfigureAwait(false);
@@ -322,12 +334,12 @@ public sealed class WorkflowValidationService(
     }
 
     /// <summary>
-    /// The commit a run's own recorded definition holds for each remote source a use names, where the check goes on
-    /// with a run that began at one: a source resolves to that commit again, however its ref has moved, so a resume is
-    /// refused by nothing it cannot help. Null where no run's own record stands behind the check.
+    /// What a run's own record holds for each remote source a use names, where the check goes on with a run that began at
+    /// one: the commit the source resolves to again, however its ref has moved, and the run's own copy it is read from
+    /// first, so a resume is refused by nothing it cannot help. Null where no run's own record stands behind the check.
     /// </summary>
-    /// <param name="recorded">The definition the run began with.</param>
-    private static Func<string, string?>? RecordedCommit(WorkflowDefinition? recorded)
+    /// <param name="recorded">What the run began with.</param>
+    private static Func<string, WorkflowRecordedUse?>? RecordedUses(WorkflowRunRecord? recorded)
     {
         if (recorded is null)
         {
@@ -336,12 +348,12 @@ public sealed class WorkflowValidationService(
 
         // Only a use that names a remote source records the commit it resolved to: a relative use inside a remote
         // workflow is read from that one's entry, at that one's commit.
-        var commits = FlowScope.Declared(recorded)
+        var commits = FlowScope.Declared(recorded.Definition)
             .Select(entry => entry.Step.Use)
             .OfType<FlowUse>()
             .Where(use => WorkflowRemote.Is(use.Name) && WorkflowRemote.Source(use.Source) is not null)
             .GroupBy(use => use.Source, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First().Fingerprint, StringComparer.Ordinal);
+            .ToDictionary(group => group.Key, group => new WorkflowRecordedUse(group.First().Fingerprint, recorded.Kept), StringComparer.Ordinal);
 
         return commits.Count == 0 ? null : source => commits.GetValueOrDefault(source);
     }

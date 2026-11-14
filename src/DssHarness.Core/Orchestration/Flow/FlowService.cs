@@ -1242,8 +1242,9 @@ public sealed class FlowService(
     /// The digest of the repository's entry for the workflow the run began with, as it reads now in the definition tree
     /// - the main checkout, <paramref name="definitionTree"/>, whichever tree the command was typed in - or the refusal
     /// (13) where the entry is no longer one that holds: a run goes on only under the definition it began with. The remote
-    /// workflows the check resolved, each at the commit the run began with, are kept again in the run's own copy where it
-    /// does not hold them whole, so a session reads every file it began with whatever a pruning did meanwhile.
+    /// workflows the check resolved, each at the commit the run began with and read from the run's own copy first, are
+    /// kept again in that copy where it does not hold them whole, so a session reads every file it began with whatever a
+    /// pruning did meanwhile.
     /// </summary>
     private async Task<(string? Digest, CommandOutcome? Refused)> EntryDigestAsync(string definitionTree, OrchestratorLayout layout, CancellationToken cancellationToken)
     {
@@ -1255,12 +1256,15 @@ public sealed class FlowService(
         }
 
         WorkflowValidationReport report;
+        var kept = WorkflowCache.OfRun(_fileSystem, layout);
 
         try
         {
-            // The frozen definition goes with the check as the run's own record: each remote use it holds is resolved
-            // to the commit the run began with, so a tag or branch that moved since changes no run already started.
-            report = await _validation.CheckAsync(definitionTree, frozen.Name, cancellationToken, frozen).ConfigureAwait(false);
+            // The frozen definition goes with the check as the run's own record, with the copy the run keeps of the remote
+            // workflows it began with: each remote use it holds is resolved to the commit the run began with, read from that
+            // copy first, so a tag or branch that moved since, a pruning of the cache or the network not there changes no
+            // run already started, and the check reads the very bytes the run's steps read.
+            report = await _validation.CheckAsync(definitionTree, frozen.Name, cancellationToken, new WorkflowRunRecord(frozen, kept)).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -1284,7 +1288,7 @@ public sealed class FlowService(
 
         try
         {
-            WorkflowCache.OfRun(_fileSystem, layout).Keep(check.Remotes);
+            kept.Keep(check.Remotes);
         }
         catch (HarnessException ex)
         {

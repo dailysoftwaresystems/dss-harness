@@ -616,8 +616,10 @@ public sealed class WorkflowCache
     /// <param name="entry">The entry.</param>
     /// <param name="path">The file's path in the repository, as the entry names it.</param>
     /// <exception cref="HarnessException">
-    /// The blob is not there, cannot be read, or does not hash to what the entry says (<see cref="HarnessExit.ConfigInvalid"/>)
-    /// - a blob changed on disk, which a resolution fetches again and a run refuses on.
+    /// The blob is not there, or does not hash to what the entry says (<see cref="HarnessExit.ConfigInvalid"/>) - a blob
+    /// gone or changed on disk, which leaves the entry not whole: a resolution fetches it again and a run refuses on it; or
+    /// it is there and could not be read (<see cref="FailedExit"/>) - the cache's own failure, as a record of it that could
+    /// not be read is, never taken for one that is not there.
     /// </exception>
     public byte[]? ReadBytes(WorkflowCacheEntry entry, string path)
     {
@@ -632,24 +634,27 @@ public sealed class WorkflowCache
         }
 
         var blob = BlobFile(cached.Blob);
+        var what = $"the workflow cache's '{blob}', the file '{path}' of the entry for '{entry.Repository}' at '{entry.Commit}',";
         byte[] bytes;
 
         try
         {
             bytes = _fileSystem.ReadAllBytes(blob);
         }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            throw new HarnessException(HarnessExit.ConfigInvalid, $"{what} is not there; a resolution of it fetches it again");
+        }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                $"the workflow cache's '{blob}', the file '{path}' of the entry for '{entry.Repository}' at '{entry.Commit}', could not be read: {exception.Message.TrimEnd('.')}; a resolution of it fetches it again");
+            throw new HarnessException(FailedExit, $"{what} could not be read: {exception.Message.TrimEnd('.')}; it is not taken for one that is not there", exception);
         }
 
         return BlobSha(bytes) == cached.Blob
             ? bytes
             : throw new HarnessException(
                 HarnessExit.ConfigInvalid,
-                $"the workflow cache's '{blob}', the file '{path}' of the entry for '{entry.Repository}' at '{entry.Commit}', does not hash to '{cached.Blob}' as the entry says: it was changed on disk, and is not read; a resolution of it fetches it again");
+                $"{what} does not hash to '{cached.Blob}' as the entry says: it was changed on disk, and is not read; a resolution of it fetches it again");
     }
 
     /// <summary>
@@ -659,7 +664,8 @@ public sealed class WorkflowCache
     /// <param name="entry">The entry.</param>
     /// <param name="path">The file's path in the repository, as the entry names it.</param>
     /// <exception cref="HarnessException">
-    /// The blob cannot be read or does not hash to what the entry says, or is not UTF-8 text (<see cref="HarnessExit.ConfigInvalid"/>).
+    /// The blob is not there or does not hash to what the entry says, or is not UTF-8 text (<see cref="HarnessExit.ConfigInvalid"/>);
+    /// or it could not be read (<see cref="FailedExit"/>) - <see cref="ReadBytes"/>.
     /// </exception>
     public string? ReadText(WorkflowCacheEntry entry, string path)
         => ReadBytes(entry, path) is { } bytes ? Text(bytes, $"'{path}' of the workflow '{entry.Repository}' at '{entry.Commit}'") : null;
