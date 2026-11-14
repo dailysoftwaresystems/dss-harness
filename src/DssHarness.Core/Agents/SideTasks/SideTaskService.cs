@@ -212,17 +212,14 @@ public sealed class SideTaskService(
         // name of the program - refuses itself, told by the one rule the fetch of a remote workflow is told by too: the
         // mark, by its presence whatever it holds, and the process tree, which no form of taking the mark away reaches. A
         // tree that could not be read is said and refused, never read as one with no agent in it; a process detached from
-        // the agent's tree is told by the mark alone.
+        // the agent's tree is told by the mark alone. The refusal says which of them made the command an agent's, and
+        // where a person starts one instead, in the words the fetch's refusal says them in.
         var origin = await _ancestry.UnderAnAgentAsync(_environment, cancellationToken).ConfigureAwait(false);
 
-        if (origin.UnderAnAgent)
+        if (origin.Why is { } why)
         {
-            return Unwritten(CommandOutcome.Refused($"'{RunCommand}' is refused: {NoAgentStartsOne}. Nothing was started."));
-        }
-
-        if (origin.Unread is { } unread)
-        {
-            return Unwritten(CommandOutcome.Refused($"'{RunCommand}' is refused: {unread} so whether an agent started it could not be told, and {NoAgentStartsOne}. Nothing was started."));
+            return Unwritten(CommandOutcome.Refused(
+                $"'{RunCommand}' is refused: {NoAgentStartsOne}, and this command is taken for an agent's: {why}. A person starts one from {AgentAncestryAnswer.APersonsShell}. Nothing was started."));
         }
 
         // The side-task's own stop: the command's, and the person's interrupts where no turn takes them - a one shot's

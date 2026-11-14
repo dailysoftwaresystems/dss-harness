@@ -38,7 +38,9 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
     /// value is still an agent's - and where it is not there, the process tree (<see cref="ReadAsync"/>), which no form of
     /// taking the mark away reaches. A tree that could not be read is said (<see cref="AgentAncestryAnswer.Unread"/>), never
     /// read as one with no agent in it, and each reader treats it as no person's: <c>run-side-task</c> refuses itself, and
-    /// the fetch of a remote workflow reads the workflow cache alone and writes nothing - both by this one rule.
+    /// the fetch of a remote workflow reads the workflow cache alone and writes nothing - both by this one rule
+    /// (<see cref="AgentAncestryAnswer.TakenForAnAgents"/>), and both saying why in its one wording
+    /// (<see cref="AgentAncestryAnswer.Why"/>) and where a person does it instead (<see cref="AgentAncestryAnswer.APersonsShell"/>).
     /// </summary>
     /// <param name="environment">Reads this process's environment, where the mark is looked for.</param>
     /// <param name="cancellationToken">Stops the reading of the process table.</param>
@@ -233,12 +235,46 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
     }
 }
 
-/// <summary>What the process tree, and the agent's mark where it was asked of, say of this process.</summary>
+/// <summary>
+/// What the process tree, and the agent's mark where it was asked of, say of this process - and, for a command the rule
+/// takes for an agent's, why, in the one wording every refusal of one gives (<see cref="Why"/>).
+/// </summary>
 /// <param name="Tool">The nearest ancestor that is a process of this tool's; null where none is, the tree could not be read, or the mark answered first.</param>
 /// <param name="Unread">Why which processes started this one could not be read, as the opening of a refusal's sentence, before its "so"; null where it was read, or the mark answered first.</param>
 /// <param name="Marked">Whether this process carries the agent's mark (<see cref="AgentAncestry.UnderAnAgentAsync"/>), the tree then not read.</param>
 public sealed record AgentAncestryAnswer(SampledProcess? Tool, string? Unread, bool Marked = false)
 {
+    /// <summary>
+    /// Where a person does what a command taken for an agent's may not, as every refusal of one says it: a shell of the
+    /// person's own, which no process of this tool's started and which carries no agent's mark - the one place the rule
+    /// reads as a person's, whatever started the command it refused.
+    /// </summary>
+    public static string APersonsShell { get; } =
+        $"a shell of the person's own, which no process of this tool's started and which carries no {AgentChildEnvironment.AgentMarker}";
+
     /// <summary>Whether the command runs under an agent: it carries the mark, or a process of this tool's started it.</summary>
     public bool UnderAnAgent => Marked || Tool is not null;
+
+    /// <summary>
+    /// Whether the command is taken for an agent's: it runs under one, or which processes started it could not be read -
+    /// a tree nobody looked at is never read as one with no agent in it. What every reader of the rule decides by.
+    /// </summary>
+    public bool TakenForAnAgents => UnderAnAgent || Unread is not null;
+
+    /// <summary>
+    /// Why the command is taken for an agent's, as every refusal of one says it - the one wording <c>run-side-task</c> and
+    /// the fetch of a remote workflow give, so a person told no is told what made the command an agent's: the mark it
+    /// carries; the process of this tool's above it in the process tree, by its name and its id - any command a process
+    /// of this tool's starts is taken for an agent's, a leg's, a check's and a machine step's among them, for an agent's
+    /// child can take its mark away but not its place in the tree, and no process of this tool's says which of its
+    /// children an agent's are; or why which processes started it could not be read. Null where it is a person's.
+    /// </summary>
+    public string? Why => this switch
+    {
+        { Marked: true } => $"it carries {AgentChildEnvironment.AgentMarker}, the mark every agent's child is given, whatever the mark holds",
+        { Tool: { } tool } => $"the process '{tool.Name}' (id {tool.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)}) above it in the process tree is a process of this tool's, as an agent's engine is, "
+            + "and a command any process of this tool's starts is taken for an agent's, a leg's, a check's or a machine step's as much, for an agent's child can take its mark away but not its place in the tree",
+        { Unread: { } unread } => $"{unread} so whether an agent started it could not be told",
+        _ => null,
+    };
 }

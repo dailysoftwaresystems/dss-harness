@@ -125,7 +125,10 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
     /// <param name="name">The workflow.</param>
     /// <param name="named">The file, as the definition names it.</param>
     /// <param name="what">What names the file, as a refusal says it.</param>
-    /// <exception cref="HarnessException">It breaks the rule, or could not be read (<see cref="HarnessExit.ConfigInvalid"/>), saying why.</exception>
+    /// <exception cref="HarnessException">
+    /// It breaks the rule, or could not be read (<see cref="HarnessExit.ConfigInvalid"/>), saying why; or, for a remote
+    /// workflow, a record or a blob of the cache it is read from could not be read (<see cref="WorkflowCache.FailedExit"/>).
+    /// </exception>
     public string ReadText(HarnessLayout layout, string name, string named, string what)
         => Read(layout, name, named, what, missingIsNone: false)!;
 
@@ -139,7 +142,10 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
     /// <param name="name">The workflow.</param>
     /// <param name="named">The file, as the workflow's own folder names it.</param>
     /// <param name="what">What names the file, as a refusal says it.</param>
-    /// <exception cref="HarnessException">It breaks the rule but for not being there, or could not be read (<see cref="HarnessExit.ConfigInvalid"/>), saying why.</exception>
+    /// <exception cref="HarnessException">
+    /// It breaks the rule but for not being there, or could not be read (<see cref="HarnessExit.ConfigInvalid"/>), saying
+    /// why; or, for a remote workflow, a record or a blob of the cache it is read from could not be read (<see cref="WorkflowCache.FailedExit"/>).
+    /// </exception>
     public string? ReadTextIfThere(HarnessLayout layout, string name, string named, string what)
         => Read(layout, name, named, what, missingIsNone: true);
 
@@ -165,17 +171,12 @@ public sealed class WorkflowNamedFiles(IFileSystem fileSystem, StringComparison 
                     $"'{named}', {what}, is of the workflow '{name}', which {(_cache is null ? "no reader of remote workflows is given here" : $"the remote workflows at '{_cache.DirectoryIfNamed}' hold no entry for")}; a run keeps every remote workflow it began with in its own, and the check a resume goes through keeps it again");
             }
 
-            try
-            {
-                return _cache.ReadText(entry, $"{parts.Directory}/{named.Replace('\\', '/')}")
-                    ?? (missingIsNone ? null : throw new HarnessException(
-                        HarnessExit.ConfigInvalid,
-                        $"'{named}', {what}, is not in the workflow '{name}': the commit it was fetched at holds no such file in its directory"));
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', {what}, could not be read: {exception.Message}");
-            }
+            // A blob gone or changed on disk is refused as a file of the workflow's that is not whole, and one that could
+            // not be read ends as the cache's own failure - each by WorkflowCache.ReadBytes, naming the blob.
+            return _cache.ReadText(entry, $"{parts.Directory}/{named.Replace('\\', '/')}")
+                ?? (missingIsNone ? null : throw new HarnessException(
+                    HarnessExit.ConfigInvalid,
+                    $"'{named}', {what}, is not in the workflow '{name}': the commit it was fetched at holds no such file in its directory"));
         }
 
         string directory;

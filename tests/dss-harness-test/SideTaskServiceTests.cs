@@ -1014,8 +1014,8 @@ public sealed class SideTaskServiceTests
 
     /// <summary>
     /// A side-task started under an agent - its environment marked as every agent's child's is - refuses itself, by
-    /// whatever name it was started and whatever the mark holds, a mark cleared to nothing among them: nothing is begun
-    /// and nothing written.
+    /// whatever name it was started and whatever the mark holds, a mark cleared to nothing among them, saying the mark made
+    /// it an agent's and where a person starts one instead: nothing is begun and nothing written.
     /// </summary>
     [Theory]
     [InlineData("1")]
@@ -1028,7 +1028,9 @@ public sealed class SideTaskServiceTests
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "start another", Model: "glm-5.3", Name: "nested"), Token);
 
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
-        Assert.Equal($"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}. Nothing was started.", outcome.Message);
+        Assert.Equal(
+            $"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}, and this command is taken for an agent's: it carries DSSHARNESS_UNDER_AGENT, the mark every agent's child is given, whatever the mark holds. A person starts one from a shell of the person's own, which no process of this tool's started and which carries no DSSHARNESS_UNDER_AGENT. Nothing was started.",
+            outcome.Message);
         Assert.Equal([SideTaskService.NoRecords], outcome.Details);
         Assert.Empty(stored.Runs);
         Assert.False(Directory.Exists(LayoutOf(temp, "nested").Directory));
@@ -1036,8 +1038,10 @@ public sealed class SideTaskServiceTests
 
     /// <summary>
     /// A side-task whose mark was taken away is still told by the process tree: started, through an agent and its shell,
-    /// by a process of this tool's, it refuses itself in the mark's own words; where the tree could not be read it is
-    /// refused saying why, never read as one with no agent in it. Nothing is begun and nothing written.
+    /// by a process of this tool's, it refuses itself naming that process by its name and id, so a person whose own command
+    /// a process of this tool's started knows what refused it; where the tree could not be read it is refused saying why,
+    /// never read as one with no agent in it. Each says where a person starts one instead. Nothing is begun and nothing
+    /// written.
     /// </summary>
     [Fact]
     public async Task ASideTaskStartedUnderAnAgent_WithItsMarkTakenAway_IsToldByTheProcessTree()
@@ -1057,7 +1061,9 @@ public sealed class SideTaskServiceTests
 
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "start another", Model: "glm-5.3", Name: "nested"), Token);
 
-        Assert.Equal((HarnessExit.Refused, $"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}. Nothing was started."), (outcome.ExitCode, outcome.Message));
+        Assert.Equal(
+            (HarnessExit.Refused, $"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}, and this command is taken for an agent's: the process 'dssharness' (id 10) above it in the process tree is a process of this tool's, as an agent's engine is, and a command any process of this tool's starts is taken for an agent's, a leg's, a check's or a machine step's as much, for an agent's child can take its mark away but not its place in the tree. A person starts one from a shell of the person's own, which no process of this tool's started and which carries no DSSHARNESS_UNDER_AGENT. Nothing was started."),
+            (outcome.ExitCode, outcome.Message));
         Assert.Equal([SideTaskService.NoRecords], outcome.Details);
 
         var (_, unreadTemp, unread, _, _) = await RepoAsync(tree: current => new ProcessTableReading([new SampledProcess(current, null, "dssharness", null, null)], "the process table came back empty, which no running machine's is"));
@@ -1066,7 +1072,7 @@ public sealed class SideTaskServiceTests
         var refused = await unread.RunAsync(new SideTaskCall(unreadTemp.Path, Prompt: "start another", Model: "glm-5.3", Name: "nested"), Token);
 
         Assert.Equal(
-            (HarnessExit.Refused, $"'run-side-task' is refused: which processes started this one could not be read - the process table came back empty, which no running machine's is - so whether an agent started it could not be told, and {SideTaskService.NoAgentStartsOne}. Nothing was started."),
+            (HarnessExit.Refused, $"'run-side-task' is refused: {SideTaskService.NoAgentStartsOne}, and this command is taken for an agent's: which processes started this one could not be read - the process table came back empty, which no running machine's is - so whether an agent started it could not be told. A person starts one from a shell of the person's own, which no process of this tool's started and which carries no DSSHARNESS_UNDER_AGENT. Nothing was started."),
             (refused.ExitCode, refused.Message));
         Assert.Empty(stored.Runs);
         Assert.False(Directory.Exists(LayoutOf(temp, "nested").Directory));

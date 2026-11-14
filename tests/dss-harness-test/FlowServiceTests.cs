@@ -3310,7 +3310,7 @@ public sealed class FlowServiceTests
         using var disposed = repository;
         var unreached = Substitute.For<IWorkflowValidationService>();
 
-        unreached.CheckAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<WorkflowDefinition?>())
+        unreached.CheckAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<WorkflowRunRecord?>())
             .Returns(Task.FromException<WorkflowValidationReport>(new HarnessException(HarnessExit.Incomplete, "the forge could not be reached.")));
 
         var started = await Service(repository.Harness, runner, validation: unreached).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);

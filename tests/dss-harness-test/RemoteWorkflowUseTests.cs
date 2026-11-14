@@ -54,6 +54,13 @@ public sealed class RemoteWorkflowUseTests
 
     private const string Prompt = "Review the paths you are given.\n";
 
+    /// <summary>
+    /// What a refusal of a command taken for an agent's says of where the cache is filled from: a person's own shell, and
+    /// the two commands that fetch there - never the command that was just refused, run again where it was.
+    /// </summary>
+    private const string FilledFromAShell =
+        "such a command never reaches the forge nor writes the cache, and nothing was asked of the forge. A person fills the cache from a shell of the person's own, which no process of this tool's started and which carries no DSSHARNESS_UNDER_AGENT, where 'dssharness validate-workflow' fetches every remote use of the workflows the repository declares, and 'dssharness export-workflow --from <source> --to <directory>' the one it names";
+
     /// <summary>What gh says where the network is not there: a name that does not resolve.</summary>
     private const string Unreachable = "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n";
 
@@ -788,7 +795,7 @@ public sealed class RemoteWorkflowUseTests
         forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Moved);
         forge.Requests.Clear();
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: Commit, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: new WorkflowRecordedUse(Commit), Token);
 
         Assert.Equal(Commit, resolved.Commit);
         Assert.Empty(forge.Requests);
@@ -799,11 +806,56 @@ public sealed class RemoteWorkflowUseTests
         forge.Answers[Repository] = Json("""{"default_branch":"main"}""");
         forge.Answers[$"{Repository}/compare/main...{Commit}"] = Exited(0, "identical\n");
 
-        var refetched = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: Commit, Token);
+        var refetched = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: new WorkflowRecordedUse(Commit), Token);
 
         Assert.Equal((Commit, Definition), (refetched.Commit, refetched.Definition));
         Assert.Equal([Repository, $"{Repository}/compare/main...{Commit}", $"{Repository}/git/commits/{Commit}"], forge.Asked.Take(3));
         Assert.DoesNotContain(forge.Asked, asked => asked.Contains("/git/ref/", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A commit a run recorded is read from the run's own copy first, whoever runs the command - a person's, with the
+    /// user's cache pruned and the forge not there, and an agent's, which reads nothing beyond the copy and the cache -
+    /// every file hashed again, nothing asked of the forge and nothing written; a copy that does not hold it whole is
+    /// passed over for the cache and the forge, as at the run's start.
+    /// </summary>
+    [Fact]
+    public async Task ARecordedCommit_IsReadFromTheRunsOwnCopyFirst_ByAPersonsCommandAndAnAgentsAlike()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (forge, cache, fetcher, warned) = Fixture(temp);
+        static string? Agent(string name) => name == AgentChildEnvironment.AgentMarker ? "1" : null;
+        Holds(forge, Commit, ("security-review.yml", Definition), ("prompts/review.md", Prompt));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        var began = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var run = new DssHarness.Core.Orchestration.OrchestratorLayout("r1", temp.Combine(".orchestrators", "r1"));
+        var kept = WorkflowCache.OfRun(harness.FileSystem, run);
+        kept.Keep([began]);
+        var keptAsItWas = Snapshot(run.RemoteWorkflowsDirectory);
+
+        // The user's cache pruned whole since the run began, and the network gone.
+        System.IO.Directory.Delete(cache.Directory, recursive: true);
+        forge.Always = Exited(1, stderr: Unreachable);
+        forge.Requests.Clear();
+
+        var person = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: new WorkflowRecordedUse(Commit, kept), Token);
+        var agent = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: new WorkflowRecordedUse(Commit, kept), Token);
+
+        Assert.Equal((Commit, Definition, Prompt), (person.Commit, person.Definition, person.Text(PromptPath)));
+        Assert.Equal((Commit, Definition, Prompt), (agent.Commit, agent.Definition, agent.Text(PromptPath)));
+        Assert.Empty(forge.Requests);
+        Assert.False(System.IO.Directory.Exists(cache.Directory));
+        Assert.Equal(keptAsItWas, Snapshot(run.RemoteWorkflowsDirectory));
+        Assert.Empty(warned);
+
+        // A blob of the copy gone: the copy does not hold it whole, and the cache - pruned - and then the forge are asked.
+        File.Delete(kept.BlobFile(WorkflowCache.BlobSha(Prompt)));
+
+        var unreached = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: new WorkflowRecordedUse(Commit, kept), Token));
+
+        Assert.Equal(HarnessExit.CommandFailed, unreached.ExitCode);
+        Assert.Equal([Repository], forge.Asked);
     }
 
     /// <summary>
@@ -960,7 +1012,8 @@ public sealed class RemoteWorkflowUseTests
     /// <summary>
     /// A command an agent runs - its environment marked - reads the workflow cache alone: a tag is resolved by the
     /// cache's newest resolution of it, nothing is asked of the forge and nothing of the cache is written, not even the
-    /// use's date; one the cache does not hold is refused naming the command a person runs to fetch it.
+    /// use's date; one the cache does not hold is refused saying the mark made the command an agent's and where a person
+    /// fills the cache instead.
     /// </summary>
     [Fact]
     public async Task AnAgentsCommand_ReadsTheCacheAlone_AndWritesNothing()
@@ -974,7 +1027,7 @@ public sealed class RemoteWorkflowUseTests
 
         Assert.Equal(HarnessExit.Refused, unfetched.ExitCode);
         Assert.Equal(
-            $"'{Source}' is not in the workflow cache as a command an agent runs needs it (it holds no resolution of 'v1'): such a command never reaches the forge nor writes the cache, so a person runs 'dssharness validate-workflow' to fetch it; nothing was asked of the forge",
+            $"'{Source}' is not in the workflow cache as this command needs it (it holds no resolution of 'v1'), and this command reads the cache alone, taken for an agent's: it carries DSSHARNESS_UNDER_AGENT, the mark every agent's child is given, whatever the mark holds; {FilledFromAShell}",
             unfetched.Message);
         Assert.Empty(forge.Requests);
         Assert.False(System.IO.Directory.Exists(cache.Directory));
@@ -992,13 +1045,15 @@ public sealed class RemoteWorkflowUseTests
         Assert.Empty(forge.Requests);
         Assert.Equal(written, Snapshot(cache.Directory));
         Assert.Equal(
-            [$"{WorkflowRemoteFetcher.Said}: '{Source}' was resolved from the workflow cache alone, for a command an agent runs never reaches the forge: it stands at the commit {Commit} the cache's newest resolution of 'v1' names, from 2026-09-30"],
+            [$"{WorkflowRemoteFetcher.Said}: '{Source}' was resolved from the workflow cache alone, at the commit {Commit} the cache's newest resolution of 'v1' names, from 2026-09-30, for this command is taken for an agent's, which never reaches the forge: it carries DSSHARNESS_UNDER_AGENT, the mark every agent's child is given, whatever the mark holds"],
             warned);
 
         // A commit the cache does not hold, named by its SHA: refused, and still nothing asked.
         var sha = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed() with { Ref = Moved }, Allowed(), temp.Path, Agent, recorded: null, Token));
 
-        Assert.StartsWith($"'dailysoftwaresystems/shared/workflows/security-review/security-review.yml@{Moved}' is not in the workflow cache as a command an agent runs needs it (it holds no entry for the commit '{Moved}')", sha.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            $"'dailysoftwaresystems/shared/workflows/security-review/security-review.yml@{Moved}' is not in the workflow cache as this command needs it (it holds no entry for the commit '{Moved}'), and this command reads the cache alone, taken for an agent's: it carries DSSHARNESS_UNDER_AGENT, the mark every agent's child is given, whatever the mark holds; {FilledFromAShell}",
+            sha.Message);
         Assert.Empty(forge.Requests);
     }
 
@@ -1869,7 +1924,9 @@ public sealed class RemoteWorkflowUseTests
     /// <summary>
     /// A command an agent runs is told by the one rule run-side-task is told by: with its mark taken away, the process tree
     /// still says the engine started it, and it reads the workflow cache alone, asking the forge nothing and writing
-    /// nothing; one whose tree cannot be read is no person's either, and is refused saying why.
+    /// nothing - refused, where the cache does not hold it, naming the process of this tool's that made it an agent's by
+    /// its name and id, so a person whose own command a leg or a step started knows what refused it; one whose tree cannot
+    /// be read is no person's either, and is refused saying why. Each says where a person fills the cache instead.
     /// </summary>
     [Fact]
     public async Task ACommandUnderAnAgent_WithItsMarkTakenAway_IsToldByTheProcessTree_AndReadsTheCacheAlone()
@@ -1894,7 +1951,7 @@ public sealed class RemoteWorkflowUseTests
 
         Assert.Equal(HarnessExit.Refused, unfetched.ExitCode);
         Assert.Equal(
-            $"'{Source}' is not in the workflow cache as a command an agent runs needs it (it holds no resolution of 'v1'): such a command never reaches the forge nor writes the cache, so a person runs 'dssharness validate-workflow' to fetch it; nothing was asked of the forge",
+            $"'{Source}' is not in the workflow cache as this command needs it (it holds no resolution of 'v1'), and this command reads the cache alone, taken for an agent's: the process 'dssharness' (id 10) above it in the process tree is a process of this tool's, as an agent's engine is, and a command any process of this tool's starts is taken for an agent's, a leg's, a check's or a machine step's as much, for an agent's child can take its mark away but not its place in the tree; {FilledFromAShell}",
             unfetched.Message);
         Assert.Empty(forge.Requests);
 
@@ -1907,7 +1964,7 @@ public sealed class RemoteWorkflowUseTests
 
         Assert.Equal(HarnessExit.Refused, unread.ExitCode);
         Assert.Equal(
-            $"'{Source}' is not in the workflow cache as a command that cannot tell it is no agent's needs it (it holds no resolution of 'v1'): which processes started this one could not be read - the process table came back empty, which no running machine's is - so whether an agent runs it could not be told, and such a command never reaches the forge nor writes the cache, so a person runs 'dssharness validate-workflow' to fetch it; nothing was asked of the forge",
+            $"'{Source}' is not in the workflow cache as this command needs it (it holds no resolution of 'v1'), and this command reads the cache alone, taken for an agent's: which processes started this one could not be read - the process table came back empty, which no running machine's is - so whether an agent started it could not be told; {FilledFromAShell}",
             unread.Message);
         Assert.Empty(forge.Requests);
 
@@ -1921,6 +1978,63 @@ public sealed class RemoteWorkflowUseTests
         Assert.Equal((Commit, Definition), (resolved.Commit, resolved.Definition));
         Assert.Empty(forge.Requests);
         Assert.Equal(written, Snapshot(cache.Directory));
+    }
+
+    /// <summary>
+    /// Where nothing is fetched over it - under an agent, and offline where the cache's last resolution would stand in -
+    /// an entry's record or a blob of the cache's own that could not be read is the cache's own failure, never said as a
+    /// workflow the cache does not hold, which a check would take for the definition's problem; a blob gone leaves its
+    /// entry not whole, and is refused as the cache not holding the workflow.
+    /// </summary>
+    [Fact]
+    public async Task AFileOfTheCachesOwnThatCouldNotBeRead_IsTheCachesOwnFailure_WhereNothingIsFetchedOverIt()
+    {
+        using var temp = new TempDirectory();
+        var (forge, cache, fetcher, _) = Fixture(temp);
+        static string? Agent(string name) => name == AgentChildEnvironment.AgentMarker ? "1" : null;
+        var lastResolved = new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" };
+        Holds(forge, Commit, ("security-review.yml", Definition), ("prompts/review.md", Prompt));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var root = cache.Directory;
+        var entry = System.IO.Directory.EnumerateFiles(Path.Combine(root, "entries")).Single();
+        var blob = cache.BlobFile(WorkflowCache.BlobSha(Prompt));
+        var physical = new PhysicalFileSystem(new HarnessFactory().FilePermissions);
+        var unreached = $"'{Source}' could not be resolved, the forge not being reached: gh api --hostname github.com {Repository}/git/ref/tags/v1 failed, so '{Source}' was not resolved: error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com";
+
+        foreach (var (unreadable, why) in new[]
+        {
+            (entry, $"the workflow cache's entry '{entry}' could not be read: {Held.Why}; it is not taken for one that is not there"),
+            (blob, $"the workflow cache's '{blob}', the file '{PromptPath}' of the entry for 'github.com/dailysoftwaresystems/shared' at '{Commit}', could not be read: {Held.Why}; it is not taken for one that is not there"),
+        })
+        {
+            var over = new WorkflowRemoteFetcher(forge.Gh(), new WorkflowCache(new Held(physical, unreadable), root), Person(), clock: new ManualClock());
+            forge.Always = null;
+            forge.Requests.Clear();
+
+            var underAnAgent = await Assert.ThrowsAsync<HarnessException>(() => over.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: null, Token));
+
+            Assert.Equal((WorkflowCache.FailedExit, why), (underAnAgent.ExitCode, underAnAgent.Message));
+            Assert.False(WorkflowResolution.RefusesTheSource(underAnAgent));
+            Assert.Empty(forge.Requests);
+
+            forge.Always = Exited(1, stderr: Unreachable);
+
+            var offline = await Assert.ThrowsAsync<HarnessException>(() => over.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token));
+
+            Assert.Equal(
+                (WorkflowCache.FailedExit, $"{unreached}; and the workflow cache, which would stand in, could not be read: {why}"),
+                (offline.ExitCode, offline.Message));
+        }
+
+        // A blob gone leaves the entry not whole: the cache does not hold the workflow, and the refusal says which file.
+        File.Delete(blob);
+
+        var gone = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: null, Token));
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"'{Source}' is not in the workflow cache as this command needs it (its files of the commit '{Commit}' are not whole: the workflow cache's '{blob}', the file '{PromptPath}' of the entry for 'github.com/dailysoftwaresystems/shared' at '{Commit}', is not there; a resolution of it fetches it again), and this command reads the cache alone, taken for an agent's: it carries DSSHARNESS_UNDER_AGENT, the mark every agent's child is given, whatever the mark holds; {FilledFromAShell}"),
+            (gone.ExitCode, gone.Message));
     }
 
     /// <summary>
@@ -2009,6 +2123,68 @@ public sealed class RemoteWorkflowUseTests
     }
 
     /// <summary>
+    /// A run's later session checks the remote workflows it began with by the run's own copy first, as its steps read
+    /// them: the user's cache pruned since, and then the network not there - or the tag moved to another commit, and the
+    /// one the run began with reached by no branch or tag of the repository any more - takes nothing from the run, which
+    /// goes on asking the forge nothing and writing nothing into the user's cache.
+    /// </summary>
+    /// <param name="offline">Whether the network is gone, rather than the tag moved off the run's commit.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ALaterSession_ReadsTheRunsOwnCopyFirst_WhateverAPruningTheNetworkOrTheTagDidSince(bool offline)
+    {
+        const string Paused = "name: security-review\nsteps:\n  - name: review\n    type: pause\n    question: go on?\n    options: [stay, go]\n";
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var (forge, cache, fetcher, _) = Fixture(temp, clock);
+        Holds(forge, Commit, ("security-review.yml", Paused));
+        forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Commit);
+        var (repository, _) = await FlowServiceTests.RepositoryAsync(
+            $"name: flow\nsteps:\n  - name: scan\n    use: {Source}\n",
+            new HarnessConfig { Workflows = [FlowServiceTests.Workflow], WorkflowSources = Allowed() });
+        using var disposed = repository;
+        var harness = repository.Harness;
+        var validation = new WorkflowValidationService(
+            harness.ContextLoader,
+            harness.FileSystem,
+            harness.Platform,
+            new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform),
+            DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild,
+            fetcher,
+            cache);
+        var service = FlowServiceTests.Service(harness, new Pausing(), validation: validation);
+
+        var started = await service.RunAsync(repository.Path, FlowServiceTests.Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(FlowServiceTests.Bound, Token);
+
+        Assert.Equal(FlowExit.Paused, started.ExitCode);
+
+        // The user's cache pruned: the run's start is the entry's last use, a month ago.
+        clock.Advance(TimeSpan.FromDays(31));
+        Assert.Equal(1, cache.Prune(30, clock.GetUtcNow()).Entries);
+
+        if (offline)
+        {
+            forge.Always = Exited(1, stderr: Unreachable);
+        }
+        else
+        {
+            // The tag moved to another commit, and nothing the forge lists reaches the one the run began with: a fetch of it
+            // now could not prove it the repository's own.
+            forge.Answers[$"{Repository}/git/ref/tags/v1"] = TagAt(Moved);
+            forge.Answers[Repository] = Json("""{"default_branch":"main"}""");
+        }
+
+        forge.Requests.Clear();
+
+        var answered = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(FlowServiceTests.Bound, Token);
+
+        Assert.Equal((HarnessExit.Success, "done"), (answered.ExitCode, answered.Message));
+        Assert.Empty(forge.Requests);
+        Assert.Empty(cache.List().Entries);
+    }
+
+    /// <summary>
     /// The workflowSources section is held to its rules: each allowed source named as one is - never blank - under a
     /// host the section names where it is under one, each host a host with the environment variable its credential is
     /// read from, none without one, and pin and offline spelled as they may be - github.com needing no host entry, for
@@ -2090,6 +2266,9 @@ public sealed class RemoteWorkflowUseTests
             "A remote workflow's schemas are held to the subset of JSON Schema the engine reads as a local one's are.",
             $"told by the one rule {DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand} is told by, the agent's mark or a process of this tool's above it in the process tree, one whose tree cannot be read taken as no person's",
             "both name it in --json, as cache, on every exit.",
+            "as the check a resume goes through reads them there first - the cache, and then the forge, asked only for a use the copy does not hold whole: neither a pruning of the cache, the network not being there, nor a tag deleted or a branch pushed over since takes a file from a run that started or refuses it",
+            "so a command any process of this tool's starts (a leg's, a check's or a machine step's as much) is taken for an agent's",
+            $"a use the cache does not hold whole is refused saying what made the command an agent's - the mark, the process of this tool's by its name and id, or why the tree could not be read - and that a person fills the cache from {AgentAncestryAnswer.APersonsShell}, with 'dssharness {WorkflowValidationService.CommandName}' or 'dssharness {WorkflowExportService.CommandName} --from'; a record or a blob of the cache's that could not be read is the cache's own failure there too ({WorkflowCache.FailedExit}).",
         })
         {
             Assert.Contains(said, remote, StringComparison.Ordinal);
@@ -2120,6 +2299,9 @@ public sealed class RemoteWorkflowUseTests
             $"or whose lock another process held past its window ({WorkflowCache.FailedExit})",
             "both name it in `--json`, as `cache`, on every exit",
             "a `--from` that names no remote workflow, is a usage error (10)",
+            "as the check a resume goes through reads them there first - the cache, and then the forge, asked only for a use the copy does not hold whole: neither a pruning of the cache, the network not being there, nor a tag deleted or a branch pushed over since takes a file from a run that started or refuses it",
+            "so a command any process of this tool's starts (a leg's, a check's or a machine step's as much) is taken for an agent's",
+            "a use the cache does not hold whole is refused saying what made the command an agent's - the mark, the process of this tool's by its name and id, or why the tree could not be read - and that a person fills the cache from a shell of their own, which no process of this tool's started and which carries no `DSSHARNESS_UNDER_AGENT`, with `dssharness validate-workflow` or `dssharness export-workflow --from`; a record or a blob of the cache's that could not be read is the cache's own failure there too (21).",
         })
         {
             Assert.Contains(said, readme, StringComparison.Ordinal);
@@ -2144,6 +2326,10 @@ public sealed class RemoteWorkflowUseTests
             $"(`WorkflowCache.{nameof(WorkflowCache.FailedExit)}`, {WorkflowCache.FailedExit})",
             $"(`AgentAncestry.{nameof(AgentAncestry.UnderAnAgentAsync)}`)",
             $"(`WorkflowFiles.{nameof(DssHarness.Core.Orchestration.Flow.WorkflowFiles.SchemaProblems)}`)",
+            $"reads it from the run's own copy first (`{nameof(WorkflowRecordedUse)}`, which `{nameof(WorkflowRunRecord)}` hands the fetcher from the check)",
+            "only where neither holds it whole: one order of where a recorded resolution's files come from, whoever runs the command",
+            $"(`{nameof(AgentAncestryAnswer)}.{nameof(AgentAncestryAnswer.Why)}`: the mark, the process of this tool's by its name and id, or why the tree could not be read; `{nameof(AgentAncestryAnswer)}.{nameof(AgentAncestryAnswer.APersonsShell)}`:",
+            $"(`WorkflowCache.{nameof(WorkflowCache.ReadBytes)}`: a blob gone or changed on disk leaves its entry not whole, one that could not be read is the cache's failure)",
         })
         {
             Assert.Contains(said, architecture, StringComparison.Ordinal);
