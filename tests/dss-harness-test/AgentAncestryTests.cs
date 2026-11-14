@@ -217,6 +217,36 @@ public sealed class AgentAncestryTests
             AgentAncestry.Of(UnderAShell(Current + 1), Current, null, StringComparison.Ordinal, Files));
     }
 
+    /// <summary>
+    /// What made a command an agent's is said in one wording, which every refusal of one gives: the mark it carries, the
+    /// process of this tool's above it by its name and id - whatever command of the tool's that process runs - or why which
+    /// processes started it could not be read; a person's command is taken for none and says nothing, and where a person
+    /// does it instead is one place.
+    /// </summary>
+    [Fact]
+    public void WhatMadeACommandAnAgents_IsSaidInOneWording()
+    {
+        var leg = new SampledProcess(10, 2, "dssharness", Early, "dssharness test --legs linux", "/home/me/.dotnet/tools/dssharness");
+        var answers = new[]
+        {
+            new AgentAncestryAnswer(null, null, Marked: true),
+            new AgentAncestryAnswer(leg, null),
+            new AgentAncestryAnswer(null, "which processes started this one could not be read - the process table does not hold this process -"),
+            new AgentAncestryAnswer(null, null),
+        };
+
+        Assert.Equal([true, true, true, false], answers.Select(answer => answer.TakenForAnAgents));
+        Assert.Equal(
+            [
+                "it carries DSSHARNESS_UNDER_AGENT, the mark every agent's child is given, whatever the mark holds",
+                "the process 'dssharness' (id 10) above it in the process tree is a process of this tool's, as an agent's engine is, and a command any process of this tool's starts is taken for an agent's, a leg's, a check's or a machine step's as much, for an agent's child can take its mark away but not its place in the tree",
+                "which processes started this one could not be read - the process table does not hold this process - so whether an agent started it could not be told",
+                null,
+            ],
+            answers.Select(answer => answer.Why));
+        Assert.Equal("a shell of the person's own, which no process of this tool's started and which carries no DSSHARNESS_UNDER_AGENT", AgentAncestryAnswer.APersonsShell);
+    }
+
     /// <summary>What the service reads is the machine's table, walked from this process's own id.</summary>
     [Fact]
     public async Task TheAncestry_ReadsTheTable_FromThisProcess()

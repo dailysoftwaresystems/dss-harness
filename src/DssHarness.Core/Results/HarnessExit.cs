@@ -57,7 +57,10 @@ public static class HarnessExit
     /// worktree's removal stopped part way is the same answer: its deletion is not done, and
     /// delete-agent run again finishes it without folding anything. So is an update of a program -
     /// DssHarness by update-tool, Claude Code by npm - not finished within its bound, or whose download
-    /// was not reached: both updaters answer it with this one code (<see cref="ProgramUpdate.FailedExit"/>).
+    /// was not reached: both updaters answer it with this one code (<see cref="ProgramUpdate.FailedExit"/>). So is a
+    /// remote workflow's fetch not finished within its bound, and the workflow cache not read, written or locked within
+    /// its window (<see cref="Orchestration.Flow.WorkflowCache.FailedExit"/>): the definition was never wrong, its check
+    /// is only not done.
     /// </remarks>
     public const int Incomplete = 21;
 
@@ -107,7 +110,7 @@ public static class HarnessExit
             [nameof(ToolMissing)] = "A required external tool is not installed, or could not be started.",
             [nameof(HostUnavailable)] = "A host could not be reached, or DssHarness could not run there; nothing ran on it.",
             [nameof(CommandFailed)] = "The wrapped command ran and reported failure.",
-            [nameof(Incomplete)] = "Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not finished within its bound, or its download not reached); it is not a pass, and running it again, once what it names is dealt with, finishes it.",
+            [nameof(Incomplete)] = "Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not finished within its bound, or its download not reached), or a remote workflow's fetch was not finished within its bound or the workflow cache could not be read, written or locked within its window; it is not a pass, and running it again, once what it names is dealt with, finishes it.",
             [nameof(InternalError)] = "The harness itself failed unexpectedly; this is a defect in the tool.",
             [nameof(Cancelled)] = "The run was interrupted before it finished; what it had already done is still reported.",
         };

@@ -24,6 +24,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Advisor">The agent that recommends an answer to a question the engine raises itself.</param>
 /// <param name="Reporter">The agent that words what a run is doing for a person who asks.</param>
 /// <param name="Amend">Everything the workflow says about a request amended, or an answer changed, while a run works.</param>
+/// <param name="Texts">
+/// The workflow's texts: each name a markdown file of its own directory, read in a prompt as <c>{text.&lt;name&gt;}</c> -
+/// a general mechanism of which <c>recommendations</c> is the shipped flow's own name, kept for the repositories that
+/// read it. Null where the workflow declares none.
+/// </param>
 /// <param name="Answers">The answers the configuration gives to question kinds, beforehand.</param>
 /// <param name="Inputs">The values a run of this workflow is started with.</param>
 /// <param name="Params">The workflow's own knobs, defaulted in the file and read as <c>param.&lt;name&gt;</c>.</param>
@@ -50,7 +55,8 @@ public sealed record WorkflowDefinition(
     string? Recommendations = null,
     FlowAdvisor? Advisor = null,
     FlowReporter? Reporter = null,
-    FlowAmend? Amend = null)
+    FlowAmend? Amend = null,
+    IReadOnlyDictionary<string, string>? Texts = null)
 {
     /// <summary>The most step instances a run may have where the file says nothing (<c>maxInstances</c>).</summary>
     public const int DefaultMaxInstances = 5_000;
@@ -313,10 +319,14 @@ public sealed record FlowAnswer(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? Times,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Then);
 
-/// <summary>One value a run of the workflow is started with.</summary>
-/// <param name="Name">The input's name, as <c>--input name=value</c> spells it.</param>
+/// <summary>One value a run of the workflow is started with, or a workflow used as a step is handed.</summary>
+/// <param name="Name">The input's name, as <c>--input name=value</c> spells it, or as a <c>with:</c> value spells it.</param>
 /// <param name="Description">What the value is for, shown when it is missing.</param>
-/// <param name="Kind"><c>text</c>, or <c>file</c>: a path inside the repository, which must be a file when the run starts.</param>
+/// <param name="Kind">
+/// <c>text</c>, or <c>file</c>: a path inside the repository, which must be a file when the run starts - and, of a
+/// workflow another uses as a step, also <c>value</c>: any typed value, read as an expression, and <c>step</c>: a name
+/// its steps say in <c>onFailure</c> or <c>then</c> through <c>{input.&lt;name&gt;}</c>, resolved in the caller.
+/// </param>
 /// <param name="Default">What to use when nothing supplies it, or <see langword="null"/>; empty is the input not given, and is always taken.</param>
 /// <param name="Required">Whether the run is refused when nothing supplies it and there is no default.</param>
 /// <param name="Options">The values a <c>text</c> input takes; a run started with another is refused.</param>
@@ -331,11 +341,17 @@ public sealed record FlowInput(
     /// <summary>The kind a file that says nothing is read as.</summary>
     public const string TextKind = "text";
 
-    /// <summary>The other kind: a path inside the repository, checked to be a file when the run starts.</summary>
+    /// <summary>The kind a path inside the repository is: checked to be a file when the run starts.</summary>
     public const string FileKind = "file";
 
-    /// <summary>Both kinds, in the order a refusal lists them.</summary>
-    public static IReadOnlyList<string> Kinds { get; } = [TextKind, FileKind];
+    /// <summary>The kind any typed value takes, read as an expression: a used workflow's alone.</summary>
+    public const string ValueKind = "value";
+
+    /// <summary>The kind a name its steps say in onFailure or then takes, resolved in the caller: a used workflow's alone.</summary>
+    public const string StepKind = "step";
+
+    /// <summary>Every kind, in the order a refusal lists them.</summary>
+    public static IReadOnlyList<string> Kinds { get; } = [TextKind, FileKind, ValueKind, StepKind];
 }
 
 /// <summary>
@@ -360,6 +376,306 @@ public sealed record WorkflowOutput(
     string Name,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Description,
     string From);
+
+/// <summary>
+/// The run-level settings of a workflow another uses as a step, carried where the use says
+/// <c>useParentLimits: false</c> and applied to its steps key by key (<see cref="FlowUse.Governing"/>): a key it
+/// declares governs its steps, counted across every instance of the use, and a key it declares none for is the next
+/// governing use's out that declares it, or the run's own - a use never widens a run's limits by declaring nothing. Its
+/// budget and its reporter are carried and not applied (<see cref="FlowUse.NotApplied"/>): the run's budget counts its steps'
+/// spend and the run's reporter words them. An amend is never carried here, for an amend is a run's own and is refused
+/// where the key says false.
+/// </summary>
+/// <param name="Budget">What the used workflow's own budget says - carried, never applied: the run's budget counts its steps' spend.</param>
+/// <param name="MaxReasoningAgents">Reasoning agents its steps may have at once, where the file says.</param>
+/// <param name="MaxParallelProcesses">Steps running legs its steps may have at once, where the file says.</param>
+/// <param name="MaxOpenAgents">Agents with a worktree its steps may have open at once, where the file says.</param>
+/// <param name="MaxRetries">Retries its steps fall back to where they say none.</param>
+/// <param name="BackoffSeconds">The seconds its steps wait before another try, doubling.</param>
+/// <param name="MaxInstances">The most step instances its steps may open, counted in the place of the run's own cap for them.</param>
+/// <param name="HandoffSeconds">How long a paused reasoning step of it is given to write its handoff.</param>
+/// <param name="Advisor">The agent that recommends an answer to a question its steps raise.</param>
+/// <param name="Reporter">The used workflow's own reporter - carried, never applied: the run's reporter words the run as a whole.</param>
+/// <param name="Answers">
+/// The answers the used workflow gives to question kinds, consulted for its steps' questions after the step's own and
+/// the groups within it, and before the caller's groups and the run's.
+/// </param>
+/// <param name="CodebaseGraph">The shape of the run's one graph where the run's own workflow declares none (<see cref="FlowUse.GraphOf"/>).</param>
+/// <param name="Amends">Whether the used workflow declares an amend - never applied, for an amend is a run's own, and refused where the use says false.</param>
+public sealed record FlowUseOwn(
+    FlowBudget? Budget = null,
+    int? MaxReasoningAgents = null,
+    int? MaxParallelProcesses = null,
+    int? MaxOpenAgents = null,
+    int? MaxRetries = null,
+    int? BackoffSeconds = null,
+    int? MaxInstances = null,
+    int? HandoffSeconds = null,
+    FlowAdvisor? Advisor = null,
+    FlowReporter? Reporter = null,
+    IReadOnlyDictionary<string, FlowAnswer>? Answers = null,
+    FlowCodebaseGraph? CodebaseGraph = null,
+    bool Amends = false)
+{
+    /// <summary>Whether the used workflow declares nothing of its own, so every key stays the caller's.</summary>
+    [JsonIgnore]
+    public bool DeclaresNothing => Declared.Count == 0;
+
+    /// <summary>Whether the used workflow declares <paramref name="key"/>, so it governs that key for its steps.</summary>
+    /// <param name="key">The run-level key.</param>
+    public bool Declares(FlowUseKey key)
+        => key switch
+        {
+            FlowUseKey.MaxReasoningAgents => MaxReasoningAgents is not null,
+            FlowUseKey.MaxParallelProcesses => MaxParallelProcesses is not null,
+            FlowUseKey.MaxOpenAgents => MaxOpenAgents is not null,
+            FlowUseKey.MaxRetries => MaxRetries is not null,
+            FlowUseKey.BackoffSeconds => BackoffSeconds is not null,
+            FlowUseKey.MaxInstances => MaxInstances is not null,
+            FlowUseKey.HandoffSeconds => HandoffSeconds is not null,
+            FlowUseKey.Advisor => Advisor is not null,
+            _ => throw new ArgumentOutOfRangeException(nameof(key), key, "no run-level key a use governs by"),
+        };
+
+    /// <summary>The keys it declares, in the order a line says them; empty where it declares none.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Declared
+    {
+        get
+        {
+            var declared = new List<string>();
+
+            if (Budget is not null)
+            {
+                declared.Add("budget");
+            }
+
+            if (MaxReasoningAgents is not null || MaxParallelProcesses is not null || MaxOpenAgents is not null || MaxRetries is not null || BackoffSeconds is not null || HandoffSeconds is not null)
+            {
+                declared.Add("limits");
+            }
+
+            if (MaxInstances is not null)
+            {
+                declared.Add("maxInstances");
+            }
+
+            if (Advisor is not null)
+            {
+                declared.Add("advisor");
+            }
+
+            if (Reporter is not null)
+            {
+                declared.Add("reporter");
+            }
+
+            if ((Answers?.Count ?? 0) > 0)
+            {
+                declared.Add("answers");
+            }
+
+            if (CodebaseGraph is not null)
+            {
+                declared.Add("codebaseGraph");
+            }
+
+            return declared;
+        }
+    }
+}
+
+/// <summary>
+/// The workflow a step that says <c>use:</c> is, as resolution found it: everything of its own the step needs to run it
+/// - its inputs, its declared outputs, its recovery - beside the fingerprint of what it says, which the run records so a
+/// resume is refused where that changed, and the run-level keys of its own that no step applies.
+/// </summary>
+/// <param name="Source">The path as written, <c>./pipeline/pipeline.yml</c> among the callers.</param>
+/// <param name="Name">
+/// The called workflow's name, under whose directory its files are read: its directory under the repository's workflows
+/// directory, <c>implementation/pipeline</c> for a pipeline the implementation workflow uses; for a remote one, or one
+/// a relative use inside a remote one names, its cache place, <c>remote/&lt;host&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;commit&gt;/&lt;dir&gt;</c>.
+/// </param>
+/// <param name="Fingerprint">
+/// What the run records of the called workflow's resolution: for a local one the digest of its parsed definition, taken
+/// as the run's own definition's is, so a comment or line endings change nothing; for a remote one, or one inside it,
+/// the commit it was read at.
+/// </param>
+/// <param name="Inputs">The called workflow's declared inputs, which the step's <c>with:</c> values fill.</param>
+/// <param name="Params">The called workflow's own params, read as <c>param.&lt;name&gt;</c> inside it.</param>
+/// <param name="Outputs">The called workflow's declared outputs: the step's own outputs once it ends.</param>
+/// <param name="Recover">The called workflow's recovery, which a failure inside the step reaches first; null where it declares none.</param>
+/// <param name="NotApplied">
+/// The run-level keys the called workflow declares that no step applies, said by <c>validate-workflow</c> so nothing is
+/// applied in silence: its budget and reporter, which a use that governs itself carries but nothing applies yet, its
+/// <c>pushCheckpoints</c> and <c>recommendations</c>, a run's own alone, and - unless the use says
+/// <c>useParentLimits: false</c> - its advisor, amend, answers, limits and <c>codebaseGraph</c>, the calling run's own
+/// holding; its <c>codebaseGraph</c> even then where the run's own workflow declares one, whose shape the run's one graph
+/// has (<see cref="FlowUse.GraphOf"/>).
+/// </param>
+/// <param name="Own">
+/// The called workflow's run-level settings, carried where the use says <c>useParentLimits: false</c> and applied to
+/// its steps key by key (<see cref="Governing"/>); null where the calling run's settings govern.
+/// </param>
+/// <param name="Texts">
+/// The called workflow's texts: each name a markdown file of its own directory, read inside it as
+/// <c>{text.&lt;name&gt;}</c>. Null where it declares none, and then no text of its own is read inside it.
+/// </param>
+public sealed record FlowUse(
+    string Source,
+    string Name,
+    string Fingerprint,
+    IReadOnlyList<FlowInput> Inputs,
+    IReadOnlyList<FlowParam> Params,
+    IReadOnlyList<WorkflowOutput> Outputs,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowRecover? Recover,
+    IReadOnlyList<string> NotApplied,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] FlowUseOwn? Own = null,
+    IReadOnlyDictionary<string, string>? Texts = null)
+{
+    /// <summary>
+    /// The use that governs <paramref name="key"/> for the step at <paramref name="path"/>: the nearest use around it,
+    /// outward, that says <c>useParentLimits: false</c> and declares that key - one that declares nothing of it governs
+    /// nothing of it, so the next one out that declares it does, or none does and the run's own holds. The one owner of
+    /// which use governs a step, which the engine's gates, retries, handoffs, instance caps and advisor and each step's
+    /// runner all ask by the step's declaration path: a step of the flow's own recovery (<c>recover.&lt;step&gt;</c>) is
+    /// the run's wherever the failure it was taken for happened, and a step of a used workflow's recovery
+    /// (<c>&lt;use&gt;.recover.&lt;step&gt;</c>) is that workflow's. Null where no use governs the key.
+    /// </summary>
+    /// <param name="definition">The resolved definition the run holds.</param>
+    /// <param name="path">The step's declaration path, dotted, from the flow's root.</param>
+    /// <param name="key">The run-level key asked of.</param>
+    public static FlowGoverning? Governing(WorkflowDefinition definition, string path, FlowUseKey key)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        FlowGoverning? governing = null;
+        var parts = path.Split('.');
+        var steps = definition.Steps;
+        var start = 0;
+        WorkflowStep? group = null;
+
+        // The flow's own recovery hangs from the root under its reserved name, and a used workflow's from the step that
+        // uses it, as the definition's names are walked (FlowScope).
+        if (parts[0] == FlowScope.Recovery && definition.Recover is { } root)
+        {
+            steps = root.Steps;
+            start = 1;
+            group = root.Declaration;
+        }
+
+        // The step itself is never its own governing use: only the groups around it are walked.
+        for (var at = start; at + 1 < parts.Length; at++)
+        {
+            if (parts[at] == FlowScope.Recovery && group?.Use?.Recover is { } called)
+            {
+                steps = called.Steps;
+                continue;
+            }
+
+            if (steps.FirstOrDefault(step => string.Equals(step.Name, parts[at], StringComparison.Ordinal)) is not { } found)
+            {
+                break;
+            }
+
+            if (found.Use?.Own is { } own && own.Declares(key))
+            {
+                governing = new FlowGoverning(string.Join('.', parts[..(at + 1)]), found, own);
+            }
+
+            group = found;
+            steps = found.Steps;
+        }
+
+        return governing;
+    }
+
+    /// <summary>
+    /// The retries the step at <paramref name="path"/> is given: its own where it says, the <c>maxRetries</c> of the use
+    /// that governs it where one declares it (<see cref="Governing"/>), and else the workflow's rule
+    /// (<see cref="WorkflowDefinition.RetriesOf"/>) - the one rule the engine's retry table and a reasoning step's agent
+    /// runner both read.
+    /// </summary>
+    /// <param name="definition">The resolved definition the run holds.</param>
+    /// <param name="path">The step's declaration path.</param>
+    /// <param name="step">The step.</param>
+    public static int RetriesOf(WorkflowDefinition definition, string path, WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(step);
+
+        return step.Retries ?? Governing(definition, path, FlowUseKey.MaxRetries)?.Own.MaxRetries ?? definition.RetriesOf(step);
+    }
+
+    /// <summary>
+    /// The seconds the step at <paramref name="path"/> waits before it is tried again: its own where it says, the
+    /// <c>backoffSeconds</c> of the use that governs it where one declares it, and else the workflow's; null where none
+    /// says, and the runner's default holds.
+    /// </summary>
+    /// <param name="definition">The resolved definition the run holds.</param>
+    /// <param name="path">The step's declaration path.</param>
+    /// <param name="step">The step.</param>
+    public static int? BackoffSecondsOf(WorkflowDefinition definition, string path, WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(step);
+
+        return step.BackoffSeconds ?? Governing(definition, path, FlowUseKey.BackoffSeconds)?.Own.BackoffSeconds ?? definition.BackoffSeconds;
+    }
+
+    /// <summary>
+    /// The shape of the run's one codebase graph, settled once for the run: the run's own workflow's where it declares
+    /// one - a governing use's then said as not applied (<see cref="NotApplied"/>) - else the first a use that governs
+    /// itself declares, in declaration order - the uses in recoveries among them - and null where none does, every
+    /// default then holding. Every sync, every serving and every graphify step of the run reads this one shape, for one
+    /// graph synced under two shapes would list and drop files between its syncs - so where two governing uses declare a
+    /// shape and the run's own workflow none, they give the graph one, for two that differ are refused (V66), and the
+    /// first in declaration order is the shape they all give.
+    /// </summary>
+    /// <param name="definition">The resolved definition the run holds.</param>
+    public static FlowCodebaseGraph? GraphOf(WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return definition.CodebaseGraph
+            ?? FlowScope.Declared(definition).Select(declared => declared.Step.Use?.Own?.CodebaseGraph).FirstOrDefault(graph => graph is not null);
+    }
+}
+
+/// <summary>The run-level keys a use that governs itself governs its steps by, each on its own (<see cref="FlowUse.Governing"/>).</summary>
+public enum FlowUseKey
+{
+    /// <summary><c>maxReasoningAgents</c>: the reasoning agents its steps may have at once.</summary>
+    MaxReasoningAgents,
+
+    /// <summary><c>maxParallelProcesses</c>: the steps running legs its steps may have at once.</summary>
+    MaxParallelProcesses,
+
+    /// <summary><c>maxOpenAgents</c>: the agents with a worktree its steps may have open at once.</summary>
+    MaxOpenAgents,
+
+    /// <summary><c>maxRetries</c>: the retries its steps fall back to.</summary>
+    MaxRetries,
+
+    /// <summary><c>backoffSeconds</c>: the wait before another try.</summary>
+    BackoffSeconds,
+
+    /// <summary><c>maxInstances</c>: the step instances its steps may open.</summary>
+    MaxInstances,
+
+    /// <summary><c>handoffSeconds</c>: how long a paused reasoning step of it is given to write its handoff.</summary>
+    HandoffSeconds,
+
+    /// <summary><c>advisor</c>: the agent that recommends an answer to its steps' questions.</summary>
+    Advisor,
+}
+
+/// <summary>The use that governs a key for a step (<see cref="FlowUse.Governing"/>).</summary>
+/// <param name="Path">The use step's declaration path: what tells one use from another, every instance of it counted as one.</param>
+/// <param name="Step">The use step.</param>
+/// <param name="Own">The used workflow's own settings, which declare the key.</param>
+public sealed record FlowGoverning(string Path, WorkflowStep Step, FlowUseOwn Own);
 
 /// <summary>
 /// One step of a workflow: a definition, of one <c>type</c>, or a group holding <c>steps</c> of its own.
@@ -389,6 +705,42 @@ public sealed record WorkflowStep
 
     /// <summary>The group's own steps; a group has these and no <see cref="Type"/>.</summary>
     public IReadOnlyList<WorkflowStep> Steps { get; init; } = [];
+
+    /// <summary>
+    /// The workflow this step is, as written: <c>use: ./pipeline.yml</c>. Read by the parser, cleared by resolution -
+    /// which puts the called workflow's steps in <see cref="Steps"/> and its record in <see cref="Use"/> - so a
+    /// definition that reaches the engine holding one was never resolved, and is refused.
+    /// </summary>
+    public string? UseSource { get; init; } = null;
+
+    /// <summary>The values the step hands the workflow it uses, as written: one scalar for each of its inputs.</summary>
+    public IReadOnlyDictionary<string, string> With { get; init; } = NoWith;
+
+    /// <summary>
+    /// Which run's settings govern the workflow this step uses: <see langword="null"/> or <see langword="true"/> the calling
+    /// run's, as from the first release of <c>use</c>, with each run-level key the used workflow declares said as not
+    /// applied; <see langword="false"/> the used workflow's own, key by key (<see cref="FlowUse.Governing"/>): a key is
+    /// governed by the nearest such use around a step that declares it, and one none declares stays the run's. Its budget
+    /// and reporter are carried and not applied (<see cref="FlowUse.NotApplied"/>), and an amend is refused there, for
+    /// an amend is a run's own.
+    /// </summary>
+    public bool? UseParentLimits { get; init; } = null;
+
+    /// <summary>
+    /// The called workflow, once the step is resolved: its name among the repository's workflows, the fingerprint of its
+    /// file, its inputs, outputs and recovery, and the run-level keys of its own that no step applies. Null on every
+    /// other step, and on this one before resolution.
+    /// </summary>
+    public FlowUse? Use { get; init; } = null;
+
+    /// <summary>
+    /// The workflow this step is declared in, where that is not the run's own: the called workflow's name, under which
+    /// its files - its agents, prompts and schemas - are read. Null on every step of the run's own workflow.
+    /// </summary>
+    public string? WorkflowOf { get; init; } = null;
+
+    /// <summary>No with values at all, the shape a step that names none holds.</summary>
+    private static readonly IReadOnlyDictionary<string, string> NoWith = new Dictionary<string, string>();
 
     /// <summary>The steps this one waits for, by name, each declared before it among its siblings.</summary>
     public IReadOnlyList<string> DependsOn { get; init; } = [];
@@ -655,6 +1007,12 @@ public sealed record WorkflowStep
     /// <summary>Whether a test step skips the build and tests what is there.</summary>
     public bool? SkipBuild { get; init; } = null;
 
+    /// <summary>
+    /// Whether a <c>build</c>, <c>test</c> or <c>run</c> step's builds of its legs go on past the units that fail to build,
+    /// as the command's <c>--keep-going</c> has them.
+    /// </summary>
+    public bool? KeepGoing { get; init; } = null;
+
     /// <summary>The predefined runner a <c>run</c> step runs.</summary>
     public string? Runner { get; init; } = null;
 
@@ -820,6 +1178,12 @@ public sealed record FlowOn(string Step, string Outcome, IReadOnlyList<int> Code
 /// <param name="Blocking">The expression that says, past the rounds, whether what is left must still be dealt with.</param>
 /// <param name="BlockersLimitRounds">Further rounds past <paramref name="Rounds"/> while <paramref name="Blocking"/> holds.</param>
 /// <param name="Leftover">Where what the loop left is written, read as the run's leftover.</param>
+/// <param name="DecideAfter">
+/// The step of each iteration the loop's decision - its <c>until</c>, its <c>blocking</c> and its bound - is read at
+/// when it ends, instead of at the iteration's end: what follows that step in the iteration starts only where the loop
+/// goes on, and a loop that ends at its bound leaves what that step found, none of it acted on. Null where the decision
+/// is read at each iteration's end, as it always was.
+/// </param>
 /// <param name="BlockersUnbounded">
 /// Whether <c>blockersLimitRounds</c> says <c>false</c>: no bound past the rounds but the workflow's budget.
 /// </param>
@@ -830,6 +1194,7 @@ public sealed record FlowRepeat(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Blocking,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? BlockersLimitRounds,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Leftover,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? DecideAfter,
     bool BlockersUnbounded = false)
 {
     /// <summary>The further rounds past <see cref="Rounds"/> while blocking holds, where the file names none.</summary>

@@ -24,7 +24,7 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class FlowServiceTests
 {
-    private const string Workflow = "flow";
+    internal const string Workflow = "flow";
 
     /// <summary>
     /// How long a test here waits for the engine - a step started, an answer taken, a session ended. Two roles in one
@@ -35,7 +35,7 @@ public sealed class FlowServiceTests
     /// (<c>--long-running</c> only reports). 120 s: the suite's own "long running" threshold, so a test that reaches the
     /// bound was already flagged twice as slow before it failed.
     /// </summary>
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(120);
+    internal static readonly TimeSpan Bound = TimeSpan.FromSeconds(120);
 
     /// <summary>The engine's own looks, made quick: a poll and a look every 10 ms; the stop waited for as the tool waits.</summary>
     private static readonly FlowTimings Quick = new(TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30));
@@ -57,7 +57,7 @@ public sealed class FlowServiceTests
         return (repository, Service(repository.Harness, runner), runner);
     }
 
-    private static async Task<(Repository Repository, SteppedRunner Runner)> RepositoryAsync(string flow, HarnessConfig? config = null, IReadOnlyDictionary<string, string>? files = null)
+    internal static async Task<(Repository Repository, SteppedRunner Runner)> RepositoryAsync(string flow, HarnessConfig? config = null, IReadOnlyDictionary<string, string>? files = null)
     {
         var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -79,7 +79,7 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>The service over <paramref name="harness"/>, with what a test changes of it.</summary>
-    private static FlowService Service(
+    internal static FlowService Service(
         HarnessFactory harness,
         IFlowStepRunner runner,
         TimeProvider? clock = null,
@@ -90,7 +90,8 @@ public sealed class FlowServiceTests
         ChildSessions? children = null,
         DssHarness.Core.Agents.IAgentRunner? agentRunner = null,
         DssHarness.Core.Secrets.AgentKeyStore? keyStore = null,
-        IAgentService? agents = null)
+        IAgentService? agents = null,
+        IWorkflowValidationService? validation = null)
     {
         var files = fileSystem ?? harness.FileSystem;
         var store = fileSystem is null ? harness.OrchestrationStore : new OrchestrationStore(files, harness.Output);
@@ -103,7 +104,7 @@ public sealed class FlowServiceTests
             store,
             engines,
             new FlowSessions(store, files, engines, harness.GitClient),
-            new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
+            validation ?? new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             runner,
             harness.OrchestrationLog,
             children ?? harness.ChildSessions,
@@ -146,7 +147,7 @@ public sealed class FlowServiceTests
         }
     }
 
-    private static OrchestratorLayout RunOf(Repository repository, string run = "r1")
+    internal static OrchestratorLayout RunOf(Repository repository, string run = "r1")
         => new(run, Path.Combine(repository.Path, ".orchestrators", run));
 
     /// <summary>
@@ -3298,6 +3299,41 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
+    /// A check of the definition that could not run - a remote use's fetch with the network not there - keeps its own
+    /// code at a run's start and at its resume, said as a check that could not be made, never as a configuration that
+    /// refuses the run or cannot be read; nothing of the run is made or changed.
+    /// </summary>
+    [Fact]
+    public async Task ACheckThatCouldNotRun_KeepsItsOwnCode_AtAStartAndAResume()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+        var unreached = Substitute.For<IWorkflowValidationService>();
+
+        unreached.CheckAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<WorkflowRunRecord?>())
+            .Returns(Task.FromException<WorkflowValidationReport>(new HarnessException(HarnessExit.Incomplete, "the forge could not be reached.")));
+
+        var started = await Service(repository.Harness, runner, validation: unreached).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal((HarnessExit.Incomplete, "the forge could not be reached."), (started.ExitCode, started.Message));
+        Assert.Null(repository.Harness.OrchestrationStore.ReadFlow(RunOf(repository)));
+
+        runner.On("one", FlowStepResult.Ended(passed: true, 0));
+        runner.Holds("two", new TaskCompletionSource().Task);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+
+        await runner.WaitStartedAsync("two");
+        _ = await service.StopAsync(repository.Path, "r1", now: false, json: false, Token).WaitAsync(Bound, Token);
+        _ = await driving.WaitAsync(Bound, Token);
+
+        var resumed = await Service(repository.Harness, runner, validation: unreached).ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, resumed.ExitCode);
+        Assert.Equal("run 'r1' began of workflow 'flow', and its definition could not be checked now: the forge could not be reached. Nothing of the run was changed.", resumed.Message);
+    }
+
+    /// <summary>
     /// Every step of a run is handed the branch the run started on, as its records keep it - by the session that started
     /// it and by every one that resumes it, whatever the main checkout is on by then - which its commits, pushes and pull
     /// request are held to.
@@ -4866,7 +4902,7 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>A repository initialized with one workflow declared, and its harness.</summary>
-    private sealed record Repository(HarnessFactory Harness, TempDirectory Tree) : IDisposable
+    internal sealed record Repository(HarnessFactory Harness, TempDirectory Tree) : IDisposable
     {
         /// <summary>The repository's root.</summary>
         public string Path => Tree.Path;

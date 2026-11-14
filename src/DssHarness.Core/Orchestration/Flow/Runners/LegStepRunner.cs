@@ -1,9 +1,12 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Isolation;
+using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -164,14 +167,14 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
             foreach (var arm in redArms)
             {
-                red.Add(Red(line.Leg, arm.Verdict, phase: null, arm.Detail, [], arm.Arm));
+                red.Add(Red(line.Leg, arm.Verdict, phase: null, arm.Detail, [], arm.Arm, failedUnits: null));
             }
 
             // The leg's own entry, where its verdict is its own - it failed outside every arm - and not one of its arms':
             // a sweep's leg is red by the worst of its own verdicts and its arms', and neither hides the other.
             if (!redArms.Any(arm => arm.Verdict == line.Verdict))
             {
-                red.Add(Red(line.Leg, line.Verdict, line.TailPhase, line.Detail, line.LogTail, arm: null));
+                red.Add(Red(line.Leg, line.Verdict, line.TailPhase, line.Detail, line.LogTail, arm: null, line.FailedUnits));
             }
         }
 
@@ -184,7 +187,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             ["runDirectory"] = result.RunDirectory,
         };
 
-        JsonObject Red(string leg, LegVerdict verdict, string? phase, string detail, IReadOnlyList<string> tail, string? arm)
+        JsonObject Red(string leg, LegVerdict verdict, string? phase, string detail, IReadOnlyList<string> tail, string? arm, FailedUnits? failedUnits)
         {
             var entry = new JsonObject
             {
@@ -199,6 +202,12 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             if (arms)
             {
                 entry["arm"] = arm;
+            }
+            else
+            {
+                // The units the leg's build failed, as the ledger's --json says them, where its own tool failed it: the tail
+                // holds a build's last lines alone, and a build that went on past its first failure ends far from them.
+                entry["failedUnits"] = failedUnits is null ? null : JsonSerializer.SerializeToNode(failedUnits.Document(path => path), ReportJson.Options);
             }
 
             return entry;
@@ -300,7 +309,10 @@ public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
     /// <inheritdoc/>
     protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken)
-        => builds.RunAsync(new BuildLegsRequest { Directory = tree, LegNames = LegsOf(run.Step), Watch = watch, Isolation = isolation }, RunId.New(), cancellationToken);
+        => builds.RunAsync(
+            new BuildLegsRequest { Directory = tree, LegNames = LegsOf(run.Step), KeepGoing = run.Step.KeepGoing == true, Watch = watch, Isolation = isolation },
+            RunId.New(),
+            cancellationToken);
 }
 
 /// <summary>
@@ -332,6 +344,7 @@ public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPla
                 Excludes = run.Step.Exclude,
                 Labels = run.Step.Labels,
                 SkipBuild = run.Step.SkipBuild == true,
+                KeepGoing = run.Step.KeepGoing == true,
                 Watch = watch,
                 Isolation = isolation,
             },
@@ -372,6 +385,7 @@ public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlat
                 Runner = runner,
                 Inputs = run.Step.Inputs,
                 InPlace = context.Config.WritingRunners(runner).Count > 0,
+                KeepGoing = run.Step.KeepGoing == true,
                 Watch = watch,
                 Isolation = isolation,
             },

@@ -246,7 +246,7 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.Equal(
-            ["line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover', 'codebaseGraph'."],
+            ["line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'texts', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover', 'codebaseGraph'."],
             problems);
     }
 
@@ -454,6 +454,46 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.Equal(["line 5, column 13: 'runner' is not a key of a test step; it is one of a run step."], problems);
+    }
+
+    /// <summary>
+    /// keepGoing is read on each step that builds its legs - a build, a test, a run - as their commands read --keep-going,
+    /// and refused on a sweep, whose arms are judged by where their builds fail, never kept going past it.
+    /// </summary>
+    [Fact]
+    public void KeepGoing_IsReadOnEveryStepThatBuildsItsLegs_AndRefusedOnASweep()
+    {
+        var definition = WorkflowFileParser.Parse(
+            "workflows/default/default.yml",
+            """
+            name: default
+            steps:
+              - name: compile
+                type: build
+                keepGoing: true
+              - name: suite
+                type: test
+                keepGoing: false
+              - name: bench
+                type: run
+                runner: corpus
+                keepGoing: true
+              - name: plain
+                type: build
+            """);
+
+        Assert.Equal([true, false, true, null], definition.Steps.Select(step => step.KeepGoing));
+
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: sweep
+                type: check-mutations
+                keepGoing: true
+            """);
+
+        Assert.Equal(["line 5, column 16: 'keepGoing' is not a key of a check-mutations step; it is one of a build step."], problems);
     }
 
     /// <summary>
@@ -681,7 +721,7 @@ public sealed class WorkflowFileParserTests
                 "line 7, column 9: 'mend.on' is not a mapping of 'step', 'outcome', 'codes'",
                 "line 13, column 14: 'fix.on.codes' is not a list.",
                 "line 11, column 7: fix.on.outcome is 'broke', which is none of 'failure', 'success', 'end'.",
-                "line 15, column 13: 'loop.repeat' is not a mapping of 'until', 'maxIterations', 'rounds', 'blocking', 'blockersLimitRounds', 'leftover'",
+                "line 15, column 13: 'loop.repeat' is not a mapping of 'until', 'maxIterations', 'rounds', 'blocking', 'blockersLimitRounds', 'leftover', 'decideAfter'",
                 "line 25, column 12: 'fold.allow' is not a mapping of 'settled', 'new', 'acceptLost', 'merge', 'acceptOver'",
                 "line 30, column 16: 'ask.preAnswer' is not a sequence.",
                 "line 36, column 9: an entry of 'asked.preAnswer' is not a mapping of 'when', 'answer', 'text', 'quote'",
@@ -691,7 +731,8 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
-    /// An input's kind is text or file, a file input takes no options - it is a path, checked when the run starts - and
+    /// An input's kind is one of the four it can take, an input of a kind other than text takes no options - a file
+    /// input is a path, checked when the run starts, a value is read as an expression and a step as a name - and
     /// options given empty are refused rather than read as any value, which is what leaving the key out says.
     /// </summary>
     [Fact]
@@ -715,8 +756,8 @@ public sealed class WorkflowFileParserTests
 
         Assert.Equal(
             [
-                "line 3, column 5: inputs.plan.kind is 'folder', which is neither of text nor file.",
-                "line 5, column 5: inputs.spec declares options and the kind 'file': options list what a 'text' input takes, and a file input is a path, checked when the run starts.",
+                "line 3, column 5: inputs.plan.kind is 'folder', which is none of 'text', 'file', 'value', 'step'.",
+                "line 5, column 5: inputs.spec declares options and the kind 'file': options list what a 'text' input takes, and an input of another kind is read as it is.",
                 "line 9, column 14: 'inputs.tone.options' is given empty, which is never read as any value: list the values it takes, or leave the key out for any value.",
             ],
             problems);
@@ -1028,7 +1069,7 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.NotNull(parsed);
-        Assert.Equal(new FlowRepeat("review.clean", null, 3, "review.blocking", null, null, BlockersUnbounded: true), parsed.Steps[0].Repeat);
+        Assert.Equal(new FlowRepeat("review.clean", null, 3, "review.blocking", null, null, DecideAfter: null, BlockersUnbounded: true), parsed.Steps[0].Repeat);
         Assert.Equal("diagnose", Assert.Single(parsed.Recover!.Steps).Name);
         Assert.Null(parsed.Recover.MaxVisits);
         Assert.Null(parsed.BackoffSeconds);

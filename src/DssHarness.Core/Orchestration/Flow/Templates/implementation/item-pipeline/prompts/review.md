@@ -2,24 +2,24 @@ Review this change, for your aspect.
 
 ## The item
 
-{item.title}
+{input.item.title}
 
 What its builder was asked to do:
 
-{item.instructions}
+{input.item.instructions}
 
-- The paths the item owns: {item.ownedPaths}
-- The paths it had to leave alone: {item.forbiddenPaths}
-- What must hold when the item is finished, its definition of done: {item.done}
-- The existing code it was to reuse or extend: {item.reuses}
-- What it was to create from nothing, and why nothing that exists served: {item.creates}
+- The paths the item owns: {input.item.ownedPaths}
+- The paths it had to leave alone: {input.item.forbiddenPaths}
+- What must hold when the item is finished, its definition of done: {input.item.done}
+- The existing code it was to reuse or extend: {input.item.reuses}
+- What it was to create from nothing, and why nothing that exists served: {input.item.creates}
 - What it was to replace because the request asked for it to be rebuilt, and what was to become of the old one:
-  {item.replaces}
+  {input.item.replaces}
 
 ## The change
 
-It is what this run changed under the item's paths since commit `{orient.startCommit}`, as it now stands in the main
-tree, folded and committed: `git diff {orient.startCommit} HEAD -- <paths>` shows it, with the item's paths after
+It is what this run changed under the item's paths since commit `{input.orient.startCommit}`, as it now stands in the main
+tree, folded and committed: `git diff {input.orient.startCommit} HEAD -- <paths>` shows it, with the item's paths after
 `--`. In a later round or a repair it can also hold earlier work in the same paths: report on that only where this
 item's instructions or definition of done concern it. Read the code around it in the main tree too; a change is right
 or wrong in its surroundings.

@@ -382,6 +382,81 @@ public sealed class WorktreeServiceTests
     }
 
     /// <summary>
+    /// A checkout moved by hand with its worktrees in it leaves each worktree's .git file and git's record of it naming
+    /// where they were, and git cannot open the worktree, though all its work is in it. The listing says it is a worktree
+    /// git's own repair points back here - never a directory to look in and delete - delete-worktree refuses it naming the
+    /// same repair, and once repaired it is listed again, its work as it was.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreeOfACheckoutMovedByHand_IsOneToRepair_NeverOneToDelete()
+    {
+        using var outer = new TempDirectory();
+        using var temp = new TempDirectory(outer.Path, "before-");
+        var harness = await PrepareAsync(temp);
+        var token = TestContext.Current.CancellationToken;
+
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, token);
+        Assert.True(created.Succeeded, created.Outcome.Message);
+        File.WriteAllText(Path.Combine(created.Path, "work.txt"), "a week of work\n");
+
+        var main = Path.Combine(outer.Path, "after");
+        Directory.Move(temp.Path, main);
+        var worktree = Path.Combine(main, Path.GetRelativePath(temp.Path, created.Path));
+
+        var listed = await harness.WorktreeService.ListAsync(main, token);
+        var said = harness.StandardError.ToString();
+
+        Assert.Empty(listed);
+        Assert.Contains(
+            $"list-worktree: WARN - 'wt' is not listed: '{worktree}' is a worktree git records at '{created.Path}', as after the checkout or its worktrees were "
+            + "moved by hand, and git cannot be relied on to open it until that record points here; everything in it is still there. "
+            + $"Run 'git -C {main} worktree repair {worktree}', which points git's record and its .git file back at each other.",
+            said,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("then delete", said, StringComparison.Ordinal);
+
+        var refused = await harness.WorktreeService.DeleteAsync(main, "wt", force: false, deleteEvidence: false, cancellationToken: token);
+
+        Assert.False(refused.Succeeded);
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.Contains($"Run 'git -C {main} worktree repair {worktree}'", refused.Outcome.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Look at what it holds", refused.Outcome.Message, StringComparison.Ordinal);
+        Assert.Equal("a week of work\n", File.ReadAllText(Path.Combine(worktree, "work.txt")));
+
+        var repaired = await harness.RunGitAsync(main, ["worktree", "repair", worktree], token);
+        Assert.Equal(0, repaired.ExitCode);
+
+        Assert.Equal(["wt"], (await harness.WorktreeService.ListAsync(main, token)).Select(listing => listing.Name));
+        Assert.Equal("a week of work\n", File.ReadAllText(Path.Combine(worktree, "work.txt")));
+    }
+
+    /// <summary>
+    /// A leftover whose .git file names a record of the same name as a live worktree's is no moved worktree: git's record
+    /// is that worktree's, still where it says, and is never offered to be pointed at the leftover.
+    /// </summary>
+    [Fact]
+    public async Task ALeftoverNamingALiveWorktreesRecord_IsStillOneToDelete_AndTheLiveOneIsNeverOfferedToIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = await PrepareAsync(temp);
+        var token = TestContext.Current.CancellationToken;
+
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, token);
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var leftover = Path.Combine(Path.GetDirectoryName(created.Path)!, "copy");
+        Directory.CreateDirectory(leftover);
+        File.Copy(Path.Combine(created.Path, ".git"), Path.Combine(leftover, ".git"));
+
+        var listed = await harness.WorktreeService.ListAsync(temp.Path, token);
+        var said = harness.StandardError.ToString();
+
+        Assert.Equal(["wt"], listed.Select(listing => listing.Name));
+        Assert.Contains($"list-worktree: WARN - 'copy' holds a .git entry, and git records no worktree there", said, StringComparison.Ordinal);
+        Assert.DoesNotContain("worktree repair", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A mutation worker kept in a worktree is a copy with a repository of its own, which git records nowhere, inside
     /// the worktree: the listing never looks in a worktree, so it is not listed and nothing is said of it. One an earlier
     /// version of this tool kept beside a worktree is known to nothing here: it is said as any directory under the root

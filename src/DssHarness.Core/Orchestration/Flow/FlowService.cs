@@ -244,7 +244,11 @@ public sealed class FlowService(
         }
         catch (HarnessException ex)
         {
-            return CommandOutcome.Refused(ex.Message);
+            // A configuration or a request the check refuses refuses the start; a check that could not run - a remote
+            // use's fetch with gh missing (14), the forge not reached with nothing standing in (21, or 20 where gh said no
+            // connection was made), an answer of the forge's that does not read (20), or the workflow cache that could not
+            // be worked on (21) - keeps its own code, its line naming the workflow cache.
+            return HarnessExit.RefusesTheRun(ex.ExitCode) ? CommandOutcome.Refused(ex.Message) : CommandOutcome.Failed(ex.ExitCode, ex.Message);
         }
 
         var check = report.Workflows.FirstOrDefault();
@@ -253,7 +257,8 @@ public sealed class FlowService(
         {
             return CommandOutcome.Failed(
                 HarnessExit.ConfigInvalid,
-                $"workflow '{definition}' is not one this run can start",
+                $"workflow '{definition}' is not one this run can start"
+                    + (check is { ResolvedRemote: true } && report.Cache is { } cache ? $"; {WorkflowValidationService.CacheSaid(cache)}" : string.Empty),
                 check?.Lines ?? [WorkflowValidationReports.NoneDeclared]);
         }
 
@@ -304,13 +309,20 @@ public sealed class FlowService(
             return new CommandOutcome(ex.ExitCode, ex.Message);
         }
 
-        // A base that cannot be told held the checkout's branch to nothing: the start says so, never silently.
+        // A base that cannot be told held the checkout's branch to nothing: the start says so, never silently. The remote
+        // workflows the check resolved are kept with the run's frozen definition as the session begins - every file as
+        // the check read and hashed it - and read from there as the run goes on, so no pruning of the user's cache takes
+        // a file from a run that started; one that cannot be kept refuses the session, the owner let go.
         return await SessionAsync(
             context,
             layout,
             RunCommand,
             checkout.BaseUnknown(FlowTemplate.PullRequestBase(workflow, resolved, layout.Name, out _)),
-            () => (workflow, runContext, null),
+            () =>
+            {
+                WorkflowCache.OfRun(_fileSystem, layout).Keep(check.Remotes);
+                return (workflow, runContext, null);
+            },
             answered: null,
             interrupts,
             json,
@@ -1229,7 +1241,10 @@ public sealed class FlowService(
     /// <summary>
     /// The digest of the repository's entry for the workflow the run began with, as it reads now in the definition tree
     /// - the main checkout, <paramref name="definitionTree"/>, whichever tree the command was typed in - or the refusal
-    /// (13) where the entry is no longer one that holds: a run goes on only under the definition it began with.
+    /// (13) where the entry is no longer one that holds: a run goes on only under the definition it began with. The remote
+    /// workflows the check resolved, each at the commit the run began with and read from the run's own copy first, are
+    /// kept again in that copy where it does not hold them whole, so a session reads every file it began with whatever a
+    /// pruning did meanwhile.
     /// </summary>
     private async Task<(string? Digest, CommandOutcome? Refused)> EntryDigestAsync(string definitionTree, OrchestratorLayout layout, CancellationToken cancellationToken)
     {
@@ -1241,21 +1256,43 @@ public sealed class FlowService(
         }
 
         WorkflowValidationReport report;
+        var kept = WorkflowCache.OfRun(_fileSystem, layout);
 
         try
         {
-            report = await _validation.CheckAsync(definitionTree, frozen.Name, cancellationToken).ConfigureAwait(false);
+            // The frozen definition goes with the check as the run's own record, with the copy the run keeps of the remote
+            // workflows it began with: each remote use it holds is resolved to the commit the run began with, read from that
+            // copy first, so a tag or branch that moved since, a pruning of the cache or the network not there changes no
+            // run already started, and the check reads the very bytes the run's steps read.
+            report = await _validation.CheckAsync(definitionTree, frozen.Name, cancellationToken, new WorkflowRunRecord(frozen, kept)).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
-            return (null, CommandOutcome.Refused($"run '{layout.Name}' began of workflow '{frozen.Name}', and the repository's config cannot be read for it now: {ex.Message.TrimEnd('.')}. Nothing of the run was changed."));
+            // A check that could not run - a remote use's fetch with gh missing (14), the forge not reached with nothing
+            // standing in (21, or 20 where gh said no connection was made), an answer of the forge's that does not read
+            // (20), the workflow cache that could not be worked on (21) - is said as that, with its own code, never as a
+            // configuration that cannot be read.
+            return (null, HarnessExit.RefusesTheRun(ex.ExitCode)
+                ? CommandOutcome.Refused($"run '{layout.Name}' began of workflow '{frozen.Name}', and the repository's config cannot be read for it now: {ex.Message.TrimEnd('.')}. Nothing of the run was changed.")
+                : CommandOutcome.Failed(ex.ExitCode, $"run '{layout.Name}' began of workflow '{frozen.Name}', and its definition could not be checked now: {ex.Message.TrimEnd('.')}. Nothing of the run was changed."));
         }
 
-        if (report.Workflows.FirstOrDefault() is not { Holds: true, Definition: { } entry })
+        if (report.Workflows.FirstOrDefault() is not { Holds: true, Definition: { } entry } check)
         {
+            var resolvedRemote = report.Workflows.FirstOrDefault() is { ResolvedRemote: true } && report.Cache is { } cache ? $" - {WorkflowValidationService.CacheSaid(cache)} -" : string.Empty;
+
             return (null, CommandOutcome.Refused(
-                $"run '{layout.Name}' began of workflow '{frozen.Name}', which the repository's config no longer declares as one that holds; a run goes on only under the definition it began with. Nothing of the run was changed.",
+                $"run '{layout.Name}' began of workflow '{frozen.Name}', which the repository's config no longer declares as one that holds{resolvedRemote}; a run goes on only under the definition it began with. Nothing of the run was changed.",
                 report.Workflows.FirstOrDefault()?.Lines ?? [WorkflowValidationReports.NoneDeclared]));
+        }
+
+        try
+        {
+            kept.Keep(check.Remotes);
+        }
+        catch (HarnessException ex)
+        {
+            return (null, CommandOutcome.Failed(ex.ExitCode, $"run '{layout.Name}' began of workflow '{frozen.Name}', and the remote workflows it began with could not be kept with it again in '{layout.RemoteWorkflowsDirectory}': {ex.Message.TrimEnd('.')}. Nothing else of the run was changed."));
         }
 
         return (FlowRunContext.DigestOf(entry), null);
@@ -1354,9 +1391,9 @@ public sealed class FlowService(
                     ? WorkflowValidator.AgentModels(
                         definition,
                         providers,
-                        named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "an agent definition"))
+                        (named, owner) => WorkflowNamedFiles.OfRun(_fileSystem, _platform.PathComparison, layout).ReadText(context.Layout, owner ?? definition.Name, named, "an agent definition"))
                     : null,
-                named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadText(context.Layout, definition.Name, named, "a workflow file"),
+                (owner, named) => WorkflowNamedFiles.OfRun(_fileSystem, _platform.PathComparison, layout).ReadText(context.Layout, owner ?? definition.Name, named, "a workflow file"),
                 async (run, agent, token) =>
                 {
                     // The engine's own deleting of a read-only agent whose work is over: applied, with nothing to fold
@@ -1394,7 +1431,7 @@ public sealed class FlowService(
                 },
                 new AdvisorRunner(_contextLoader, _platform, _store, agentRunner, _fileSystem, keyStore, _output, isolation, updates),
                 updates: () => _store.ReadFlowUpdates(layout),
-                workflowFileIfThere: named => new WorkflowNamedFiles(_fileSystem, _platform.PathComparison).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
+                workflowFileIfThere: named => WorkflowNamedFiles.OfRun(_fileSystem, _platform.PathComparison, layout).ReadTextIfThere(context.Layout, definition.Name, named, "a workflow file"),
                 runFacts: (instance, fact) => RunFactOf(context, layout, instance, fact),
                 agentLive: agent => _store.ReadAgent(layout, agent) is { State: Orchestration.AgentStates.Live });
             var before = _store.ReadFlowQuestions(layout);
@@ -1973,8 +2010,12 @@ public sealed class FlowService(
         => flow.Steps.FirstOrDefault(step => string.Equals(step.Instance, id, StringComparison.Ordinal)) is { Exit: { } exit } step
             && FlowRetry.RunsAgain(exit, step.Cause is { } cause ? FlowRecordNames.Of<OutcomeCause>(cause) : OutcomeCause.None);
 
-    /// <summary>Every record a session of the run writes, by what it is and its path - the inbox where the session took or left an answer in it.</summary>
-    private static IReadOnlyList<FlowRecordPath> RecordsOf(OrchestratorLayout layout, bool inbox)
+    /// <summary>
+    /// Every record a session of the run writes, by what it is and its path - the inbox where the session took or left an
+    /// answer in it, and, where the run uses remote workflows, its own copy of them and the user's workflow cache the
+    /// check that let the session begin read them from and fetched them into.
+    /// </summary>
+    private IReadOnlyList<FlowRecordPath> RecordsOf(OrchestratorLayout layout, bool inbox)
         =>
         [
             new("run", layout.Directory),
@@ -1988,8 +2029,25 @@ public sealed class FlowService(
             new("report", layout.ReportFile),
             new("reportJson", layout.ReportJsonFile),
             new("folds", layout.FoldsFile),
+            .. RemoteRecordsOf(layout),
             .. inbox ? new[] { new FlowRecordPath("inbox", layout.InboxFile) } : [],
         ];
+
+    /// <summary>
+    /// The run's own copy of the remote workflows it began with, and the user's workflow cache they were read from and
+    /// fetched into, where the run keeps any; none where it uses none.
+    /// </summary>
+    private IReadOnlyList<FlowRecordPath> RemoteRecordsOf(OrchestratorLayout layout)
+    {
+        if (!_fileSystem.DirectoryExists(layout.RemoteWorkflowsDirectory))
+        {
+            return [];
+        }
+
+        return WorkflowCache.DefaultDirectoryIfNamed() is { } cache
+            ? [new("remoteWorkflows", layout.RemoteWorkflowsDirectory), new("workflowCache", cache)]
+            : [new("remoteWorkflows", layout.RemoteWorkflowsDirectory)];
+    }
 
     /// <summary>Every answer the questions were given after <paramref name="before"/>: the ones this command gave, each with who gave it and what the engine did.</summary>
     private static IReadOnlyList<FlowAnswered> AnsweredSince(FlowQuestionsFile? before, FlowQuestionsFile? after)

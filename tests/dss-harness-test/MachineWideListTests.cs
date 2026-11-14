@@ -23,7 +23,16 @@ public sealed class MachineWideListTests
 
         MachineWideFile.Update(path, TimeSpan.FromSeconds(5), afterwards =>
         {
-            afterwards(() => freeWhenSaid = Task.Run(() => MachineWideFile.Update(path, TimeSpan.FromMilliseconds(100), () => true)).GetAwaiter().GetResult());
+            afterwards(() =>
+            {
+                // A thread of its own, never this one: a machine-wide section is the thread's that took it, taken again
+                // freely - so only another thread's take tells a file let go from one still held.
+                Exception? refused = null;
+                var other = new Thread(() => refused = Record.Exception(() => freeWhenSaid = MachineWideFile.Update(path, TimeSpan.FromMilliseconds(100), () => true)));
+                other.Start();
+                Assert.True(other.Join(TimeSpan.FromMinutes(1)), "the other thread's update never ended");
+                Assert.Null(refused);
+            });
             Assert.Null(freeWhenSaid);
             return 0;
         });

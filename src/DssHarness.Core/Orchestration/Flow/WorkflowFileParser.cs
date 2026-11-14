@@ -91,6 +91,7 @@ public static class WorkflowFileParser
         int? handoffSeconds = null;
         FlowBudget? budget = null;
         string? recommendations = null;
+        IReadOnlyDictionary<string, string>? texts = null;
         FlowAdvisor? advisor = null;
         FlowReporter? reporter = null;
         FlowAmend? amend = null;
@@ -152,6 +153,10 @@ public static class WorkflowFileParser
 
                 case "recommendations":
                     recommendations = YamlReading.RequireScalar(value, "recommendations", problems);
+                    break;
+
+                case "texts":
+                    texts = ReadTexts(value, problems);
                     break;
 
                 case "advisor":
@@ -239,7 +244,8 @@ public static class WorkflowFileParser
                 recommendations,
                 advisor,
                 reporter,
-                amend)
+                amend,
+                texts)
             {
                 Recover = recover,
                 BackoffSeconds = backoffSeconds,
@@ -538,6 +544,58 @@ public static class WorkflowFileParser
         return (null, byModel);
     }
 
+    /// <summary>
+    /// Reads the <c>texts</c> section: each name a markdown file of the workflow's own directory, read in a prompt as
+    /// <c>{text.&lt;name&gt;}</c>. A name is one segment - no dot, no slash, no placeholder - for the read that names it
+    /// is <c>{text.&lt;name&gt;}</c> alone, and a file is a markdown one, relative, as every file a workflow names is.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? ReadTexts(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(YamlReading.At(node, "'texts' is not a mapping of names to markdown files"));
+            return null;
+        }
+
+        var texts = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var (key, value) in mapping.Children)
+        {
+            var name = YamlReading.ScalarOf(key);
+            var file = YamlReading.RequireScalar(value, $"texts.{name ?? "''"}", problems);
+
+            if (name is null)
+            {
+                problems.Add(YamlReading.At(key, "'texts' holds a key that is not one name: a text is read as {text.<name>}, so its name is one segment with no dot and no slash"));
+                continue;
+            }
+
+            if (file is null)
+            {
+                continue;
+            }
+
+            if (name.Contains('.') || name.Contains('/') || name.Contains('\\') || name.Contains('{'))
+            {
+                problems.Add(YamlReading.At(key, $"'texts' names the text '{name}', and a text is read as {{text.<name>}}: its name is one segment with no dot and no slash"));
+                continue;
+            }
+
+            if (!file.EndsWith(".md", StringComparison.OrdinalIgnoreCase) || file.Contains('{'))
+            {
+                problems.Add(YamlReading.At(value, $"'texts.{name}' names '{file}', and a text is a markdown file of the workflow's directory, named as it is, relative"));
+                continue;
+            }
+
+            if (!texts.TryAdd(name, file))
+            {
+                problems.Add(YamlReading.At(key, $"'texts' names '{name}' more than once"));
+            }
+        }
+
+        return texts.Count == 0 ? null : texts;
+    }
+
     private static FlowAmend? ReadAmend(YamlNode node, List<string> problems)
     {
         if (node is not YamlMappingNode mapping)
@@ -666,13 +724,13 @@ public static class WorkflowFileParser
 
         if (kind is not null && !FlowInput.Kinds.Contains(kind, StringComparer.Ordinal))
         {
-            problems.Add(YamlReading.At(declaration, $"{owner}.kind is '{kind}', which is neither of {string.Join(" nor ", FlowInput.Kinds)}."));
+            problems.Add(YamlReading.At(declaration, $"{owner}.kind is '{kind}', which is none of {string.Join(", ", FlowInput.Kinds.Select(known => $"'{known}'"))}."));
             kind = null;
         }
 
-        if (kind == FlowInput.FileKind && options.Count > 0)
+        if (kind != FlowInput.TextKind && options.Count > 0)
         {
-            problems.Add(YamlReading.At(declaration, $"{owner} declares options and the kind '{FlowInput.FileKind}': options list what a '{FlowInput.TextKind}' input takes, and a file input is a path, checked when the run starts."));
+            problems.Add(YamlReading.At(declaration, $"{owner} declares options and the kind '{kind}': options list what a '{FlowInput.TextKind}' input takes, and an input of another kind is read as it is."));
         }
 
         yield return new FlowInput(name, description, kind ?? FlowInput.TextKind, fallback, required, options);
@@ -857,6 +915,42 @@ public static class WorkflowFileParser
             problems.Add(YamlReading.At(node, $"{where} names the type '{type}' and holds steps; a group holds steps and names no type, and a typed step runs one thing."));
         }
 
+        // V57, the one rule that keeps a step one thing: a step that is a workflow names no type and holds no steps of
+        // its own - the workflow it uses brings its own, as its resolution places them there.
+        if (keys.Any(entry => entry.Key == "use"))
+        {
+            if (type is not null)
+            {
+                problems.Add(YamlReading.At(node, $"{where} names the type '{type}' and a workflow to use; a typed step runs one thing, and the workflow it would use brings steps of its own."));
+            }
+
+            if (keys.Any(entry => entry.Key == "steps"))
+            {
+                problems.Add(YamlReading.At(node, $"{where} holds steps and names a workflow to use; the workflow it uses brings its own steps, and a step that holds steps uses none."));
+            }
+
+            if (keys.Any(entry => entry.Key == "with") == false && NodeIn(keys, "use") is not YamlScalarNode)
+            {
+                problems.Add(YamlReading.At(node, $"{where}.use is not a single value; it is the path of the workflow this step is."));
+            }
+
+            if (NodeIn(keys, "use") is YamlScalarNode { Value: var used } && string.IsNullOrWhiteSpace(used))
+            {
+                problems.Add(YamlReading.At(node, $"{where}.use is empty; it is the path of the workflow this step is, relative to this workflow's directory, or owner/repo/path/workflow.yml@ref."));
+            }
+        }
+
+        if (keys.Any(entry => entry.Key == "with") && !keys.Any(entry => entry.Key == "use"))
+        {
+            problems.Add(YamlReading.At(node, $"{where} hands values with 'with', and names no workflow to use; the values are what a used workflow's inputs are filled with."));
+        }
+
+        // A use's own key, refused on any step that is not one - the with rule's own shape.
+        if (keys.Any(entry => entry.Key == "useParentLimits") && !keys.Any(entry => entry.Key == "use"))
+        {
+            problems.Add(YamlReading.At(node, $"{where} says useParentLimits and names no workflow to use; the key says which run's settings govern the workflow a use runs."));
+        }
+
         // A group's own keys, checked against the group's table; a typed step's against its type's.
         IReadOnlyList<string> allowed = typed is null
             ? [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group)]
@@ -867,8 +961,9 @@ public static class WorkflowFileParser
             // A key no table lists was refused where the keys were collected; what is left to refuse
             // here is a key that belongs to a step this one is not - a type's key on a group or on a
             // step of another type, and a group's key on a typed step, which would otherwise be read
-            // by nothing and obeyed by nothing.
-            if (!allowed.Contains(key, StringComparer.Ordinal))
+            // by nothing and obeyed by nothing. A step that says 'use' is refused its type and its
+            // steps by that rule alone (V57), so its use and with are never refused here twice.
+            if (!allowed.Contains(key, StringComparer.Ordinal) && !(key is "use" or "with" && keys.Any(entry => entry.Key == "use")))
             {
                 var owner = typed is null ? "a group" : $"a {typed.Type} step";
                 var taken = WorkflowStepTypes.All.FirstOrDefault(other => other != typed && WorkflowStepTypes.KeysOf(other).Contains(key, StringComparer.Ordinal));
@@ -891,7 +986,7 @@ public static class WorkflowFileParser
             Description = ScalarIn(keys, $"{where}.description", problems),
             DependsOn = StringListIn(keys, $"{where}.dependsOn", problems) ?? [],
             When = ScalarIn(keys, $"{where}.when", problems),
-            OnFailure = EnumIn(keys, $"{where}.onFailure", problems, WorkflowStep.FailurePolicies),
+            OnFailure = OnFailureIn(keys, $"{where}.onFailure", problems),
             Retries = IntIn(keys, $"{where}.retries", problems),
             Always = BooleanIn(keys, $"{where}.always", problems),
             Alone = BooleanIn(keys, $"{where}.alone", problems),
@@ -954,10 +1049,11 @@ public static class WorkflowFileParser
         {
             // The group's own keys, checked only where the file holds them.
             var stepsNode = NodeIn(keys, "steps");
+            var useNode = NodeIn(keys, "use");
 
             // A type the file names that no table knows, or that is no single value, is refused above;
             // what is left to refuse here is a step that names no type at all.
-            if (stepsNode is null && typeNode is null)
+            if (stepsNode is null && typeNode is null && useNode is null)
             {
                 problems.Add(YamlReading.At(node, $"{where} names no type and holds no steps; a step does one thing, and a group holds steps of their own."));
             }
@@ -968,6 +1064,19 @@ public static class WorkflowFileParser
             else if (stepsNode is not null)
             {
                 step = step with { Steps = [.. ReadSteps(stepsNode, depth + 1, problems)] };
+            }
+
+            // A step that is a workflow: the path as written, and the values its inputs are filled with - both read
+            // again before the definition is used, the path resolved against the caller's directory and the values
+            // held to the workflow's declared inputs.
+            if (useNode is not null)
+            {
+                step = step with
+                {
+                    UseSource = ScalarIn(keys, $"{where}.use", problems),
+                    With = StringMapIn(keys, $"{where}.with", problems),
+                    UseParentLimits = BooleanIn(keys, $"{where}.useParentLimits", problems),
+                };
             }
 
             step = step with
@@ -1020,7 +1129,11 @@ public static class WorkflowFileParser
             _ => $"{string.Join(", ", filled.Take(filled.Count - 1))} and {filled[^1]}",
         };
 
-        foreach (var (key, value) in keys.Where(entry => entry.Key is not ("name" or "type" or "steps") && !filled.Contains(entry.Key, StringComparer.Ordinal)))
+        // A failure policy or a handler's then read from a step-kind input - only a step of a workflow used as a step
+        // reads one, which the definition's check refuses elsewhere - the file a reason step is asked with, read the
+        // same one way - and the values a use hands the workflow it uses, each read as the input it fills declares, are
+        // held to their own rules where those steps are checked.
+        foreach (var (key, value) in keys.Where(entry => entry.Key is not ("name" or "type" or "steps" or "onFailure" or "then" or "prompt" or "resumePrompt" or "with") && !filled.Contains(entry.Key, StringComparer.Ordinal)))
         {
             foreach (var (path, scalar) in TextsIn(key, value, inList: false))
             {
@@ -1124,7 +1237,8 @@ public static class WorkflowFileParser
                 break;
 
             case "build":
-                // Its keys are the leg keys every leg step shares, read before this switch.
+                // Its keys are the leg keys every leg step shares, read before this switch, and the one a step that builds takes.
+                step = step with { KeepGoing = BooleanIn(keys, $"{where}.keepGoing", problems) };
                 break;
 
             case "test":
@@ -1135,6 +1249,7 @@ public static class WorkflowFileParser
                     Exclude = StringListIn(keys, $"{where}.exclude", problems) ?? [],
                     Labels = StringListIn(keys, $"{where}.labels", problems) ?? [],
                     SkipBuild = BooleanIn(keys, $"{where}.skipBuild", problems),
+                    KeepGoing = BooleanIn(keys, $"{where}.keepGoing", problems),
                 };
                 break;
 
@@ -1143,6 +1258,7 @@ public static class WorkflowFileParser
                 {
                     Runner = ScalarIn(keys, $"{where}.runner", problems),
                     Inputs = StringMapIn(keys, $"{where}.inputs", problems),
+                    KeepGoing = BooleanIn(keys, $"{where}.keepGoing", problems),
                 };
                 break;
 
@@ -1330,6 +1446,7 @@ public static class WorkflowFileParser
             ScalarIn(repeatKeys, $"{where}.repeat.blocking", problems),
             unbounded ? null : IntIn(repeatKeys, $"{where}.repeat.blockersLimitRounds", problems),
             ScalarIn(repeatKeys, $"{where}.repeat.leftover", problems),
+            ScalarIn(repeatKeys, $"{where}.repeat.decideAfter", problems),
             unbounded);
     }
 
@@ -1669,6 +1786,34 @@ public static class WorkflowFileParser
         }
 
         problems.Add($"'{what}' is '{text}', which is none of {string.Join(", ", values.Select(known => $"'{known}'"))}.");
+        return null;
+    }
+
+    /// <summary>
+    /// Reads a failure policy: one of the closed list, or - for a step of a workflow used as a step - a single read of
+    /// one of its inputs, <c>{input.failTo}</c>, resolved where the step runs and held to the same list by the
+    /// definition's check, which alone knows the step sits in a used workflow and what the input's value may be.
+    /// </summary>
+    private static string? OnFailureIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
+    {
+        var text = ScalarIn(keys, what, problems);
+
+        if (text is null)
+        {
+            return null;
+        }
+
+        if (text.Contains('{'))
+        {
+            return text;
+        }
+
+        if (WorkflowStep.FailurePolicies.Contains(text, StringComparer.Ordinal))
+        {
+            return text;
+        }
+
+        problems.Add($"'{what}' is '{text}', which is none of {string.Join(", ", WorkflowStep.FailurePolicies.Select(known => $"'{known}'"))}.");
         return null;
     }
 

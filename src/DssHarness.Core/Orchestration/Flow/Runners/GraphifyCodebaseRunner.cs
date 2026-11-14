@@ -47,6 +47,7 @@ public sealed class GraphifyCodebaseRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.Refused, refusal);
         }
 
+        // The run's one shape, the same every sync of its graph is made under (FlowUse.GraphOf).
         var request = FlowGraphSyncs.RequestOf(context, place, run.Instance, rebuild: run.Step.Rebuild == true);
 
         if (run.Step.In is { } named)

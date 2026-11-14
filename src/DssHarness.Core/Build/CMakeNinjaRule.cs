@@ -20,6 +20,15 @@ internal static class CMakeNinjaRule
     /// <summary>What ends the name of what a rule that links a program does.</summary>
     private const string ProgramLinker = "_EXECUTABLE_LINKER";
 
+    /// <summary>What ends the name of what a rule that compiles one source into an object does, whatever its language.</summary>
+    private const string Compiler = "_COMPILER";
+
+    /// <summary>
+    /// Whether <paramref name="edge"/> compiles one source - its first explicit input, <see cref="NinjaEdge.Source"/> - into
+    /// an object: <c>C_COMPILER__app_unscanned_Debug</c>, never a rule that links, scans, or runs a command.
+    /// </summary>
+    public static bool Compiles(NinjaEdge edge) => Does(edge).EndsWith(Compiler, StringComparison.Ordinal);
+
     /// <summary>
     /// Whether <paramref name="edge"/> links what objects were built for - a program, or a library of any kind - and so
     /// builds no object itself.

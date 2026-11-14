@@ -74,6 +74,7 @@ public static partial class HarnessConfigValidator
         ValidateLineEndings(config.LineEndings, problems);
         ValidateCi(config.Ci, problems);
         ValidateWorkflows(config, problems);
+        ValidateWorkflowSources(config.WorkflowSources, problems);
 
         return problems;
     }
@@ -563,6 +564,74 @@ public static partial class HarnessConfigValidator
                 problems.Add($"workflows names '{name}' and '{other}', which differ only by case; a "
                     + "workflow directory is the file system's to tell apart, and not every file system does");
             }
+        }
+    }
+
+    /// <summary>
+    /// Checks the workflow sources the configuration declares: that each allowed source is named as one is, under a
+    /// host <c>hosts</c> names where it is under one, that each host is named as a host and gives the environment
+    /// variable its credential is read from - a host with none would be reached with no credential, which the fetch
+    /// refuses - and that <c>pin</c> and <c>offline</c> spell what they may.
+    /// </summary>
+    private static void ValidateWorkflowSources(WorkflowSourcesConfig? sources, List<string> problems)
+    {
+        if (sources is null)
+        {
+            return;
+        }
+
+        RefuseGivenEmpty(sources.Allow, "workflowSources.allow", "name an owner or a repository", "no source allowed, and a remote use is refused", problems);
+
+        foreach (var entry in sources.Allow)
+        {
+            if (WorkflowSourceRules.AllowProblem(entry) is { } problem)
+            {
+                problems.Add($"workflowSources.{problem}");
+            }
+            else if (WorkflowSourceRules.AllowedHost(entry) is { } allowedHost && !sources.Hosts.ContainsKey(allowedHost))
+            {
+                problems.Add($"workflowSources.allow names '{entry}', under the host '{allowedHost}', which workflowSources.hosts does not name: a host beyond github.com is reached only with the credential its entry there names");
+            }
+        }
+
+        foreach (var (host, named) in sources.Hosts)
+        {
+            if (host.Length == 0 || !host.Contains('.', StringComparison.Ordinal) || host.Contains('/', StringComparison.Ordinal))
+            {
+                problems.Add($"workflowSources.hosts names '{host}', which is no host: a host is named as its own name is, dotted, with no path in it");
+            }
+
+            if (host.Equals(WorkflowSourceRules.GitHub, StringComparison.OrdinalIgnoreCase))
+            {
+                problems.Add($"workflowSources.hosts names '{WorkflowSourceRules.GitHub}', which needs no entry: the machine's own gh login reaches it");
+            }
+
+            if (named?.Credential is { } credential)
+            {
+                if (!string.Equals(credential.From, "env", StringComparison.Ordinal))
+                {
+                    problems.Add($"workflowSources.hosts.{host}.credential.from is '{credential.From}'; a host's credential is read from an environment variable, env");
+                }
+
+                if (string.IsNullOrWhiteSpace(credential.Name))
+                {
+                    problems.Add($"workflowSources.hosts.{host}.credential names no environment variable; a host's credential is an environment variable, named here");
+                }
+            }
+            else if (!host.Equals(WorkflowSourceRules.GitHub, StringComparison.OrdinalIgnoreCase))
+            {
+                problems.Add($"workflowSources.hosts.{host} names no credential; a host beyond github.com is reached with the one credential named here, \"credential\": {{\"from\": \"env\", \"name\": \"<VARIABLE>\"}}, and never with the machine's own tokens");
+            }
+        }
+
+        if (sources.Pin is { } pin && !WorkflowSourceRules.Pins.Contains(pin, StringComparer.Ordinal))
+        {
+            problems.Add($"workflowSources.pin is '{pin}'; it is one of {string.Join(", ", WorkflowSourceRules.Pins)}");
+        }
+
+        if (sources.Offline is { } offline && !WorkflowSourceRules.Offlines.Contains(offline, StringComparer.Ordinal))
+        {
+            problems.Add($"workflowSources.offline is '{offline}'; it is one of {string.Join(", ", WorkflowSourceRules.Offlines)}");
         }
     }
 

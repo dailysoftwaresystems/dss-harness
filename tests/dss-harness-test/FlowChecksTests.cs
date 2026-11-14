@@ -131,6 +131,32 @@ public sealed class FlowChecksTests
         Assert.Equal(FlowChecks.None, FlowChecks.Red([checks[1]]));
     }
 
+    /// <summary>
+    /// A red leg whose build its own tool failed says what its line said of the units - how many, and how far its tool
+    /// got - after its phase; its entry in the step's red names each, and a leg whose entry carries none says nothing more.
+    /// </summary>
+    [Fact]
+    public void ARedLegWhoseBuildFailedUnits_SaysWhatItsLineSaidOfThem()
+    {
+        var output = Legs(passed: false, ("win", "failed"), ("linux", "failed"));
+
+        output["red"] = new JsonArray(
+            new JsonObject
+            {
+                ["leg"] = "win",
+                ["verdict"] = "failed",
+                ["phase"] = "build",
+                ["failedUnits"] = new JsonObject { ["tool"] = "ninja", ["count"] = 2, ["said"] = "2 unit(s) failed to build; ninja went on past them" },
+            },
+            new JsonObject { ["leg"] = "linux", ["verdict"] = "failed", ["phase"] = "test", ["failedUnits"] = null });
+
+        Assert.Equal(
+            string.Join("\n",
+                "gate (build) in the main tree: win failed at build - 2 unit(s) failed to build; ninja went on past them",
+                "gate (build) in the main tree: linux failed at test"),
+            FlowChecks.Red([Check("gate", "build", FlowInstanceState.Done, output, at: 1)]));
+    }
+
     private static FlowCheck Check(
         string instance,
         string kind,

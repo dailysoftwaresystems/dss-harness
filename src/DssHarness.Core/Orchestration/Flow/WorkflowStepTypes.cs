@@ -103,7 +103,7 @@ public static class WorkflowStepTypes
         new("type", "what runs: one of the types 'help workflows' lists; absent, the step is a group"),
         new("dependsOn", "steps this one waits for, by name, each declared before it among its siblings"),
         new("when", "an expression that says whether the step runs at all"),
-        new("onFailure", "what a failure nothing handles does: stop, pause, continue, or recover - give it to the workflow's recover; absent, its group's, and at the top stop; never back to the step itself, which says retries"),
+        new("onFailure", "what a failure nothing handles does: stop, pause, continue, or recover - give it to the workflow's recover; absent, its group's, and at the top pause where the run's workflow declares a recover, else stop; never back to the step itself, which says retries"),
         new("retries", "retries the step is given where it ends incomplete - a reasoning step also where its agent failed, on each model it may use; absent, maxRetries"),
         new("always", "run even where the dependencies did not reach this step"),
         new("alone", "run with nothing beside it"),
@@ -131,7 +131,10 @@ public static class WorkflowStepTypes
     /// </summary>
     public static IReadOnlyList<KeyDescription> Group =>
     [
-        new("steps", $"the group's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))}") { Required = true },
+        new("steps", $"the group's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))} - a step that says 'use' takes none, for the workflow it uses brings its own"),
+        new("use", "the workflow this step is: a path to its yml file, relative to the calling workflow's directory and resolving inside the workflows root - inside the directory a remote workflow was fetched as, for a use inside one - or a remote workflow, owner/repo/path/workflow.yml@ref or the same under a GitHub Enterprise host the configuration names, fetched into the workflow cache and read from it; the step takes the workflow's steps as its own, and its recovery and its declared outputs with them"),
+        new("with", "the values the used workflow's inputs are filled with, each read as the input it fills declares: an expression for a value, a template for a text, a path into the used workflow's directory for a file, and a name its steps say in onFailure or then for a step"),
+        new("useParentLimits", "which run's settings govern the used workflow's steps: true (the default) the calling run's, with each run-level key the used workflow declares said as not applied, or false the used workflow's own, key by key - a key is governed by the nearest such use around a step that declares it, and one none declares stays the run's - its budget and reporter carried and not applied, its pushCheckpoints and recommendations, a run's own, said as not applied too, and an amend refused, for an amend is a run's own"),
         new("forEach", "an expression yielding the work items the group runs its steps for, once each"),
         new("repeat", "the group's bound: when its iterations end, and what is left") { Keys = RepeatKeys },
         new("gather", "members gathered from the group's steps into one list, named as its members read them"),
@@ -192,9 +195,9 @@ public static class WorkflowStepTypes
             "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)",
             ["read main", "write the agent's tree where its access is write"],
             "maxReasoningAgents"),
-        new("build", LegKeys, [], "red", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners, IAgentIsolation.ForExecutionAsync", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("build", [.. LegKeys, KeepGoingKey], [], "red", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("test", [.. LegKeys, .. TestKeys, KeepGoingKey], ["filter", "exclude", "labels"], "red", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs, KeepGoingKey], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners, IAgentIsolation.ForExecutionAsync", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
         new(
             "check-mutations",
             [.. LegKeys, new("arms", "the arms it runs, by id; absent, every arm"), new("pending", "drive only the arms with no recorded passed that still holds")],
@@ -469,6 +472,9 @@ public static class WorkflowStepTypes
     /// <summary>The run step's <c>inputs</c> map.</summary>
     private static KeyDescription RunInputs => new("inputs", "the values it hands its runner's inputs");
 
+    /// <summary>The key a step that builds its legs takes - <c>build</c>, <c>test</c> and <c>run</c> - as their commands take <c>--keep-going</c>.</summary>
+    private static KeyDescription KeepGoingKey => new("keepGoing", "its builds of its legs go on past the units that fail to build, as --keep-going has them, so each red leg's entry in the step's red names, in failedUnits, every unit its build failed - by source and step, with what its line said of them - and {run.red} says that line's words");
+
     /// <summary>The keys the fold family takes, shared by <c>fold</c> and <c>delete-agent</c>.</summary>
     private static IReadOnlyList<KeyDescription> FoldKeys =>
     [
@@ -494,6 +500,7 @@ public static class WorkflowStepTypes
         new("blocking", "the expression that says, past the rounds, whether what is left must still be dealt with"),
         new("blockersLimitRounds", "further rounds past rounds while blocking holds, from 1 to 20 (absent, 3); false, none but the workflow's budget"),
         new("leftover", "where what the loop left is written"),
+        new("decideAfter", "the step of each iteration the loop decides at: where its newest visit ends done, the loop's until, blocking and bound are read there and kept in the iteration's record, and what follows it in the iteration starts only where the loop goes on; where it ends any other way they are read at the iteration's end"),
     ];
 
     /// <summary>What one <c>allow</c> block takes.</summary>
@@ -551,7 +558,7 @@ public static class WorkflowStepTypes
         ("passed", Flag),
         ("exitCode", WholeNumber),
         ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
-        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), .. arms ? [("arm", TextOrNull)] : Array.Empty<(string, string)>()]))),
+        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
         ("runDirectory", TextOrNull),
         ("isolation", IsolationOutput));
 
@@ -618,9 +625,31 @@ public static class WorkflowStepTypes
     /// <summary>A schema of a list whose items are each <paramref name="items"/>.</summary>
     private static string ListOf(string items) => $$"""{"type":"array","items":{{items}}}""";
 
+    /// <summary>
+    /// What a red leg's entry carries of the units its build failed (<see cref="Build.FailedUnitsDocument"/>), or null where
+    /// its own tool failed no build of it: each member as the ledger's <c>--json</c> says it, left out where it holds nothing.
+    /// </summary>
+    private static string FailedUnitsOutput => ObjectOrNullOf(
+        ("tool", Text),
+        ("count", WholeNumber),
+        ("units", ListOf(ObjectOf(("source", Text), ("step", Text)))),
+        ("unread", Text),
+        ("keptGoing", Flag),
+        ("stopsAtFirst", Flag),
+        ("stepsRun", WholeNumber),
+        ("stepsPlanned", WholeNumber),
+        ("unattributed", WholeNumber),
+        ("said", Text));
+
     /// <summary>A schema of an object holding exactly <paramref name="properties"/>, each named and none other, as the subset closes every object.</summary>
-    private static string ObjectOf(params (string Name, string Schema)[] properties)
-        => $$$"""{"type":"object","additionalProperties":false,"properties":{{{{string.Join(",", properties.Select(property => $"\"{property.Name}\":{property.Schema}"))}}}}}""";
+    private static string ObjectOf(params (string Name, string Schema)[] properties) => Closed("\"object\"", properties);
+
+    /// <summary>A schema of what <see cref="ObjectOf"/> says of <paramref name="properties"/>, or null.</summary>
+    private static string ObjectOrNullOf(params (string Name, string Schema)[] properties) => Closed("""["object","null"]""", properties);
+
+    /// <summary>A schema of a closed object of the <paramref name="type"/> given, holding exactly <paramref name="properties"/>.</summary>
+    private static string Closed(string type, (string Name, string Schema)[] properties)
+        => $$$"""{"type":{{{type}}},"additionalProperties":false,"properties":{{{{string.Join(",", properties.Select(property => $"\"{property.Name}\":{property.Schema}"))}}}}}""";
 
     /// <summary>What one answer of an <c>answers</c> map takes.</summary>
     public static IReadOnlyList<KeyDescription> AnswerKeys =>

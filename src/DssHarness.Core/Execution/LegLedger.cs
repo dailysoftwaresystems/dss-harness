@@ -206,6 +206,13 @@ public sealed record LegEntry
     public KeptOnFailure? KeptOnFailure { get; init; }
 
     /// <summary>
+    /// The units the leg's build failed to build, where its build's own tool failed it and that failure is its verdict:
+    /// each by its source, how many, and how far a tool that stops at its first failures got (<see cref="Build.FailedUnits"/>).
+    /// <see langword="null"/> on every other leg.
+    /// </summary>
+    public Build.FailedUnits? FailedUnits { get; init; }
+
+    /// <summary>
     /// Each mutation arm the leg was asked about, in the registry's order, with the verdict it reached there: empty for
     /// every command but <c>check-mutations</c>. The leg's own verdict is the worst of its own and these.
     /// </summary>

@@ -8,7 +8,7 @@ It names each path it refused, and says why: your change writes or deletes a pat
 or you and the main tree both changed a file and the two changes conflict. Of each conflict it shows the file three
 ways: as you hold it, as both trees held it, and as the main tree holds it now.
 
-The paths this item owns, and the only ones its fold carries: {item.ownedPaths}
+The paths this item owns, and the only ones its fold carries: {input.item.ownedPaths}
 
 Just before this message the engine tried to bring your worktree up to date with the main tree. Where no path
 conflicted it did; where any did, it changed nothing. Read each path before you change it.

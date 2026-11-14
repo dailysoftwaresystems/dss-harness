@@ -208,27 +208,18 @@ public sealed class SideTaskService(
     {
         ArgumentNullException.ThrowIfNull(call);
 
-        // The first line of the rule every agent's policy holds as well: a side-task started under an agent - by this
-        // verb or by any other name of the program - refuses itself. The mark is read by its presence, whatever it holds:
-        // a child that cleared its value is still an agent's.
-        if (_environment(AgentChildEnvironment.AgentMarker) is not null)
-        {
-            return Unwritten(CommandOutcome.Refused($"'{RunCommand}' is refused: {NoAgentStartsOne}. Nothing was started."));
-        }
+        // The rule every agent's policy holds as well: a side-task started under an agent - by this verb or by any other
+        // name of the program - refuses itself, told by the one rule the fetch of a remote workflow is told by too: the
+        // mark, by its presence whatever it holds, and the process tree, which no form of taking the mark away reaches. A
+        // tree that could not be read is said and refused, never read as one with no agent in it; a process detached from
+        // the agent's tree is told by the mark alone. The refusal says which of them made the command an agent's, and
+        // where a person starts one instead, in the words the fetch's refusal says them in.
+        var origin = await _ancestry.UnderAnAgentAsync(_environment, cancellationToken).ConfigureAwait(false);
 
-        // The second, which no form of taking the mark away reaches: a process of this tool's among the ones that started
-        // this one is the engine an agent's child runs under. A tree that could not be read is said and refused, never
-        // read as one with no agent in it; a process detached from the agent's tree is told by the mark alone.
-        var tree = await _ancestry.ReadAsync(cancellationToken).ConfigureAwait(false);
-
-        if (tree.Unread is { } unread)
+        if (origin.Why is { } why)
         {
-            return Unwritten(CommandOutcome.Refused($"'{RunCommand}' is refused: {unread} so whether an agent started it could not be told, and {NoAgentStartsOne}. Nothing was started."));
-        }
-
-        if (tree.Tool is not null)
-        {
-            return Unwritten(CommandOutcome.Refused($"'{RunCommand}' is refused: {NoAgentStartsOne}. Nothing was started."));
+            return Unwritten(CommandOutcome.Refused(
+                $"'{RunCommand}' is refused: {NoAgentStartsOne}, and this command is taken for an agent's: {why}. A person starts one from {AgentAncestryAnswer.APersonsShell}. Nothing was started."));
         }
 
         // The side-task's own stop: the command's, and the person's interrupts where no turn takes them - a one shot's

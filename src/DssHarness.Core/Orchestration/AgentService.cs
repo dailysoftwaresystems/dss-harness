@@ -13,6 +13,7 @@ using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Worktrees;
+using static DssHarness.Core.Orchestration.AgentWorktrees;
 
 namespace DssHarness.Core.Orchestration;
 
@@ -3518,52 +3519,9 @@ public sealed class AgentService(
                 + "the agent's worktree is there.");
     }
 
-    /// <summary>What the directory at an agent's worktree path is to git; a path that cannot be looked at is never taken for one that is gone.</summary>
-    private async Task<WorktreeStanding> StandingAsync(HarnessContext context, AgentRecord record, string path, CancellationToken cancellationToken)
-    {
-        try
-        {
-            switch (_fileSystem.KindOf(path))
-            {
-                case PathKind.None:
-                    return new WorktreeStanding(Standing.Gone, null, null);
-                case PathKind.File:
-                    return new WorktreeStanding(Standing.Foreign, null, "it is a file, not a directory");
-                case PathKind.Link:
-                    return new WorktreeStanding(Standing.Foreign, null, "it is a link, and a worktree is never reached through one");
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return new WorktreeStanding(Standing.Unreadable, null, $"whether anything is there cannot be told: {ex.Message.TrimEnd('.')}");
-        }
-
-        WorktreeIdentity identity;
-
-        try
-        {
-            identity = await Inspector().IdentifyAsync(context.Layout.MainCheckoutRoot, WorktreeAddress.Nested(record.Orchestrator, record.Name), path, cancellationToken).ConfigureAwait(false);
-        }
-        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
-        {
-            return new WorktreeStanding(Standing.Unreadable, null, ex.Message);
-        }
-
-        // A husk is never read: a directory with no .git of its own is answered for by the main checkout that contains it,
-        // whose HEAD and uncommitted changes would be read as the agent's. A tree is the agent's only as the kind its record
-        // names: a repository of its own where the record says so, one of git's linked worktrees where an earlier version's
-        // record says nothing - one of the other kind there is not the tree the agent was made with.
-        return (identity.Membership, record.OwnRepository) switch
-        {
-            (WorktreeMembership.AgentRepository, true) or (WorktreeMembership.OfThisRepository, false) => new WorktreeStanding(Standing.Registered, identity.AdministrativeDirectory, null),
-            (WorktreeMembership.OfThisRepository, true) => new WorktreeStanding(Standing.Foreign, null, "it is one of git's linked worktrees, and its record says it was made a repository of its own"),
-            (WorktreeMembership.AgentRepository, false) => new WorktreeStanding(Standing.Foreign, null, "it is a repository of its own, and its record says it was made one of git's linked worktrees"),
-            (WorktreeMembership.OfAnotherRepository, true) => new WorktreeStanding(Standing.Foreign, null, "it is a repository whose own configuration names no agent of this main checkout at its address, or which does not borrow this main checkout's objects"),
-            (WorktreeMembership.OfAnotherRepository, false) => new WorktreeStanding(Standing.Foreign, null, "it is a repository of its own"),
-            _ when WorktreeInspector.HoldsOwnGit(_fileSystem, path) => new WorktreeStanding(Standing.Unreadable, null, "its .git is there, and git cannot read the worktree from it"),
-            _ => new WorktreeStanding(Standing.Husk, null, "it holds no .git of its own, and git answers for it with the main checkout"),
-        };
-    }
+    /// <summary>What the directory at an agent's worktree path is to git (<see cref="AgentWorktrees.StandingAsync"/>).</summary>
+    private Task<WorktreeStanding> StandingAsync(HarnessContext context, AgentRecord record, string path, CancellationToken cancellationToken)
+        => AgentWorktrees.StandingAsync(_fileSystem, Inspector(), context.Layout.MainCheckoutRoot, record, path, cancellationToken);
 
     /// <summary>Why an agent's worktree cannot be worked on as it stands.</summary>
     private static string Unusable(AgentRecord record, string path, WorktreeStanding standing) => standing.Kind switch
@@ -3573,6 +3531,7 @@ public sealed class AgentService(
             + "Nothing was read, written or removed. What a removal that stopped part way leaves is finished by "
             + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, WorktreeAddress.Nested(record.Orchestrator, record.Name).Name, "--force")} once what it holds is kept.",
         Standing.Foreign => $"{Agent(record)}: '{path}' is not a worktree of this repository - {standing.Why}. Nothing was read, written or removed.",
+        Standing.Moved => $"{Agent(record)}: {standing.Why}. Nothing was read, written or removed.",
         _ => $"Whether '{path}', the worktree of {Lower(Agent(record))}, is a worktree of this repository cannot be told: {standing.Why?.TrimEnd('.')}. Nothing was read, written or removed.",
     };
 
@@ -4034,19 +3993,6 @@ public sealed class AgentService(
         /// <summary>Anything else: nothing here finishes it.</summary>
         public static HeadMoved Refusing(CommandOutcome refusal) => new(null, refusal);
     }
-
-    /// <summary>What the directory at an agent's worktree path is.</summary>
-    private enum Standing
-    {
-        Registered,
-        Gone,
-        Husk,
-        Foreign,
-        Unreadable,
-    }
-
-    /// <summary>What the directory at an agent's worktree path is, its git directory where it is a worktree, and why where it is not usable.</summary>
-    private sealed record WorktreeStanding(Standing Kind, string? AdministrativeDirectory, string? Why);
 
     /// <summary>An agent found - or a live one to work on, with its worktree - or why it cannot be.</summary>
     private sealed record AgentAt(

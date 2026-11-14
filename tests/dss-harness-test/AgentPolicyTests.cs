@@ -909,7 +909,7 @@ public sealed class AgentPolicyTests
                 "stop-orchestrator", "ask-orchestrator-status", "ask-orchestrator", "create-agent", "seed-agent", "refresh-agent",
                 "rebase-agent", "fold-agent", "delete-agent", "legs", "install-missing-tools", "update-tool", "sync", "build", "test",
                 "run", "check-mutations", "stop-run", "clean", "host-exec", "up", "down", "host-agent", "sync-serve", "host-hold",
-                "contain-exec", "isolate-exec",
+                "contain-exec", "isolate-exec", "workflow-cache",
             ],
             AgentPolicy.SlotOrStateVerbs);
     }

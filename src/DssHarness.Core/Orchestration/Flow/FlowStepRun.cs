@@ -599,9 +599,18 @@ public sealed record FlowStepResult
 /// The asking step's instance id, as its records name it: the step the prompt's <c>{question.step}</c> reads, and the one
 /// under whose own directory each advice keeps its records in <c>advice/&lt;n&gt;/</c>, numbered after those already there.
 /// </param>
-/// <param name="Inputs">The run's inputs, as its person gave them.</param>
+/// <param name="Inputs">
+/// The inputs of the workflow whose advisor is asked, as its prompt reads them by <c>{input.&lt;name&gt;}</c>: what the use
+/// filled where a use that governs itself declares the advisor, and else the run's own, as its person gave them.
+/// </param>
 /// <param name="Record">What the run stored of the asking step, rendered as a continuation record renders a step.</param>
 /// <param name="Bar">The repository's bar for a recommendation, read where the question was raised.</param>
+/// <param name="Texts">
+/// The texts the advisor's prompt reads by <c>{text.&lt;name&gt;}</c>, each by its name with the workflow whose directory
+/// holds it - as a step of the advisor's own workflow sees them: that used workflow's first, where a use that governs
+/// itself declares the advisor, then the uses' around it, and the run's last. Null where none are declared, and a name
+/// it holds none of is refused, naming the workflow.
+/// </param>
 /// <param name="Place">Where the run works; null for a run held in memory alone.</param>
 /// <param name="BudgetLeftUsd">What is left of the run's budget in dollars before its reserve, which the advice's agent is held to where it is less than its own bound, or where it names none; null where the run budgets no dollars.</param>
 /// <param name="RunValues">The run as its own <c>run</c> root reads it, as the asking left it: its name, what it has checked and what it knows to be red among it; null where the asking was made from no run.</param>
@@ -620,9 +629,15 @@ public sealed record FlowAdvisorCall(
     System.Text.Json.Nodes.JsonObject Inputs,
     string? Record,
     string Bar,
+    IReadOnlyDictionary<string, FlowAdvisorText>? Texts = null,
     FlowRunPlace? Place = null,
     double? BudgetLeftUsd = null,
     System.Text.Json.Nodes.JsonObject? RunValues = null);
+
+/// <summary>One text an advisor's prompt reads by its name: the workflow whose directory holds it, and its file there.</summary>
+/// <param name="Workflow">The workflow that declares the text, by its name.</param>
+/// <param name="File">The text's markdown file, under that workflow's directory.</param>
+public sealed record FlowAdvisorText(string Workflow, string File);
 
 /// <summary>
 /// The advice one question of the run's was given: the answer its advisor recommends with why and a text where the

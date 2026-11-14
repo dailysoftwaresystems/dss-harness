@@ -202,9 +202,24 @@ public static class FlowScope
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(definition);
 
-        return path == Recovery
-            ? definition.Recover is { } recover ? new Located(Recovery, recover.Declaration) : null
-            : Member(path[(path.LastIndexOf('.') + 1)..], ScopeOf(path), definition);
+        if (path == Recovery)
+        {
+            return definition.Recover is { } recover ? new Located(Recovery, recover.Declaration) : null;
+        }
+
+        // A used workflow's recovery hangs from the step that uses it, under the same reserved name: the flow's own
+        // recovery at the root, and each use's under its path.
+        if (path.EndsWith($".{Recovery}", StringComparison.Ordinal))
+        {
+            var usePath = path[..^($".{Recovery}").Length];
+
+            if (At(usePath, definition) is { Step.Use.Recover: { } called } use)
+            {
+                return new Located(path, called.Declaration);
+            }
+        }
+
+        return Member(path[(path.LastIndexOf('.') + 1)..], ScopeOf(path), definition);
     }
 
     /// <summary>
@@ -258,16 +273,26 @@ public static class FlowScope
 
     /// <summary>
     /// Every declared step with its path, in declaration order - a group before its members - the flow's steps first
-    /// and then the recovery's, under <see cref="Recovery"/>.
+    /// and then the recovery's, under <see cref="Recovery"/>, and each used workflow's recovery under the step that
+    /// uses it.
     /// </summary>
     /// <param name="definition">The workflow, as it was read.</param>
     public static IEnumerable<(string Path, WorkflowStep Step)> Declared(WorkflowDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var declared = Walk(definition.Steps, scope: null);
+        foreach (var declared in Walk(definition.Steps, scope: null))
+        {
+            yield return declared;
+        }
 
-        return definition.Recover is { } recover ? declared.Concat(Walk(recover.Steps, Recovery)) : declared;
+        if (definition.Recover is { } recover)
+        {
+            foreach (var declared in Walk(recover.Steps, Recovery))
+            {
+                yield return declared;
+            }
+        }
     }
 
     /// <summary>Each step of <paramref name="steps"/> and of every group among them, with its path, a group before its members.</summary>
@@ -283,6 +308,16 @@ public static class FlowScope
             {
                 yield return inner;
             }
+
+            // A workflow used as a step brings its own recovery, which hangs from the step under the same reserved name
+            // the flow's own does at the root.
+            if (step.Use?.Recover is { } called)
+            {
+                foreach (var inner in Walk(called.Steps, $"{path}.{Recovery}"))
+                {
+                    yield return inner;
+                }
+            }
         }
     }
 
@@ -293,8 +328,9 @@ public static class FlowScope
             : null;
 
     /// <summary>
-    /// The steps declared directly in <paramref name="scope"/>: the flow's top level, the recovery's own steps, or a
-    /// group's members, the group found by its path from the one or the other; none where the path names no group.
+    /// The steps declared directly in <paramref name="scope"/>: the flow's top level, the recovery's own steps, a
+    /// group's members, or a used workflow's recovery under the step that uses it - the group found by its path from
+    /// the one or the other; none where the path names no group.
     /// </summary>
     private static IReadOnlyList<WorkflowStep> MembersOf(string? scope, WorkflowDefinition definition)
     {
@@ -306,21 +342,30 @@ public static class FlowScope
         var parts = scope.Split('.');
         var siblings = definition.Steps;
         var start = 0;
+        WorkflowStep? group = null;
 
-        if (parts[0] == Recovery && definition.Recover is { } recover)
+        if (parts[0] == Recovery && definition.Recover is { } root)
         {
-            siblings = recover.Steps;
+            siblings = root.Steps;
             start = 1;
+            group = root.Declaration;
         }
 
         foreach (var part in parts[start..])
         {
-            if (First(part, siblings) is not { } group)
+            if (part == Recovery && group?.Use?.Recover is { } called)
+            {
+                siblings = called.Steps;
+                continue;
+            }
+
+            if (First(part, siblings) is not { } member)
             {
                 return [];
             }
 
-            siblings = group.Steps;
+            group = member;
+            siblings = member.Steps;
         }
 
         return siblings;

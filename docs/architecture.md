@@ -857,6 +857,19 @@ worktree, names everything it found on one line, each with its remedy, and exits
   `git -C <main checkout> worktree repair`, which helps only while git still has the worktree's
   record: when it was moved or its `.git` file was lost. A clone at the path would pass a status
   check and take its whole history with it.
+- **A worktree of a checkout moved by hand.** Moving the checkout, its worktrees in it, leaves
+  each worktree's `.git` file and git's record of it naming where they were, and git may not open
+  the worktree at all, though all its work is in it. `WorktreeInspector.MovedFromAsync` reads it
+  as git's own repair does: the `.git` file names a record in a `worktrees` directory; where that
+  record is gone, the record of the same name in this checkout's git directory is the one meant,
+  and where it is there it must be that one; a record whose worktree is still where it says is
+  another worktree's and is never taken. Such a worktree is never said to be a directory to look
+  in and delete: `list-worktree` warns of it, `delete-worktree` refuses it (`--force` aside),
+  `delete-orchestrator` refuses its orchestrator, and every agent verb refuses its agent, each
+  naming `git -C <main checkout> worktree repair <path>`. `list-orchestrator` asks each live
+  agent's worktree of git by the one rule the agent verbs use (`AgentWorktrees.StandingAsync`),
+  and says one git cannot open, or holds as another kind than its record names, cannot be worked
+  on and why (`worktreeProblem` in `--json`), never that the agent stands live at it.
 
 - **Evidence.** The directories `worktrees.evidenceRoots` declares are checked before git is asked
   anything, because they hold files git was never told about. One of them holding anything refuses
@@ -932,7 +945,8 @@ history of a repository nested inside one included.
   `delete-worktree <name> --force` finishes it, which is safe because every check passed before
   removal began. Run again without `--force`, the command names that same way for a directory
   that holds no `.git` of its own and that git records no worktree at, which is what such a
-  removal leaves; `git worktree repair` is named only while git still records a worktree there,
+  removal leaves; `git worktree repair` is named only while git still records a worktree there -
+  at that path, or, after the checkout was moved by hand, at another place that holds none now -
   since it rebuilds a lost `.git` file from that record and has nothing to rebuild from without
   it.
 - Forced, it is `git worktree remove --force --force`, which overrides a lock. A directory git
@@ -1618,7 +1632,8 @@ A workflow is a flow of typed steps that depend on one another by name, declared
 `workflows` in `config.json` and defined by a yml file of its own,
 `.harness-config/workflows/<name>/<name>.yml` - never an entry in the configuration, which holds the
 names and nothing else. The workflow's directory is the workflow's own - its agent files
-(`agents/<name>.md`), its prompts, its schemas, the bar it recommends by (`recommendations.md`) -
+(`agents/<name>.md`), its prompts, its schemas, the bar it recommends by (`recommendations.md`), its
+texts (`texts:`, each name a markdown file a prompt reads as `{text.<name>}`) -
 and every path the definition names is relative to that directory and stays inside it, as an
 action's files are relative to its own directory; two workflows never read each other's files. The
 name is the folder's, the file's and the `name:` key's alike, one word, and a disagreement among the
@@ -1630,9 +1645,20 @@ missing - the whole set where the repository has no definition of it yet, and wh
 the shipped files that definition names, so a file taken out with its step stays out - and keeps
 each one that is there, whatever it holds, saying how many it kept: an init that stopped part way is
 finished by the next, and a file a repository edited is never written over. A configuration that
-does not declare it gets none of it. A file the disk will not write refuses init (13), naming the files written before it, which stay;
-and where a file is missing and the repository's own definition does not read, init refuses (12; 13
-where it cannot be read) and writes none, since which files it names cannot be told. The shipped set is held to every rule a repository's workflow
+does not declare it gets none of it. The files a definition names are those of the tree it runs, its
+uses resolved as a run resolves them (`WorkflowResolver`, a remote use left as written, for it names
+no file of the repository's), and a shipped used workflow's yml the repository has not got is read
+from the embedded copy init is about to write, so a pipeline taken out whole comes back whole in one
+run. A file the disk will not write refuses init (13), naming the files written before it, which stay;
+and where a file is missing and the repository's own definition does not read, or uses a workflow of
+the repository's that does not resolve, init refuses (12, naming each problem; 13 where it cannot be
+read) and writes none, since which files it names cannot be told. A file the repository's own
+definition names that this tool ships elsewhere now (`WorkflowTemplates.Moved`, the item pipeline's
+files an older release shipped beside the definition, read forever and never written) is not
+brought back, for this build's copy is written for the new layout, and init says so in a note
+naming where it ships it now; and a file of the old layout still there that the definition names no
+more (`ShippedWorkflowFiles.Left`) is read by nothing, so a change a repository made to it reaches no
+step, and init says so in a note naming the file read now. The shipped set is held to every rule a repository's workflow
 is by this build's own tests, so a build whose own workflow does not hold fails before it ships.
 
 A definition declares `inputs` - the values a run is started with, each with a kind, a default and
@@ -1641,10 +1667,316 @@ and `outputs`, what the whole workflow produces, each from a step of the flow. I
 one `type` - from `orient` and `reason` through the leg steps, the fold family, the checks, git
 and the forge, to `pause` - or groups holding steps of their own: a group runs its steps once for
 each work item a `forEach` yields, again and again until a `repeat`'s bound is met, or once as a
-block that `gathers` its members' findings into one list. A step raised by another step's ending
+block that `gathers` its members' findings into one list. A repeat that says `decideAfter` decides
+at that step of each iteration, not at the iteration's end: where the step's newest visit ends
+done, its `until`, its `blocking` and its bound are read there, on the iteration as it then stands
+(`DecideAt`, called where the deciding step ends done and again by the schedule's walk for a session
+that takes the run up from its records), and the decision is kept with that visit in the
+iteration's own record (`Scope.Decision`, written through `Decide`, persisted as the step record's
+`decided`), so a resume never reads it again over what has run since and a later visit of the step
+in the same iteration is decided anew. The rest of that iteration starts only where the loop goes
+on: a loop that asks at its bound there holds the rest of the iteration, at any depth, on its
+question until the answer (`HeldByItsLoop`, the one owner of that hold, which the schedule's
+drawing and `HoldOf` both read, the wait said as `FlowWaits.Answer`) - a handler its deciding
+step's ending raised among it waits not started, a group one drawing none of its steps - and the
+answer has it go on with the loop or end with the iteration; a loop that ends there withdraws what
+of the iteration has begun no work (`EndAtTheDecision`) -
+a handler its deciding step's ending raised among it, a group one made running at its raise NotRun
+with all its steps (`NotRunUnbegun`) - save the steps that run after the iteration's end
+(`RunsAfterItsGroup`), its always steps, which run in the always phase as a failing group's do,
+waits for what is in flight and ends the loop at the iteration's end (`FinishTheDecision`), leaving
+what its deciding step found, none of it acted on; at its bound, work a plan update owes the loop
+has its iteration added first, as at an iteration's end; and no iteration's end re-reads a
+decision made. A decision goes on past what it said in one place (`GoOnPast`), its `goesOn`
+rewritten in the iteration's record: one that asked at the bound goes on once the bound allows the
+next iteration - the answer `more` granted it, or work an update owes the loop had the question
+withdrawn for the iteration added (`CarryWhatTheLoopsOwe`) - and one that ended the loop goes on
+where an update owes it work its bound's question was never asked for, which runs again a loop that
+ended at an iteration's end too (`Reopening`). The decision is written before what follows from
+it, and a session that finds it with nothing of that made makes it (`Follow`, from `DecideAt` and
+the iteration's end): the rest NotRun, or the bound's question asked - or, where the bound now
+allows the next iteration, the loop going on - as the session that read it would have. Where the
+deciding step ends any other way - skipped, failed and passed over, never run - nothing is decided
+there, and the iteration's end reads them as for a loop that names no deciding step. Since the
+decision is read where the deciding step ends, its `until`, `blocking` and `leftover` read of the
+iteration only that step and the steps it waits for (V64), and every other step of the iteration
+runs before it - one it waits for - or after it, waiting for it as a handler of its ending does
+(V65), so none is left running unseen in an iteration the loop ended at its decision
+(`WorkflowValidator`'s `DecisionRules`). The shipped
+review loop decides at its `review`, so the last rework of a loop that ends at its bound is
+reviewed by the round after it and what it leaves is what its last review found. A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
 schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own.
+
+A step may be a whole workflow of its own: it says `use` - a path to the workflow's yml file,
+relative to the calling workflow's directory and resolving inside the workflows folder, so a
+workflow lives in a folder of its own beside the one that uses it, refused where it resolves to a
+file of the workflows folder itself, holds a backslash or a part that starts or ends with a space -
+the path every machine reads alike - and held to the workflows folder once links are followed by
+the rule the run's own workflow is (`WorkflowValidationService.Contained`) - and `with`, the values its
+inputs are filled with, each read as the input it fills declares: an expression for a `value`, a
+template for a `text`, a path of the used workflow's directory for a `file`, and a single name
+for a `step`, which a step of the used workflow reads as `{input.<name>}` whole in its `onFailure`
+or a handler's `then`. The file a step is asked with may be read the same way (V63): one whole
+input of the kind `file` naming its `prompt`, so one pipeline is asked with a different prompt by
+each workflow that uses it; and a step of the used workflow may say a `when` that reads one input
+of it alone, its own gate, held off where a use fills that input so - the way the shipped flow's
+item pipeline holds its `redo` and `undo` off where its recovery uses it. Only where the use's
+`with` value, or the input's default, is known as the file is read and makes the `when` false
+(`HeldOffByItsUse`, which reads the gate as the run reads it) is such a step free of waiting for
+the agent it works in and of reading a piece outside the work-item group; one the use opens runs,
+and is held to both as any step is. An input the use leaves to its default is read as a `with`
+value is, where the use sits, typed by the whole expression that fills it (`Yield`), as a declared
+output is; a text is a template written whole; a step input read in an `onFailure` or a `then` that
+the use fills with no name is refused where it is read (V62); and a policy read from an input is,
+in every rule that weighs one, the policy the use around its writer fills it with
+(`EffectiveOnFailure` through `PolicyFilled`) - a reasoning step under a group a use fills with
+`recover` is never recovered, a use that fills it with `recover` gives the run's recovery its
+failures, and `recoveryBound` is raised there. The used workflow is read as a definition of its
+own and resolved into the step before anything is checked or run: its steps become the step's
+members - instances named under the use as a group's are - its files are read in its own
+directory, and checked there by `validate-workflow` as the run's own are (each its steps and its
+recovery's steps name, its texts, the file an input of the kind `file` is filled with or defaults
+to, and the advisor's and reporter's files of a use that governs itself: `WorkflowFiles.OfUse`),
+and its declared outputs are the step's own once it ends (`UseOutputs`, read where the use ends
+done: one that reads nothing, from a step its item skipped, is absent, and one that cannot be read
+fails the use). A failure inside it that is given to a recovery reaches the nearest one declared
+around the failing step, however many uses out, and else the run's own (`RecoveryReaching` walks
+the scopes as the workflow declares them, `Scope.World`; `RecoveryFrom` is the one the validator's
+reach and recovery-never-calls-itself rules ask), and a used workflow's recovery is held to the
+run's own recovery's rules (`RecoverRules`) - its `onFailure` pause or stop - and placed and
+checked however deep in other recoveries it sits.
+
+Its `with` values are read once for each scope its steps run in - the block, each item of a
+`forEach`, each iteration of a `repeat`, each raising of a handler, each item a plan update places
+- by one owner (`FillUse`, reading past the use's own boundary, for the values are the caller's),
+and kept in the record of the instance that scope is (the step record's `inputs`), so a resume
+takes them back and never reads them again over what has run since. Every item's are read before
+any item opens: a value that cannot be read fails the use, saying which input and for which item,
+with nothing of it opened, and a read inside a scope whose inputs were never filled - an always
+step of the failed use - is refused naming the use, never handed the caller's input of the same
+name. A failure policy or a `then` read from a `step` input is filled in the scope that declares
+it (`DeclaringScopeOf`) - a group's `onFailure: '{input.failTo}'` reads the input of the workflow
+that declares the group, however deep the failing step - and one that reads nothing, or fills with
+no policy, is said: the step's error and record say which and why, and the failure goes where the
+top level sends what nothing else decides (`Unpolicied`); a handler whose `then` cannot be read
+ends failed, its code `ConfigInvalid`, and its failure decides as any failure does (`ThenUnread`).
+Its steps read only its inputs, its params and its own steps, never the calling run's - nor the
+caller's work item, the caller's iteration before, or what raised a handler of the caller, and a
+pull request's `base` inside it reads no input, for the base is filled from the run's own inputs
+before any use opens (V61); every fact of the caller they need comes through an input. A visit of
+a recovery stands in the scope its source failed in, but every lookup across a use's boundary -
+inputs, params, texts, a failure policy, the answers - is made in the scope that declares the
+recovery (`Scope.World`, which a recovery visit's scope takes from the recovery's declaring scope
+and every other scope from its parent), so the run's own recovery reads the run's inputs wherever
+the failure happened. A `{text.<name>}` is the nearest used workflow's own around the reading step
+that declares the name, else the next one out's, else the run's (`TextsAt`, the one owner the
+templates, the bar and the advisor's prompt read by).
+
+Its budget, reporter, `pushCheckpoints` and `recommendations` are never applied, nor - unless the
+use says `useParentLimits: false` - its advisor, amend, answers, limits and `codebaseGraph`, nor its
+`codebaseGraph` where the run's own workflow declares one, whose shape the run's one graph then has:
+the calling run's own hold, and `validate-workflow` says so beside the fingerprint of what it read,
+one line for each use (`FlowUse.NotApplied`). With `useParentLimits: false` the used workflow's own
+settings govern its steps key by key: a key is governed by the nearest such use around a step, by
+its declaration path, that declares it - one that declares none of it governs nothing of it, so the
+next one out that declares it does - and a key no such use declares stays the run's, for a use
+cannot widen a run's limits by declaring nothing (`FlowUse.Governing`, the one owner of which use
+governs a key, walking the root's and each use's `recover` as the definition names them, which the
+engine asks through `GoverningOf` and each runner by the step's declaration path). Its
+`maxReasoningAgents`, `maxParallelProcesses` and `maxOpenAgents` gate its steps as pools of their
+own in the place of the run's, counted across every instance of the use (`CounterFull`); its
+`maxInstances` caps the instances its steps open, across every instance of the use and in the
+place of the run's own cap for them (`InstanceBoundOf`); its `maxRetries` and `backoffSeconds` are
+what its steps fall back to where they say neither (`FlowUse.RetriesOf`, which `RetryCap` and the
+reason runner both read, and `BackoffSecondsOf`, which the reason runner reads); its
+`handoffSeconds` bounds the handoff of its paused reasoning steps; and its advisor recommends for
+its steps' questions in the place of the run's (`SeekAdvice`): its agent and prompt files read in its own directory, its prompt handed the
+inputs the use filled and the texts its steps see, its bar the workflow's own `texts.recommendations`
+where it declares one (`BarOf`, reading `texts.recommendations` first, then the run's
+`recommendations`, then `recommendations.md`), and each recommendation credited to the advisor that
+gave it. A question of its steps is answered nearest first (`ConfiguredFor`): the step's own
+answers, the groups around it within the workflow, the workflow's own `answers`, and then the use
+step's own, the caller's groups and the run's. The run's one codebase graph has one shape
+(`FlowUse.GraphOf`): the run's own workflow's, else the one its governing uses declare, and every
+sync at a step's start or end, every serving and every graphify step of the run is made under it
+(`FlowGraphSyncs.RequestOf`). Each key such a use applies is held to every rule the run's own key of
+that name is (V66, `GoverningRules` calling the run's own `LimitRules`, `AdvisorKinds`,
+`AnswerRules` and `GraphShapeRules`): its limits and `maxInstances` in their ranges, its advisor's
+tier, model, tries and kinds, its agent definition and prompt read in its own directory and checked
+against the configuration, and its keys among those the run needs, its answers to kinds its steps
+raise, and its graph's patterns and languages - a use cannot declare what a run could not; and
+where the run's own workflow declares no `codebaseGraph`, two such uses that shape the graph
+differently are refused, for a run has one graph, of one shape. Its budget and its reporter are
+carried and not applied (`FlowUse.NotApplied`): the run's budget counts its steps' spend and the
+run's reporter words the run as a whole. An amend is refused where the key says false - an amend is a
+run's own, and no step of a run applies one - said at validation; `preapproved` is a run's input
+alone, whatever the key says. A
+workflow file that uses itself, directly or through others, is refused with the circle of the
+files that close it - told apart by the machine's path comparison, the calling workflow's own file
+the first, so two workflows of one folder close none and a use back to the run's own file is found
+at once - and steps nest at most ten deep in all, a used workflow's own counted below the step that
+uses it, its recovery's as much as its flow's: the reader's own bound held across the uses of
+others, so no definition that holds is deeper than the run's frozen `definition.json` can be
+written. A run records each use's resolution - the called workflow's name and its fingerprint, for
+a local one the digest of its parsed definition taken as the run's own definition's is, so a
+comment or line endings change nothing, and for a remote one, or one inside it, its commit - in the
+definition it freezes, and a resume is refused where what the called workflow says changed since
+the run began, as the run's own definition's would be. The shipped implementation workflow uses the
+mechanism for itself: its item pipeline - written once in `item-pipeline/item-pipeline.yml` - is
+used by its rounds (`implementPrompt: prompts/implement.md`, `alternatives: 'true'`,
+`failTo: recover`) and by its recovery (`prompts/remedy.md`, `alternatives: 'false'`,
+`failTo: pause`, for the recovery cannot call itself) alike, and the validator and the tests count
+the resolved tree, every step of every use a step as a group's are.
+
+A use may name a workflow beyond the repository: `owner/repo/path/workflow.yml@ref`, as GitHub
+Actions spells `uses` - a repository's name may be dotted, as an organisation's `.github` is - or
+the same under a GitHub Enterprise host the configuration names. The ref is held to git's own rules
+for a ref's name (`WorkflowRemote.RefProblem`, before anything is asked) and resolved at the run's
+start through the one runner of `gh` (`WorkflowRemoteFetcher` over `GhProcess`, `gh api` calls each
+naming the host by `--hostname`, `GH_HOST` taken away) and the repository's own refs: its tag's ref,
+an annotated tag's tag object peeled to the commit it names, or - where the pin is `any` - its
+branch's ref, the repository itself asked before a missing tag is said to be one, so a repository
+that is not there or that the credential cannot see is named as that. A commit named by its SHA, or
+recorded by a run and no longer cached, is proved the repository's own before it is fetched: GitHub
+serves a commit of any fork under the repository's own name (the imposter commit), so the default
+branch, then the first 20 tags and branches the forge lists, are compared with it
+(`compare/<ref>...<sha>`, `behind` or `identical`), and one none reaches is refused. The commit is
+read as a commit (`git/commits/<sha>`, its own SHA the one asked) and its tree walked a part at a
+time to the workflow's directory, whose own listing is read whole (`git/trees/<dir>?recursive=1`);
+a listing cut short (`truncated`), a symbolic link, a submodule, a path rooted on any platform or
+holding `..`, `\`, `:` or a control character, two paths one where case is folded
+(`WorkflowCache.TreePathProblems`), or a file the use names that the directory does not hold refuses
+the whole before a blob is fetched. Every blob is fetched as its bytes and checked against the hash
+the tree gives of it (git's own blob hash, SHA-1 of `blob <size>\0` and the bytes), the whole
+bounded at 2,000 files and 20 MiB, and nothing is cached where a check fails; any answer that does
+not read as what was asked is the forge's failure, named, never an exception of the runtime's. What
+is cached lives in `workflow-cache/` under this user's own directory for this tool
+(`UserState.Directory`, the root every per-user file of the tool lives under), named the first time
+the cache is used so a process with no home of its own still runs every workflow that names nothing
+remote: each blob as the bytes the forge gave at `blobs/<first 2 hex>/<remaining 38 hex>` - decoded
+only where text is read, a byte order mark dropped as a repository's own file read drops it - one
+entry per repository, commit and directory at `entries/<sha256 of the parts>.json`, and each ref's
+newest resolution at `resolutions/<sha256 of the parts>.json`, each read strictly as every state file
+is (`JsonStateFile`) and an entry held to the key it was looked up by, its commit and blobs 40 hex
+characters and its paths the tree's rule's. Every file of an entry is hashed again as it is read, so
+a blob changed on disk is refused and its directory fetched again. One machine-wide lock
+(`MachineWideFile`) orders what a pruning decides against what a fetch and a use record, and it is
+held for one record, or one batch of a pruning's removals (`WorkflowCache.BlobsPerHold`), at a time -
+never across a fetch's blobs or a whole pruning, so it bounds a moment's work as every lock of the
+tool's does: a blob is named by its content, so it is written outside the lock before its entry, and
+the entry is written under it only once every blob it names is there, written again where a pruning
+took it meanwhile (`WorkflowCache.Write`); a pruning reads under the lock which blobs the entries hold
+before it removes one, and reads each stale entry again under it before removing it, so a use since
+keeps it; and a use is recorded under the lock with the look that its entry is still there
+(`WorkflowCache.Hold`), so an entry a pruning removed as it was read is fetched again, never answered
+as held. A second run of a pinned SHA reads the cache with no network, and
+a tag needs one call at each run's start; a run records each use's resolution - the remote commit SHA
+stands in the fingerprint a local workflow's parsed digest holds - and `FlowService` hands the frozen definition, with
+the run's own copy of its remote workflows, to the check a resume goes through, so each remote use resolves to the commit the run began with and
+never resolves again: a tag or branch that moved since changes no run already started, and only a
+change to what a local file says refuses it as before. A resolution carries every file of its
+directory as it fetched or read and hashed it (`WorkflowRemoteResolution.Files`), and nothing after
+it reads the cache again: the check reads a remote workflow's files, a use inside it and its schemas
+from there, `export-workflow --from` writes them from there, and a run keeps them beside its frozen
+definition, in the cache's own shape under its directory (`OrchestratorLayout.RemoteWorkflowsDirectory`,
+`WorkflowCache.OfRun`), filled at each session's start from the check that let the session begin
+(`WorkflowCache.Keep`, which keeps again only what the copy does not hold whole), and read by its steps
+as they run (`WorkflowNamedFiles.OfRun`). A run's files are frozen rather than its entries held against
+a pruning because freezing makes what a run reads the run's own, as its definition already is: a
+pruning then decides by nothing but the cache's own records, never by a guess at which runs are live
+and which of them hold which entry - a run whose engine died, or one resumed on another day, would
+otherwise hold its entries forever or lose them - and a resume, which resolves each use to the commit
+it began with again, reads it from the run's own copy first (`WorkflowRecordedUse`, which
+`WorkflowRunRecord` hands the fetcher from the check), proved the repository's own, read and hashed
+when the run began, then from the user's cache, and from the forge - proved again as any commit named
+by its SHA is - only where neither holds it whole: one order of where a recorded resolution's files
+come from, whoever runs the command, so the check a session goes through reads the very bytes its
+steps read, and neither a pruning of the cache, the network not being there, nor a tag deleted or a
+branch pushed over since refuses a run that started; and the session keeps again only what the run's
+copy does not hold whole.
+Trust is a person's decision, never a response's: a remote workflow directs agents and machine
+steps in the calling repository, so `workflowSources` in
+`config.json` allows its owner (`allow`, empty by default); names each GitHub Enterprise host with its
+one credential (`hosts.<host>.credential`, `{"from": "env", "name": "<VARIABLE>"}`, required), handed
+to the call as the one variable `gh` reads for the host's kind - `GH_TOKEN` for a `*.ghe.com` host,
+`GH_ENTERPRISE_TOKEN` for a GitHub Enterprise Server - with every other token variable taken away
+(`GhProcess.HostEnvironment`) and written nowhere else, a host with none, or whose variable is not
+set, refused before it is asked anything, while a github.com call keeps the machine's own `gh` login
+and is given no enterprise token; pins the refs it takes (`pin`: `tag-or-commit` by default, `commit`,
+or `any`, which allows a branch, warned of wherever one is resolved); and says what stands in where
+the network keeps the forge from being reached (`offline`: `refuse`, or `last-resolved`, the cache's
+newest resolution of the ref, warned of where it stands in). A resolution the cache stands in with,
+offline or under an agent, is held to the pin by one rule (`WorkflowRemoteFetcher.CachedResolution`):
+a ref the cache last resolved as a branch is refused where the pin is not `any`, as the forge's own
+answer would be. Only a call that never reached the forge
+- its limit passed, or `gh`'s own words for a name that did not resolve or a connection that did not
+answer (`GhProcess.Unreached`) - is the network not being there; a forge that answered, refusing the
+credential or naming a repository or ref that is not there, is refused with what `gh` said, and
+nothing stands in for it. A remote workflow's own name inside the run is its cache place,
+`remote/<host>/<owner>/<repo>/<commit>/<dir>`: its files resolve against its entry as a local
+workflow's do against its directory - through the same `WorkflowNamedFiles` rule, the reader routing
+the reserved `remote/` place to the cache - a relative use inside it resolves inside the same entry
+(`WorkflowResolution.ReadCached`, the resolution carrying the remote one's place down, a use that
+leaves the fetched directory refused), named under `remote/` by its own directory and read at run
+time from the entry of the nearest directory above it that the cache holds at that commit
+(`WorkflowCache.FindNamed`); no local use resolves under `remote/`, the cache's own reserved place in
+the workflows folder, and no workflow is named `remote` (`WorkflowName`). A remote workflow's schemas
+are held to the subset of JSON Schema the engine reads by the one rule a local one's are
+(`WorkflowFiles.SchemaProblems`), read from what its resolution read. A fetch refused for what the
+source is (`WorkflowResolution.RefusesTheSource`: 13, or 12 for a workflow file that is no text) - not
+allowed, a host or credential not named, a ref the pin refuses or that is not the repository's own,
+a file the directory does not hold, a forge that answered and refused - is the definition's problem,
+said with the use, so `validate-workflow` ends 12 and a run is not started. A fetch that could not run
+is none, and goes on with its own code: `gh` missing (14); the forge not reached with nothing standing
+in - `offline: refuse`, or `last-resolved` with no whole resolution of the ref cached - as the call
+that did not reach it raised it, 21 where its limit passed and 20 where `gh` said no connection was
+made; an answer of the forge's that does not read (20); and the workflow cache that could not be
+named, written or read, or whose lock another process held past its window, which every failure of
+the cache's own ends with (`WorkflowCache.FailedExit`, 21) - `workflow-cache list` and `prune` among
+them. `validate-workflow`, `run-orchestrator` and a resume end with that code, the line they end on
+naming the workflow cache. A command that runs under an agent never reaches the forge nor writes the
+cache: the fetcher tells it by the one rule `run-side-task` refuses itself by
+(`AgentAncestry.UnderAnAgentAsync`) - the agent's mark (`DSSHARNESS_UNDER_AGENT`), or a process of this
+tool's above it in the process tree, which no form of taking the mark away reaches, one whose tree
+cannot be read taken as no person's - and resolves from the cache alone - a ref by its newest
+resolution the pin takes - writing nothing, not even the use's date, and refuses what the cache does
+not hold whole saying what made the command an agent's and where a person fills the cache instead, in
+the one wording `run-side-task`'s refusal gives too (`AgentAncestryAnswer.Why`: the mark, the process
+of this tool's by its name and id, or why the tree could not be read; `AgentAncestryAnswer.APersonsShell`:
+a shell of the person's own, which no process of this tool's started and which carries no mark, where
+`dssharness validate-workflow` or `dssharness export-workflow --from` fetches it), so a person told no
+is never sent to run again the command that was refused; a record or a blob of the cache's that could
+not be read is the cache's own failure there as everywhere nothing is fetched over it (21), never a
+workflow the cache does not hold (`WorkflowCache.ReadBytes`: a blob gone or changed on disk leaves its
+entry not whole, one that could not be read is the cache's failure). So `validate-workflow` and
+`export-workflow` stay among the verbs open to an agent (`AgentPolicy.OpenVerbs`). The rule takes a
+command any process of this tool's starts for an agent's - a leg's, a check's or a machine step's as
+much as an agent's own - because the process tree is the one fact an agent's child cannot change, and
+no process of the tool's says which of its children are an agent's: a record the engine kept of its
+own processes - a file, or a word of the environment - an agent's command could take away wherever no
+isolation holds it, as it can the mark, and a list of the verbs that start agents would be a second
+hand-kept rule beside the code that starts them. The refusal says so, naming the process, rather than
+the rule being narrowed.
+`validate-workflow` names the workflow cache's directory on the line it ends on wherever it went to
+resolve a remote use, whether the workflows hold or not, and in `--json` (`cache`) on every exit; a
+stop of it that came of a fetch names it in its line too.
+`export-workflow --from <use> --to <dir>` vendors a remote workflow at its resolved commit - every
+file of its directory and `source.md`, a note of where it came from and how the commit came about
+where that is worth a word (the cache's last resolution standing in, or a branch), a directory
+holding a `source.md` of its own refused (13); a workflow name or `--shipped` beside `--from`, or a
+`--from` that names no remote workflow (`WorkflowRemote.Source` answers none for a blank one), is a
+usage error (10), and the folder is looked at before anything is fetched, so one that is there is
+refused (13) with nothing written anywhere; its line names the workflow cache it fetched into, a
+refusal after the fetch says what it fetched is kept there, and its `--json` names the cache
+(`cache`) for every export but the shipped one's - so a team can review what is written and use it
+as `./`; the `workflow-cache` verb lists the cache's entries and the files of its
+own it could not read, and prunes, by the days an entry went unused and unfetched (`--unused-days`,
+required, 0 to 36,500), the entries, the resolutions that named them and the blobs no entry left
+holds - keeping every blob an entry it keeps holds (`WorkflowCache.BlobOf`, the inverse of the blob's
+path), removing no blob while a file of the cache's own could not be read, and ending incomplete (21)
+where a file could not be removed or read; both name the cache's directory, in text and in `--json`.
 
 A definition may declare `recover`: steps written once, which a step gives a failure nothing handles
 to by saying `onFailure: recover`, itself or through a group around it. A member that writes none
@@ -2829,7 +3161,13 @@ needs written - each held by a canary in its mechanism's real suite (`Bubblewrap
 `MxcProcessContainerTests`), whose failure would name the link allowed. Inside the isolation a verb of this tool's that reads a slot or writes state or its install would fail part
 way, so the words policy refuses each to every agent by name (`AgentPolicy.SlotOrStateVerbs`, after `ToolVerbs` for a
 step and the side-task's own refusal for a side-task); the verbs that only read, and those that write only the tree's
-own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one or the other.
+own files, stay open (`AgentPolicy.OpenVerbs`), every verb the tool lists in one or the other. `validate-workflow` and
+`export-workflow`, which a person's command may have fetch a remote workflow into the workflow cache, are open because
+under an agent they do not: the fetcher tells it by the one rule `run-side-task` refuses itself by
+(`AgentAncestry.UnderAnAgentAsync`: the agent's mark, or a process of this tool's above it in the process tree, one whose
+tree cannot be read taken as no person's), and reads the cache alone and writes nothing to it (`WorkflowRemoteFetcher`),
+refusing what the cache does not hold saying what made the command an agent's and where a person fills the cache instead
+(`AgentAncestryAnswer.Why`, `AgentAncestryAnswer.APersonsShell`).
 
 The same owner decides the isolation of the tool's own executions of what the agents wrote
 (`IAgentIsolation.ForExecutionAsync`, an `ExecutionIsolation`, from an `ExecutionGround` that `ExecutionGrounds` alone
@@ -3205,7 +3543,8 @@ write reads through `ConfiguredRunnerFacts` - and `IMutationLegs`) run in the ag
 legs told to the engine as `LegRunService` says them through the request's `ILegRunWatch` (each leg placed, in a copy or
 the tree; each copy made, said where the leg takes its tree after the sync; each leg ended, said by `LegLedger` as its
 line is kept), each leg's verdict read on its own and `red` holding the red legs only, with the phase that did not pass
-(`LegEntry.TailPhase`, beside `LogTail`); the ledger (`LegRunResult.ToDocument`) and, in an agent's worktree, each red
+(`LegEntry.TailPhase`, beside `LogTail`) and, for `build`, `test` and `run`, the units its build failed as the ledger's
+`--json` says them (`FailedUnits.Document`; `{run.red}` says their line's words, `FlowChecks`); the ledger (`LegRunResult.ToDocument`) and, in an agent's worktree, each red
 leg's failing phase log are kept in the step's directory. A leg run something other than its legs ended - refused, or
 stopped - ends the step with its own code. The checks that run no legs answer `FlowStepResult.Red` where they found red,
 which the coordinator reads by `failOn` as it reads a red leg: `AnchorBalanceStepRunner` and `AnchorCitationsStepRunner`
@@ -3340,7 +3679,12 @@ it is the implementation workflow as this build ships it, held to `WorkflowValid
 configuration with no `commit.template`, written as
 `init` writes it. The yml is written last, and a file that cannot be written takes back what was
 written before it, with every folder the export made, so a folder with part of a workflow in it is never
-left behind - or the refusal says why it could not be taken back.
+left behind - or the refusal says why it could not be taken back. A used workflow's files are placed
+where it sits under the workflow's folder (`WorkflowFiles.PlaceOf`, the one placing init and the
+build's own set read too), never by how a use spelt it, so a hidden folder keeps its dot; a use of a
+workflow outside the folder, or of a remote one, is refused (13) with nothing written, for the
+folder alone would name a workflow it has not got - the refusal names each, a remote one with the
+`--from` that vendors it.
 
 ### Running a workflow
 
@@ -3603,7 +3947,10 @@ store a dotnet tool install keeps the package in); by its command's name (`ToolP
 update finds its running copies by) only where the table gives no file, so a launcher of that name - a script, whose
 process runs its interpreter, or another program's shim - is none; one detached from the agent's tree - `at`, a
 `tmux` server, a double fork - told by the mark alone, and a table read by names alone, or one without this
-process, refused saying why, never read as a tree with no agent in it); code an interpreter runs and a process apart from the agent's tree
+process, refused saying why, never read as a tree with no agent in it - the mark and the tree read together by
+`AgentAncestry.UnderAnAgentAsync`, the one rule the fetch of a remote workflow reads the cache alone by too, each
+refusal saying which made the command an agent's and that a person starts one from a shell of their own, in the one
+wording the fetch's refusal gives too, `AgentAncestryAnswer.Why` and `AgentAncestryAnswer.APersonsShell`); code an interpreter runs and a process apart from the agent's tree
 are where that reading of words ends); no limits, no output envelope; the web
 search of every configured source turned on, with one more asked beside them: `native`, the
 provider's own search - on the Claude API a request of the harness's own whose only tool is the
@@ -7248,8 +7595,10 @@ why, since no mutation of it could prove anything. Its run bounds theirs (see *T
    input dated no later than what its last build left, starts from clean, saying so;
 4. is built - its target, and a TEST-RED arm's runner beside it, so the binary run links the
    mutation - through the build every leg builds by, every guard included;
-5. is witnessed: a build that failed is read for the steps ninja said failed, and one that passed
-   is held to ninja's log, read before and after, for every object depending on a site;
+5. is witnessed: a build that failed is read for the steps ninja said failed that could be the
+   build's own - a nested build's alone left out, by the reading a failed build's units are named by
+   (`Ninja.FailedOutputs`) - and one that passed is held to ninja's log, read before and after, for
+   every object depending on a site;
 6. is run whole with `mutations.reportArgs`, its JUnit report a new file for every run, or for a
    BUILD-RED arm, has its paired control applied to the site as it was and built. The sweep starts
    the binary itself, never through ctest: see below;
@@ -7707,6 +8056,125 @@ own directory and the logs in it; `--json` carries the run's directory as `runDi
 top and on such a leg, and the leg's own as `records` and `logs` (see "Where a run's records
 live").
 
+**A build that failed names the units it failed to build.** A consumer's MinGW build under ninja
+stopped with 22 of its 1093 steps run and three units failed, and every unit it never reached read
+as one that built. So a leg whose build its own tool failed - not stopped, and ended by no bound of
+the harness's - carries what its adapter read of the units (`IBuildAdapter.FailedUnitsOf`, a
+`FailedUnits`). Only the build's own steps are units, never the lines of a build nested in one of
+them - an external project's, whose step runs a build of its own and prints its lines as the step's
+output, shaped as the outer build's: its objects relative to its own directory, a name the outer
+manifest may hold too where both projects build one target from one source.
+
+Under ninja each unit is a step the build's own ninja said failed (`Ninja.Own`): a `FAILED:` line
+directly after a status line of its own, as ninja writes a failed step's - or, for a step in the
+console pool, whose status ninja writes as it starts and whose `FAILED:` line after all it printed,
+one naming that step where its start was its own - and, for samurai, which names no outputs, a
+failed command a build line of the manifest runs, in each of the lines samurai writes for a step that
+failed, under its name: `job failed with status`, `job terminated due to signal` and `job status
+unknown`. A status line is its own where what it prints
+after the count is what one of the manifest's build lines prints (`NinjaEdge.Description`, or its
+command where it has none) and its count is no lower than the one the build stands at and no more
+than one higher: ninja counts each step as it ends, a console step as it starts, and a nested build
+counts from one beside it, so its line passes both only where it prints what one of the outer
+build's prints at the outer build's count. A console step's end has no status, so after its
+`FAILED:` line the count may be two higher; and while a console step runs, ninja holds back every
+other step's lines - its line printer is locked to the console step - and at its end writes those of
+each step that failed or printed something and the status of the last to end, never the others':
+piped to a file, ninja 1.11 wrote a console step's start at 0, then nothing of the five steps that
+ended while it ran but a failed one's status at 3 and the last one's at 5, and the next at 7. So from
+a console step's start until its own `FAILED:` line, the count is held to from below alone. How many
+it plans moves either way, up as dynamic dependencies are found and down as a step that restats
+leaves others nothing to do, so only the count is held to. The last status of its own says how far
+it got - one more where a console step's `FAILED:` line, or its start, came after it, for ninja ends
+a failed build once every step it started has ended; where a console step that did not fail was
+followed by statuses of its own, whether it ended before the last of them is not written, and how far
+the build got is not said. samurai counts otherwise: its `[%s/%t]` is written as each step starts,
+its count the steps it has started with that one, and it writes none for a step it starts while a
+console step runs - so its last status of its own is how far it got, a console step's start among
+them, never one more for that step's end, and is not said where it is a console step's start and the
+build planned more, for what samurai started while that step ran is written nowhere. It is samurai
+where CMake's cache names its file `samu`, or where it said a job failed, which ninja never says -
+whatever its file is called. A unit is named by the source its build line in the manifest compiles
+where its rule is a CMake compile (`CMakeNinjaRule.Compiles`) - relative to the tree where it is in
+it - and by its output where it links or runs a command, an external project's step among them.
+
+Every failing line ninja wrote is told the build's own, a nested build's, or neither (`Ninja.Own`,
+its `OwnSteps`). A nested build's line is one provably within one: in the output of a failed step of
+the build's own - after its `FAILED:` line, or a console step's after its start - before that output's
+nested build said its end (`build stopped:`, or an error, under ninja's name), where something of the
+build's followed that end: a line of its own or another under ninja's name, for the build's own end
+is the last, and a console step's `FAILED:` line follows all it printed. Every other failing line -
+after a status line not its own, as every one is where `NINJA_STATUS` spells the status otherwise, a
+nested build's end nothing followed, a samurai failure whose command no build line runs - cannot be
+told either: the line counts it as perhaps a unit of its own (`FailedUnits.Unattributed`), never as
+clean, and where no status line was its own at all and no unit was read, the units are said not read,
+naming how many failing lines it wrote. `check-mutations` judges an arm's failed build by the same
+reading (`Ninja.FailedOutputs`, `OwnSteps.NotNested`): its own failing steps and every one that
+cannot be told apart, so none that could be a step not depending on a site is lost, and a nested
+build's alone left out - where nothing is nested, every failing line, as before.
+
+Under make each unit is a target the build's own makes said failed (`Make.FailedTargets`), read by
+the structure GNU make writes in every language - `make[2]: *** [makefile:line: target]` and
+whatever follows, `Error 1`, `Fehler 1` or a signal's name, the makefile and line parted from the
+target as each catalog writes the colon: `: ` in English and most, ` : ` in French, a full-width `：`
+in Simplified Chinese - and along each chain of makes, never
+over the whole build: a step of a target's own `build.make` that failed, and a failure of CMake's
+driving makefiles (`Makefile`, `CMakeFiles/Makefile2`) that no earlier, deeper failure of the same
+target explains - tied by the target's directory, `CMakeFiles/app.dir/`, in the driving makefile's
+target and the step's makefile - kept by its target, so a target whose make named no failing step,
+as one that found no rule for a header, still counts. A failure is a nested build's where a step of
+this build at a shallower depth failed after it, the step whose make ran that build - one known to be
+a step: its makefile read and none of the driving ones, or, where no failure names a makefile, its
+target no driving makefile's goal. A failure whose makefile was named in a form not read, or one
+naming none among failures that name theirs, proves nothing, for either could be a driving
+makefile's and would leave out the very unit that failed: it is kept as make said it. GNU make before
+4 names no makefile, so its driving failures are known by their targets, and a step is tied to a
+target by its directory where its target lies under it, as an object does, else to any. make names
+no source, so the unit is named by its target, the object.
+
+The leg's line says how many, the units are listed beneath the table, and `--json` carries them on
+the leg as `failedUnits`: `tool`, `count`, `units` - each one's `source` and `step` - `unread`,
+`keptGoing`, `stopsAtFirst`, `stepsRun`, `stepsPlanned`, `unattributed` and `said`, the line's own
+words (`FailedUnits.Document`, which a workflow step's red entry carries too). Where which units
+failed is not read - MSBuild's, dotnet's and dart's output is not, nor a log that could not be read
+back, nor one in which no line of the build's own named a failed unit (`FailedUnits.WhyUnread`) -
+`count` is left out and `unread` says why, never that none failed. ninja and make stop at their
+first failures, so a build of theirs not told to go on says that every unit it never reached was not
+built and says nothing of the code, and, where ninja's last status of its own said it, how many of
+the steps it had to run it ran.
+
+`--keep-going` (`KeepGoing.Option`), on `build`, `test` and `run`, and `keepGoing` on a workflow's
+`build`, `test` and `run` steps, has each leg's build go on past its failing units. It rides the
+leg's build request (`BuildRequest.KeepGoing`, set in one place, `LegWork.BuildRequest`), and a leg
+a host runs is given the option on its command. How the tool goes on is its adapter's to say
+(`IBuildAdapter.KeepGoingFor`, a `KeepGoingWay`): CMake's by the generator the leg's toolchain
+names - ninja, and samurai where CMake runs it for ninja, given `-k 0` and make `-k`, after `--` on
+`cmake --build`; MSBuild under a Visual Studio generator given nothing, for it builds every project
+that does not need one that failed and cl compiles every source of a project it builds; NMake
+refused, for its `/K` does not reach the nmake CMake's makefiles start for each target. dotnet and
+dart go on by themselves and are given nothing. Each was measured over two sources that fail:
+ninja 1.12, mingw32-make 4.4, NMake 14.44, MSBuild 17.14 under Visual Studio 17 2022, the .NET 10
+SDK's dotnet build, and dart compile exe. A toolchain that names no generator - CMake picks its
+tool as it configures - and a generator no way is known for, Xcode's among them, are refused
+before anything is synced, locked or built (`KeepGoing.Require`, exit 13), naming every such leg at
+once, and the option on a run that builds none of its legs is a usage error (10). A leg that builds
+in a copy of its tree builds by the copy's configuration, which can differ from the tree's the run
+was weighed by: its build is refused before it starts where the copy's gives its tool no way
+(`KeepGoing.RequireFor`, 13), and the adapter never builds without its way while asked for it.
+Whether a tool went on is read from what the build phase ran with (`KeepGoingWay.GivenIn`,
+`CMakeAdapter.KeptGoing`), never from what was asked; and a ninja told to go on builds long after a
+step fails, so a failed step is no end of its build - ninja's `FAILED:` line, or samurai's `job failed
+with status`, `job terminated due to signal` or `job status unknown` under its name: it ended the
+build itself only where its last word under its name says so - ninja's `build stopped: cannot make
+progress due to previously encountered errors`, samurai's `cannot make progress due to previous
+errors`, or an error of its own - and is stopped where it said nothing after a step failed, as a
+ninja killed from outside says nothing, or where its last word is a nested build's
+`subcommand failed`, which neither says of its own without a limit (`Ninja.Stopped`): `-k 0` gives
+ninja the largest int and samurai the largest size, neither ever reached. The steps it never ran are
+never said to need one that failed. `help legs` lists every way from the
+adapters' own (`IBuildAdapter.KeepGoingWays`). `check-mutations` takes no `--keep-going`: an arm's
+build is judged by whether, and where, it fails.
+
 ## CI legs
 
 `check-ci-legs` reads each leg's verdict from the forge's job metadata, one job at a time and never
@@ -7743,7 +8211,7 @@ with "the harness could not run", because the remedies differ.
 | 14 | A required tool is missing, or could not be started |
 | 15 | A host could not be reached, DssHarness could not run there, or a command run there never reported how it finished |
 | 20 | The wrapped command ran and failed |
-| 21 | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not finished within its bound, or its download not reached); it is not a pass, and running it again, once what it names is dealt with, finishes it |
+| 21 | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not finished within its bound, or its download not reached), or a remote workflow's fetch was not finished within its bound or the workflow cache could not be read, written or locked within its window; it is not a pass, and running it again, once what it names is dealt with, finishes it |
 | 70 | The harness itself failed unexpectedly (a defect in the tool) |
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 

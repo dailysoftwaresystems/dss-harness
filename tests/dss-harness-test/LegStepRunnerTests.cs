@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Application;
 using DssHarness.Core.Application.Legs;
+using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Legs;
@@ -406,8 +407,9 @@ public sealed class LegStepRunnerTests : IDisposable
 
     /// <summary>
     /// Each leg step asks its command's use case what its keys say, in the tree it works in: the legs it names, or none
-    /// for every leg; a test's filter, exclusions, labels and skipBuild; a run's runner, inputs and - for a run that writes
-    /// the tree, by its runner or a run check's - in place; a sweep's arms, or none for every arm, and pending.
+    /// for every leg; whether a build, a test or a run that builds keeps going past the units its builds fail; a test's
+    /// filter, exclusions, labels and skipBuild; a run's runner, inputs and - for a run that writes the tree, by its runner
+    /// or a run check's - in place; a sweep's arms, or none for every arm, and pending.
     /// </summary>
     [Fact]
     public async Task EachLegStep_AsksItsUseCase_WhatItsKeysSay()
@@ -427,8 +429,10 @@ public sealed class LegStepRunnerTests : IDisposable
         [
             new() { Name = "build", Type = "build" },
             new() { Name = "test", Type = "test", Legs = ["native"], Filter = "fast", Exclude = ["slow"], Labels = ["unit"], SkipBuild = true },
-            new() { Name = "run", Type = "run", Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" } },
+            new() { Name = "run", Type = "run", Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" }, KeepGoing = true },
             new() { Name = "tidy", Type = "run", Runner = "TIDY" },
+            new() { Name = "build past", Type = "build", KeepGoing = true },
+            new() { Name = "test past", Type = "test", KeepGoing = true },
             new() { Name = "sweep", Type = "check-mutations" },
             new() { Name = "pending", Type = "check-mutations", Arms = ["A-ONE"], Pending = true },
         ];
@@ -447,10 +451,12 @@ public sealed class LegStepRunnerTests : IDisposable
                 asked,
                 strict: true),
             asked => Assert.Equivalent(
-                new RunnerLegsRequest { Directory = repository.Path, Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" }, Watch = asked.Watch, Isolation = asked.Isolation },
+                new RunnerLegsRequest { Directory = repository.Path, Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" }, KeepGoing = true, Watch = asked.Watch, Isolation = asked.Isolation },
                 asked,
                 strict: true),
             asked => Assert.Equivalent(new RunnerLegsRequest { Directory = repository.Path, Runner = "TIDY", InPlace = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked, strict: true),
+            asked => Assert.Equal(new BuildLegsRequest { Directory = repository.Path, KeepGoing = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked),
+            asked => Assert.Equivalent(new TestLegsRequest { Directory = repository.Path, KeepGoing = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked, strict: true),
             asked => Assert.Equal(new MutationLegsRequest { Directory = repository.Path, Watch = asked.Watch, Isolation = asked.Isolation }, asked),
             asked => Assert.Equivalent(new MutationLegsRequest { Directory = repository.Path, ArmNames = ["A-ONE"], Pending = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked, strict: true));
         Assert.All(legs.Asked, asked => Assert.NotNull(asked.Watch));
@@ -532,7 +538,8 @@ public sealed class LegStepRunnerTests : IDisposable
 
     /// <summary>
     /// What a leg step answers: each leg's own verdict; red holding the red legs alone - a leg that failed, with the phase
-    /// that did not pass, the ledger's line and the last lines it printed - and not one incomplete or passed; of a sweep,
+    /// that did not pass, the ledger's line and the last lines it printed, and the units its build failed as the ledger's
+    /// --json says them - and not one incomplete or passed; of a sweep,
     /// each arm that is not as its registry says, naming it, and a leg that failed outside every arm with no arm; passed
     /// only where every leg passed; and no run directory where the run made none.
     /// </summary>
@@ -541,7 +548,15 @@ public sealed class LegStepRunnerTests : IDisposable
     {
         LegEntry[] entries =
         [
-            new() { Leg = "broken", Verdict = LegVerdict.Failed, Detail = "build failed", TailPhase = "build", LogTail = ["error: x"] },
+            new()
+            {
+                Leg = "broken",
+                Verdict = LegVerdict.Failed,
+                Detail = "build failed",
+                TailPhase = "build",
+                LogTail = ["error: x"],
+                FailedUnits = new FailedUnits("ninja", [new FailedUnit("src/a.c", "CMakeFiles/app.dir/a.c.o")], null, KeptGoing: true, StopsAtFirst: true, 2, 3),
+            },
             new() { Leg = "moved", Verdict = LegVerdict.InputsMoved, Detail = "a file moved" },
             new() { Leg = "fine", Verdict = LegVerdict.Passed },
             new()
@@ -568,7 +583,7 @@ public sealed class LegStepRunnerTests : IDisposable
         var legs = LegStepRunner.Output(Result(entries[..3], HarnessExit.CommandFailed, "a leg failed"), arms: false);
 
         Assert.Equal(
-            """{"passed":false,"exitCode":20,"verdicts":[{"leg":"broken","verdict":"failed"},{"leg":"moved","verdict":"inputs-moved"},{"leg":"fine","verdict":"passed"}],"red":[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"]}],"runDirectory":"/runs/r"}""",
+            """{"passed":false,"exitCode":20,"verdicts":[{"leg":"broken","verdict":"failed"},{"leg":"moved","verdict":"inputs-moved"},{"leg":"fine","verdict":"passed"}],"red":[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"failedUnits":{"tool":"ninja","count":1,"units":[{"source":"src/a.c","step":"CMakeFiles/app.dir/a.c.o"}],"keptGoing":true,"stopsAtFirst":true,"stepsRun":2,"stepsPlanned":3,"said":"1 unit(s) failed to build; ninja went on past them and ran 2 of the 3 steps it had to run: the one it did not run needs one that failed"}}],"runDirectory":"/runs/r"}""",
             legs.ToJsonString());
 
         var sweep = LegStepRunner.Output(Result([entries[0], entries[3], entries[4]], LegExit.Survived, "an arm survived") with { RunDirectory = null }, arms: true);

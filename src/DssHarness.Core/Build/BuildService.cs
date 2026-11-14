@@ -61,6 +61,13 @@ public sealed record BuildRequest(
     /// <see langword="null"/> where the leg builds in its tree itself.
     /// </summary>
     public string? CopyOf { get; init; }
+
+    /// <summary>
+    /// Whether the build goes on past the units that fail to build (<see cref="Build.KeepGoing.Option"/>), its tool told so as its
+    /// adapter says (<see cref="IBuildAdapter.KeepGoingFor"/>), so a build that fails names every unit it failed and not
+    /// only its first.
+    /// </summary>
+    public bool KeepGoing { get; init; }
 }
 
 /// <summary>What one leg's build did.</summary>
@@ -104,6 +111,35 @@ public sealed record BuildResult(
 
     /// <summary>The phase <see cref="Tail"/>'s lines are of, as <see cref="PhaseResult.TailPhaseOf"/> names it.</summary>
     public string? TailPhase => PhaseResult.TailPhaseOf(Phases);
+
+    /// <summary>
+    /// What the build says of the units it failed to build, where its build phase was failed by its own tool - never one
+    /// a bound of the harness's, or something from outside, stopped - as its adapter reads it
+    /// (<see cref="IBuildAdapter.FailedUnitsOf"/>); <see langword="null"/> for every other build.
+    /// </summary>
+    public FailedUnits? FailedUnits { get; init; }
+
+    /// <summary>
+    /// The line of the leg <paramref name="leg"/> whose build this is, where the build is what its line says: its verdict and
+    /// why, the notes and compilers it names, the last lines of the phase it stopped at, and the units it failed to build.
+    /// Made here, once, for every command that builds a leg, so none of them leaves out what another says.
+    /// </summary>
+    /// <param name="leg">The leg, as the configuration names it.</param>
+    /// <param name="emulated">Whether the leg runs under emulation.</param>
+    /// <param name="duration">The whole leg's time, from the monotonic clock.</param>
+    public LegEntry Line(string leg, bool emulated, TimeSpan duration) => new()
+    {
+        Leg = leg,
+        Verdict = Verdict.Verdict,
+        Detail = Verdict.Detail,
+        Duration = duration,
+        Emulated = emulated,
+        TimingNotes = Notes,
+        Compilers = Compilers,
+        LogTail = Tail,
+        TailPhase = TailPhase,
+        FailedUnits = FailedUnits,
+    };
 }
 
 /// <summary>Building one leg.</summary>
@@ -166,6 +202,11 @@ public sealed class BuildService(
         ArgumentNullException.ThrowIfNull(request);
 
         var adapter = BuildAdapters.For(request.Project.Type);
+
+        // By the configuration the leg builds by, which for a leg in a copy is the copy's: the run was refused by the tree's
+        // before anything ran, and a copy's can give its tool no way the tree's gave it.
+        KeepGoing.RequireFor(config, request, adapter);
+
         var buildDirectory = request.Variant.DirectoryUnder(request.TreeRoot);
         var overlay = request.Variant.Overlay(config, request.Project);
 
@@ -386,16 +427,23 @@ public sealed class BuildService(
                     return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, full), null).ConfigureAwait(false);
                 }
 
-                // A build ninja did not end itself, or ended only because it was interrupted, was stopped from outside,
-                // which says nothing about the code.
-                var stopped = adapter is CMakeAdapter
-                    && string.Equals(phase.Phase, CMakeAdapter.BuildPhase, StringComparison.Ordinal)
-                    && _buildDirectoryGuard.Read(buildDirectory) is { } configured
-                    && Ninja.Generates(configured.Generator)
-                        ? Ninja.Stopped(result, configured.MakeProgram)
-                        : null;
+                var buildPhase = string.Equals(phase.Phase, BuildAdapters.BuildPhase, StringComparison.Ordinal);
+                var configured = buildPhase && adapter is CMakeAdapter ? _buildDirectoryGuard.Read(buildDirectory) : null;
 
-                return await FinishAsync(stopped ?? result.Verdict(), null).ConfigureAwait(false);
+                // A build ninja did not end itself, or ended only because it was interrupted, was stopped from outside,
+                // which says nothing about the code - and one it was told to go on past failing steps ended itself only
+                // where it said it had, as what the phase ran with says it was told.
+                var stopped = configured is not null && Ninja.Generates(configured.Generator)
+                    ? Ninja.Stopped(result, configured.MakeProgram, CMakeAdapter.KeptGoing(configured.Generator, phase.Arguments))
+                    : null;
+
+                // A build its own tool failed names the units it failed to build, and where its tool stops at its first
+                // failures, how far it got: a unit it never reached is not one that built.
+                var units = buildPhase && stopped is null && result.Stopped == PhaseStop.None && result.ExitCode != 0
+                    ? adapter.FailedUnitsOf(new FailedBuild(result, phase.Arguments, request, buildDirectory, configured, _fileSystem))
+                    : null;
+
+                return await FinishAsync(stopped ?? result.Verdict(), null, units).ConfigureAwait(false);
             }
         }
 
@@ -499,7 +547,7 @@ public sealed class BuildService(
         // built from. Local because every exit from this method has to do all three: a build that
         // returned early without closing them would leave a sampler running and report a verdict
         // nothing watched.
-        async Task<BuildResult> FinishAsync(ReachedVerdict reached, NinjaDependencyReport? dependencies)
+        async Task<BuildResult> FinishAsync(ReachedVerdict reached, NinjaDependencyReport? dependencies, FailedUnits? failedUnits = null)
         {
             var seen = await guards.CloseAsync(cancellationToken).ConfigureAwait(false);
             var verdict = seen.Decide(request.Leg, [reached]);
@@ -546,7 +594,13 @@ public sealed class BuildService(
                 }
             }
 
-            return new BuildResult(verdict, buildDirectory, phases, rebuilt, dependencies) { Compilers = compilers };
+            // The units only where the build's failure is the verdict: one a moving tree or a shared directory outranked was
+            // a build of a tree that never existed, and what it failed says nothing of the code.
+            return new BuildResult(verdict, buildDirectory, phases, rebuilt, dependencies)
+            {
+                Compilers = compilers,
+                FailedUnits = verdict.Verdict == LegVerdict.Failed ? failedUnits : null,
+            };
         }
     }
 

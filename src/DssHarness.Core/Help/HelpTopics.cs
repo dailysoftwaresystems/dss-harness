@@ -1967,6 +1967,8 @@ public static class HelpTopics
         builder.AppendLine("check that did not run has established nothing. A build directory that is not");
         builder.AppendLine("ninja's is skipped and says so.");
         builder.AppendLine();
+        AppendFailedUnits(builder);
+        builder.AppendLine();
         builder.AppendLine("A leg no host can run is a warning that names it and says why; the other legs");
         builder.AppendLine("still go ahead. The check fails when a leg named with --legs cannot run, or when");
         builder.AppendLine("no selected leg can - and, with exit 70, when whether a leg can run was never");
@@ -2159,6 +2161,85 @@ public static class HelpTopics
         return builder.ToString();
     }
 
+    /// <summary>
+    /// What a build that failed says of the units it failed to build, and how <see cref="KeepGoing.Option"/> has each build
+    /// tool go on past them: every way, from the adapters' own (<see cref="IBuildAdapter.KeepGoingWays"/>), so help names no
+    /// way the code does not go by.
+    /// </summary>
+    private static void AppendFailedUnits(StringBuilder builder)
+    {
+        builder.AppendLine("Units a build failed");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A leg whose build its own tool failed names each unit it failed to build: by its source, as ninja's manifest "
+            + "names the source a failed step compiles - a step that links or runs a command by its output - or by the "
+            + "target make says failed, which is the object it was building. Its line says how many, they are listed "
+            + "beneath the table, and --json carries them as failedUnits: each unit's source and step, the count, the tool, "
+            + "whether its tool went on past failing units, how many failing lines could not be told its own, and how far it "
+            + "got. Only the build's own steps are units: ninja's FAILED line directly after a status line of its own - one "
+            + "printing what a build line of its manifest prints, at a count no lower than the build stands at and no more "
+            + "than one higher, two after a console step's FAILED line, whose end has no status, and any higher while a "
+            + "console step runs, for ninja holds back every other step's lines until it ends and then writes only some of "
+            + "their statuses - and its last such status for how far it got, one more where a console step's FAILED line or "
+            + "start came after it, and not said where a console step that did not fail was followed by statuses of its own, "
+            + "which it may have ended before or after; samurai's failed jobs whose commands a build line runs, and its last "
+            + "status of its own - written as each step starts, none for one it starts while a console step runs - for how far "
+            + "it got, never one more for a console step's end, and not said where that status is a console step's start before "
+            + "the last step it planned; make's failing step of a target's own makefile, and a failure of CMake's driving "
+            + "makefiles that no deeper failure of its target explains, read by its structure in any language - the makefile "
+            + "and line parted from the target as each catalog writes the colon, French's ' : ' and Simplified Chinese's "
+            + "full-width one among them - and whatever signal ended it. A build nested in a step - an external project's - is "
+            + "that step's unit, never its own lines: a failing line ninja wrote is a nested build's only within a failed step's "
+            + "output, before the nested build's own end, and a failure make wrote only where a shallower step known to be the "
+            + "build's own failed after it - its makefile read and none of the driving ones, or, where no failure names a "
+            + "makefile, as make before 4 writes them, its target no driving makefile's goal. One that cannot be told the "
+            + "build's own or a nested build's - after a status line not its own, "
+            + "as every one is where NINJA_STATUS spells the status otherwise - is counted on the line as perhaps a unit of its "
+            + "own, never read as clean; and check-mutations judges an arm's build by the same reading: its own failing steps "
+            + "and every one that cannot be told apart, a nested build's alone left out. Where which units failed is not read "
+            + "- MSBuild's, dotnet's and dart's output is not, nor a log that could not be read back, nor one in which no line of the "
+            + "build's own named a failed unit - the line says so and why, never that none failed. ninja and make stop at "
+            + "their first failures, so the line of a build of theirs not kept going says that every unit it never reached "
+            + "was not built and says nothing of the code, and - where ninja's own [run/planned] status says it - how many "
+            + "of the steps it had to run it ran: 'ran 22 of the 1093 steps it had to run'.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{KeepGoing.Option}, on build, test and run - and keepGoing on a workflow's build, test and run steps - has each "
+            + "leg's build go on past its failing units, so its line names every one. Each build tool goes on its own way, "
+            + "by the generator the leg's toolchain names or its project's type:");
+        builder.AppendLine();
+
+        foreach (var way in BuildAdapters.All.SelectMany(adapter => adapter.KeepGoingWays))
+        {
+            var how = way.How switch
+            {
+                KeepGoingHow.WhenTold => $"given {string.Join(' ', way.Arguments)}",
+                KeepGoingHow.ByItself => "given nothing",
+                _ => $"refused ({HarnessExit.Refused})",
+            };
+
+            builder.AppendLine($"  {way.Builds}");
+            AppendWrapped(builder, $"{how}: {way.Said}.", lead: "    ");
+        }
+
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"A toolchain that names no generator - CMake would pick its build tool as it configures - and a generator no way "
+            + $"is known for, Xcode's among them, refuse {KeepGoing.Option} for each leg they build before anything runs "
+            + $"({HarnessExit.Refused}), naming every one; and a run that builds none of its legs refuses it too ({HarnessExit.UsageError}). "
+            + "A leg that builds in a copy of its tree builds by the copy's configuration, so where the copy's gives its "
+            + $"tool no way, its build is refused before it starts ({HarnessExit.Refused}): no tool is run without its way "
+            + "while the build was asked for it. Whether a tool went on is read from what its build ran with, and a ninja "
+            + "told to go on ended its build only where its last word says so - 'cannot make progress due to previously "
+            + "encountered errors', or an error of its own - a failed step, ninja's FAILED line or samurai's failed job, never "
+            + "being its last word: killed after a step failed, it says nothing, and the build is stopped, never one whose "
+            + "unrun steps need one that failed. check-mutations takes none: an arm's build is judged by whether, and where, "
+            + "it fails.");
+    }
+
     private static string RenderSpace()
     {
         var builder = new StringBuilder();
@@ -2313,6 +2394,12 @@ public static class HelpTopics
             + "removal left, a person's to look in and delete, or a worker an earlier version of this tool kept beside an "
             + $"agent's worktree, which clean --former-workers removes - --force or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git "
             + $"cannot list its worktrees ({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. "
+            + "A worktree git records at another place that holds none now - as after the checkout, or the worktrees in it, were "
+            + "moved by hand, its .git file and git's record still naming where they were - is a worktree with its work in it, "
+            + "never a directory to delete: list-worktree, delete-worktree, delete-orchestrator and every agent verb name "
+            + "'git -C <main checkout> worktree repair <path>', which points the record and the .git file back at each other, and "
+            + "list-orchestrator says of a live agent whose worktree git cannot open, or holds as another kind than its record "
+            + "names, that it cannot be worked on and why, never that the agent stands live at it (\"worktreeProblem\" in --json). "
             + "A plain worktree cannot take an orchestrator's name. An agent's copies on hosts are kept under "
             + "orchestrator--agent, so two orchestrators' agents of one name keep theirs apart.");
         builder.AppendLine();
@@ -2396,7 +2483,8 @@ public static class HelpTopics
             + $"cannot be removed stops the deletion before git runs ({HarnessExit.CommandFailed}), and a volume mounted "
             + "on a directory is never unmounted. A directory under the root with no .git and no record of git's - "
             + $"what a removal that stopped part way leaves - is refused ({HarnessExit.Refused}), naming --force; git "
-            + "worktree repair is named only while git still records a worktree there.");
+            + "worktree repair is named only while git still records a worktree there - at that path, or, after the checkout was "
+            + "moved by hand, at another place that holds none now.");
         builder.AppendLine();
         builder.AppendLine("An interruption during the deletion can leave it partly done, on any platform;");
         builder.AppendLine("running delete-worktree again with --force finishes it.");
@@ -2622,7 +2710,10 @@ public static class HelpTopics
             + "table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by its "
             + "name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is "
             + "none; one detached from the agent's tree (at, a tmux server, "
-            + "a double fork) is told by the mark alone, and a tree that could not be read is refused saying why - a "
+            + "a double fork) is told by the mark alone, and a tree that could not be read is refused saying why; each "
+            + "refusal says which made the command an agent's (the mark, the process of this tool's by its name and id, so a "
+            + "side-task any process of this tool's starts is refused, or why the tree could not be read) and that a person "
+            + $"starts one from {Agents.AgentAncestryAnswer.APersonsShell} - a "
             + "side-task is a person's own conversation, and no agent starts another. The main tree is the side-task's "
             + "working directory and holds the credential slots: a command over it whole - named . or given no path, an "
             + "archive of it or a search - is not told from one over its sources, and reaches their files; and code an "
@@ -3419,7 +3510,13 @@ public static class HelpTopics
             + "tool's verbs that read a credential slot or write its state or install would fail inside it, so each is "
             + "refused to every agent by name, a side-task's as well as a step's: "
             + $"{string.Join(", ", Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those that "
-            + "write only the tree's own files, stay open.";
+            + $"write only the tree's own files, stay open. {WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} are among "
+            + "them: where a person's run of either would fetch a remote workflow into the workflow cache, an agent's - told as "
+            + $"{Agents.SideTasks.SideTaskService.RunCommand} tells it, by {Agents.AgentChildEnvironment.AgentMarker}, which its every child carries, or a "
+            + "process of this tool's above it in the process tree, one whose tree cannot be read taken as no person's - reads the "
+            + "cache alone and writes nothing to it, and one the cache does not hold is refused saying what made the command an "
+            + $"agent's and that a person fills the cache from {Agents.AgentAncestryAnswer.APersonsShell}, with "
+            + $"'{ToolPackage.Command} {WorkflowValidationService.CommandName}' or '{ToolPackage.Command} {WorkflowExportService.CommandName} --from'.";
 
     /// <summary>
     /// The places the user keeps credentials in that the isolation hides, said from their one list
@@ -5190,6 +5287,88 @@ public static class HelpTopics
         return builder.ToString();
     }
 
+    /// <summary>
+    /// What a remote use is, how its ref is resolved and proved the repository's own, what refuses its directory, how the
+    /// cache keeps it, and what workflowSources says of it - every bound and every variable named from the code that holds
+    /// it, so the paragraph cannot promise what the fetch does not do.
+    /// </summary>
+    internal static string RemoteWorkflowsHelp
+        => "A use may name a workflow beyond the repository: owner/repo/path/workflow.yml@ref, as GitHub Actions spells uses - a "
+            + "repository's name may be dotted, as an organisation's .github is - or the same under a GitHub Enterprise host the "
+            + "configuration names. The ref is held to git's own rules for a ref's name and resolved at the run's start through the "
+            + "repository's own refs: its tag, an annotated one peeled to the commit it names, or its branch where the pin allows one. A full "
+            + "commit SHA is its own commit, and is fetched only once the repository's default branch, or one of the first "
+            + $"{WorkflowRemoteFetcher.MostRefsCompared} tags and branches the forge lists, reaches it: GitHub serves a commit of any fork under "
+            + "the repository's own name, and one that is not the repository's own is refused. The commit's tree is walked to the "
+            + "workflow's directory, and the whole is refused with nothing cached where the directory's listing was cut short, holds a "
+            + "symbolic link or a submodule, or a path that is rooted, holds '..', '\\', ':' or a control character, or is another's "
+            + "where case is folded, or where the file the use names is not in it; every blob is fetched as its bytes and checked "
+            + "against the hash the tree gives of it, the whole bounded at "
+            + $"{WorkflowCache.MostFiles.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} files and "
+            + $"{(WorkflowCache.MostBytes / (1024 * 1024)).ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} MiB. It is kept in the "
+            + $"workflow cache, {WorkflowCache.DirectoryName}/ under this user's own directory for this tool, named the first time a "
+            + "remote use needs it: each blob as its bytes at blobs/<first 2 hex>/<remaining 38 hex>, one entry per repository, commit "
+            + "and directory, held to its key as it is read, and each ref's newest resolution with its time; every blob is hashed "
+            + "again as it is read, so a blob changed on disk is refused and its directory fetched again, and a use is recorded "
+            + "with the look that its entry is still there, so one a pruning removed as it was read is fetched again. A second run "
+            + "of a pinned SHA reads the cache with no network, a tag needs one call at each run's start, and a run records each "
+            + "use's resolution: a resume uses the recorded commit and never resolves again, so a tag or branch that moved since "
+            + "changes no run already started. A run keeps every file of the remote workflows it began with beside its frozen "
+            + $"definition, in {OrchestratorLayout.RemoteWorkflowsDirectoryName}/ of its own directory, as the check that let it start "
+            + "proved, read and hashed them, and its steps read them there as it runs, as the check a resume goes through reads "
+            + "them there first - the cache, and then the forge, asked only for a use the copy does not hold whole: neither a "
+            + "pruning of the cache, the network not being there, nor a tag deleted or a branch pushed over since takes a file "
+            + "from a run that started or refuses it, and each session's start keeps again what the run's copy does not hold whole. A remote workflow is "
+            + "trusted by configuration alone - it directs agents and machine steps in "
+            + "this repository - so workflowSources in config.json allows its owner (empty by default, and a remote use is refused "
+            + "until then); names each GitHub Enterprise host with its one credential, \"credential\": {\"from\": \"env\", \"name\": "
+            + $"\"<VARIABLE>\"}}, given to its calls as {GhProcess.TokenVariable} for a *.ghe.com host and {GhProcess.EnterpriseTokenVariable} for any "
+            + "other with every other token of the machine's taken away, a host with none or whose variable is not set refused; "
+            + "reaches github.com with the machine's own gh login, every call naming its host; pins the refs it takes "
+            + $"({WorkflowSourceRules.PinTagOrCommit} by default, {WorkflowSourceRules.PinCommit}, or {WorkflowSourceRules.PinAny}, which allows a branch, "
+            + $"warned of wherever one is resolved); and says what stands in where the network keeps the forge from being reached "
+            + $"({WorkflowSourceRules.OfflineRefuse}, or {WorkflowSourceRules.OfflineLastResolved}, the cache's newest resolution of the ref, held to the pin "
+            + "as the forge's own answer is - a ref the cache last resolved as a branch refused where the pin is not any - and "
+            + "warned of where it stands in) - a forge that answered, refusing the credential or naming a thing not there, is "
+            + "refused with what gh said, and nothing stands in for it. A refusal of what the source is - not allowed, a host or "
+            + "credential not named, a ref the pin refuses or that is not the repository's own, a file the directory does not "
+            + "hold, a forge that answered and refused - is the definition's problem, said with the use; a fetch that could not run "
+            + $"keeps its own code: gh missing ({HarnessExit.ToolMissing}), the forge not reached with nothing standing in "
+            + $"({HarnessExit.Incomplete} where the call's limit passed, {HarnessExit.CommandFailed} where gh said no connection was made), an "
+            + $"answer of the forge's that does not read ({HarnessExit.CommandFailed}), and the workflow cache that could not be named, "
+            + $"written or read, or whose lock another process held past its window ({WorkflowCache.FailedExit}). Its files resolve against "
+            + "its cache entry as a local workflow's do against its directory, a relative use inside it resolves inside the same "
+            + "entry - one that leaves the entry refused - and no local use resolves under remote/, the cache's own reserved place "
+            + "in the workflows folder, as no workflow is named remote. A remote workflow's schemas are held to the subset of JSON "
+            + "Schema the engine reads as a local one's are. A command that runs under an agent - told by the one rule "
+            + $"{Agents.SideTasks.SideTaskService.RunCommand} is told by, the agent's mark or a process of this tool's above it in the "
+            + "process tree, one whose tree cannot be read taken as no person's, so a command any process of this tool's starts (a "
+            + "leg's, a check's or a machine step's as much) is taken for an agent's - never reaches the forge nor writes the cache: "
+            + $"{WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} there read the cache alone, and a use the cache does "
+            + "not hold whole is refused saying what made the command an agent's - the mark, the process of this tool's by its name "
+            + "and id, or why the tree could not be read - and that a person fills the cache from "
+            + $"{Agents.AgentAncestryAnswer.APersonsShell}, with '{ToolPackage.Command} {WorkflowValidationService.CommandName}' or "
+            + $"'{ToolPackage.Command} {WorkflowExportService.CommandName} --from'; a record or a blob of the cache's that could not be read "
+            + $"is the cache's own failure there too ({WorkflowCache.FailedExit}). "
+            + $"{WorkflowValidationService.CommandName} names the workflow cache's directory on the line it ends on wherever it went to "
+            + $"resolve a remote use, whether the workflows hold or not, and {WorkflowExportService.CommandName} --from on its own; "
+            + "both name it in --json, as cache, on every exit.";
+
+    /// <summary>What the workflow-cache verbs do, every bound named from the code that holds it.</summary>
+    internal static string WorkflowCacheHelp
+        => $"{ToolPackage.Command} {WorkflowCacheService.CommandName} list says each entry the cache holds - where it came from, its commit, its "
+            + "files and bytes, when it was fetched and last used, and the refs whose newest resolution it is - and every file of "
+            + $"the cache's own that could not be read. {ToolPackage.Command} {WorkflowCacheService.CommandName} prune --unused-days N, the days "
+            + $"required and from 0 to {WorkflowCache.MostUnusedDays.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}, removes the "
+            + "entries no run used and none was fetched for N days, the resolutions that named them, and the blobs no entry left "
+            + "holds - every blob an entry it keeps holds kept, and no blob removed at all while a file of the cache's own could not "
+            + $"be read; a file it could not remove or read is said, and the pruning ends incomplete ({HarnessExit.Incomplete}). Both name "
+            + "the cache's directory, in text and in --json. Every record of an entry, a use or a resolution, and every removal a "
+            + "pruning makes, is made under one lock, held for one record or one batch of blobs at a time - a fetch's blobs are "
+            + "written before its entry, outside it, and the entry only once every blob it names is there - so a pruning never "
+            + "takes a blob an entry holds and never holds a fetch off for longer than a moment; a cache that could not be named, "
+            + $"written or read, or whose lock another process held past its window, ends incomplete ({WorkflowCache.FailedExit}).";
+
     private static string RenderWorkflows()
     {
         var builder = new StringBuilder();
@@ -5205,7 +5384,8 @@ public static class HelpTopics
         builder.AppendLine("fails, saying no runner serves its type.");
         builder.AppendLine();
         builder.AppendLine("The workflow's directory is the workflow's own - its agent files (agents/<name>.md),");
-        builder.AppendLine("its prompts, its schemas, the bar it recommends by (recommendations.md) - and every path");
+        builder.AppendLine("its prompts, its schemas, the bar it recommends by (recommendations.md), its texts");
+        builder.AppendLine("(texts:, each name a markdown file a prompt reads as {text.<name>}) - and every path");
         builder.AppendLine("the yml names is relative to that directory and stays inside it, as an action's files");
         builder.AppendLine("are relative to its own directory (see 'help runners'). So two workflows never read");
         builder.AppendLine("each other's files, and a repository can hold as many as it has ways of working. init");
@@ -5224,11 +5404,16 @@ public static class HelpTopics
         builder.AppendLine($"config.json declares {WorkflowTemplates.ShippedWorkflowName},");
         builder.AppendLine("init writes each of its files that is missing - the whole set where the repository has no");
         builder.AppendLine("definition of it yet, and where it has one only the shipped files that definition names,");
-        builder.AppendLine("so a file taken out with its step stays out - and keeps each one that is there,");
+        builder.AppendLine("the workflows it uses among them - a shipped one taken out whole read from the copy init");
+        builder.AppendLine("writes, so it comes back whole in one run - so a file taken out with its step stays out -");
+        builder.AppendLine("and keeps each one that is there,");
         builder.AppendLine("whatever it holds, so an init that stopped part way is finished by the next - where a");
-        builder.AppendLine("file is missing and the definition there does not read, init refuses (12; 13 where it");
+        builder.AppendLine("file is missing and the definition there does not read, or uses a workflow of the");
+        builder.AppendLine("repository's that does not resolve, init refuses (12, naming each problem; 13 where it");
         builder.AppendLine("cannot be read), since which files it names cannot be told; nothing that exists is ever");
-        builder.AppendLine("overwritten, and a config that does not declare it gets none of it.");
+        builder.AppendLine("overwritten, and a config that does not declare it gets none of it. A file such a definition");
+        builder.AppendLine("names that this tool ships elsewhere now - one of the item pipeline's, moved into its own");
+        builder.AppendLine("folder - is not brought back, and init says so.");
         builder.AppendLine("The name is the folder's, the file's and the name: key's alike, one word, and a");
         builder.AppendLine("disagreement among the three is refused when the file is read.");
         builder.AppendLine();
@@ -5237,7 +5422,9 @@ public static class HelpTopics
         builder.AppendLine("there (13 where it is): a declared one once it holds (12 where it does not), byte for");
         builder.AppendLine($"byte, or, with --shipped, the {WorkflowTemplates.ShippedWorkflowName} workflow as this tool ships it, to make a");
         builder.AppendLine("version of your own. A file that cannot be written takes back what was written before it, or");
-        builder.AppendLine("says why it could not.");
+        builder.AppendLine("says why it could not. A used workflow's files go where it sits under the folder, and a");
+        builder.AppendLine("workflow that uses one outside its folder, or a remote one, is refused (13), nothing written,");
+        builder.AppendLine("for the folder alone would name a workflow it has not got; --from vendors a remote one.");
         builder.AppendLine();
         builder.AppendLine("A workflow declares inputs - the values a run is started with, each with a kind, a");
         builder.AppendLine("default and the options it takes; params - its own knobs, defaulted in the file and read");
@@ -5264,6 +5451,91 @@ public static class HelpTopics
         builder.AppendLine("visits); past it the run asks (recoveryBound), with the advisor's recommendation of a fix:");
         builder.AppendLine("more, one more recovery; direct, with the fix in words, for the next one; skip, where the");
         builder.AppendLine("step is skippable; or abort.");
+        builder.AppendLine();
+        builder.AppendLine("A step may be a whole workflow of its own: it says use - a path to the workflow's yml in a");
+        builder.AppendLine("folder of its own, relative to the calling workflow's directory, written with forward");
+        builder.AppendLine("slashes and no part that starts or ends with a space, and held inside the workflows folder");
+        builder.AppendLine("once links are followed, as the run's own workflow is -");
+        builder.AppendLine("and the workflow it names is read as a definition of its own and runs inside the run, its");
+        builder.AppendLine("steps the step's own, its files read in its own directory and its declared outputs the");
+        builder.AppendLine("step's once it ends - one that reads nothing, from a step its item skipped, absent, and one");
+        builder.AppendLine("that cannot be read failing the use. Its with fills the workflow's inputs, each value read");
+        builder.AppendLine("as the input it fills declares: an expression for a value, a template for a text, a path of");
+        builder.AppendLine("the used workflow's directory for a file, and a name for a step - what a step of the used");
+        builder.AppendLine("workflow reads as {input.<name>} whole in its onFailure or a handler's then, filled in the");
+        builder.AppendLine("scope that declares it, however deep the failing step; the file a step is asked with may be");
+        builder.AppendLine("read the same way, one whole input of the kind file naming its prompt, so one pipeline is");
+        builder.AppendLine("asked with a different prompt by each workflow that uses it. An input the use leaves to its");
+        builder.AppendLine("default is read the same way, where the use sits; a step input it fills with no name is");
+        builder.AppendLine("refused where it is read, and a policy filled with recover is held to what recover written");
+        builder.AppendLine("out is - a reasoning step is never recovered, and a recovery never calls itself. A step of");
+        builder.AppendLine("the used workflow may also say a when that reads one input of it alone: its own gate, held");
+        builder.AppendLine("off where a use fills that input so - the way the shipped flow's item pipeline holds its");
+        builder.AppendLine("redo and undo off where its recovery uses it; only where the use's with value, or the");
+        builder.AppendLine("input's default, closes the gate as written is the step free of waiting for the agent it");
+        builder.AppendLine("works in, and one the use opens is held to it as any step is. The with values are read once");
+        builder.AppendLine("for each scope its steps run in - the block, each item of a forEach, each iteration of a");
+        builder.AppendLine("repeat, each raising of a handler - and kept in the use's record, so a resume takes them");
+        builder.AppendLine("back and never reads them again; every item's are read before any item opens, and one that");
+        builder.AppendLine("cannot be read fails the use, saying which input and for which item, with nothing of it");
+        builder.AppendLine("opened - a step of it that runs all the same, an always step, is refused where it reads an");
+        builder.AppendLine("input. A failure policy that reads nothing, or fills with no policy, is said in the step's");
+        builder.AppendLine("error and record, and the failure goes where the top level sends what nothing else decides;");
+        builder.AppendLine("a handler whose then cannot be read ends failed saying why. The steps of a used workflow");
+        builder.AppendLine("read only its inputs, its params and its own steps, never the calling run's - nor the");
+        builder.AppendLine("caller's work item, its iteration before, or what raised a handler of the caller, and a");
+        builder.AppendLine("pull request's base inside it reads no input - every fact of the caller they need comes");
+        builder.AppendLine("through an input; a recovery's steps read those of the workflow that declares the recovery,");
+        builder.AppendLine("and {text.<name>} is the used workflow's own where it declares the name, else the next one");
+        builder.AppendLine("out's, else the run's. A failure inside it that is given to a recovery is taken by the");
+        builder.AppendLine("nearest recovery declared around the failing step, however many uses out, before the run's;");
+        builder.AppendLine("that recovery's onFailure is pause or stop, as the run's own is. Its budget, reporter,");
+        builder.AppendLine("pushCheckpoints and recommendations are never applied, nor - unless the use says");
+        builder.AppendLine("useParentLimits: false - its advisor, amend, answers, limits and codebaseGraph, nor its");
+        builder.AppendLine("codebaseGraph where the run's own workflow declares one: the calling run's own hold, and");
+        builder.AppendLine("validate-workflow says so beside the fingerprint of what it read. With");
+        builder.AppendLine("useParentLimits: false the workflow's own settings govern its steps key by key: a key is");
+        builder.AppendLine("governed by the nearest such use around a step that declares it, in a recovery as anywhere,");
+        builder.AppendLine("and a key no such use declares stays the run's, for a use cannot widen a run's limits by");
+        builder.AppendLine("declaring nothing. Its maxReasoningAgents, maxParallelProcesses and maxOpenAgents gate its");
+        builder.AppendLine("steps as pools of their own in the place of the run's, counted across every instance of the");
+        builder.AppendLine("use; its maxInstances caps the instances its steps open, across every instance of the use");
+        builder.AppendLine("and in the place of the run's own cap for them; its maxRetries and backoffSeconds are what");
+        builder.AppendLine("its steps fall back to; its handoffSeconds bounds the handoff of its paused reasoning steps;");
+        builder.AppendLine("and its advisor recommends for its steps' questions in the place of the run's - its files");
+        builder.AppendLine("read in its own directory, its prompt handed the inputs the use filled and the texts its");
+        builder.AppendLine("steps see, its bar the workflow's own texts.recommendations where it declares one, and each");
+        builder.AppendLine("recommendation credited to it. A question of its steps is answered nearest first: the");
+        builder.AppendLine("step's own answers, the groups around it within the workflow, the workflow's own answers,");
+        builder.AppendLine("and then the use step's own, the caller's groups and the run's. The run's one codebase");
+        builder.AppendLine("graph has one shape - the run's own workflow's, else the one its governing uses declare - and");
+        builder.AppendLine("every sync, serving and graphify step is made under it. Each key such a use applies is held");
+        builder.AppendLine("to every rule the run's own key of that name is - its limits, its maxInstances, its");
+        builder.AppendLine("advisor, its answers, its graph's shape - for a use cannot declare what a run could not, and");
+        builder.AppendLine("two such uses that shape the graph differently are refused where the run's own workflow");
+        builder.AppendLine("declares no shape, for a run has one graph. Its budget and its reporter are carried and not");
+        builder.AppendLine("applied: the run's budget counts its steps' spend, and the run's reporter words the run as a");
+        builder.AppendLine("whole. An amend is refused there, said at validation, for an amend is a run's own, and");
+        builder.AppendLine("preapproved is a run's input alone, whatever the key says. A workflow file that uses itself,");
+        builder.AppendLine($"directly or through others, is refused with the circle of the files that close it, and steps nest at most {WorkflowFileParser.MaxDepth}");
+        builder.AppendLine("deep in all, a used workflow's own counted below the step that uses it; a run records each");
+        builder.AppendLine("use's resolution, and a resume is refused where what the called workflow says changed since");
+        builder.AppendLine("the run began - the digest of its parsed definition, taken as the run's own definition's is,");
+        builder.AppendLine("so a comment or line endings change nothing - as its own definition's would.");
+        builder.AppendLine();
+        AppendWrapped(builder, RemoteWorkflowsHelp);
+        builder.AppendLine();
+        builder.AppendLine($"{ToolPackage.Command} {WorkflowExportService.CommandName} --from <use> --to <dir> vendors a remote workflow into the");
+        builder.AppendLine("repository at its resolved commit - no workflow named beside it, nor --shipped: every file");
+        builder.AppendLine("of its directory, byte for byte, and source.md, a note of where it came from and how the");
+        builder.AppendLine("commit came about where that is worth a word, a directory holding a source.md of its own");
+        builder.AppendLine("refused - so a team can review what is written and use it as ./. A workflow named beside");
+        builder.AppendLine($"it, --shipped, or a --from that names no remote workflow is a usage error ({HarnessExit.UsageError}), and the");
+        builder.AppendLine($"folder is looked at before anything is fetched, one that is there refused ({HarnessExit.Refused}) with");
+        builder.AppendLine("nothing written anywhere; a refusal after the fetch says what it fetched is kept in the");
+        builder.AppendLine("workflow cache.");
+        builder.AppendLine();
+        AppendWrapped(builder, WorkflowCacheHelp);
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -5581,7 +5853,8 @@ public static class HelpTopics
             + "is text any template reads: {run.ran}, every check that ended so far, a line each with where it ran and its "
             + "verdict, each leg's for a step that runs legs; {run.notRun}, each check not run yet, by its step's name, and each "
             + "skipped or never reached, with why; and {run.red}, each red result not seen green since by a later visit of the "
-            + "same step - a red leg, a red check of CI, an anchor check's findings, a plan's problems, a failure - each 'none' "
+            + "same step - a red leg, with what its line said of the units its build failed where its own tool failed it, a "
+            + "red check of CI, an anchor check's findings, a plan's problems, a failure - each 'none' "
             + "where it names nothing. The checks are the steps of type "
             + $"{string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step "
             + "marked independent, whatever each is named. A commit's message and variables read {carried.ran}, "
@@ -5647,7 +5920,10 @@ public static class HelpTopics
             + "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the "
             + "advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own "
             + "recommendations.md, read live each time it is given so a change holds from the next question on, and a "
-            + "sentence saying none was written where the folder has no one - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its "
+            + "sentence saying none was written where the folder has no one - and {text.<name>} beside it, a workflow's "
+            + "texts (texts:): each name a markdown file of its own directory, read live as the bar is, the used "
+            + "workflow's own first where the reading step is one of its and the run's where none between them "
+            + "declares the name - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its "
             + "askPrompt alone - {update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and "
             + "{piece.<name>} in a step of the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull "
             + "request's body, which the engine fills and no agent reads, reads what a template key reads and no skill. "
@@ -5817,6 +6093,7 @@ public static class HelpTopics
                 repeat:
                   until: empty(review.findings)
                   maxIterations: 3
+                  decideAfter: review
                   leftover: review.findings
                 answers:
                   loopBound: accept
@@ -5854,8 +6131,14 @@ public static class HelpTopics
             """,
             "Each iteration reviews what is in the tree; where the review found something, the author's agent",
             "reworks it, it is tested, folded and committed, and the next iteration reviews it again. The loop ends",
-            "when a review finds nothing. At three iterations the configuration ends it as it stands and what is",
-            "left is the loop's leftover.");
+            "when a review finds nothing, and it decides where its review ended (decideAfter): the until and the",
+            "bound are read on what that review found, before the rework acts on it, so the last rework of a loop",
+            "that ends at its bound is reviewed by the round after it, and what such a loop leaves is what its last",
+            "review found, none of it acted on. A loop that decides at a step reads, in its until, its blocking and its",
+            "leftover, only that step and the steps it waits for, which have ended there, and every other step of the",
+            "iteration runs before it or after it - here each step after the review waits for it - so none is left",
+            "running when the loop ends at its decision. At three iterations the configuration ends it as it stands",
+            "and what is left is the loop's leftover.");
 
         return builder.ToString();
 
@@ -6086,6 +6369,14 @@ public static class HelpTopics
         builder.AppendLine("  workflows      the workflows this repository runs, each defined by a yml file of its");
         builder.AppendLine("                 own under .harness-config/workflows/<name>/ and declared here by name");
         builder.AppendLine("                 alone; validate-workflow checks them ('help workflows')");
+        builder.AppendLine("  workflowSources  where a remote use may come from beyond the repository: allow, the");
+        builder.AppendLine("                 owners and repositories it may name (empty, and a remote use is refused);");
+        builder.AppendLine("                 hosts, GitHub Enterprise hosts, each with the one credential its calls");
+        builder.AppendLine("                 are given, \"credential\": {\"from\": \"env\", \"name\": \"<VARIABLE>\"}");
+        builder.AppendLine("                 (required); pin, the refs it takes (tag-or-commit, the default, commit,");
+        builder.AppendLine("                 or any, which allows a moving branch); offline, what stands in where the");
+        builder.AppendLine("                 network keeps a ref from being resolved (refuse, the default, or");
+        builder.AppendLine("                 last-resolved) ('help workflows')");
         builder.AppendLine("  setUp          what a run brings up around its work and down after, by name: an up");
         builder.AppendLine($"                 and a down command line for '{ToolPackage.Command} up' and '{ToolPackage.Command} down', which");
         builder.AppendLine("                 take inputs; a test invocation's and a runner's setUp name them ('help setups')");

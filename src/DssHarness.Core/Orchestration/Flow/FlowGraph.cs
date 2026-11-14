@@ -96,8 +96,9 @@ public static class FlowGraph
     }
 
     /// <summary>
-    /// The graph of <paramref name="definition"/>: every step a node, in declaration order - the flow's, then the
-    /// recovery's - with the edges from each to what it waits for.
+    /// The graph of <paramref name="definition"/>: every step a node, in declaration order - the flow's, each used
+    /// workflow's recovery after the step that uses it, then the recovery's - with the edges from each to what it waits
+    /// for.
     /// </summary>
     private static (List<string> Order, Dictionary<string, List<string>> Edges) Build(WorkflowDefinition definition)
     {
@@ -173,6 +174,14 @@ public static class FlowGraph
             if (step.Steps.Count > 0)
             {
                 Collect(step.Steps, id, held, definition, order, edges);
+            }
+
+            // A workflow used as a step brings its own recovery, hanging from the step under the reserved name the flow's
+            // own does at the root (FlowScope.Declared): its steps are nodes as the root recovery's are, so a cycle among
+            // them is found and a wait on one of them is seen.
+            if (step.Use?.Recover is { } called)
+            {
+                Collect(called.Steps, $"{id}.{FlowScope.Recovery}", inherited: [], definition, order, edges);
             }
         }
     }

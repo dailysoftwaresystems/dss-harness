@@ -867,6 +867,55 @@ public sealed class ImplementationFlowTests
     }
 
     /// <summary>
+    /// A failure that comes before anything is planned is put right as one after it is: the build fails red at the head
+    /// of the run - before the intake, before the planning - the diagnosis says fix, and its remedy is built through the
+    /// item pipeline as a work item is, on the remedy prompt, folded, committed and reviewed, though the run has no plan
+    /// yet: the recovery's use hands the pipeline nothing of a plan, for its remedy reads the diagnosis and never the
+    /// plan, which may not exist. The build then runs again, green, and the run goes on to its end.
+    /// </summary>
+    [Fact]
+    public async Task ABuildRedBeforeAnythingIsPlanned_IsPutRightByARemedyBuiltAsAnItemIs_AndTheBuildRunsAgain()
+    {
+        using var temp = new TempDirectory();
+        var kit = await PrepareAsync(
+            temp,
+            ground: new Ground(Legs: true),
+            script: agents => agents.Queue(
+                "diagnostician",
+                Completed(Diagnosis(course: "fix", items: [Remedy("frame", "src/frame/**")], summary: "The build is red: the tool names a type that is gone"))),
+            machine: steps => steps.Queue("build", MachineSteps.Red(HarnessExit.CommandFailed, "the build is red: Tool.Frame is not defined")));
+
+        var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+        Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+        Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+        Assert.Empty(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
+
+        // The diagnosis was asked before the planner was: the recovery ran with no plan in the run.
+        var asked = kit.Agents.Asked.Select(step => step.AgentDefinition).ToList();
+
+        Assert.True(asked.IndexOf("diagnostician") < asked.IndexOf("planner"), string.Join(", ", asked));
+
+        // The remedy was built on the remedy prompt, before the round's item was built on the implement prompt.
+        var builders = kit.Agents.Of("implementer");
+
+        Assert.Equal(2, builders.Count);
+        Assert.StartsWith("Build this work item. It puts right a failure of this run", builders[0].Prompt, StringComparison.Ordinal);
+        Assert.Contains("The build is red: the tool names a type that is gone", builders[0].Prompt, StringComparison.Ordinal);
+        Assert.StartsWith("Build this work item.\n\n## The item", builders[1].Prompt, StringComparison.Ordinal);
+
+        // The remedy was folded, committed and reviewed as a work item is, and the build ran again, green.
+        var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps;
+
+        Assert.Equal(
+            [("recover.remedies.checkpoint", nameof(FlowInstanceState.Done)), ("recover.remedies.fix.review.correctness", nameof(FlowInstanceState.Done)), ("recover.remedies.fold", nameof(FlowInstanceState.Done))],
+            [.. flow.Where(step => step.Step is "recover.remedies.fold" or "recover.remedies.checkpoint" or "recover.remedies.fix.review.correctness").Select(step => (step.Step, step.State)).OrderBy(step => step.Step, StringComparer.Ordinal)]);
+        Assert.Equal(
+            [("build", nameof(FlowInstanceState.Failed)), ("build+2", nameof(FlowInstanceState.Done))],
+            [.. flow.Where(step => step.Step == "build").Select(step => (step.Instance, step.State)).OrderBy(step => step.Instance, StringComparer.Ordinal)]);
+    }
+
+    /// <summary>
     /// A step the recovery took five times, and failed again, is asked of the person at the next - with the
     /// advisor's recommendation of a fix - the diagnoses after the first on the resume prompt that says the last one
     /// did not put it right.
@@ -1446,7 +1495,8 @@ public sealed class ImplementationFlowTests
 
             await EditWorkflowAsync(
                 kit,
-                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: recover" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "            onFailure: stop" : line)]);
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
+                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: '{input.failTo}'" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "    onFailure: stop" : line)]);
 
             var failed = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -1474,7 +1524,8 @@ public sealed class ImplementationFlowTests
 
             await EditWorkflowAsync(
                 kit,
-                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: recover" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "            onFailure: pause" : line)]);
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
+                lines => [.. lines.Select((line, at) => line.Trim() == "onFailure: '{input.failTo}'" && at > 0 && lines[at - 1].Trim() == "when: \"(item-blocked.answer ?? 'continue') != 'skip'\"" ? "    onFailure: pause" : line)]);
 
             var asked = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -1628,15 +1679,24 @@ public sealed class ImplementationFlowTests
             Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
             Assert.Contains("runs 'corpus', which writes the tree (writesTree), on the main tree", string.Join("; ", refused.Details ?? []), StringComparison.Ordinal);
 
+            // The corpus step comes out of the flow's own file, where the first edit put it, and goes into the item
+            // pipeline beside the alternatives.
             await EditWorkflowAsync(
                 kit,
                 lines =>
                 {
                     var top = Array.IndexOf(lines, "  - name: corpus");
-                    string[] without = [.. lines[..top], .. lines[(top + 3)..]];
-                    var at = Array.IndexOf(without, "          - name: redo");
 
-                    return [.. without[..at], "          - name: corpus", "            type: run", "            runner: corpus", "            in: item-agent", "            dependsOn: [item-agent]", .. without[at..]];
+                    return [.. lines[..top], .. lines[(top + 3)..]];
+                });
+            await EditWorkflowAsync(
+                kit,
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
+                lines =>
+                {
+                    var at = Array.FindIndex(lines, line => line.Trim() == "- name: redo");
+
+                    return [.. lines[..at], "  - name: corpus", "    type: run", "    runner: corpus", "    in: item-agent", "    dependsOn: [item-agent]", .. lines[at..]];
                 });
 
             var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
@@ -1850,9 +1910,10 @@ public sealed class ImplementationFlowTests
     }
 
     /// <summary>
-    /// A review that still finds a low finding after three rounds ends the loop: nobody is asked - the bound is
-    /// accepted by the flow's own configuration, the answer recorded as the configuration's - and what the loop left
-    /// is kept in its record, named in the run's report and given to the scribe that writes the handoff.
+    /// A review that still finds a low finding after three rounds ends the loop, deciding where its review ended
+    /// (decideAfter): nobody is asked - nothing blocking stands, so the bound is not reached - the rework of the third
+    /// round never runs, for the loop ended before it started, and what the review found is kept in its record, named
+    /// in the run's report and given to the scribe that writes the handoff.
     /// </summary>
     [Fact]
     public async Task ALowFindingTheThirdRoundStillFinds_EndsTheLoop_Unasked_LeftInTheRecordAndGivenToTheScribe()
@@ -1871,10 +1932,10 @@ public sealed class ImplementationFlowTests
         Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
         Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
 
-        // Three rounds of review, each reworking the finding; the loop ended at its rounds with no question asked -
-        // nothing blocking stands, so the bound is not reached and nobody is asked.
+        // Three rounds of review, the first two reworking their finding; the third ended the loop where its review
+        // stood, so its rework never ran - the low finding it found is what the loop left, none of it acted on.
         Assert.Equal(3, kit.Agents.Of("reviewer-correctness").Count);
-        Assert.Equal(4, kit.Agents.Of("implementer").Count);
+        Assert.Equal(3, kit.Agents.Of("implementer").Count);
 
         var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
 
@@ -1894,8 +1955,9 @@ public sealed class ImplementationFlowTests
 
     /// <summary>
     /// A finding the loop counts - critical, high or medium, in production code or out of it - keeps the loop going
-    /// past its three rounds to the further three its blocking holds for; at the sixth the configuration accepts the
-    /// bound, and what is left is said in the record and to the scribe, which is told to file it in the run's backlog.
+    /// past its three rounds to the further three its blocking holds for; at the sixth, deciding where its review
+    /// ended (decideAfter), the configuration accepts the bound - the sixth round's rework never runs - and what the
+    /// sixth review found is said in the record and to the scribe, which is told to file it in the run's backlog.
     /// </summary>
     [Fact]
     public async Task ABlockingFindingStandsPastThreeRoundsToSix_ThenTheBoundIsAcceptedByTheConfiguration()
@@ -1919,9 +1981,10 @@ public sealed class ImplementationFlowTests
 
         Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
 
-        // Six rounds, one rework each, the bound reached once - at the sixth, not asked of a person at the third.
+        // Six rounds, the first five reworking their finding; the sixth ended the loop where its review stood - the
+        // bound read there, not at the iteration's end - so the sixth rework never ran.
         Assert.Equal(6, kit.Agents.Of("reviewer-correctness").Count);
-        Assert.Equal(7, kit.Agents.Of("implementer").Count);
+        Assert.Equal(6, kit.Agents.Of("implementer").Count);
 
         var questions = kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!;
 
@@ -2110,7 +2173,8 @@ public sealed class ImplementationFlowTests
         using var temp = new TempDirectory();
         var kit = await PrepareAsync(temp);
 
-        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "implementation.yml");
+        // The errors reviewer is a step of the item pipeline the entry uses, taken out of the pipeline's own file.
+        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "item-pipeline", "item-pipeline.yml");
         var lines = File.ReadAllLines(workflow).ToList();
         var from = lines.FindIndex(line => line.Trim().Equals("- name: errors", StringComparison.Ordinal));
         var to = lines.FindIndex(from + 1, line => line.Trim().Equals("- name: tests", StringComparison.Ordinal));
@@ -2195,7 +2259,7 @@ public sealed class ImplementationFlowTests
                 Completed(Review(Finding(severity: "high", production: false))),
                 Completed(Review(Finding(severity: "high", production: false)))));
 
-        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(kit, WithoutConfiguredLoopBounds);
 
         OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
         await kit.Harness.CommitAllAsync(kit.Tree.Path, "the backlog the run files what it leaves in", Token);
@@ -2265,7 +2329,7 @@ public sealed class ImplementationFlowTests
                 Completed(Review(Finding(severity: "high", production: false))),
                 Completed(Review(Finding(severity: "high", production: false)))));
 
-        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(kit, WithoutConfiguredLoopBounds);
 
         OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
         await kit.Harness.CommitAllAsync(kit.Tree.Path, "the backlog the run files what it leaves in", Token);
@@ -2314,7 +2378,7 @@ public sealed class ImplementationFlowTests
                     Completed(Review(Finding(severity: "high", production: false))));
             });
 
-        await EditWorkflowAsync(other, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(other, WithoutConfiguredLoopBounds);
         OrchestrationKit.Write(other.Tree.Path, Path.Combine("docs", "backlog.md"), "# Backlog\n");
         await other.Harness.CommitAllAsync(other.Tree.Path, "the backlog the run files what it leaves in", Token);
 
@@ -3738,7 +3802,7 @@ public sealed class ImplementationFlowTests
 
         // The rounds loop asks at its bound where the configuration would answer for it: the window an amendment past
         // the items of the last round stands in.
-        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(kit, WithoutConfiguredLoopBounds);
 
         var paused = await StartAsync(kit, "request=Ship the orders report.");
 
@@ -3905,9 +3969,11 @@ public sealed class ImplementationFlowTests
         // The rounds loop asks at its bound where the configuration would answer for it: the window a change past its
         // minute stands in.
         var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "implementation.yml");
+        var pipeline = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "item-pipeline", "item-pipeline.yml");
         var asShipped = File.ReadAllLines(workflow);
+        var pipelineAsShipped = File.ReadAllLines(pipeline);
 
-        await EditWorkflowAsync(kit, WithoutConfiguredLoopBounds);
+        await EditShippedAsync(kit, WithoutConfiguredLoopBounds);
 
         var paused = await StartAsync(kit, "request=Ship the orders report.");
 
@@ -4084,6 +4150,7 @@ public sealed class ImplementationFlowTests
         // person answered anything, so a change of the answer the configuration gave is refused - it is no set to
         // change.
         await EditWorkflowAsync(kit, _ => asShipped);
+        await EditWorkflowAsync(kit, Path.Combine("item-pipeline", "item-pipeline.yml"), _ => pipelineAsShipped);
 
         var secondRun = await kit.Service.RunAsync(
             kit.Tree.Path,
@@ -4736,10 +4803,20 @@ public sealed class ImplementationFlowTests
 
     /// <summary>Rewrites the workflow the kit's repository holds, and commits it as the run reads it.</summary>
     private static async Task EditWorkflowAsync(Kit kit, Func<string[], string[]> edit)
+        => await EditWorkflowAsync(kit, "implementation.yml", edit);
+
+    private static async Task EditWorkflowAsync(Kit kit, string file, Func<string[], string[]> edit)
     {
-        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", "implementation.yml");
+        var workflow = Path.Combine(kit.Tree.Path, ".harness-config", "workflows", "implementation", file);
         File.WriteAllLines(workflow, edit([.. File.ReadAllLines(workflow)]));
         await kit.Harness.CommitAllAsync(kit.Tree.Path, "the workflow as this run reads it", Token);
+    }
+
+    /// <summary>The edit applied to the shipped flow's every file - its own and the item pipeline its uses place.</summary>
+    private static async Task EditShippedAsync(Kit kit, Func<string[], string[]> edit)
+    {
+        await EditWorkflowAsync(kit, "implementation.yml", edit);
+        await EditWorkflowAsync(kit, Path.Combine("item-pipeline", "item-pipeline.yml"), edit);
     }
 
     /// <summary>
@@ -5171,7 +5248,7 @@ public sealed class ImplementationFlowTests
 
             if (edit is not null)
             {
-                await EditWorkflowAsync(kit, edit);
+                await EditShippedAsync(kit, edit);
             }
 
             return (kit, claude!, glm!);
@@ -5179,6 +5256,22 @@ public sealed class ImplementationFlowTests
 
         static bool Serving(AgentRun run, string model)
             => string.Equals(run.Model, model, StringComparison.Ordinal) && run.Output?.Name == "implement";
+
+        // The implement step alone names its model outright, in place of its own tier - the first after its name, in
+        // the item pipeline that declares it; the flow's own file declares no implement step and is left as it is.
+        static string[] ImplementNamingGlm(string[] lines)
+        {
+            var step = Array.FindIndex(lines, line => line.Trim() == "- name: implement");
+
+            if (step < 0)
+            {
+                return lines;
+            }
+
+            var at = Array.FindIndex(lines, step, line => line.Trim() == "tier: balanced");
+
+            return [.. lines[..at], $"{lines[at][..^lines[at].TrimStart().Length]}model: glm-5.3", .. lines[(at + 1)..]];
+        }
 
         // A request the step's model declines: the step goes on with its fallback, and its record names both models.
         using (var declined = new TempDirectory())
@@ -5290,11 +5383,7 @@ public sealed class ImplementationFlowTests
                 named,
                 run => Completed(Implement()),
                 keys: "ZAI_API_KEY=sk-test-two\n",
-                edit: lines =>
-                {
-                    var at = Array.IndexOf(lines, "            tier: balanced");
-                    return [.. lines[..at], "            model: glm-5.3", .. lines[(at + 1)..]];
-                });
+                edit: ImplementNamingGlm);
 
             var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -5314,11 +5403,7 @@ public sealed class ImplementationFlowTests
                 keyless,
                 run => Completed(Implement()),
                 keys: "ANTHROPIC_API_KEY=sk-test-one\n",
-                edit: lines =>
-                {
-                    var at = Array.IndexOf(lines, "            tier: balanced");
-                    return [.. lines[..at], "            model: glm-5.3", .. lines[(at + 1)..]];
-                });
+                edit: ImplementNamingGlm);
 
             var refused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -5525,7 +5610,17 @@ public sealed class ImplementationFlowTests
                 script: agents => agents.Queue("implementer", Completed(Implement())),
                 machine: steps => steps.Queue("fold", Conflicting(), Folded("DS-2")));
 
-            await EditWorkflowAsync(kit, lines => [.. lines.Where((line, at) => at != Array.IndexOf(lines, "              foldConflicts: fail"))]);
+            // The item's fold alone loses its line: the catch-ups' and the refold's keep theirs.
+            await EditWorkflowAsync(
+                kit,
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
+                lines =>
+                {
+                    var fold = Array.FindIndex(lines, line => line.Trim() == "- name: fold");
+                    var at = Array.FindIndex(lines, fold, line => line.Trim() == "foldConflicts: fail");
+
+                    return [.. lines[..at], .. lines[(at + 1)..]];
+                });
 
             var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
@@ -5590,6 +5685,7 @@ public sealed class ImplementationFlowTests
             // However the configuration is written, no line of it accepts a cell for a person: the check refuses it.
             await EditWorkflowAsync(
                 kit,
+                Path.Combine("item-pipeline", "item-pipeline.yml"),
                 lines =>
                 {
                     var edited = new List<string>();
@@ -5601,7 +5697,7 @@ public sealed class ImplementationFlowTests
 
                         if (first && line.Trim() == "foldNewRows: allow")
                         {
-                            edited.Add("              foldOverCells: allow");
+                            edited.Add($"{line[..^line.TrimStart().Length]}foldOverCells: allow");
                             first = false;
                         }
                     }

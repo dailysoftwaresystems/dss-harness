@@ -1239,9 +1239,17 @@ public sealed partial class HelpTests
         Assert.Contains(
             "so each is refused to every agent by name, a side-task's as well as a step's: "
                 + $"{string.Join(", ", DssHarness.Core.Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those "
-                + "that write only the tree's own files, stay open.",
+                + $"that write only the tree's own files, stay open. {WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} "
+                + "are among them: where a person's run of either would fetch a remote workflow into the workflow cache, an agent's - "
+                + $"told as {DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand} tells it, by {DssHarness.Core.Agents.AgentChildEnvironment.AgentMarker}, "
+                + "which its every child carries, or a process of this tool's above it in the process tree, one whose tree cannot be read "
+                + "taken as no person's - reads the cache alone and writes nothing to it, and one the cache does not hold is refused saying what "
+                + $"made the command an agent's and that a person fills the cache from {DssHarness.Core.Agents.AgentAncestryAnswer.APersonsShell}, with "
+                + $"'dssharness {WorkflowValidationService.CommandName}' or 'dssharness {WorkflowExportService.CommandName} --from'.",
             prose,
             StringComparison.Ordinal);
+        Assert.Contains(WorkflowValidationService.CommandName, DssHarness.Core.Agents.Policy.AgentPolicy.OpenVerbs);
+        Assert.Contains(WorkflowExportService.CommandName, DssHarness.Core.Agents.Policy.AgentPolicy.OpenVerbs);
 
         // The tool's own executions of the agents' work inside the same isolation, the codes the mode turns into its own.
         Assert.Contains(
@@ -1396,7 +1404,10 @@ public sealed partial class HelpTests
                 + "process tree, walked parent by parent, a process that took a freed id never read as a parent, the tool's own runtime told by the "
                 + "file it runs where the table gives one (the installed tool, a build's program, the runtime running the tool's assembly) and by "
                 + "its name only where it gives none, so a launcher of the tool's name - a script, another program's shim - is none; one detached from the agent's tree "
-                + "(at, a tmux server, a double fork) is told by the mark alone, and a tree that could not be read is refused saying why - a "
+                + "(at, a tmux server, a double fork) is told by the mark alone, and a tree that could not be read is refused saying why; each "
+                + "refusal says which made the command an agent's (the mark, the process of this tool's by its name and id, so a side-task any "
+                + "process of this tool's starts is refused, or why the tree could not be read) and that a person starts one from "
+                + $"{DssHarness.Core.Agents.AgentAncestryAnswer.APersonsShell} - a "
                 + "side-task is a person's own conversation, and no agent starts another. The "
                 + "main tree is the side-task's working directory and holds the credential slots: a command over it whole - named . or given no "
                 + "path, an archive of it or a search - is not told from one over its sources, and reaches their files; and code an interpreter "
@@ -2747,13 +2758,18 @@ public sealed partial class HelpTests
     /// <summary>
     /// The exit codes topic, and the table the architecture keeps by hand, say that 21 is also an update of a program begun
     /// and not finished - not finished within its bound, or its download not reached - which both updaters exit with: a
-    /// code whose words named only a leg, a set-up and an agent's verbs was what each updater answered differently.
+    /// code whose words named only a leg, a set-up and an agent's verbs was what each updater answered differently. And
+    /// that it is a remote workflow's fetch not finished within its bound and the workflow cache not read, written or
+    /// locked, which the cache's commands, validate-workflow and export-workflow exit with.
     /// </summary>
     [Fact]
     public void ExitCodeTopic_SaysAnUpdateStoppedPartWayIsIncomplete()
     {
+        Assert.Equal(HarnessExit.Incomplete, WorkflowCache.FailedExit);
+
         const string Said = "or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not "
-            + "finished within its bound, or its download not reached)";
+            + "finished within its bound, or its download not reached), or a remote workflow's fetch was not finished within its "
+            + "bound or the workflow cache could not be read, written or locked within its window";
 
         Assert.Contains(Said, Prose.Words(HelpText.Of("exit-codes").StandardOutput), StringComparison.Ordinal);
         Assert.Contains($"| {HarnessExit.Incomplete} | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, {Said};", Prose.Document("docs", "architecture.md"), StringComparison.Ordinal);
@@ -3115,6 +3131,255 @@ public sealed partial class HelpTests
                 + "not finish, that is not there, or that holds no copy this tool made are inputs-moved.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// --keep-going is taken by each command that builds its legs, and by no other, and its help says what each build tool
+    /// is given - the arguments its adapter's way names - and what is refused, with the exits from the code.
+    /// </summary>
+    [Theory]
+    [InlineData("build", true)]
+    [InlineData("test", true)]
+    [InlineData("run", true)]
+    [InlineData("check-mutations", false)]
+    public async Task KeepGoing_IsTakenByEachCommandThatBuildsItsLegs_SayingWhatEachToolIsGiven(string command, bool takes)
+    {
+        var help = Prose.Words((await CliRunner.RunAsync([command, "--help"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        if (!takes)
+        {
+            Assert.DoesNotContain(DssHarness.Core.Build.KeepGoing.Option, help, StringComparison.Ordinal);
+            return;
+        }
+
+        var told = DssHarness.Core.Build.BuildAdapters.All
+            .SelectMany(adapter => adapter.KeepGoingWays)
+            .Where(way => way.How == DssHarness.Core.Build.KeepGoingHow.WhenTold)
+            .Select(way => string.Join(' ', way.Arguments))
+            .ToList();
+
+        Assert.Equal(new[] { "-k 0", "-k" }, told);
+        Assert.Contains(
+            $"{DssHarness.Core.Build.KeepGoing.Option} Have each leg's build go on past the units that fail to build, so its line names "
+                + "every one and counts them: ninja is given -k 0 and make -k; MSBuild, dotnet and dart go on by themselves; a leg "
+                + "whose toolchain names no generator, or a generator with no known way, NMake's and Xcode's among them, is refused "
+                + $"before anything runs ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}), and so is a run that builds "
+                + $"none of its legs ({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}). help legs lists each generator's way.",
+            help,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The workflows topic says what a leg step's red entry carries of the units its build failed - failedUnits, which the
+    /// output's schema declares - and that {run.red} says what the leg's line said of them.
+    /// </summary>
+    [Fact]
+    public void WorkflowsTopic_SaysWhatARedLegsEntryCarriesOfItsUnits()
+    {
+        var prose = Prose.Words(HelpText.Of("workflows").StandardOutput);
+
+        Assert.Contains(
+            "keepGoing its builds of its legs go on past the units that fail to build, as --keep-going has them, so each red leg's "
+                + "entry in the step's red names, in failedUnits, every unit its build failed - by source and step, with what its line "
+                + "said of them - and {run.red} says that line's words",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("a red leg, with what its line said of the units its build failed where its own tool failed it, a red check of CI,", prose, StringComparison.Ordinal);
+
+        foreach (var type in new[] { "build", "test", "run" })
+        {
+            Assert.Contains("\"failedUnits\":{\"type\":[\"object\",\"null\"]", WorkflowStepTypes.Find(type)!.Output, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("failedUnits", WorkflowStepTypes.Find("check-mutations")!.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The legs topic says what a failed build names of the units it failed to build, and how --keep-going has each build
+    /// tool go on past them - every way an adapter answers, as the adapter says it - and the README and the architecture
+    /// say the same, the architecture naming each owner by the type that is it.
+    /// </summary>
+    [Fact]
+    public void LegsTopic_SaysWhatAFailedBuildNamesOfItsUnits_AndEachToolsWayToGoOn()
+    {
+        var help = HelpText.Of("legs").StandardOutput;
+        var prose = Prose.Words(help);
+
+        Assert.Contains(
+            "A leg whose build its own tool failed names each unit it failed to build: by its source, as ninja's manifest names "
+                + "the source a failed step compiles - a step that links or runs a command by its output - or by the target make "
+                + "says failed, which is the object it was building. Its line says how many, they are listed beneath the table, "
+                + "and --json carries them as failedUnits: each unit's source and step, the count, the tool, whether its tool went on "
+                + "past failing units, how many failing lines could not be told its own, and how far it got. Only the build's own "
+                + "steps are units: ninja's FAILED line directly after a status line of its own - one printing what a build line of "
+                + "its manifest prints, at a count no lower than the build stands at and no more than one higher, two after a console "
+                + "step's FAILED line, whose end has no status, and any higher while a console step runs, for ninja holds back every "
+                + "other step's lines until it ends and then writes only some of their statuses - and its last such status for how "
+                + "far it got, one more where a console step's FAILED line or start came after it, and not said where a console step "
+                + "that did not fail was followed by statuses of its own, which it may have ended before or after; samurai's failed "
+                + "jobs whose commands a build line runs, and its last status of its own - written as each step starts, none for one "
+                + "it starts while a console step runs - for how far it got, never one more for a console step's end, and not said "
+                + "where that status is a console step's start before the last step it planned; make's failing step of a target's "
+                + "own makefile, and a failure of CMake's driving makefiles that no deeper failure of its target explains, read by its "
+                + "structure in any language - the makefile and line parted from the target as each catalog writes the colon, "
+                + "French's ' : ' and Simplified Chinese's full-width one among them - and whatever signal ended it. A build nested "
+                + "in a step - an external project's - is that step's unit, never its own lines: a failing line ninja wrote is a "
+                + "nested build's only within a failed step's output, before the nested build's own end, and a failure make wrote "
+                + "only where a shallower step known to be the build's own failed after it - its makefile read and none of the "
+                + "driving ones, or, where no failure names a makefile, as make before 4 writes them, its target no driving "
+                + "makefile's goal. One that cannot be told the build's own or a "
+                + "nested build's - after a status line not its own, as every one is where NINJA_STATUS spells the status otherwise "
+                + "- is counted on the line as perhaps a unit of its own, never read as clean; and check-mutations judges an arm's "
+                + "build by the same reading: its own failing steps and every one that cannot be told apart, a nested build's alone "
+                + "left out. Where which units failed is not read - MSBuild's, dotnet's and dart's output is not, nor a log that could "
+                + "not be read back, nor one in which no line of the build's own named a failed unit - the line says so and why, "
+                + "never that none failed. ninja and make stop at their first failures, so the line of a build of theirs not kept "
+                + "going says that every unit it never reached was not built and says nothing of the code, and - where ninja's own "
+                + "[run/planned] status says it - how many of the steps it had to run it ran: 'ran 22 of the 1093 steps it had to run'.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "--keep-going, on build, test and run - and keepGoing on a workflow's build, test and run steps - has each leg's "
+                + "build go on past its failing units, so its line names every one.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A toolchain that names no generator - CMake would pick its build tool as it configures - and a generator no way is "
+                + "known for, Xcode's among them, refuse --keep-going for each leg they build before anything runs "
+                + $"({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}), naming every one; and a run that builds none of "
+                + $"its legs refuses it too ({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}). A leg that builds in a "
+                + "copy of its tree builds by the copy's configuration, so where the copy's gives its tool no way, its build is "
+                + $"refused before it starts ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}): no tool is run without its "
+                + "way while the build was asked for it. Whether a tool went on is read from what its build ran with, and a ninja told "
+                + "to go on ended its build only where its last word says so - 'cannot make progress due to previously encountered "
+                + "errors', or an error of its own - a failed step, ninja's FAILED line or samurai's failed job, never being its last "
+                + "word: killed after a step failed, it says nothing, and the build is stopped, never one whose unrun steps need one "
+                + "that failed. check-mutations takes none: an arm's build is judged by whether, and where, it fails.",
+            prose,
+            StringComparison.Ordinal);
+
+        var ways = DssHarness.Core.Build.BuildAdapters.All.SelectMany(adapter => adapter.KeepGoingWays).ToList();
+        var lines = help.ReplaceLineEndings("\n").Split('\n');
+
+        Assert.Equal(6, ways.Count);
+        Assert.All(ways, way =>
+        {
+            var how = way.How switch
+            {
+                DssHarness.Core.Build.KeepGoingHow.WhenTold => $"given {string.Join(' ', way.Arguments)}",
+                DssHarness.Core.Build.KeepGoingHow.ByItself => "given nothing",
+                _ => $"refused ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)})",
+            };
+
+            Assert.Contains($"  {way.Builds}", lines);
+            Assert.Contains($"{way.Builds} {how}: {way.Said}.", prose, StringComparison.Ordinal);
+        });
+
+        var readme = Prose.Document("README.md");
+
+        Assert.Contains("| `build [--legs a,b] [--time] [--keep-going]` |", readme, StringComparison.Ordinal);
+        Assert.Contains("| `test [--legs a,b] [--time] [--set-up] [--keep-going]` |", readme, StringComparison.Ordinal);
+        Assert.Contains("| `run <runner> [--legs a,b] [--time] [--input name=value] [--set-up] [--keep-going]` |", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "`--keep-going`, on `build`, `test` and `run` - and `keepGoing` on a workflow's `build`, `test` and `run` steps - has "
+                + "each leg's build go on past its failing units: ninja is given `-k 0` and make `-k`, MSBuild, dotnet and dart go on "
+                + "by themselves and are given nothing, and a leg whose toolchain names no generator, or one no way is known for - "
+                + $"NMake's and Xcode's - is refused ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}) before anything "
+                + "runs, as is the option on a run that builds none of its legs "
+                + $"({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}); a leg built in a copy whose configuration gives "
+                + $"its tool no way is refused before its build starts ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}). "
+                + "Whether a tool went on is read from what its build ran with, and a ninja told to go on that never said it ended its "
+                + "build - a failed step, ninja's or samurai's, is no such word - was stopped from outside.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Only the build's own steps are units: a build nested in one of them, an external project's, is that step's unit, "
+                + "never its own lines; a failing line ninja wrote that cannot be told the build's own or a nested build's - every "
+                + "one, where `NINJA_STATUS` spells its status otherwise - is counted on the line as perhaps a unit of its own, never "
+                + "read as clean, and `check-mutations` judges an arm's build by the same reading, a nested build's lines alone left "
+                + "out; make's lines are read by their structure, in any language - French's space before a colon and Simplified "
+                + "Chinese's full-width colon among them - and whatever signal ended a step.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ninja and make stop at their first failures, so a build of theirs says that every unit it never reached was not "
+                + "built, and how many of the steps it had to run it ran where ninja's status says it - not where a step in the "
+                + "console pool that did not fail, whose end ninja writes no status for, may have ended after the last, nor where "
+                + "samurai's last status is a console step's start before the last step it planned, for samurai counts each step "
+                + "as it starts and writes no status for one it starts while that runs.",
+            readme,
+            StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "and `--json` carries them on the leg as `failedUnits`: `tool`, `count`, `units` - each one's `source` and `step` - "
+                + "`unread`, `keptGoing`, `stopsAtFirst`, `stepsRun`, `stepsPlanned`, `unattributed` and `said`, the line's own words "
+                + "(`FailedUnits.Document`, which a workflow step's red entry carries too).",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "So from a console step's start until its own `FAILED:` line, the count is held to from below alone.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "samurai counts otherwise: its `[%s/%t]` is written as each step starts, its count the steps it has started with that "
+                + "one, and it writes none for a step it starts while a console step runs - so its last status of its own is how far "
+                + "it got, a console step's start among them, never one more for that step's end, and is not said where it is a "
+                + "console step's start and the build planned more, for what samurai started while that step ran is written nowhere.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the makefile and line parted from the target as each catalog writes the colon: `: ` in English and most, ` : ` in "
+                + "French, a full-width `：` in Simplified Chinese",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A failure is a nested build's where a step of this build at a shallower depth failed after it, the step whose make "
+                + "ran that build - one known to be a step: its makefile read and none of the driving ones, or, where no failure "
+                + "names a makefile, its target no driving makefile's goal.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "so a failed step is no end of its build - ninja's `FAILED:` line, or samurai's `job failed with status`, `job "
+                + "terminated due to signal` or `job status unknown` under its name:",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`check-mutations` judges an arm's failed build by the same reading (`Ninja.FailedOutputs`, `OwnSteps.NotNested`): "
+                + "its own failing steps and every one that cannot be told apart, so none that could be a step not depending on a "
+                + "site is lost, and a nested build's alone left out - where nothing is nested, every failing line, as before.",
+            architecture,
+            StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            $"{nameof(DssHarness.Core.Build.IBuildAdapter)}.{nameof(DssHarness.Core.Build.IBuildAdapter.FailedUnitsOf)}",
+            $"{nameof(DssHarness.Core.Build.IBuildAdapter)}.{nameof(DssHarness.Core.Build.IBuildAdapter.KeepGoingFor)}",
+            $"{nameof(DssHarness.Core.Build.IBuildAdapter)}.{nameof(DssHarness.Core.Build.IBuildAdapter.KeepGoingWays)}",
+            nameof(DssHarness.Core.Build.FailedUnits),
+            nameof(DssHarness.Core.Build.KeepGoingWay),
+            $"{nameof(DssHarness.Core.Build.KeepGoing)}.{nameof(DssHarness.Core.Build.KeepGoing.Option)}",
+            $"{nameof(DssHarness.Core.Build.KeepGoing)}.{nameof(DssHarness.Core.Build.KeepGoing.Require)}",
+            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.Own)}",
+            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.Stopped)}",
+            $"{nameof(DssHarness.Core.Build.NinjaEdge)}.{nameof(DssHarness.Core.Build.NinjaEdge.Description)}",
+            $"{nameof(DssHarness.Core.Build.KeepGoing)}.{nameof(DssHarness.Core.Build.KeepGoing.RequireFor)}",
+            $"{nameof(DssHarness.Core.Build.KeepGoingWay)}.{nameof(DssHarness.Core.Build.KeepGoingWay.GivenIn)}",
+            $"{nameof(DssHarness.Core.Build.CMakeAdapter)}.{nameof(DssHarness.Core.Build.CMakeAdapter.KeptGoing)}",
+            $"{nameof(DssHarness.Core.Build.FailedUnits)}.{nameof(DssHarness.Core.Build.FailedUnits.WhyUnread)}",
+            $"{nameof(DssHarness.Core.Build.FailedUnits)}.{nameof(DssHarness.Core.Build.FailedUnits.Document)}",
+            $"{nameof(DssHarness.Core.Build.CMakeNinjaRule)}.{nameof(DssHarness.Core.Build.CMakeNinjaRule.Compiles)}",
+            $"{nameof(DssHarness.Core.Build.BuildRequest)}.{nameof(DssHarness.Core.Build.BuildRequest.KeepGoing)}",
+            $"{nameof(LegWork)}.{nameof(LegWork.BuildRequest)}",
+            $"{nameof(DssHarness.Core.Build.Make)}.{nameof(DssHarness.Core.Build.Make.FailedTargets)}",
+            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.FailedOutputs)}",
+            $"{nameof(DssHarness.Core.Build.Ninja.OwnSteps)}.{nameof(DssHarness.Core.Build.Ninja.OwnSteps.NotNested)}",
+            $"{nameof(DssHarness.Core.Build.FailedUnits)}.{nameof(DssHarness.Core.Build.FailedUnits.Unattributed)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
@@ -4030,7 +4295,13 @@ public sealed partial class HelpTests
             + "delete, or a worker an earlier version of this tool kept beside an agent's worktree, which clean --former-workers "
             + "removes - --force "
             + $"or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git cannot list its worktrees "
-            + $"({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. A plain worktree cannot take an "
+            + $"({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. A worktree git records at another "
+            + "place that holds none now - as after the checkout, or the worktrees in it, were moved by hand, its .git file and git's record "
+            + "still naming where they were - is a worktree with its work in it, never a directory to delete: list-worktree, delete-worktree, "
+            + "delete-orchestrator and every agent verb name 'git -C <main checkout> worktree repair <path>', which points the record and the "
+            + ".git file back at each other, and list-orchestrator says of a live agent whose worktree git cannot open, or holds as another "
+            + "kind than its record names, that it cannot be worked on and why, never that the agent stands live at it (\"worktreeProblem\" in "
+            + "--json). A plain worktree cannot take an "
             + "orchestrator's name. An agent's copies on hosts are kept under orchestrator--agent, so two orchestrators' agents of one name "
             + "keep theirs apart.",
             text,
@@ -4054,7 +4325,8 @@ public sealed partial class HelpTests
             $"One that cannot be removed stops the deletion before git runs ({HarnessExit.CommandFailed}), and a volume mounted "
                 + "on a directory is never unmounted.",
             "A directory under the root with no .git and no record of git's - what a removal that stopped part way leaves - is "
-                + $"refused ({HarnessExit.Refused}), naming --force; git worktree repair is named only while git still records a worktree there.",
+                + $"refused ({HarnessExit.Refused}), naming --force; git worktree repair is named only while git still records a worktree there - "
+                + "at that path, or, after the checkout was moved by hand, at another place that holds none now.",
         })
         {
             Assert.Contains(said, text, StringComparison.Ordinal);
@@ -5324,11 +5596,14 @@ public sealed partial class HelpTests
                 + "run's records, ask none of it. Where config.json declares "
                 + $"{WorkflowTemplates.ShippedWorkflowName}, init writes each of its "
                 + "files that is missing - the whole set where the repository has no definition of it yet, and where it has one only "
-                + "the shipped files that definition names, so a file taken out with its step stays out - and keeps each one that is "
-                + "there, whatever it holds, so an init that stopped part way is "
-                + "finished by the next - where a file is missing and the definition there does not read, init refuses (12; 13 where it "
+                + "the shipped files that definition names, the workflows it uses among them - a shipped one taken out whole read from "
+                + "the copy init writes, so it comes back whole in one run - so a file taken out with its step stays out - and keeps each "
+                + "one that is there, whatever it holds, so an init that stopped part way is "
+                + "finished by the next - where a file is missing and the definition there does not read, or uses a workflow of the "
+                + "repository's that does not resolve, init refuses (12, naming each problem; 13 where it "
                 + "cannot be read), since which files it names cannot be told; nothing that exists is ever overwritten, and a config that "
-                + "does not declare it gets none of it.",
+                + "does not declare it gets none of it. A file such a definition names that this tool ships elsewhere now - one of the item "
+                + "pipeline's, moved into its own folder - is not brought back, and init says so.",
             prose,
             StringComparison.Ordinal);
 

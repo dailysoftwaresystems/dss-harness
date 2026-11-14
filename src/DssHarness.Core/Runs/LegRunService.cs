@@ -109,6 +109,13 @@ public sealed record LegRunRequest(
     /// line is.
     /// </summary>
     public ILegIsolation? Isolation { get; init; }
+
+    /// <summary>
+    /// Whether each leg the run builds goes on past the units that fail to build (<see cref="Build.KeepGoing.Option"/>):
+    /// refused before any host is measured where the run builds none of its legs, or a leg's build tool has no known way
+    /// (<see cref="Build.KeepGoing.Require"/>), and given on to a host for each leg it builds there.
+    /// </summary>
+    public bool KeepGoing { get; init; }
 }
 
 /// <summary>
@@ -170,6 +177,19 @@ public sealed record LegWork(
     /// <see langword="null"/> where it names none.
     /// </summary>
     public DeveloperEnvironmentFact? DeveloperEnvironment { get; init; }
+
+    /// <summary>Whether the leg's build goes on past the units that fail to build (<see cref="LegRunRequest.KeepGoing"/>).</summary>
+    public bool KeepGoing { get; init; }
+
+    /// <summary>
+    /// The build of the leg its work runs, as the run was asked to build it: the leg's own (<see cref="PlacedLeg.BuildRequestFor(HarnessConfig, string, bool)"/>),
+    /// going on past its failing units where the run was asked to. Made here, once, for every command that builds a leg,
+    /// so the run's options reach each of their builds or none.
+    /// </summary>
+    /// <param name="time">Whether the build reports its profile timing.</param>
+    /// <exception cref="HarnessException">The leg builds nothing; see <see cref="PlacedLeg.BuildableProject"/>.</exception>
+    public BuildRequest BuildRequest(bool time = false)
+        => Leg.BuildRequestFor(Context.Config, RunDirectory, time) with { KeepGoing = KeepGoing };
 }
 
 /// <summary>
@@ -286,6 +306,13 @@ public sealed class LegRunService(
         if (request.Workload.SetUp)
         {
             SetUpsOrRefuse().Require(context.Config, context.Layout.RepositoryRoot, LegSelection.Resolve(context.Config, request.LegNames).Legs, request.Workload);
+        }
+
+        // And a run asked to go on past failing units, for the same reason: a leg whose build tool has no known way, or a
+        // run that builds none of its legs, would otherwise be found out once its hosts were measured and its trees synced.
+        if (request.KeepGoing)
+        {
+            KeepGoing.Require(context.Config, LegSelection.Resolve(context.Config, request.LegNames).Legs, request.Workload);
         }
 
         // Hosts are measured before anything runs, and DssHarness on each is brought to this
@@ -1065,6 +1092,13 @@ public sealed class LegRunService(
         => request.Workload.SetUpsOf(context.Config, leg.Leg).Count > 0 ? [LegSetUps.Option] : [];
 
     /// <summary>
+    /// <see cref="KeepGoing.Option"/> where the run was asked to go on past failing units and builds <paramref name="leg"/>:
+    /// a host given it for a leg it does not build would refuse it, the run building none of the legs it is given.
+    /// </summary>
+    private static string[] KeepGoingOption(PlacedLeg leg, LegRunRequest request)
+        => request.KeepGoing && request.Workload.On(leg.Leg.Os).Build ? [KeepGoing.Option] : [];
+
+    /// <summary>
     /// What a set-up's lines - run outside the operating system's isolation - may not read where the leg's work is held
     /// inside it under required (<paramref name="held"/>): the tree the leg works in, the run's and the main checkout,
     /// each of which the agents wrote; and the empty directory outside them the decision made for the lines to run from.
@@ -1123,7 +1157,7 @@ public sealed class LegRunService(
                 .RunAsync(
                     commandName,
                     leg,
-                    [.. request.RemoteArguments ?? [], .. SetUpOption(context, leg, request), .. own],
+                    [.. request.RemoteArguments ?? [], .. SetUpOption(context, leg, request), .. KeepGoingOption(leg, request), .. own],
                     runId,
                     onNote,
                     facts => ledger.SetUpsEnded(leg.Name, facts),
@@ -1249,6 +1283,7 @@ public sealed class LegRunService(
                     AdmitUnit = (unit, admitted) => AskAsync(context, runsAs, request, runId, ledger, $"{runsAs.Name}/{unit.Unit}", unit.Room, unit.Settle, admitted),
                     Progress = message => ledger.Transition(runsAs.Name, message),
                     DeveloperEnvironment = setUp?.Fact,
+                    KeepGoing = request.KeepGoing,
                 },
                 token).ConfigureAwait(false);
         }

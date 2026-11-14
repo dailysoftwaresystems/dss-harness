@@ -1223,7 +1223,7 @@ public sealed class WorkflowValidatorTests
                 "step 'items.redo' works in the agent 'items.item-agent' makes, and does not wait for it: name 'item-agent', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
                 "amend.whenChangeScope names 'planning.plan', which is not declared beside 'items.implement': the three are alternatives at one place of one forEach group",
                 "amend.whenRemoveScope names 'items.undo', a orient step, and 'items.implement' is a reason step: an alternative runs in that step's place, and is of its type",
-                "amend.whenRemoveScope names 'items.undo', which says dependsOn, when: it runs in the place of 'implement', with that step's dependencies, and begins the work of its instance",
+                "amend.whenRemoveScope names 'items.undo', which says dependsOn, when: it runs in the place of 'implement', with that step's dependencies, and begins the work of its instance - the one thing it may say of its own is a when that reads one input of the used workflow alone, which holds it off where a use fills that input",
                 "step 'items.after-undo' is raised by 'undo': 'undo' runs in the place of 'implement', and is named by that step's name",
                 "step 'items.after-undo' sends the run to 'undo': 'undo' runs in the place of 'implement', and is named by that step's name",
                 "step 'items.verify' depends on 'undo': 'undo' runs in the place of 'implement', and is named by that step's name",
@@ -2007,9 +2007,9 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>The named files of a workflow's directory, reading each agent definition the steps name.</summary>
-    private static Func<string, string?>? AgentFiles(params (string Agent, string Text)[] agents)
-        => agents.Length == 0 ? null : named => named is { } file && file.StartsWith("agents/", StringComparison.Ordinal) && file.EndsWith(".md", StringComparison.Ordinal)
-            ? agents.FirstOrDefault(agent => agent.Agent == file["agents/".Length..^".md".Length]).Text
+    private static Func<string, string?, string?>? AgentFiles(params (string Agent, string Text)[] agents)
+        => agents.Length == 0 ? null : (named, owner) => owner is null && named.StartsWith("agents/", StringComparison.Ordinal) && named.EndsWith(".md", StringComparison.Ordinal)
+            ? agents.FirstOrDefault(agent => agent.Agent == named["agents/".Length..^".md".Length]).Text
             : "text";
 
     /// <summary>A test step's filterWhen is an expression as when is, with the same reads, and must yield a boolean.</summary>
@@ -2818,7 +2818,7 @@ public sealed class WorkflowValidatorTests
 
         // A step gives its failure to a recovery only where the workflow declares one.
         Assert.Equal(
-            ["step 'test' gives its failure to the recovery (onFailure: recover), and the workflow declares no recover; declare one, or say what the failure does"],
+            ["step 'test' gives its failure to the recovery (onFailure: recover), and neither the workflow nor any workflow it uses around it declares a recover; declare one, or say what the failure does"],
             Problems(
                 """
                 name: default
@@ -3485,7 +3485,7 @@ public sealed class WorkflowValidatorTests
         string[] reserved =
         [
             "run", "carried", "previous", "source", "item", "it", "index", "iteration", "visit", "input", "recover", "skill",
-            "recommendations", "update", "piece", "status", "true", "false", "null", "empty", "any",
+            "recommendations", "text", "update", "piece", "status", "true", "false", "null", "empty", "any",
             "outcome", "code", "error", "question", "latest", "assumptions",
             "worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os",
             "param", "issue",
@@ -4420,7 +4420,7 @@ public sealed class WorkflowValidatorTests
     /// step's output typed by its schema, and each prompt read for what it reads.
     /// </summary>
     private static IReadOnlyList<string> Problems(string text, IReadOnlyDictionary<string, string> files)
-        => [.. WorkflowValidator.Validate(Parse(text), hasCommitTemplate: false, path => files.GetValueOrDefault(path))];
+        => [.. WorkflowValidator.Validate(Parse(text), hasCommitTemplate: false, (path, owner) => owner is null ? files.GetValueOrDefault(path) : null)];
 
     /// <summary>
     /// V41: a ci-wait's time limit is always more than its wait - the hour it waits where it says none among them - for one
@@ -5129,7 +5129,7 @@ public sealed class WorkflowValidatorTests
     [Fact]
     public void AReasonStepsGraphKeys_AreHeldToTheGraphTheRunMakes_AndToWhatEachKeyDoes()
     {
-        IReadOnlyList<string> Checked(string body, Func<string, string?>? files = null)
+        IReadOnlyList<string> Checked(string body, Func<string, string?, string?>? files = null)
             => WorkflowValidator.Validate(Parse($$"""
                 name: default
                 steps:
@@ -5237,7 +5237,7 @@ public sealed class WorkflowValidatorTests
                 - name: codebase
                   type: graphify-codebase
                 {{reason.Replace("prompt:", "graph: tools\n  dependsOn: [codebase]\n  prompt:")}}
-                """, files: path => path == "agents/thinker.md" ? "---\nname: thinker\ndescription: Writes.\ncapabilities: [write]\n---\nYou write." : null));
+                """, files: (path, owner) => owner is null && path == "agents/thinker.md" ? "---\nname: thinker\ndescription: Writes.\ncapabilities: [write]\n---\nYou write." : null));
     }
 
     /// <summary>
@@ -5345,4 +5345,804 @@ public sealed class WorkflowValidatorTests
             ["step 'look' says graphFrom: 'changes', which is the pack's own seed and names the reason step 'changes' too; a step named task or changes cannot seed a pack - rename it to seed from it"],
             Checked("changes", "changes"));
     }
+
+    /// <summary>
+    /// A workflow's texts (<c>texts:</c>) are read in a prompt by their name alone - <c>{text.&lt;name&gt;}</c> with
+    /// nothing under it - where the workflow declares the name, and nowhere but a reason step's prompt and the
+    /// advisor's: prose for an agent, as the bar for recommendations is.
+    /// </summary>
+    [Fact]
+    public void ATextIsReadInAPromptByItsName_WhereTheWorkflowDeclaresIt()
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["prompts/think.md"] = "Close the class at its one home:\n{text.closure}\n",
+            ["prompts/barred.md"] = "The run's bar:\n{text.barred}\n",
+            ["prompts/dotted.md"] = "Dotted:\n{text.a.b}\n",
+            ["prompts/bare.md"] = "Bare:\n{text}\n",
+        };
+
+        string Definition(string prompt)
+            => $$"""
+                name: default
+                texts:
+                  closure: texts/closure.md
+                steps:
+                  - name: think
+                    type: reason
+                    agent: thinker
+                    prompt: {{prompt}}
+                    outputs: schemas/think.json
+                """;
+
+        Assert.Empty(WorkflowValidator.Validate(Parse(Definition("prompts/think.md")), hasCommitTemplate: false, (path, owner) => files.GetValueOrDefault(path)));
+
+        Assert.Equal(
+            ["step 'think' prompt 'prompts/barred.md' line 2 reads 'text.barred', and the workflow 'default' declares no text 'barred'"],
+            WorkflowValidator.Validate(Parse(Definition("prompts/barred.md")), hasCommitTemplate: false, (path, owner) => files.GetValueOrDefault(path)));
+
+        Assert.Equal(
+            ["step 'think' prompt 'prompts/dotted.md' line 2 reads 'text.a.b', and a text is read by its name alone: {text.<name>} with nothing under it"],
+            WorkflowValidator.Validate(Parse(Definition("prompts/dotted.md")), hasCommitTemplate: false, (path, owner) => files.GetValueOrDefault(path)));
+
+        Assert.Equal(
+            ["step 'think' prompt 'prompts/bare.md' line 2 reads 'text', and a text is read by its name alone: {text.<name>} with nothing under it"],
+            WorkflowValidator.Validate(Parse(Definition("prompts/bare.md")), hasCommitTemplate: false, (path, owner) => files.GetValueOrDefault(path)));
+
+        // A step's own key reads no text: the run's names are its world, prose is a prompt's.
+        Assert.Equal(
+            ["'think.when' reads 'text.closure': a workflow's texts are prose for an agent, and only a reason step's prompt and the advisor's read them"],
+            Problems("""
+                name: default
+                texts:
+                  closure: texts/closure.md
+                steps:
+                  - name: think
+                    type: reason
+                    agent: thinker
+                    when: '{text.closure}'
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """, files));
+    }
+
+    /// <summary>
+    /// A repeat that decides after a step (<c>decideAfter</c>) names one of the group's own that the schedule draws in
+    /// the course of an iteration: a step that never runs there - no step at all, a handler - would leave the loop's
+    /// decision unread.
+    /// </summary>
+    [Fact]
+    public void ARepeatDecidesAfterAStepOfItsOwn_ThatTheScheduleDraws()
+    {
+        Assert.Equal(
+            ["group 'fix' decides after 'nope', which is no step of the group it repeats"],
+            Problems("""
+                name: default
+                steps:
+                  - name: fix
+                    repeat:
+                      until: "review.outcome == 'done'"
+                      maxIterations: 3
+                      decideAfter: nope
+                    steps:
+                      - name: review
+                        type: orient
+                """));
+
+        Assert.Equal(
+            ["group 'fix' decides after 'mend', which never runs in the course of an iteration - a handler - so the loop would read its decision nowhere; name a step the schedule draws"],
+            Problems("""
+                name: default
+                steps:
+                  - name: fix
+                    repeat:
+                      until: "review.outcome == 'done'"
+                      maxIterations: 3
+                      decideAfter: mend
+                    steps:
+                      - name: review
+                        type: orient
+                      - name: mend
+                        on:
+                          step: review
+                          outcome: failure
+                        type: orient
+                """));
+
+        // A step of the group, drawn in its course: no problem.
+        Assert.Empty(Problems("""
+            name: default
+            steps:
+              - name: fix
+                repeat:
+                  until: "review.outcome == 'done'"
+                  maxIterations: 3
+                  decideAfter: review
+                steps:
+                  - name: review
+                    type: orient
+            """));
+    }
+
+    /// <summary>
+    /// V64: a repeat that decides after one of its steps reads its until, its blocking and its leftover where that step
+    /// ends, so they read of the iteration only the deciding step and the steps it waits for - a step after it, or beside
+    /// it, may not have run by then, and would read nothing.
+    /// </summary>
+    [Fact]
+    public void ADecisionReadAtAStep_ReadsOnlyThatStepAndWhatItWaitsFor()
+    {
+        Assert.Equal(
+            [
+                "'fix.repeat.until' reads 'lint.outcome', and 'fix.lint' is neither 'review' nor a step it waits for: the loop decides where 'review' ends (decideAfter), and 'lint' may not have run by then - read what 'review' found, or what a step it waits for found",
+                "'fix.repeat.blocking' reads 'revise.outcome', and 'fix.revise' is neither 'review' nor a step it waits for: the loop decides where 'review' ends (decideAfter), and 'revise' may not have run by then - read what 'review' found, or what a step it waits for found",
+                "'fix.repeat.leftover' reads 'revise.outcome', and 'fix.revise' is neither 'review' nor a step it waits for: the loop decides where 'review' ends (decideAfter), and 'revise' may not have run by then - read what 'review' found, or what a step it waits for found",
+            ],
+            Problems(Decided("lint.outcome == 'done' && scope.outcome == 'done'", "revise.outcome == 'failed'", "revise.outcome")));
+
+        // The deciding step, and a step it waits for, have both ended where the loop decides.
+        Assert.Empty(Problems(Decided("review.outcome == 'done' && scope.outcome == 'done'", "scope.outcome == 'failed'", "review.outcome")));
+
+        static string Decided(string until, string blocking, string leftover)
+            => $$"""
+                name: default
+                steps:
+                  - name: fix
+                    repeat:
+                      until: "{{until}}"
+                      rounds: 2
+                      blocking: "{{blocking}}"
+                      decideAfter: review
+                      leftover: '{{leftover}}'
+                    steps:
+                      - name: scope
+                        type: orient
+                      - name: review
+                        type: orient
+                        dependsOn: [scope]
+                      - name: lint
+                        type: orient
+                        dependsOn: [review]
+                      - name: revise
+                        type: orient
+                        dependsOn: [review]
+                """;
+    }
+
+    /// <summary>
+    /// V65: where a loop decides after one of its steps, every other step of the iteration runs before it - is one it
+    /// waits for - or after it, waiting for it, as a handler of its ending does: the iteration ends where the loop ends
+    /// there, and a step ordered neither way could still be running beside it, in an iteration that has ended.
+    /// </summary>
+    [Fact]
+    public void EveryOtherStepOfADecidedIteration_RunsBeforeTheDecidingStepOrAfterIt()
+    {
+        Assert.Equal(
+            [
+                "group 'fix' decides after 'review', and its step 'lint' neither waits for it nor is waited for by it: the loop may end where 'review' ends while 'lint' still runs beside it - make 'review' wait for it, or make it wait for 'review'",
+                "group 'fix' decides after 'review', and its step 'patch' neither waits for it nor is waited for by it: the loop may end where 'review' ends while 'patch' still runs beside it - make 'review' wait for it, or make it wait for 'review'",
+            ],
+            Problems("""
+                name: default
+                steps:
+                  - name: fix
+                    repeat:
+                      until: "review.outcome == 'done'"
+                      maxIterations: 3
+                      decideAfter: review
+                    steps:
+                      - name: review
+                        type: orient
+                      - name: lint
+                        type: orient
+                      - name: mend
+                        type: orient
+                        on:
+                          step: review
+                          outcome: failure
+                      - name: patch
+                        type: orient
+                        on:
+                          step: lint
+                          outcome: failure
+                      - name: later
+                        type: orient
+                        dependsOn: [review]
+                """));
+    }
+
+    /// <summary>
+    /// The policy a step of a used workflow reads from a step-kind input is the one its use fills it with, in every rule
+    /// that weighs one: a reasoning step under a group whose onFailure the use fills with recover is never recovered, the
+    /// run's recovery is given a failure by such a use, and recoveryBound is raised where the fill is recover.
+    /// </summary>
+    [Fact]
+    public void APolicyAUseFillsWithRecover_IsWeighedAsRecover()
+    {
+        Assert.Equal(
+            ["step 'part.build.think' is a reasoning step, and its failure would go to the recovery by the onFailure of 'part.build', '{input.failTo}' filled with 'recover' by 'part'; a reasoning step is never recovered - say pause on it"],
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: part
+                    use: ./part/part.yml
+                    with:
+                      failTo: recover
+                recover:
+                  onSuccess: failed-step
+                  onFailure: pause
+                  steps:
+                    - name: diagnose
+                      type: orient
+                """,
+                ("flow/part/part.yml", """
+                    name: part
+                    inputs:
+                      - name: failTo
+                        kind: step
+                        required: true
+                    steps:
+                      - name: build
+                        onFailure: '{input.failTo}'
+                        answers:
+                          recoveryBound: abort
+                        steps:
+                          - name: think
+                            type: reason
+                            agent: thinker
+                            prompt: prompts/think.md
+                            outputs: schemas/think.json
+                          - name: check
+                            type: orient
+                    """)));
+    }
+
+    /// <summary>
+    /// A step of a used workflow whose when reads one of its inputs alone is held off - free of waiting for the agent it
+    /// works in - only where the use's fill closes that gate; where the fill opens it the step starts as any step does,
+    /// beside the agent's making, and waits for the agent as any step must.
+    /// </summary>
+    [Fact]
+    public void AStepGatedByAnInput_IsHeldOffOnlyWhereItsUseClosesTheGate()
+    {
+        const string Part = """
+            name: part
+            inputs:
+              - name: tests
+                kind: value
+                required: true
+            steps:
+              - name: maker
+                type: create-agent
+                agent: implementer
+              - name: chore
+                type: test
+                in: maker
+                when: 'input.tests'
+            """;
+
+        Assert.Equal(
+            ["step 'part.chore' works in the agent 'part.maker' makes, and does not wait for it: name 'maker', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made"],
+            UsedProblems(Caller("'true'"), ("flow/part/part.yml", Part)));
+
+        Assert.Empty(UsedProblems(Caller("'false'"), ("flow/part/part.yml", Part)));
+
+        static string Caller(string tests)
+            => $"""
+                name: flow
+                steps:
+                  - name: part
+                    use: ./part/part.yml
+                    with:
+                      tests: {tests}
+                """;
+    }
+
+    /// <summary>
+    /// V46 for a step of a used workflow gated by one of its inputs: one whose use closes the gate never runs, and what
+    /// it would read of a piece is read by nothing; one whose use opens it runs outside the work-item group, where no
+    /// piece is there to read, and is refused as any such step is.
+    /// </summary>
+    [Fact]
+    public void APieceReadOfAStepGatedByAnInput_IsHeldOffOnlyWhereItsUseClosesTheGate()
+    {
+        const string Part = """
+            name: part
+            inputs:
+              - name: open
+                kind: value
+                required: true
+            steps:
+              - name: peek
+                type: pause
+                when: 'input.open'
+                question: 'the piece is {piece.kind}'
+                options: [continue]
+            """;
+
+        Assert.Equal(
+            ["'elsewhere.peek.question' reads 'piece.kind', whose 'piece' is the part of a plan update a work item carries, and 'elsewhere.peek' is no step of the work-item group 'items'"],
+            UsedProblems(WithAUse("'true'"), ("flow/part/part.yml", Part)));
+
+        Assert.Empty(UsedProblems(WithAUse("'false'"), ("flow/part/part.yml", Part)));
+
+        static string WithAUse(string open)
+            => Amended.Replace("amend:\n", $"  - name: elsewhere\n    use: ./part/part.yml\n    with:\n      open: {open}\namend:\n", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// V66: the settings a use that governs itself applies to its steps are held to every rule the run's own key of that
+    /// name is - its limits, its maxInstances, its advisor's kinds and tier, its answers and its graph's languages - each
+    /// said naming the used workflow and the step; and its advisor is one of the run's agents, whose keys the run needs.
+    /// </summary>
+    [Fact]
+    public void AGoverningUsesSettings_AreHeldToTheRunsOwnRules()
+    {
+        var definition = Resolved(
+            """
+            name: flow
+            steps:
+              - name: part
+                use: ./part/part.yml
+                useParentLimits: false
+            """,
+            ("flow/part/part.yml", """
+                name: part
+                maxReasoningAgents: 0
+                maxInstances: 5
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  tier: missing
+                  kinds: [bogus]
+                answers:
+                  bogus: accept
+                codebaseGraph:
+                  languages: [klingon]
+                steps:
+                  - name: graph
+                    type: graphify-codebase
+                  - name: chore
+                    type: orient
+                """));
+        const string Lead = "the workflow 'flow/part' governing step 'part' (useParentLimits: false)";
+        var known = string.Join(", ", WorkflowValidator.QuestionKinds.Select(kind => $"'{kind}'"));
+
+        Assert.Equal(
+            [
+                $"{Lead}: maxReasoningAgents must be from 1 to 32, found 0",
+                $"{Lead}: maxInstances must be from 100 to 100,000, found 5",
+                $"{Lead}: advisor.kinds names 'bogus', which is no question kind. Known: {known}.",
+                $"{Lead} answers the kind 'bogus', which is no question kind. Known: {known}.",
+                $"{Lead}: codebaseGraph extracts 'klingon', which this tool has no extractor for; it extracts: go, python",
+                $"{Lead}: advisor names tier 'missing', which tierConfig does not define. Defined: balanced",
+            ],
+            WorkflowValidator.Validate(definition, hasCommitTemplate: false, files: null, Providers(), languages: ["go", "python"]));
+
+        var governed = Resolved(
+            """
+            name: flow
+            steps:
+              - name: part
+                use: ./part/part.yml
+                useParentLimits: false
+            """,
+            ("flow/part/part.yml", """
+                name: part
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  tier: balanced
+                steps:
+                  - name: chore
+                    type: orient
+                """));
+
+        Assert.Equal([$"{Lead}: advisor"], Assert.Single(WorkflowValidator.MissingKeys(governed, Providers()!, held: [])).ReadBy);
+    }
+
+    /// <summary>
+    /// V66: a run has one graph, of one shape. Where the run's own workflow declares none, two uses that govern
+    /// themselves by workflows shaping it differently are refused; one workflow used twice declares one shape, and a run
+    /// that declares its own shape settles it.
+    /// </summary>
+    [Fact]
+    public void TwoGoverningUses_ShapeTheRunsOneGraphAlike()
+    {
+        var files = new[]
+        {
+            ("flow/narrow/narrow.yml", "name: narrow\ncodebaseGraph:\n  mapTokens: 100\nsteps:\n  - name: chore\n    type: orient\n"),
+            ("flow/wide/wide.yml", "name: wide\ncodebaseGraph:\n  mapTokens: 200\nsteps:\n  - name: chore\n    type: orient\n"),
+        };
+
+        Assert.Equal(
+            ["steps 'one' and 'two' govern themselves (useParentLimits: false) by the workflows 'flow/narrow' and 'flow/wide', which shape the run's graph differently, and the run's own workflow declares no codebaseGraph: a run has one graph, of one shape - declare it in the run's own workflow, or give the two one shape"],
+            UsedProblems(Caller(string.Empty, "./wide/wide.yml"), files));
+
+        Assert.Empty(UsedProblems(Caller(string.Empty, "./narrow/narrow.yml"), files));
+        Assert.Empty(UsedProblems(Caller("codebaseGraph:\n  mapTokens: 300\n", "./wide/wide.yml"), files));
+
+        static string Caller(string graph, string second)
+            => $"""
+                name: flow
+                {graph}steps:
+                  - name: graph
+                    type: graphify-codebase
+                  - name: one
+                    use: ./narrow/narrow.yml
+                    useParentLimits: false
+                  - name: two
+                    use: {second}
+                    useParentLimits: false
+                """;
+    }
+
+    /// <summary>
+    /// The default of an input a use leaves to it is read where the use sits, as the with value it stands for would be:
+    /// a value default reading what the caller does not hold is refused, and a step default of recover where no recovery
+    /// is reached is refused as a with value of recover would be.
+    /// </summary>
+    [Fact]
+    public void ADefaultAUseLeavesAnInputTo_IsCheckedAsAWithValue()
+    {
+        Assert.Equal(
+            [
+                "'part.inputs.hasLegs.default' reads 'orient.hasLegs', which no step before 'part', no input and no param provides",
+                "step 'part'.inputs.failTo.default is 'recover', and neither the workflow 'flow/part' it uses nor the calling workflow declares a recover; one of them must, for the failures it hands there",
+            ],
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: part
+                    use: ./part/part.yml
+                """,
+                ("flow/part/part.yml", """
+                    name: part
+                    inputs:
+                      - name: hasLegs
+                        kind: value
+                        default: 'orient.hasLegs'
+                      - name: failTo
+                        kind: step
+                        default: recover
+                    steps:
+                      - name: chore
+                        type: orient
+                        when: 'input.hasLegs'
+                        onFailure: '{input.failTo}'
+                    """)));
+    }
+
+    /// <summary>
+    /// What a value input of a used workflow yields, and what a declared output does, is what the whole expression that
+    /// fills it yields - a comparison a boolean - never what its first read is.
+    /// </summary>
+    [Fact]
+    public void AUsesInputsAndOutputs_AreTypedByTheirWholeExpression()
+    {
+        Assert.Empty(UsedProblems(
+            """
+            name: flow
+            inputs:
+              - name: affectedTests
+                default: 'off'
+            steps:
+              - name: part
+                use: ./part/part.yml
+                with:
+                  focused: "input.affectedTests == 'on'"
+              - name: after
+                type: orient
+                dependsOn: [part]
+                when: 'part.done'
+            """,
+            ("flow/part/part.yml", """
+                name: part
+                inputs:
+                  - name: focused
+                    kind: value
+                    required: true
+                outputs:
+                  - name: done
+                    from: "chore.outcome == 'done'"
+                steps:
+                  - name: chore
+                    type: orient
+                    when: 'input.focused'
+                """)));
+    }
+
+    /// <summary>A text a use fills an input with is a template, written whole, as the use's opening fills it.</summary>
+    [Fact]
+    public void ATextAUseFills_IsATemplateWrittenWhole()
+    {
+        Assert.Equal(
+            [$"'part.with.title' is not written whole: {WorkflowExpressions.TemplateSyntaxProblem("run {orient")}, and nothing it reads past there would be checked"],
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: part
+                    use: ./part/part.yml
+                    with:
+                      title: 'run {orient'
+                """,
+                ("flow/part/part.yml", "name: part\ninputs:\n  - name: title\n    kind: text\nsteps:\n  - name: chore\n    type: orient\n")));
+    }
+
+    /// <summary>
+    /// V62: an onFailure, or a handler's then, read from a step-kind input the use neither fills nor gives a default is
+    /// refused: the failure would go where a step that wrote nothing's goes, and the redirect would be made to nothing,
+    /// both in silence.
+    /// </summary>
+    [Fact]
+    public void AStepInputTheUseFillsWithNothing_IsRefusedWhereItIsRead()
+    {
+        Assert.Equal(
+            [
+                "step 'part.chore' reads its onFailure from '{input.failTo}', and 'part' fills the input with no name; a step's onFailure is one of 'stop', 'pause', 'continue', 'recover', and the use fills it with one",
+                "step 'part.fixup' sends the run to '{input.next}', and 'part' fills the input with no name; a handler's then is a step's name, and the use fills it with one",
+            ],
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: part
+                    use: ./part/part.yml
+                """,
+                ("flow/part/part.yml", """
+                    name: part
+                    inputs:
+                      - name: failTo
+                        kind: step
+                      - name: next
+                        kind: step
+                    steps:
+                      - name: chore
+                        type: orient
+                        onFailure: '{input.failTo}'
+                      - name: fixup
+                        type: orient
+                        on:
+                          step: chore
+                          outcome: failure
+                        then: '{input.next}'
+                    """)));
+    }
+
+    /// <summary>
+    /// A failure given to the recovery reaches the one the run finds for it: the recovery of the nearest workflow used
+    /// around the step that declares one, however many uses out, and else the run's own. So a step of an inner used
+    /// workflow reaches an outer one's recovery, and a step of the run's recovery whose own used workflow declares a
+    /// recovery reaches that one, and does not call itself.
+    /// </summary>
+    [Fact]
+    public void AFailureGivenToTheRecovery_ReachesTheNearestOneAroundIt()
+    {
+        Assert.Empty(UsedProblems(
+            """
+            name: flow
+            steps:
+              - name: outer
+                use: ./outer/outer.yml
+            """,
+            ("flow/outer/outer.yml", "name: outer\nsteps:\n  - name: inner\n    use: ../inner/inner.yml\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  steps:\n    - name: diagnose\n      type: orient\n"),
+            ("flow/inner/inner.yml", "name: inner\nsteps:\n  - name: chore\n    type: orient\n    onFailure: recover\n")));
+
+        Assert.Empty(UsedProblems(
+            """
+            name: flow
+            steps:
+              - name: head
+                type: orient
+                onFailure: recover
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: part
+                  use: ./part/part.yml
+                  with:
+                    failTo: recover
+            """,
+            ("flow/part/part.yml", "name: part\ninputs:\n  - name: failTo\n    kind: step\n    required: true\nsteps:\n  - name: chore\n    type: orient\n    onFailure: '{input.failTo}'\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  steps:\n    - name: mend\n      type: orient\n")));
+    }
+
+    /// <summary>
+    /// A used workflow's recovery is held to the run's own recovery's rules: its maxVisits in range, and a failure of its
+    /// own work never passed over - the step that gave it its failure would be neither put right nor failed.
+    /// </summary>
+    [Fact]
+    public void AUsedWorkflowsRecovery_IsHeldToTheRunsOwnRecoverysRules()
+    {
+        Assert.Equal(
+            [
+                "step 'part' uses the workflow 'flow/part', whose recover.maxVisits must be from 1 to 99, found 0",
+                "step 'part' uses the workflow 'flow/part', whose recover passes a failure of its own work over (onFailure: continue); the step that gave it its failure would be neither put right nor failed - say pause or stop",
+            ],
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: part
+                    use: ./part/part.yml
+                """,
+                ("flow/part/part.yml", "name: part\nsteps:\n  - name: chore\n    type: orient\n    onFailure: recover\nrecover:\n  maxVisits: 0\n  onSuccess: failed-step\n  onFailure: continue\n  steps:\n    - name: mend\n      type: orient\n")));
+    }
+
+    /// <summary>
+    /// The recovery of a workflow used inside another used workflow's recovery is placed and checked as every other is:
+    /// its steps run, and what they read is held to the rules.
+    /// </summary>
+    [Fact]
+    public void ARecoveryOfAUseInsideAUsedRecovery_IsChecked()
+    {
+        Assert.Equal(
+            ["'outer.recover.inner.recover.check.when' reads 'nothing.here', and a workflow used as a step reads only its own steps and its own names: it is of the workflow that called it. Give the fact to the called workflow as one of its inputs"],
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: outer
+                    use: ./outer/outer.yml
+                """,
+                ("flow/outer/outer.yml", "name: outer\nsteps:\n  - name: chore\n    type: orient\n    onFailure: recover\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  steps:\n    - name: inner\n      use: ../inner/inner.yml\n"),
+                ("flow/inner/inner.yml", "name: inner\nsteps:\n  - name: fix\n    type: orient\n    onFailure: recover\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  steps:\n    - name: check\n      type: orient\n      when: 'nothing.here'\n")));
+    }
+
+    /// <summary>
+    /// V61 holds for the work item, the iteration before and a handler's source as it does for steps: a step of a used
+    /// workflow reads its own forEach's item, its own repeat's iterations and its own handlers' sources, never those of
+    /// the workflow that called it, which would hold it valid only under callers shaped so.
+    /// </summary>
+    [Fact]
+    public void AUsedWorkflowsStep_ReadsNoItemIterationOrSourceOfItsCaller()
+    {
+        Assert.Equal(
+            [
+                "'rounds.part.chore.when' reads 'item.name', and a workflow used as a step reads only its own steps and its own names: the work item of the forEach 'rounds.part' is of the workflow that called it. Give the fact to the called workflow as one of its inputs",
+                "'rounds.part.chore.when' reads 'previous.tally.outcome', and a workflow used as a step reads only its own steps and its own names: the iteration of the repeat 'rounds' is of the workflow that called it. Give the fact to the called workflow as one of its inputs",
+                "'mending.fix.look.when' reads 'source.outcome', and a workflow used as a step reads only its own steps and its own names: the step whose ending raised 'mending' is of the workflow that called it. Give the fact to the called workflow as one of its inputs",
+            ],
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: orient
+                    type: orient
+                  - name: rounds
+                    dependsOn: [orient]
+                    repeat:
+                      until: "tally.outcome == 'done'"
+                      maxIterations: 2
+                    steps:
+                      - name: tally
+                        type: orient
+                      - name: part
+                        use: ./part/part.yml
+                        dependsOn: [tally]
+                        forEach: 'orient.tests'
+                  - name: mending
+                    on:
+                      step: orient
+                      outcome: failure
+                    steps:
+                      - name: fix
+                        use: ./fix/fix.yml
+                """,
+                ("flow/part/part.yml", "name: part\nsteps:\n  - name: chore\n    type: orient\n    when: \"item.name == 'x' && previous.tally.outcome == 'done'\"\n"),
+                ("flow/fix/fix.yml", "name: fix\nsteps:\n  - name: look\n    type: orient\n    when: \"source.outcome == 'failed'\"\n")));
+    }
+
+    /// <summary>
+    /// V61 holds for the failure a recovery puts right, and the issue it fixes: a used workflow the run's recovery holds
+    /// reads neither as source or issue - they are the recovery's, handed in through an input - while the recovery's own
+    /// steps, and a used workflow's own recovery's, read them.
+    /// </summary>
+    [Fact]
+    public void AUseTheRecoveryHolds_ReadsNotTheFailureItPutsRight_ButThroughAnInput()
+    {
+        const string Caller =
+            """
+            name: flow
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: look
+                  type: orient
+                  when: "!empty(source.step)"
+                - name: remedy
+                  use: ./fix/fix.yml
+                  dependsOn: [look]
+                  with:
+                    failed: 'source.step'
+            """;
+
+        Assert.Equal(
+            [
+                "'recover.remedy.mend.when' reads 'source.step', and a workflow used as a step reads only its own steps and its own names: the failure the recovery around it puts right is of the workflow that called it. Give the fact to the called workflow as one of its inputs",
+                "'recover.remedy.mend.when' reads 'issue.title', and a workflow used as a step reads only its own steps and its own names: the pre-existing issue the recovery around it fixes is of the workflow that called it. Give the fact to the called workflow as one of its inputs",
+            ],
+            UsedProblems(Caller, ("flow/fix/fix.yml", Fix("!empty(source.step) || !empty(issue.title)"))));
+
+        Assert.Empty(UsedProblems(Caller, ("flow/fix/fix.yml", Fix("!empty(input.failed)"))));
+
+        static string Fix(string when)
+            => $"name: fix\ninputs:\n  - name: failed\n    kind: value\nsteps:\n  - name: mend\n    type: orient\n    when: \"{when}\"\n";
+    }
+
+    /// <summary>
+    /// A pull request's base inside a used workflow reads none of its inputs: the base is filled from the run's own
+    /// inputs before any use is opened, and an input there is the use's.
+    /// </summary>
+    [Fact]
+    public void APullRequestBaseInsideAUsedWorkflow_ReadsNoInput()
+    {
+        Assert.Equal(
+            ["step 'part.pr' opens its pull request against {input.target}, and is a step of the workflow 'flow/part' used as a step: orient fills orient.baseBranch from the run's own inputs before any use is opened, and an input inside a used workflow is the one its use fills - name the branch, or read the run's input in a pull request of the run's own workflow"],
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: part
+                    use: ./part/part.yml
+                """,
+                ("flow/part/part.yml", "name: part\ninputs:\n  - name: target\n    default: main\nsteps:\n  - name: pr\n    type: pull-request\n    title: 'the work'\n    body: prompts/pr-body.md\n    base: '{input.target}'\n")));
+    }
+
+    /// <summary>A caller's definition resolved over the workflows it uses, by their paths under the workflows directory; the resolution refuses nothing.</summary>
+    private static WorkflowDefinition Resolved(string caller, params (string Path, string Text)[] used)
+    {
+        var files = used.ToDictionary(file => file.Path, file => file.Text.ReplaceLineEndings("\n"), StringComparer.Ordinal);
+        var (definition, problems) = WorkflowResolver.Resolve(WorkflowFileParser.Parse("workflows/flow/flow.yml", caller), "flow", path => files.GetValueOrDefault(path));
+
+        Assert.Empty(problems);
+        return definition;
+    }
+
+    /// <summary>Every problem of a caller resolved over the workflows it uses, under a configuration that declares no commit template.</summary>
+    /// <summary>
+    /// A used workflow's recovery is part of the run's step graph as the run's own recovery is: a cycle among its steps
+    /// is refused, named by their paths under the use, never passed over for sitting in a recovery a use brings.
+    /// </summary>
+    [Fact]
+    public void ACycleInAUsedWorkflowsRecovery_IsRefusedAsTheRunsOwnRecoverysIs()
+    {
+        Assert.Contains(
+            "the workflow has a dependency cycle: fix.recover.heal -> fix.recover.mend -> fix.recover.heal",
+            UsedProblems(
+                """
+                name: flow
+                steps:
+                  - name: fix
+                    use: ./fix/fix.yml
+                """,
+                ("flow/fix/fix.yml", """
+                    name: fix
+                    steps:
+                      - name: look
+                        type: orient
+                        onFailure: recover
+                    recover:
+                      onSuccess: failed-step
+                      onFailure: pause
+                      steps:
+                        - name: heal
+                          type: orient
+                          dependsOn: [mend]
+                        - name: mend
+                          type: orient
+                          dependsOn: [heal]
+                    """)));
+    }
+
+    private static IReadOnlyList<string> UsedProblems(string caller, params (string Path, string Text)[] used)
+        => [.. WorkflowValidator.Validate(Resolved(caller, used), hasCommitTemplate: false)];
 }

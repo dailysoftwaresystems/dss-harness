@@ -72,6 +72,7 @@ internal static class TestCommand
         command.Options.Add(SkipBuildOption);
         command.Options.Add(LocalCopyOption);
         command.Options.Add(InPlaceOption);
+        command.Options.Add(DispatchOptions.KeepGoing);
         command.Options.Add(DispatchOptions.Here);
         command.Options.Add(DispatchOptions.SetUp);
         GlobalOptions.AddTo(command);
@@ -96,6 +97,7 @@ internal static class TestCommand
                         SetUp = arguments.GetValue(DispatchOptions.SetUp),
                         LocalCopy = arguments.GetValue(DispatchOptions.LocalCopy),
                         InPlace = arguments.GetValue(DispatchOptions.InPlace),
+                        KeepGoing = arguments.GetValue(DispatchOptions.KeepGoing),
 
                         // Read once, for the legs run here and the hosts given theirs alike: which tests run is one
                         // choice, and a host told something else would report another suite under the same leg.

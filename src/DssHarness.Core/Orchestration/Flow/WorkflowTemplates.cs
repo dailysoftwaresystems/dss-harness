@@ -12,7 +12,18 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// Each file written, relative to the repository's root with forward separators, in the order it was written.
 /// </param>
 /// <param name="Kept">How many of the workflow's files were there already, each left as it was.</param>
-public sealed record ShippedWorkflowFiles(IReadOnlyList<string> Created, int Kept);
+/// <param name="Moved">
+/// Each file the repository's own definition names that is not there and this tool ships at that path no more
+/// (<see cref="WorkflowTemplates.Moved"/>), relative to the workflow's directory with forward separators: not written,
+/// for this build's copy of it is written for another layout, and said, so the person is not left with a definition
+/// that names a file init never brings back.
+/// </param>
+/// <param name="Left">
+/// Each file of the old layout (<see cref="WorkflowTemplates.Moved"/>) still there that the repository's own definition
+/// names no more, relative to the workflow's directory with forward separators: read by nothing, so a change made to it -
+/// a prompt the repository wrote its own - reaches no step, and said, so it is carried over rather than lost unseen.
+/// </param>
+public sealed record ShippedWorkflowFiles(IReadOnlyList<string> Created, int Kept, IReadOnlyList<string> Moved, IReadOnlyList<string> Left);
 
 /// <summary>
 /// The implementation workflow this tool ships: the definition <c>init</c> writes where a repository's
@@ -53,33 +64,107 @@ public static class WorkflowTemplates
     /// </summary>
     private static readonly Lazy<IReadOnlyDictionary<string, string>> Embedded = new(ReadEmbedded);
 
-    /// <summary>The agent files the implementation workflow names.</summary>
+    /// <summary>The agent files the implementation workflow names at its own levels.</summary>
     private static IReadOnlyList<string> Agents =>
     [
-        "prioritizer", "triage", "planner", "plan-auditor", "implementer",
-        "review-scope", "reviewer-correctness", "reviewer-errors", "reviewer-tests",
-        "reviewer-types", "reviewer-comments", "reviewer-simplicity",
+        "prioritizer", "triage", "planner", "plan-auditor",
         "scribe", "auditor", "diagnostician", "pre-existing-triage", "advisor", "reporter",
     ];
 
-    /// <summary>The prompt files the implementation workflow names.</summary>
+    /// <summary>The prompt files the implementation workflow names at its own levels.</summary>
     private static IReadOnlyList<string> Prompts =>
     [
         "priority", "triage", "plan", "replan", "plan-update", "plan-audit",
-        "implement", "redo", "undo", "unblock", "mend", "reconcile", "anchors",
-        "review-scope", "review", "rework",
-        "deferrals", "handoff",
+        "anchors", "deferrals", "handoff",
         "self-audit", "pr-body",
-        "diagnose", "rediagnose", "redirect", "remedy", "pre-existing",
+        "diagnose", "rediagnose", "redirect", "pre-existing",
         "recommend", "status", "ask",
     ];
 
-    /// <summary>The schema files the implementation workflow names.</summary>
+    /// <summary>The schema files the implementation workflow names at its own levels.</summary>
     private static IReadOnlyList<string> Schemas =>
     [
-        "priority", "triage", "plan", "plan-audit", "implement",
-        "review-scope", "review", "self-audit", "summary", "diagnosis", "pre-existing",
+        "priority", "triage", "plan", "plan-audit",
+        "self-audit", "summary", "diagnosis", "pre-existing",
     ];
+
+    /// <summary>The agent files the item pipeline names: the workflow its rounds and its recovery both use.</summary>
+    private static IReadOnlyList<string> PipelineAgents =>
+    [
+        "implementer", "review-scope", "reviewer-correctness", "reviewer-errors", "reviewer-tests",
+        "reviewer-types", "reviewer-comments", "reviewer-simplicity",
+    ];
+
+    /// <summary>The prompt files the item pipeline names, the two its uses hand it among them.</summary>
+    private static IReadOnlyList<string> PipelinePrompts =>
+    [
+        "implement", "remedy", "redo", "undo", "unblock", "mend", "reconcile", "anchors",
+        "review-scope", "review", "rework",
+    ];
+
+    /// <summary>The schema files the item pipeline names.</summary>
+    private static IReadOnlyList<string> PipelineSchemas =>
+    [
+        "implement", "review-scope", "review",
+    ];
+
+    /// <summary>
+    /// The item pipeline's own files, under its directory in the implementation workflow's, in the order they are
+    /// written: the workflow the two uses name, its agents, its prompts - the two a use hands it among them - and its
+    /// schemas.
+    /// </summary>
+    private static IReadOnlyList<string> PipelineFiles =>
+    [
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/implementer.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/review-scope.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-correctness.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-errors.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-tests.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-types.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-comments.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-simplicity.md",
+        .. PipelinePrompts.Select(prompt => $"item-pipeline/prompts/{prompt}.md"),
+        .. PipelineSchemas.Select(schema => $"item-pipeline/schemas/{schema}.schema.json"),
+        $"item-pipeline/item-pipeline{HarnessLayout.WorkflowFileExtension}",
+    ];
+
+    /// <summary>
+    /// The files the implementation workflow shipped at its own level before its item pipeline became a workflow of its
+    /// own, each with the path this build ships it at now, under the pipeline's directory - read forever and never
+    /// written: a repository on the old layout whose definition still names one gets it back from no init, for this
+    /// build's copy is the pipeline's, written for the new layout and reading its inputs, and init says so.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> Moved =>
+        PipelineFiles
+            .Where(file => !file.EndsWith(HarnessLayout.WorkflowFileExtension, StringComparison.Ordinal))
+            .Select(file => (Old: file[(file.IndexOf('/') + 1)..], New: file))
+            .Where(pair => !Files.Contains(pair.Old, StringComparer.Ordinal))
+            .ToDictionary(pair => pair.Old, pair => pair.New, StringComparer.Ordinal);
+
+    /// <summary>
+    /// What init says of a file of the old layout still there that the repository's own definition names no more
+    /// (<see cref="ShippedWorkflowFiles.Left"/>): read by nothing, so a change made to it reaches no step.
+    /// </summary>
+    /// <param name="file">The file, relative to the workflow's directory.</param>
+    public static string LeftNote(string file)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(file);
+
+        return $"{Shown(file)} is of the layout before the item pipeline became a workflow of its own, and the repository's own definition of the "
+            + $"{ShippedWorkflowName} workflow reads it no more - it reads {Shown(Moved[file])} - so a change made to it reaches no step: carry what it says "
+            + "over to the file read now, then take it out";
+    }
+
+    /// <summary>What init says of a file the repository's own definition names that this tool ships elsewhere now (<see cref="Moved"/>).</summary>
+    /// <param name="file">The file as the definition names it, relative to the workflow's directory.</param>
+    public static string MovedNote(string file)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(file);
+
+        return $"{Shown(file)} is named by the repository's own definition of the {ShippedWorkflowName} workflow and is not there, and init brings it "
+            + $"back no more: this tool ships it as {Shown(Moved[file])} since the item pipeline became a workflow of its own, written for that layout; "
+            + $"'{ToolPackage.Command} {WorkflowExportService.CommandName} {ShippedWorkflowName} --shipped --to <dir>' gives the whole of it to compare with";
+    }
 
     /// <summary>
     /// Every file of the implementation workflow, relative to its directory, in the order they are
@@ -91,6 +176,8 @@ public static class WorkflowTemplates
         .. Prompts.Select(prompt => $"prompts/{prompt}.md"),
         .. Schemas.Select(schema => $"schemas/{schema}.schema.json"),
         "recommendations.md",
+        "closure.md",
+        .. PipelineFiles,
         $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}",
     ];
 
@@ -134,16 +221,24 @@ public static class WorkflowTemplates
                 $"this build's implementation workflow names itself '{parsed.Name}'; it is '{ShippedWorkflowName}'");
         }
 
-        // As for a config with no commit.template: each commit step writes its message. The files are the build's own, so
-        // every schema is held to the subset, every path is typed by the schema that holds it and every prompt's
-        // placeholder is checked.
+        // The definition as a run reads it: every use resolved - the item pipeline placed at each of the two places
+        // that name it - so that what is held to the rules is the tree the engine runs.
+        var (resolved, resolution) = WorkflowResolver.Resolve(parsed, ShippedWorkflowName, path => Below(path) is { } below ? TextOf(below) : null);
+
+        // As for a config with no commit.template: each commit step writes its message. The files are the build's own,
+        // so every schema is held to the subset, every path is typed by the schema that holds it and every prompt's
+        // placeholder is checked - each in the directory of the workflow that names it, and each file a use names in
+        // the used workflow's directory is one of that directory, found where its use is checked.
         IReadOnlyList<string> problems =
         [
-            .. WorkflowFiles.Steps(parsed)
-                .SelectMany(entry => WorkflowFiles.OfStep(entry.Step, $"step '{entry.Path}'"))
-                .Where(named => named.IsSchema && TextOf(named.File) is not null)
-                .SelectMany(named => WorkflowFiles.SchemaProblems(named, TextOf(named.File)!)),
-            .. WorkflowValidator.Validate(parsed, hasCommitTemplate: false, TextOf),
+            .. resolution,
+            .. WorkflowFiles.Steps(resolved)
+                .SelectMany(entry => WorkflowFiles.OfStep(entry.Step, $"step '{entry.Path}'")
+                    .Select(named => (entry.Step.WorkflowOf, Named: named)))
+                .Where(schema => schema.Named.IsSchema && EmbeddedText(schema.WorkflowOf, schema.Named.File) is not null)
+                .SelectMany(schema => WorkflowFiles.SchemaProblems(schema.Named, EmbeddedText(schema.WorkflowOf, schema.Named.File)!)),
+            .. UseFilesOf(resolved),
+            .. WorkflowValidator.Validate(resolved, hasCommitTemplate: false, (named, owner) => EmbeddedText(owner, named)),
         ];
 
         if (problems.Count > 0)
@@ -155,8 +250,45 @@ public static class WorkflowTemplates
                 $"this build's own implementation workflow does not hold:{Environment.NewLine}{detail}");
         }
 
-        return parsed;
+        return resolved;
     }
+
+    /// <summary>
+    /// Why a file a use of the resolved definition names in the used workflow's directory
+    /// (<see cref="WorkflowFiles.OfUse"/>) is not one of this build's embedded set: each such file is a file of that
+    /// directory, as every file a step of it names is, and one that is missing makes the build's own set incomplete.
+    /// </summary>
+    private static IReadOnlyList<string> UseFilesOf(WorkflowDefinition resolved)
+        =>
+        [
+            .. WorkflowFiles.Steps(resolved)
+                .SelectMany(entry => WorkflowFiles.OfUse(entry.Step, entry.Path).Select(named => (entry.Path, entry.Step.Use!.Name, Named: named)))
+                .Where(file => EmbeddedText(file.Name, file.Named.File) is null)
+                .Select(file => $"'{file.Named.File}', {file.Named.What}, is not in this build's embedded set at that path under '{file.Name}'"),
+        ];
+
+    /// <summary>
+    /// The text of one embedded file of this workflow's set, named by the workflow that owns it: a file of the
+    /// workflow itself is named as it names it, and a file of a workflow it uses - the item pipeline's prompts and
+    /// schemas - carries that workflow's own place under this one (<see cref="WorkflowFiles.PlaceOf"/>); none for a
+    /// workflow outside it, which this build embeds nothing of.
+    /// </summary>
+    /// <param name="owner">The workflow the file belongs to: its path under the workflows root, or null for this workflow's own.</param>
+    /// <param name="named">The file, as the definition names it, relative to its owner's directory.</param>
+    private static string? EmbeddedText(string? owner, string named)
+        => WorkflowFiles.PlaceOf(ShippedWorkflowName, owner) switch
+        {
+            null => null,
+            "" => TextOf(named),
+            var place => TextOf($"{place}/{named}"),
+        };
+
+    /// <summary>
+    /// A workflow file's path under this workflow's own directory, as the resolver names it under the workflows root;
+    /// null where it is outside that directory, which this build embeds nothing of.
+    /// </summary>
+    private static string? Below(string path)
+        => path.StartsWith($"{ShippedWorkflowName}/", StringComparison.Ordinal) ? path[(ShippedWorkflowName.Length + 1)..] : null;
 
     /// <summary>
     /// Writes each file of the implementation workflow that is missing from its directory under
@@ -166,15 +298,17 @@ public static class WorkflowTemplates
     /// </summary>
     /// <param name="workflowsDirectory">The repository's workflows directory, under its harness directory.</param>
     /// <param name="fileSystem">Writes the files.</param>
+    /// <param name="pathComparison">How this machine compares paths, by which a use that closes a circle is found.</param>
     /// <returns>The files written, in the order they were, and how many were kept.</returns>
     /// <exception cref="HarnessException">
-    /// The repository's own definition does not read (<see cref="HarnessExit.ConfigInvalid"/>) or cannot be read
+    /// The repository's own definition does not read, or uses a workflow that does not resolve
+    /// (<see cref="HarnessExit.ConfigInvalid"/>, naming every problem), or cannot be read
     /// (<see cref="HarnessExit.Refused"/>), so which shipped files it names cannot be told, and nothing is written. A
     /// file could not be written (<see cref="HarnessExit.Refused"/>): the refusal names it and each file written before
     /// it, which stay, and init run again writes what is still missing. Or this build embeds a file of the set no more
     /// (<see cref="HarnessExit.InternalError"/>), and nothing is written.
     /// </exception>
-    public static ShippedWorkflowFiles EnsureShipped(string workflowsDirectory, IFileSystem fileSystem)
+    public static ShippedWorkflowFiles EnsureShipped(string workflowsDirectory, IFileSystem fileSystem, StringComparison pathComparison)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workflowsDirectory);
         ArgumentNullException.ThrowIfNull(fileSystem);
@@ -184,18 +318,28 @@ public static class WorkflowTemplates
         var directory = Path.Combine(workflowsDirectory, ShippedWorkflowName);
         var kept = Files.Count(file => fileSystem.FileExists(PathOf(directory, file)));
 
-        // Every shipped file there leaves nothing to write, whatever the definition names; only where one is missing is
-        // the definition asked which of them it wants back.
-        if (kept == Files.Count)
+        // A file of the old layout still there is asked of the definition, as is every shipped file's absence: one it
+        // names no more is read by nothing, and said.
+        var stale = Moved.Keys.Where(file => fileSystem.FileExists(PathOf(directory, file))).Order(StringComparer.Ordinal).ToList();
+
+        // Every shipped file there and none of the old layout leaves nothing to write or say, whatever the definition
+        // names; only then is the definition not asked.
+        if (kept == Files.Count && stale.Count == 0)
         {
-            return new ShippedWorkflowFiles([], kept);
+            return new ShippedWorkflowFiles([], kept, [], []);
         }
 
-        var missing = Wanted(directory, fileSystem).Where(file => !fileSystem.FileExists(PathOf(directory, file))).ToList();
+        var named = Wanted(directory, fileSystem, pathComparison);
+        var left = stale.Where(file => !named.Contains(file, StringComparer.Ordinal)).ToList();
+        var missing = Files.Where(file => named.Contains(file, StringComparer.Ordinal) && !fileSystem.FileExists(PathOf(directory, file))).ToList();
+
+        // A file the definition names that this tool shipped at that path before and ships elsewhere now is said, never
+        // written: this build's copy is written for the new layout.
+        var moved = named.Where(file => Moved.ContainsKey(file) && !fileSystem.FileExists(PathOf(directory, file))).ToList();
 
         if (missing.Count == 0)
         {
-            return new ShippedWorkflowFiles([], kept);
+            return new ShippedWorkflowFiles([], kept, moved, left);
         }
 
         // Read whole before anything is written, so a build with a broken set writes nothing rather
@@ -232,19 +376,22 @@ public static class WorkflowTemplates
             created.Add(Shown(file));
         }
 
-        return new ShippedWorkflowFiles(created, kept);
+        return new ShippedWorkflowFiles(created, kept, moved, left);
     }
 
     /// <summary>
-    /// The shipped files <c>init</c> may write into <paramref name="directory"/>: the whole set where the repository has
-    /// no definition of the workflow yet; where it has one, the shipped files that definition names, and no other - a
-    /// file a repository took out with its step is not written back.
+    /// The files the workflow in <paramref name="directory"/> names, which the shipped ones <c>init</c> may write are
+    /// taken from: the whole shipped set where the repository has no definition of the workflow yet; where it has one,
+    /// every file that definition's tree names, and no other - a file a repository took out with its step is not
+    /// written back.
     /// </summary>
     /// <exception cref="HarnessException">
-    /// The definition there does not read (<see cref="HarnessExit.ConfigInvalid"/>), or could not be read
+    /// The definition there does not read, or a workflow it uses does not resolve - one the repository has, and no
+    /// shipped one stands in for, that is not there, does not read, could not be read or closes a circle
+    /// (<see cref="HarnessExit.ConfigInvalid"/>, naming every problem); or the definition could not be read
     /// (<see cref="HarnessExit.Refused"/>): which files it names cannot be told, and none is written in its place.
     /// </exception>
-    private static IReadOnlyList<string> Wanted(string directory, IFileSystem fileSystem)
+    private static IReadOnlyList<string> Wanted(string directory, IFileSystem fileSystem, StringComparison pathComparison)
     {
         var definition = PathOf(directory, $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}");
 
@@ -267,11 +414,11 @@ public static class WorkflowTemplates
             throw new HarnessException(HarnessExit.Refused, $"{unread} could not be read ({ex.Message.TrimEnd('.')}), {after}.", ex);
         }
 
+        WorkflowDefinition parsed;
+
         try
         {
-            var named = WorkflowFiles.All(WorkflowFileParser.Parse(definition, text));
-
-            return [.. Files.Where(file => named.Contains(file, StringComparer.Ordinal))];
+            parsed = WorkflowFileParser.Parse(definition, text);
         }
         catch (HarnessException ex)
         {
@@ -280,6 +427,53 @@ public static class WorkflowTemplates
                 $"{unread} does not read, {after} ('{ToolPackage.Command} {WorkflowValidationService.CommandName} {ShippedWorkflowName}' says the same):{Environment.NewLine}{ex.Message}",
                 ex);
         }
+
+        // The definition resolved as a run reads it, its uses included: what a repository's own definition names is the
+        // whole tree it runs, a used workflow's files among them - read from the repository's own workflows directory
+        // as a run resolves them, and where a shipped used workflow's file is not there, from the embedded copy this
+        // init is about to write, so a pipeline the repository took out whole is written back whole in one run. A
+        // remote use names no file of the repository's, and is left as it is written.
+        var workflows = Path.GetDirectoryName(directory.TrimEnd(Path.DirectorySeparatorChar))!;
+        var named = new WorkflowNamedFiles(fileSystem, pathComparison);
+
+        string? ReadUnder(string relative)
+        {
+            var path = Path.Combine([workflows, .. relative.Split('/')]);
+            var shown = $"{HarnessLayout.WorkflowsDirectoryRelative}/{relative}";
+
+            if (!named.IsFile(path, out var unlooked))
+            {
+                return unlooked is not null
+                    ? throw new HarnessException(HarnessExit.ConfigInvalid, $"{shown} could not be looked at: {unlooked}")
+                    : Below(relative) is { } shipped && Files.Contains(shipped, StringComparer.Ordinal) ? TextOf(shipped) : null;
+            }
+
+            try
+            {
+                return fileSystem.ReadAllText(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new HarnessException(HarnessExit.ConfigInvalid, $"{shown} could not be read: {ex.Message}", ex);
+            }
+        }
+
+        // Local reads only: no fetch is awaited, so the task is done where it is made and the wait is only that.
+        var (resolved, problems, _) = WorkflowResolver.ResolveAsync(
+            parsed,
+            ShippedWorkflowName,
+            new WorkflowResolution(ReadUnder, PathComparison: pathComparison, RemoteLeftAsWritten: true)).GetAwaiter().GetResult();
+
+        if (problems.Count > 0)
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"{unread} uses what does not resolve, so which shipped files it names cannot be told, and none was written; run '{ToolPackage.Command} init' again once it does "
+                    + $"('{ToolPackage.Command} {WorkflowValidationService.CommandName} {ShippedWorkflowName}' says the same):{Environment.NewLine}"
+                    + string.Join(Environment.NewLine, problems.Select(problem => "  - " + problem)));
+        }
+
+        return WorkflowFiles.AllUnder(resolved).Files;
     }
 
     /// <summary>Where <paramref name="file"/> of the implementation workflow is, under its <paramref name="directory"/>.</summary>

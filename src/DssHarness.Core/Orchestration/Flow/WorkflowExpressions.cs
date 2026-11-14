@@ -39,7 +39,7 @@ public static class WorkflowExpressions
     public static readonly IReadOnlyList<string> ReservedRoots =
     [
         "input", "param", "run", "carried", "previous", "source", "issue", "item", "it", "index", "iteration", "visit",
-        "recover", "skill", "recommendations", "update", "piece", "status", "question", "empty", "any",
+        "recover", "skill", "recommendations", "text", "update", "piece", "status", "question", "empty", "any",
         .. RunFacts,
     ];
 

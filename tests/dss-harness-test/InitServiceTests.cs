@@ -204,6 +204,79 @@ public sealed class InitServiceTests
     }
 
     /// <summary>
+    /// A repository on the layout before the item pipeline was a workflow of its own, whose definition names a file this
+    /// tool ships elsewhere now, is told why init does not bring it back - one note for each such file not there - and
+    /// nothing is written at that path, for this build's copy is written for the new layout.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_SaysWhyAFileTheOldLayoutNames_IsNotBroughtBack()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Directory.Delete(WorkflowFile(temp, "item-pipeline"), recursive: true);
+        await File.WriteAllTextAsync(
+            WorkflowFile(temp, $"{name}.yml"),
+            $"name: {name}\nsteps:\n  - name: implement\n    type: reason\n    agent: implementer\n    prompt: prompts/implement.md\n    outputs: schemas/implement.schema.json\n",
+            token);
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded, outcome.Message);
+        Assert.Equal(
+            [
+                .. new[] { "agents/implementer.md", "prompts/implement.md", "schemas/implement.schema.json" }.Select(file => $"note    {WorkflowTemplates.MovedNote(file)}"),
+                $"kept    .harness-config/workflows/{name}/ ({WorkflowTemplates.Files.Count - WorkflowTemplates.Files.Count(file => file.StartsWith("item-pipeline/", StringComparison.Ordinal))} file(s) already present)",
+            ],
+            WorkflowLines(outcome.Details!));
+        Assert.Equal(
+            $".harness-config/workflows/{name}/prompts/implement.md is named by the repository's own definition of the {name} workflow and is not there, and init brings it "
+                + $"back no more: this tool ships it as .harness-config/workflows/{name}/item-pipeline/prompts/implement.md since the item pipeline became a workflow of its own, "
+                + $"written for that layout; 'dssharness export-workflow {name} --shipped --to <dir>' gives the whole of it to compare with",
+            WorkflowTemplates.MovedNote("prompts/implement.md"));
+        Assert.False(File.Exists(WorkflowFile(temp, "prompts/implement.md")));
+    }
+
+    /// <summary>
+    /// A file of the old layout still there - a prompt the repository wrote its own before the item pipeline became a
+    /// workflow of its own - that the definition reads no more is said by init, naming the file read now, and left as it
+    /// is: a change made to it reaches no step, and is carried over rather than lost unseen.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_SaysAFileOfTheOldLayoutTheDefinitionReadsNoMore()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(WorkflowFile(temp, "prompts/implement.md"))!);
+        await File.WriteAllTextAsync(WorkflowFile(temp, "prompts/implement.md"), "the repository's own words\n", token);
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded, outcome.Message);
+        Assert.Equal(
+            [
+                $"note    {WorkflowTemplates.LeftNote("prompts/implement.md")}",
+                $"kept    .harness-config/workflows/{name}/ ({WorkflowTemplates.Files.Count} file(s) already present)",
+            ],
+            WorkflowLines(outcome.Details!));
+        Assert.Equal(
+            $".harness-config/workflows/{name}/prompts/implement.md is of the layout before the item pipeline became a workflow of its own, and the repository's own "
+                + $"definition of the {name} workflow reads it no more - it reads .harness-config/workflows/{name}/item-pipeline/prompts/implement.md - so a change "
+                + "made to it reaches no step: carry what it says over to the file read now, then take it out",
+            WorkflowTemplates.LeftNote("prompts/implement.md"));
+        Assert.Equal("the repository's own words\n", await File.ReadAllTextAsync(WorkflowFile(temp, "prompts/implement.md"), token));
+    }
+
+    /// <summary>
     /// A repository's own definition that does not read, where a shipped file is missing, refuses init as configuration
     /// that does not hold (12), naming the definition and every problem in it: which files it names cannot be told, so
     /// the missing file is not written in its place. With every shipped file there, nothing is asked of the definition.
@@ -328,7 +401,7 @@ public sealed class InitServiceTests
         var workflows = temp.Combine(".harness-config", "workflows");
 
         var refusal = Assert.Throws<HarnessException>(
-            () => WorkflowTemplates.EnsureShipped(workflows, new WillNotWrite(harness.FileSystem, WorkflowFile(temp, first))));
+            () => WorkflowTemplates.EnsureShipped(workflows, new WillNotWrite(harness.FileSystem, WorkflowFile(temp, first)), harness.Platform.PathComparison));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.Equal(
@@ -351,10 +424,12 @@ public sealed class InitServiceTests
 
         Assert.Contains(
             $"Where `config.json` declares `{name}`, `init` writes each of its files that is missing - the whole set where the repository "
-                + "has no definition of it yet, and where it has one only the shipped files that definition names, so a file taken out with "
-                + "its step stays out - and keeps each one that is there, "
+                + "has no definition of it yet, and where it has one only the shipped files that definition names, the workflows it uses "
+                + "among them - a shipped one taken out whole read from the copy `init` writes, so it comes back whole in one run - so a "
+                + "file taken out with its step stays out - and keeps each one that is there, "
                 + "whatever it holds, so an `init` that stopped part way is finished by the next - where a file is missing and the definition "
-                + "there does not read, init refuses (12; 13 where it cannot be read), since which files it names cannot be told; nothing that "
+                + "there does not read, or uses a workflow of the repository's that does not resolve, init refuses (12, naming each problem; "
+                + "13 where it cannot be read), since which files it names cannot be told; nothing that "
                 + "exists is ever overwritten, "
                 + $"and a config that does not declare it gets none of it. A config written before workflows declares none: add `\"workflows\": [\"{name}\"]` "
                 + "and run `init` to have it.",
@@ -365,10 +440,32 @@ public sealed class InitServiceTests
                 + "repository has no definition of it yet, and where it has one only the shipped files that definition names, so a file "
                 + "taken out with its step stays out - and keeps each one that is there, "
                 + "whatever it holds, saying how many it kept: an init that stopped part way is finished by the next, and a file a repository "
-                + "edited is never written over. A configuration that does not declare it gets none of it. A file the disk will not write "
-                + $"refuses init ({HarnessExit.Refused}), naming the files written before it, which stay; and where a file is missing and the "
-                + $"repository's own definition does not read, init refuses ({HarnessExit.ConfigInvalid}; {HarnessExit.Refused} where it cannot be "
+                + "edited is never written over. A configuration that does not declare it gets none of it. The files a definition names are "
+                + $"those of the tree it runs, its uses resolved as a run resolves them (`{nameof(WorkflowResolver)}`, a remote use left as "
+                + "written, for it names no file of the repository's), and a shipped used workflow's yml the repository has not got is read "
+                + "from the embedded copy init is about to write, so a pipeline taken out whole comes back whole in one run. A file the disk "
+                + $"will not write refuses init ({HarnessExit.Refused}), naming the files written before it, which stay; and where a file is "
+                + "missing and the repository's own definition does not read, or uses a workflow of the repository's that does not resolve, "
+                + $"init refuses ({HarnessExit.ConfigInvalid}, naming each problem; {HarnessExit.Refused} where it cannot be "
                 + "read) and writes none, since which files it names cannot be told.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+
+        // A file the old layout names that this tool ships elsewhere now is said, never brought back.
+        Assert.Contains(
+            "A file a repository's own definition names that this tool ships elsewhere now - one of the item pipeline's, moved into its own folder, which an "
+                + "older release shipped beside the definition - is not brought back, for this build's copy is written for the new layout, and `init` says so in a note, "
+                + "naming where it ships it now. A file of that older layout still there that the definition reads no more - a prompt the repository "
+                + "made its own before the move - is read by nothing, so a change made to it reaches no step, and `init` says so in a note, naming the "
+                + "file read now.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"A file the repository's own definition names that this tool ships elsewhere now (`{nameof(WorkflowTemplates)}.{nameof(WorkflowTemplates.Moved)}`, the item "
+                + "pipeline's files an older release shipped beside the definition, read forever and never written) is not brought back, for this build's copy is written "
+                + "for the new layout, and init says so in a note naming where it ships it now; and a file of the old layout still there that the "
+                + $"definition names no more (`{nameof(ShippedWorkflowFiles)}.{nameof(ShippedWorkflowFiles.Left)}`) is read by nothing, so a change a "
+                + "repository made to it reaches no step, and init says so in a note naming the file read now.",
             Prose.Document("docs", "architecture.md"),
             StringComparison.Ordinal);
     }

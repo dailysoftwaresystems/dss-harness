@@ -8,7 +8,7 @@ The whole logs are under `{source.runDirectory}`. This is visit {visit} of this 
 
 Each entry names a leg, the phase that did not pass - the build, or the tests - and the last lines that phase printed.
 
-How the engine runs the tests, leg by leg: {orient.tests}
+How the engine runs the tests, leg by leg: {input.orient.tests}
 
 Every red result the run knows of, those from before its changes among them:
 

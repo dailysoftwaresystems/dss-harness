@@ -50,7 +50,7 @@ public sealed class ConfigKeysGuardTests
         Assert.Equal("takes a step's keys", ConfigKeys.TakesKeysOf(typeof(WorkflowStep)));
 
         Assert.Equal(
-            "the group's own steps; each takes a step's keys",
+            "the group's own steps; each takes a step's keys - a step that says 'use' takes none, for the workflow it uses brings its own",
             Assert.Single(WorkflowStepTypes.Group, key => key.Name == "steps").Meaning);
 
         Assert.Equal(

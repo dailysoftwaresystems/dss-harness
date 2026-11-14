@@ -99,7 +99,7 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.True(report.Passed);
-        Assert.Equal($"ok {Shown(Default)} (82 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
+        Assert.Equal($"ok {Shown(Default)} (82 steps, 48 recovering, 48 reasoning)", report.Lines[0]);
         Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at xhigh", report.Lines);
         Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
 
@@ -390,7 +390,8 @@ public sealed class WorkflowValidationServiceTests
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
 
-        Assert.Equal("""{"workflows":[],"passed":false}""", JsonSerializer.Serialize(document.RootElement));
+        // A check given no workflow cache names none; one given the cache names it on every report (RemoteWorkflowUseTests).
+        Assert.Equal("""{"workflows":[],"passed":false,"cache":null}""", JsonSerializer.Serialize(document.RootElement));
     }
 
     /// <summary>
@@ -423,7 +424,7 @@ public sealed class WorkflowValidationServiceTests
 
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
-        Assert.Equal($"ok {Shown(Default)} (82 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
+        Assert.Equal($"ok {Shown(Default)} (82 steps, 48 recovering, 48 reasoning)", report.Lines[0]);
         Assert.All(
             report.Lines.Skip(1).TakeWhile(line => !line.StartsWith(Shown("small"), StringComparison.Ordinal)),
             line => Assert.True(
@@ -431,8 +432,9 @@ public sealed class WorkflowValidationServiceTests
                     || line.StartsWith("advisor ", StringComparison.Ordinal)
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
                     || line.StartsWith("prices of", StringComparison.Ordinal)
-                    || line.StartsWith("no file under", StringComparison.Ordinal),
-                $"a level, price or missing-key line: {line}"));
+                    || line.StartsWith("no file under", StringComparison.Ordinal)
+                    || IsResolution(line),
+                $"a level, price, resolution or missing-key line: {line}"));
         Assert.Equal(
             [
                 $"{Shown("small")}: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
@@ -445,7 +447,8 @@ public sealed class WorkflowValidationServiceTests
                     || line.StartsWith("advisor ", StringComparison.Ordinal)
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
                     || line.StartsWith("prices of", StringComparison.Ordinal)
-                    || line.StartsWith("no file under", StringComparison.Ordinal)));
+                    || line.StartsWith("no file under", StringComparison.Ordinal)
+                    || IsResolution(line)));
         Assert.Equal([true, false], report.Workflows.Select(workflow => workflow.Holds));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
@@ -831,7 +834,7 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository, held).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.Equal($"{Shown("small")} could not be read: {Held.Why}", report.Lines[0]);
-        Assert.Equal($"ok {Shown(Default)} (82 steps, 46 recovering, 46 reasoning)", report.Lines[1]);
+        Assert.Equal($"ok {Shown(Default)} (82 steps, 48 recovering, 48 reasoning)", report.Lines[1]);
         Assert.All(
             report.Lines.Skip(2),
             line => Assert.True(
@@ -839,8 +842,9 @@ public sealed class WorkflowValidationServiceTests
                     || line.StartsWith("advisor ", StringComparison.Ordinal)
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
                     || line.StartsWith("prices of", StringComparison.Ordinal)
-                    || line.StartsWith("no file under", StringComparison.Ordinal),
-                $"a level, price or missing-key line: {line}"));
+                    || line.StartsWith("no file under", StringComparison.Ordinal)
+                    || IsResolution(line),
+                $"a level, price, resolution or missing-key line: {line}"));
 
         // Z.AI's key alone: Anthropic's models are reached through claude-code, which reads none.
         Assert.Equal(1, report.Lines.Count(line => line.StartsWith("no file under", StringComparison.Ordinal)));
@@ -1165,14 +1169,14 @@ public sealed class WorkflowValidationServiceTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own recommendations.md, read live each time it is given so a change holds from the next question on, and a sentence saying none was written where the folder has no one - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
+            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's - the bar the repository wrote, the orchestrator's recommendations file or its folder's own recommendations.md, read live each time it is given so a change holds from the next question on, and a sentence saying none was written where the folder has no one - and {text.<name>} beside it, a workflow's texts (texts:): each name a markdown file of its own directory, read live as the bar is, the used workflow's own first where the reading step is one of its and the run's where none between them declares the name - {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
                 + "{update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and {piece.<name>} in a step of "
                 + "the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's body, which the "
                 + "engine fills and no agent reads, reads what a template key reads and no skill.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
-            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote, read live each time it is given - `{text.<name>}` beside it, a workflow's texts, and `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
                 + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
                 + "work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's `body`, which the engine "
                 + "fills and no agent reads, reads what a template key reads and no skill.",
@@ -1510,6 +1514,253 @@ public sealed class WorkflowValidationServiceTests
             => Path.GetFileName(path) == name ? throw new UnauthorizedAccessException("the disk would not say.") : base.KindOf(path);
     }
 
+    /// <summary>
+    /// A workflow that uses another is checked as the whole resolved tree: a required input of the used one that the
+    /// use names none for is the caller's problem, said under its own name.
+    /// </summary>
+    [Fact]
+    public async Task AWorkflowThatUsesAnother_IsCheckedResolved_AndSaysWhatItReadAndAppliesNot()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+        var pipeline = Path.Combine(directory, "pipeline");
+
+        Directory.CreateDirectory(pipeline);
+        Directory.CreateDirectory(Path.Combine(pipeline, "prompts"));
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
+        File.WriteAllText(Path.Combine(pipeline, "pipeline.yml"), "name: pipeline\ninputs:\n  - name: item\n    kind: value\n    required: true\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
+        File.WriteAllText(Path.Combine(pipeline, "prompts", "implement.md"), "Do the work.\n");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.False(report.Passed);
+        Assert.Contains(
+            $"{Shown("flow")}: step 'items' names no 'item' in with, and the workflow 'flow/pipeline' it uses requires the input",
+            report.Workflows[0].Lines);
+    }
+
+    /// <summary>
+    /// The same use, its input filled, holds and says its resolution: the source, the called workflow's name, its input
+    /// count and its fingerprint's first twelve, beside the budget it declares that no step applies.
+    /// </summary>
+    [Fact]
+    public async Task AUseThatHolds_SaysItsResolution_AndWhatItAppliesNot()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+        var pipeline = Path.Combine(directory, "pipeline");
+
+        Directory.CreateDirectory(pipeline);
+        Directory.CreateDirectory(Path.Combine(pipeline, "prompts"));
+        Directory.CreateDirectory(Path.Combine(pipeline, "agents"));
+        Directory.CreateDirectory(Path.Combine(pipeline, "schemas"));
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    with:\n      item: '\"the work\"'\n");
+        File.WriteAllText(Path.Combine(pipeline, "pipeline.yml"), "name: pipeline\nbudget:\n  usd: 5\ninputs:\n  - name: item\n    kind: value\nsteps:\n  - name: implement\n    type: reason\n    agent: worker\n    prompt: prompts/implement.md\n    outputs: schemas/implement.json\n");
+        File.WriteAllText(Path.Combine(pipeline, "prompts", "implement.md"), "Do {input.item}.\n");
+        File.WriteAllText(Path.Combine(pipeline, "agents", "worker.md"), "---\nname: worker\ndescription: does the work\n---\nYou do the work.\n");
+        File.WriteAllText(Path.Combine(pipeline, "schemas", "implement.json"), """{ "type": "object", "additionalProperties": false, "properties": { "done": { "type": "boolean" } }, "required": ["done"] }""");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.True(report.Passed);
+
+        var resolution = Assert.Single(report.Workflows[0].Lines.Where(line => line.StartsWith("'items' uses", StringComparison.Ordinal)).ToList());
+
+        Assert.StartsWith("'items' uses ./pipeline/pipeline.yml -> flow/pipeline (1 input, fingerprint ", resolution, StringComparison.Ordinal);
+        Assert.EndsWith("; applies none of the budget it declares", resolution, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A used workflow governing itself says the keys it applies apart from the ones it carries that nothing applies
+    /// yet - its budget and reporter - and the ones a run alone has: never "governed by its own budget".
+    /// </summary>
+    [Fact]
+    public async Task AUseThatGovernsItself_SaysWhatItAppliesApartFromWhatNothingAppliesYet()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+        var pipeline = Path.Combine(directory, "pipeline");
+
+        Directory.CreateDirectory(pipeline);
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    useParentLimits: false\n");
+        File.WriteAllText(Path.Combine(pipeline, "pipeline.yml"), "name: pipeline\nbudget:\n  usd: 5\nmaxRetries: 2\npushCheckpoints: false\nsteps:\n  - name: look\n    type: orient\n");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.True(report.Passed);
+
+        var resolution = Assert.Single(report.Workflows[0].Lines.Where(IsResolution).ToList());
+
+        Assert.StartsWith("'items' uses ./pipeline/pipeline.yml -> flow/pipeline (0 inputs, fingerprint ", resolution, StringComparison.Ordinal);
+        Assert.EndsWith("); useParentLimits: false, governed by its own limits; applies none of the budget, pushCheckpoints it declares", resolution, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every file a use names in the workflow it uses is checked there, as a step of it names one: each text the used
+    /// workflow declares, the file a file-kind input is filled with by its default as much as by the use's with, and
+    /// the advisor's and reporter's files of a use that governs itself - each said under the used workflow's own name.
+    /// </summary>
+    [Fact]
+    public async Task TheFilesAUseNamesInTheWorkflowItUses_AreEachCheckedThere()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+        var pipeline = Path.Combine(directory, "pipeline");
+
+        Directory.CreateDirectory(pipeline);
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n    useParentLimits: false\n    with:\n      brief: notes/brief.md\n");
+        File.WriteAllText(
+            Path.Combine(pipeline, "pipeline.yml"),
+            """
+            name: pipeline
+            texts:
+              closure: closure.md
+            inputs:
+              - name: brief
+                kind: file
+              - name: guide
+                kind: file
+                default: notes/guide.md
+            advisor:
+              agent: counsel
+              prompt: prompts/counsel.md
+            reporter:
+              agent: teller
+              statusPrompt: prompts/status.md
+              askPrompt: prompts/ask.md
+            steps:
+              - name: look
+                type: orient
+            """);
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+        const string At = ".harness-config/workflows/flow/pipeline";
+
+        Assert.Equal(
+            [
+                $"{Shown("flow")}: 'notes/brief.md', the input 'brief' of 'flow/pipeline', as step 'items' fills it, is not at '{At}/notes/brief.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'notes/guide.md', the input 'guide' of 'flow/pipeline', by its default, is not at '{At}/notes/guide.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'closure.md', the text 'closure' of 'flow/pipeline', is not at '{At}/closure.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'agents/counsel.md', the agent the advisor of 'flow/pipeline' runs, is not at '{At}/agents/counsel.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'prompts/counsel.md', the advisor of 'flow/pipeline''s prompt, is not at '{At}/prompts/counsel.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'agents/teller.md', the agent the reporter of 'flow/pipeline''s status prompt runs, is not at '{At}/agents/teller.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'prompts/status.md', the reporter of 'flow/pipeline''s status prompt's prompt, is not at '{At}/prompts/status.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'agents/teller.md', the agent the reporter of 'flow/pipeline''s ask prompt runs, is not at '{At}/agents/teller.md'; write it there, beside the definition that names it",
+                $"{Shown("flow")}: 'prompts/ask.md', the reporter of 'flow/pipeline''s ask prompt's prompt, is not at '{At}/prompts/ask.md'; write it there, beside the definition that names it",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A used workflow's recovery is checked as every step a run can reach is: a run step of it whose runner writes the
+    /// tree is held to an agent's worktree (V24), and the files its steps name are found in the used workflow's directory.
+    /// </summary>
+    [Fact]
+    public async Task AUsedWorkflowsRecovery_IsCheckedAsTheFlowsSteps()
+    {
+        using var repository = await RepositoryAsync(
+            new HarnessConfig
+            {
+                Workflows = ["flow"],
+                PredefinedRunners = new Dictionary<string, RunnerConfig>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["formatter"] = new RunnerConfig
+                    {
+                        WritesTree = true,
+                        Phases = [new RunnerPhase { Name = "format", Command = ["tool"] }],
+                    },
+                },
+            });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+        var pipeline = Path.Combine(directory, "pipeline");
+
+        Directory.CreateDirectory(pipeline);
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
+        File.WriteAllText(
+            Path.Combine(pipeline, "pipeline.yml"),
+            """
+            name: pipeline
+            steps:
+              - name: look
+                type: orient
+                onFailure: recover
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: format
+                  type: run
+                  runner: formatter
+                - name: body
+                  type: pull-request
+                  title: a fix
+                  body: notes/body.md
+            """);
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                $"{Shown("flow")}: step 'items.recover.format' runs 'formatter', which writes the tree (writesTree), on the main tree: the run reads its definition there and folds into it, so a runner that writes works in an agent's worktree. Name the create-agent step with 'in'",
+                $"{Shown("flow")}: 'notes/body.md', step 'items.recover.body''s body, is not at '.harness-config/workflows/flow/pipeline/notes/body.md'; write it there, beside the definition that names it",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A used workflow is held to the rule the run's own is: its directory, once every link along it is followed, is the
+    /// repository's own, so that what a reviewer reads there is what the workflow runs. Skipped where this machine does
+    /// not let this user make a link to a directory.
+    /// </summary>
+    [Fact]
+    public async Task AUsedWorkflowLinkingOutOfTheWorkflowsDirectory_IsRefused()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        using var elsewhere = new TempDirectory();
+        var workflows = Path.Combine(repository.Path, ".harness-config", "workflows");
+
+        Directory.CreateDirectory(Path.Combine(workflows, "flow"));
+        File.WriteAllText(Path.Combine(workflows, "flow", "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ../shared/shared.yml\n");
+        elsewhere.WriteFile("shared.yml", "name: shared\nsteps:\n  - name: look\n    type: orient\n");
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(Path.Combine(workflows, "shared"), elsewhere.Path));
+
+        var report = await Service(repository).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+        var fileSystem = repository.Harness.FileSystem;
+
+        Assert.Equal(
+            [
+                $"{Shown("flow")}: step 'items' uses '../shared/shared.yml', which could not be read: .harness-config/workflows/shared/shared.yml: its directory leads to "
+                    + $"'{Path.TrimEndingDirectorySeparator(fileSystem.ResolveLinks(elsewhere.Path))}', which is outside '{Path.TrimEndingDirectorySeparator(fileSystem.ResolveLinks(workflows))}'; "
+                    + "a workflow's directory is the repository's own, so that what a reviewer reads there is what the workflow runs",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A used workflow's file the file system would not look at is said so, with why, and never as a file that is not
+    /// there: the person is not sent to write one that may be there.
+    /// </summary>
+    [Fact]
+    public async Task AUsedWorkflowThatCouldNotBeLookedAt_IsSaidSo_NeverAsNotThere()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["flow"] });
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "flow");
+
+        Directory.CreateDirectory(Path.Combine(directory, "pipeline"));
+        File.WriteAllText(Path.Combine(directory, "flow.yml"), "name: flow\nsteps:\n  - name: items\n    use: ./pipeline/pipeline.yml\n");
+        File.WriteAllText(Path.Combine(directory, "pipeline", "pipeline.yml"), "name: pipeline\nsteps:\n  - name: look\n    type: orient\n");
+
+        var report = await Service(repository, new Unlooked(repository.Harness.FileSystem, "pipeline.yml")).CheckAsync(repository.Path, "flow", TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [$"{Shown("flow")}: step 'items' uses './pipeline/pipeline.yml', which could not be read: .harness-config/workflows/flow/pipeline/pipeline.yml could not be looked at: the disk would not say"],
+            report.Lines);
+    }
+
+    /// <summary>Whether a line under the one that says a definition holds is a use's resolution: <c>'&lt;step&gt;' uses </c>.</summary>
+    private static bool IsResolution(string line)
+        => line.StartsWith('\'') && line.IndexOf("' uses ", StringComparison.Ordinal) is var end && end > 1 && !line[1..end].Contains(' ', StringComparison.Ordinal);
+
     private static WorkflowValidationService Service(Repository repository, IFileSystem? fileSystem = null)
         => new(
             repository.Harness.ContextLoader,
@@ -1588,7 +1839,7 @@ public sealed class WorkflowValidationServiceTests
 
         if ((withAgents.Workflows ?? []).Contains(Default))
         {
-            WorkflowTemplates.EnsureShipped(Path.Combine(temp.Path, ".harness-config", "workflows"), harness.FileSystem);
+            WorkflowTemplates.EnsureShipped(Path.Combine(temp.Path, ".harness-config", "workflows"), harness.FileSystem, harness.Platform.PathComparison);
         }
 
         return new Repository(harness, temp);

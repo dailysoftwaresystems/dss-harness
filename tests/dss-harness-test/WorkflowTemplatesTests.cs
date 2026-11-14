@@ -15,6 +15,9 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class WorkflowTemplatesTests
 {
+    /// <summary>How this machine compares paths, as init hands it to the write-back of the shipped files.</summary>
+    private static StringComparison PathComparison => new HostPlatform().PathComparison;
+
     /// <summary>
     /// This build's own implementation workflow holds: parsed and validated against every rule a repository's is held to -
     /// a build whose own workflow does not hold is a build that says so, never one that writes a definition it refuses.
@@ -26,11 +29,61 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
         Assert.Equal(82, Count(definition.Steps));
-        Assert.Equal(46, Count(definition.Recover!.Steps));
-        Assert.Equal(46, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(48, Count(definition.Recover!.Steps));
+        Assert.Equal(48, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "affectedTests" && input.Default == "off");
         Assert.Equal(["on", "off"], definition.Inputs.Single(input => input.Name == "affectedTests").Options);
+    }
+
+    /// <summary>
+    /// The item pipeline is written once: the two places that build a work item - the rounds and the recovery - both
+    /// use the one workflow, and the flow's own file holds no copy of its steps. The recovery's instance holds
+    /// <c>redo</c> and <c>undo</c> too, held off there by the pipeline's <c>alternatives</c> input, which is why the
+    /// recovery counts 48 where it counted 46 and the reason steps with it.
+    /// </summary>
+    [Fact]
+    public void TheItemPipeline_IsOneWorkflow_UsedByTheRoundsAndTheRecoveryAlike()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+        var items = StepAt(definition.Steps, "rounds", "items");
+        var remedies = StepAt(definition.Recover!.Steps, "remedies");
+
+        Assert.NotNull(items.Use);
+        Assert.NotNull(remedies.Use);
+        Assert.Equal("./item-pipeline/item-pipeline.yml", items.Use.Source);
+        Assert.Equal("./item-pipeline/item-pipeline.yml", remedies.Use.Source);
+        Assert.Equal("implementation/item-pipeline", items.Use.Name);
+        Assert.Equal("implementation/item-pipeline", remedies.Use.Name);
+
+        // Each use fills the pipeline's inputs as the place it builds at reads them: the rounds with the implement
+        // prompt, its alternatives held ready and failures given to the run's recovery; the recovery with the remedy
+        // prompt, reading its own diagnosis, its alternatives held off and its failures asked, for it cannot call
+        // itself.
+        Assert.Equal("prompts/implement.md", items.With["implementPrompt"]);
+        Assert.Equal("prompts/remedy.md", remedies.With["implementPrompt"]);
+        Assert.Equal("recover", items.With["failTo"]);
+        Assert.Equal("pause", remedies.With["failTo"]);
+        Assert.Equal("true", items.With["alternatives"]);
+        Assert.Equal("false", remedies.With["alternatives"]);
+        Assert.DoesNotContain("diagnose", items.With.Keys);
+        Assert.Equal("diagnose.latest", remedies.With["diagnose"]);
+
+        // The rounds hand the pipeline the plan's summary their builder reads; the recovery hands it none, for its
+        // remedy reads the diagnosis and a failure it puts right may come before anything is planned - a red build,
+        // an issue the request's triage met that was there before the run - so the pipeline requires no plan of a use.
+        Assert.Equal("planning.plan.latest.summary", items.With["planSummary"]);
+        Assert.DoesNotContain("planSummary", remedies.With.Keys);
+        Assert.False(items.Use.Inputs.Single(input => input.Name == "planSummary").Required);
+
+        // The two uses name the one file: its fingerprint is one, and the steps the flow holds are the pipeline's,
+        // placed at each use.
+        Assert.Equal(items.Use.Fingerprint, remedies.Use.Fingerprint);
+        Assert.Equal([.. items.Steps.Select(step => step.Name)], [.. remedies.Steps.Select(step => step.Name)]);
+
+        // The recovery's redo and undo never run there: the pipeline's own gate holds them off.
+        Assert.Equal("input.alternatives", StepAt(remedies.Steps, "redo").When);
+        Assert.Null(StepAt(definition.Steps, "rounds", "items", "redo").DependsOn.SingleOrDefault());
     }
 
     /// <summary>
@@ -175,12 +228,14 @@ public sealed class WorkflowTemplatesTests
         diagnosis["properties"]!.AsObject().Remove("choices");
         required.RemoveAt(required.Select(name => name!.GetValue<string>()).ToList().IndexOf("choices"));
 
-        var problems = WorkflowValidator.Validate(definition, hasCommitTemplate: false, file => file switch
-        {
-            "schemas/diagnosis.schema.json" => diagnosis.ToJsonString(),
-            "prompts/diagnose.md" => prompt + "{previous.course}\n",
-            _ => WorkflowTemplates.TextOf(file),
-        });
+        var problems = WorkflowValidator.Validate(definition, hasCommitTemplate: false, (file, owner) => owner is null
+            ? file switch
+            {
+                "schemas/diagnosis.schema.json" => diagnosis.ToJsonString(),
+                "prompts/diagnose.md" => prompt + "{previous.course}\n",
+                _ => WorkflowTemplates.TextOf(file),
+            }
+            : null);
 
         Assert.Equal(
             [
@@ -242,20 +297,22 @@ public sealed class WorkflowTemplatesTests
         var name = WorkflowTemplates.ShippedWorkflowName;
         var workflows = temp.Combine("tree", ".harness-config", "workflows");
 
-        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
 
         Assert.Equal([.. WorkflowTemplates.Files.Select(file => $".harness-config/workflows/{name}/{file}")], written.Created);
         Assert.Equal(0, written.Kept);
         Assert.Equal(WorkflowTemplates.Files.Count, Directory.GetFiles(workflows, "*", SearchOption.AllDirectories).Length);
 
         File.Delete(Path.Combine(workflows, name, "recommendations.md"));
+        File.Delete(Path.Combine(workflows, name, "closure.md"));
         File.WriteAllText(Path.Combine(workflows, name, "agents", "advisor.md"), "edited\n");
 
-        var finished = WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        var finished = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
 
-        Assert.Equal([$".harness-config/workflows/{name}/recommendations.md"], finished.Created);
-        Assert.Equal(WorkflowTemplates.Files.Count - 1, finished.Kept);
+        Assert.Equal([$".harness-config/workflows/{name}/recommendations.md", $".harness-config/workflows/{name}/closure.md"], finished.Created);
+        Assert.Equal(WorkflowTemplates.Files.Count - 2, finished.Kept);
         Assert.Equal(WorkflowTemplates.TextOf("recommendations.md"), File.ReadAllText(Path.Combine(workflows, name, "recommendations.md")));
+        Assert.Equal(WorkflowTemplates.TextOf("closure.md"), File.ReadAllText(Path.Combine(workflows, name, "closure.md")));
         Assert.Equal("edited\n", File.ReadAllText(Path.Combine(workflows, name, "agents", "advisor.md")));
     }
 
@@ -273,7 +330,7 @@ public sealed class WorkflowTemplatesTests
         var workflows = temp.Combine("tree", ".harness-config", "workflows");
         var directory = Path.Combine(workflows, name);
 
-        WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
 
         // The repository keeps one step of the shipped flow, and its files; every other file is gone.
         foreach (var file in Directory.GetFiles(directory, "*", SearchOption.AllDirectories))
@@ -293,7 +350,7 @@ public sealed class WorkflowTemplatesTests
                 outputs: schemas/triage.schema.json
             """);
 
-        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem);
+        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
 
         Assert.Equal(
             [
@@ -309,10 +366,91 @@ public sealed class WorkflowTemplatesTests
         File.WriteAllText(Path.Combine(directory, $"{name}.yml"), "name: [unclosed\n");
         File.Delete(Path.Combine(directory, "prompts", "triage.md"));
 
-        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, fileSystem));
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.False(File.Exists(Path.Combine(directory, "prompts", "triage.md")));
+    }
+
+    /// <summary>
+    /// Where the repository took the item pipeline out whole, its definition still using it, init writes it back whole
+    /// in one run: the pipeline's yml, missing, is read from the copy init is about to write, so every file it names is
+    /// known before anything is written.
+    /// </summary>
+    [Fact]
+    public void AUsedPipelineTakenOutWhole_IsWrittenBackWholeInOneRun()
+    {
+        using var temp = new TempDirectory();
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        var workflows = temp.Combine("tree", ".harness-config", "workflows");
+        var pipeline = WorkflowTemplates.Files.Where(file => file.StartsWith("item-pipeline/", StringComparison.Ordinal)).ToList();
+
+        WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
+        Directory.Delete(Path.Combine(workflows, name, "item-pipeline"), recursive: true);
+
+        var written = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
+
+        Assert.Equal([.. pipeline.Select(file => $".harness-config/workflows/{name}/{file}")], written.Created);
+        Assert.Equal(WorkflowTemplates.Files.Count - pipeline.Count, written.Kept);
+    }
+
+    /// <summary>
+    /// A repository's own definition that uses a workflow that does not resolve - one of its own that is not there, and
+    /// no shipped one stands in for it - refuses as configuration that does not hold, naming every problem: which
+    /// shipped files the tree names cannot be told, and none is written. A remote use names no file of the
+    /// repository's, and is no problem of init's.
+    /// </summary>
+    [Fact]
+    public void ARepositorysOwnDefinitionUsingWhatDoesNotResolve_IsRefused_AndARemoteUseIsNone()
+    {
+        using var temp = new TempDirectory();
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        var workflows = temp.Combine("tree", ".harness-config", "workflows");
+        var directory = Path.Combine(workflows, name);
+
+        WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
+        File.Delete(Path.Combine(directory, "prompts", "triage.md"));
+        File.WriteAllText(
+            Path.Combine(directory, $"{name}.yml"),
+            $"""
+            name: {name}
+            steps:
+              - name: triage
+                type: reason
+                agent: triage
+                prompt: prompts/triage.md
+                outputs: schemas/triage.schema.json
+              - name: mine
+                use: ./mine/mine.yml
+            """);
+
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            $".harness-config/workflows/{name}/{name}.yml is the repository's own definition of the {name} workflow, and uses what does not resolve, so which shipped files it names cannot be told, "
+                + $"and none was written; run 'dssharness init' again once it does ('dssharness validate-workflow {name}' says the same):{Environment.NewLine}"
+                + $"  - step 'mine' uses './mine/mine.yml', and no workflow file is at '{name}/mine/mine.yml' under the repository's workflows directory",
+            refusal.Message);
+        Assert.False(File.Exists(Path.Combine(directory, "prompts", "triage.md")));
+
+        File.WriteAllText(
+            Path.Combine(directory, $"{name}.yml"),
+            $"""
+            name: {name}
+            steps:
+              - name: triage
+                type: reason
+                agent: triage
+                prompt: prompts/triage.md
+                outputs: schemas/triage.schema.json
+              - name: review
+                use: acme/shared/workflows/review/review.yml@v1
+            """);
+
+        Assert.Equal([$".harness-config/workflows/{name}/prompts/triage.md"], WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison).Created);
     }
 
     /// <summary>
@@ -328,10 +466,10 @@ public sealed class WorkflowTemplatesTests
         var workflows = temp.Combine("tree", ".harness-config", "workflows");
         var directory = Path.Combine(workflows, name);
 
-        WorkflowTemplates.EnsureShipped(workflows, real);
+        WorkflowTemplates.EnsureShipped(workflows, real, PathComparison);
         File.Delete(Path.Combine(directory, "prompts", "plan.md"));
 
-        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, new UnreadDefinition(real, $"{name}.yml")));
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, new UnreadDefinition(real, $"{name}.yml"), PathComparison));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.Equal(
@@ -351,11 +489,26 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
         var schemas = NamedFiles.Steps(definition)
             .Where(entry => entry.Step.Type == "reason" && entry.Step.Raised is null)
-            .Select(entry => entry.Step.Outputs!)
+            .Select(entry => entry.Step.WorkflowOf is { } owner
+                ? $"{owner[(WorkflowTemplates.ShippedWorkflowName.Length + 1)..]}/{entry.Step.Outputs!}"
+                : entry.Step.Outputs!)
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(10, schemas.Count);
+        Assert.Equal(
+            [
+                "item-pipeline/schemas/implement.schema.json",
+                "item-pipeline/schemas/review-scope.schema.json",
+                "item-pipeline/schemas/review.schema.json",
+                "schemas/diagnosis.schema.json",
+                "schemas/plan-audit.schema.json",
+                "schemas/plan.schema.json",
+                "schemas/priority.schema.json",
+                "schemas/self-audit.schema.json",
+                "schemas/summary.schema.json",
+                "schemas/triage.schema.json",
+            ],
+            [.. schemas.Order(StringComparer.Ordinal)]);
 
         foreach (var schema in schemas)
         {
@@ -383,7 +536,8 @@ public sealed class WorkflowTemplatesTests
     public void NoShippedAgentFile_NamesAModelATierOrAnEffort()
     {
         string[] chosen = ["model", "tier", "effort"];
-        var agents = WorkflowTemplates.Files.Where(file => file.StartsWith("agents/", StringComparison.Ordinal)).ToList();
+        var agents = WorkflowTemplates.Files.Where(file =>
+            file.StartsWith("agents/", StringComparison.Ordinal) || file.StartsWith("item-pipeline/agents/", StringComparison.Ordinal)).ToList();
 
         Assert.Equal(18, agents.Count);
 
@@ -435,20 +589,77 @@ public sealed class WorkflowTemplatesTests
             Assert.Contains(items.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
         }
 
-        var workflow = Read("implementation.yml");
+        var pipeline = Read("item-pipeline/item-pipeline.yml");
 
-        Assert.Contains("rounds: 3", workflow, StringComparison.Ordinal);
+        Assert.Contains("rounds: 3", pipeline, StringComparison.Ordinal);
         Assert.Contains(
             "blocking: \"any(review.findings, it.severity != 'low' && it.severity != 'nit')\"",
-            workflow,
+            pipeline,
             StringComparison.Ordinal);
-        Assert.DoesNotContain("it.production && it.severity", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("it.production && it.severity", pipeline, StringComparison.Ordinal);
 
         var fix = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items", "fix");
 
         Assert.Equal(3, fix.Repeat!.BlockersLimitRounds);
         Assert.Equal("review.findings", fix.Repeat.Leftover);
+        Assert.Equal("review", fix.Repeat.DecideAfter);
         Assert.Equal(new FlowAnswer("accept", null, null), fix.Answers["loopBound"]);
+    }
+
+    /// <summary>
+    /// The shipped flow declares its texts - the bar for recommendations and its closure, the universe a repository's
+    /// decisions range over - and <c>init</c> writes <c>closure.md</c> once and never over a repository's own, exactly
+    /// as it keeps <c>recommendations.md</c>: the file is the repository's from the day it is written.
+    /// </summary>
+    [Fact]
+    public void TheShippedFlow_DeclaresItsTexts_AndShipsClosureMdAsTheRepositorysOwn()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["recommendations"] = "recommendations.md",
+                ["closure"] = "closure.md",
+            },
+            definition.Texts);
+        Assert.Null(definition.Recommendations);
+
+        using var temp = new TempDirectory();
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        var workflows = temp.Combine("tree", ".harness-config", "workflows");
+
+        WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
+        File.WriteAllText(Path.Combine(workflows, name, "closure.md"), "# The repository's own universe\n");
+        File.Delete(Path.Combine(workflows, name, "recommendations.md"));
+
+        var finished = WorkflowTemplates.EnsureShipped(workflows, fileSystem, PathComparison);
+
+        Assert.Equal([$".harness-config/workflows/{name}/recommendations.md"], finished.Created);
+        Assert.Equal("# The repository's own universe\n", File.ReadAllText(Path.Combine(workflows, name, "closure.md")));
+    }
+
+    /// <summary>
+    /// <c>closure.md</c> says what reads it, as what ships does: an agent is given it only where its step's prompt reads
+    /// <c>{text.closure}</c>, and no file shipped beside it does yet - so a repository that fills its heading is told
+    /// that its words reach no agent until a prompt of its own reads them, never left to think the shipped flow weighs
+    /// them; the README says the same. A shipped prompt that comes to read it changes both sentences in the same change.
+    /// </summary>
+    [Fact]
+    public void ClosureMd_SaysNoShippedPromptReadsIt_AsNoneDoes()
+    {
+        Assert.DoesNotContain(WorkflowTemplates.Files.Where(file => file != "closure.md"), file => WorkflowTemplates.TextOf(file)!.Contains("{text.closure}", StringComparison.Ordinal));
+        Assert.Contains(
+            "an agent is given it where its step's prompt reads `{text.closure}`, as the file stands when the prompt is given. "
+                + "None of the prompts shipped beside it reads it: what is written here reaches an agent once a prompt of this "
+                + "repository's says `{text.closure}` where its agent is to weigh it.",
+            Prose.Words(WorkflowTemplates.TextOf("closure.md")!),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "No prompt the tool ships reads `{text.closure}` yet, and the file says so: what a repository writes there reaches an agent once a prompt of its own reads it.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -481,11 +692,14 @@ public sealed class WorkflowTemplatesTests
         var otherwise = new List<string>();
         var asking = new List<string>();
 
-        Walk(definition.Steps, parent: null, inherited: null, recovering: false);
-        Walk(recover.Steps, parent: "recover", inherited: null, recovering: true);
+        Walk(definition.Steps, parent: null, inherited: null, recovering: false, failTo: null);
+        Walk(recover.Steps, parent: "recover", inherited: null, recovering: true, failTo: null);
 
         // Only the reads that are told on, never judged, pass a failure over; every reasoning step asks, every other
-        // step of the flow gives its failure to the recovery, and no step of the recovery does.
+        // step of the flow gives its failure to the recovery - through the pipeline's failTo input, filled 'recover'
+        // by the rounds' use - and no step of the recovery does: the pipeline's machine steps are filled 'pause'
+        // there, so each that fails asks a person on its own, the remedies beside it going on, rather than ending
+        // the remedies with nothing more started.
         Assert.Equal(["codebase", "ci", "rounds.items.reconcile.catch-up", "rounds.items.fix.revise.rereconcile.recatch-up", "recover.remedies.reconcile.catch-up", "recover.remedies.fix.revise.rereconcile.recatch-up"], passedOver);
         Assert.Empty(otherwise);
 
@@ -522,19 +736,23 @@ public sealed class WorkflowTemplatesTests
 
         return;
 
-        void Walk(IReadOnlyList<WorkflowStep> steps, string? parent, string? inherited, bool recovering)
+        void Walk(IReadOnlyList<WorkflowStep> steps, string? parent, string? inherited, bool recovering, string? failTo)
         {
             foreach (var step in steps)
             {
                 var path = parent is null ? step.Name : $"{parent}.{step.Name}";
-                var effective = step.OnFailure ?? inherited;
-                var expected = step.Type == "reason" ? "pause" : recovering ? null : WorkflowStep.Recover;
+
+                // The pipeline's steps read their failure policy from its failTo input, filled by each use: 'recover'
+                // where the rounds use it, 'pause' where the recovery does.
+                var written = step.OnFailure == "{input.failTo}" ? failTo : step.OnFailure;
+                var effective = written ?? inherited;
+                var expected = step.Type == "reason" ? "pause" : recovering ? "pause" : WorkflowStep.Recover;
 
                 if (step.OnFailure == "continue")
                 {
                     passedOver.Add(path);
                 }
-                else if (!step.IsGroup && effective != expected)
+                else if (!step.IsGroup && effective != expected && !(recovering && step.Type != "reason" && effective is null or "pause"))
                 {
                     otherwise.Add($"{path}: {effective ?? "nothing"}");
                 }
@@ -554,7 +772,7 @@ public sealed class WorkflowTemplatesTests
                     asking.Add(path);
                 }
 
-                Walk(step.Steps, path, effective, recovering);
+                Walk(step.Steps, path, effective, recovering, step.With.TryGetValue("failTo", out var filled) ? filled : failTo);
             }
         }
     }

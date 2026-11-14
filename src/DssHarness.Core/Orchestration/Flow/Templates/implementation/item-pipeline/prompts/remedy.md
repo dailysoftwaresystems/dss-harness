@@ -3,34 +3,34 @@ runs again.
 
 ## The failure
 
-The step `{source.step}` failed; where it is `triage-pre-existing-issue`, nothing failed, and what you put right is an
+The step `{input.failed}` failed; where it is `triage-pre-existing-issue`, nothing failed, and what you put right is an
 issue that was there before the run. What the diagnosis found:
 
-{diagnose.latest.summary}
+{input.diagnose.summary}
 
-{diagnose.latest.cause}
+{input.diagnose.cause}
 
 ## The item
 
-{item.title}
+{input.item.title}
 
-{item.instructions}
+{input.item.instructions}
 
-- The paths you own, and the only ones you write: {item.ownedPaths}
-- The paths near your work that you must not touch: {item.forbiddenPaths}
+- The paths you own, and the only ones you write: {input.item.ownedPaths}
+- The paths near your work that you must not touch: {input.item.forbiddenPaths}
 - What must hold when your work is finished, your item's definition of done, checked statement by statement before
-  you report: {item.done}
-- The filter that names the tests your change affects: `{item.testFilter}`. The tests it names are yours to write
+  you report: {input.item.done}
+- The filter that names the tests your change affects: `{input.item.testFilter}`. The tests it names are yours to write
   where they are not there yet. The engine runs only those for this item where the run's input affectedTests is on
   (it is `{input.affectedTests}`), and every test where it is off or the filter is empty; every test runs once every
   item of the round is built, either way.
 
 What exists and what is new:
 
-- The existing code this item reuses or extends, and for what. Build on it: {item.reuses}
-- What this item creates from nothing, with why nothing that exists serves: {item.creates}
+- The existing code this item reuses or extends, and for what. Build on it: {input.item.reuses}
+- What this item creates from nothing, with why nothing that exists serves: {input.item.creates}
 - What this item replaces because the request asked for it to be rebuilt, and what becomes of the old one:
-  {item.replaces}
+  {input.item.replaces}
 
 Hold to these lists, as a work item of the plan does. Put the cause right, and nothing beside it: never make the
 failure go away by weakening what found it - no test skipped, no assertion loosened, no tolerance widened, no check

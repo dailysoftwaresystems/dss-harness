@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Results;
@@ -214,6 +215,54 @@ public sealed class AgentTreesTests
             $"Agent 'ag' of 'o1': '{worktree}' is not a worktree of this repository - it is one of git's linked worktrees, and its record says it was made "
             + "a repository of its own. Nothing was read, written or removed.",
             refused.Message);
+    }
+
+    /// <summary>
+    /// An agent an earlier version made, its worktree one of git's linked worktrees, in a checkout moved by hand: git cannot
+    /// open its worktree, whose .git file and git's record name where they were. list-orchestrator says it cannot be worked
+    /// on and names git's repair, never that it stands live at its worktree; list-worktree never says to delete it; a fold
+    /// is refused naming the repair, nothing touched; and once repaired the agent stands live at its worktree again, its
+    /// work in it.
+    /// </summary>
+    [Fact]
+    public async Task ALegacyLinkedAgentOfACheckoutMovedByHand_IsSaidAsOneToRepair_AndNeverAsLiveOrToDelete()
+    {
+        using var outer = new TempDirectory();
+        using var temp = new TempDirectory(outer.Path, "before-");
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var before = await kit.CreateLegacyAgentAsync("ag");
+        OrchestrationKit.Write(before, "b.txt", "two\na week of the agent's work\n");
+
+        var main = Path.Combine(outer.Path, "after");
+        Directory.Move(temp.Path, main);
+        var worktree = Path.Combine(main, Path.GetRelativePath(temp.Path, before));
+        var repair = $"Run 'git -C {main} worktree repair {worktree}'";
+
+        var listed = await kit.Harness.OrchestratorService.ListAsync(main, name: null, false, false, json: false, Token);
+
+        Assert.True(listed.Succeeded, OrchestrationKit.Describe(listed));
+        var line = Assert.Single(listed.Details ?? [], detail => detail.Contains("ag  live", StringComparison.Ordinal));
+        Assert.StartsWith($"ag  live, and its worktree at '{worktree}' cannot be worked on: '{worktree}' is a worktree git records at '{before}'", line.Trim(), StringComparison.Ordinal);
+        Assert.Contains(repair, line, StringComparison.Ordinal);
+
+        var json = await kit.Harness.OrchestratorService.ListAsync(main, name: null, false, false, json: true, Token);
+        var agent = Assert.Single(JsonNode.Parse(Assert.Single(json.Data))!["orchestrators"]![0]!["agents"]!.AsArray())!;
+
+        Assert.Contains(repair, (string?)agent["worktreeProblem"], StringComparison.Ordinal);
+        Assert.DoesNotContain("then delete", kit.Harness.StandardError.ToString(), StringComparison.Ordinal);
+
+        var refused = await kit.Harness.AgentService.FoldAsync(main, OrchestrationKit.Orchestrator, "ag", new FoldAllowances(), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal($"Agent 'ag' of 'o1': {WorktreeInspector.SaidMoved(main, worktree, before)}. Nothing was read, written or removed.", refused.Message);
+        Assert.Contains(repair, refused.Message, StringComparison.Ordinal);
+
+        await kit.GitAsync(main, "worktree", "repair", worktree);
+
+        var again = await kit.Harness.OrchestratorService.ListAsync(main, name: null, false, false, json: false, Token);
+
+        Assert.Contains(again.Details ?? [], detail => detail.Trim().StartsWith($"ag  live at '{worktree}'", StringComparison.Ordinal));
+        Assert.Equal("two\na week of the agent's work\n", OrchestrationKit.Read(worktree, "b.txt"));
     }
 
     /// <summary>An agent an earlier version made, its worktree one of git's linked worktrees, is folded as it always was.</summary>

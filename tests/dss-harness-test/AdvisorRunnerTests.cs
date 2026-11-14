@@ -137,6 +137,7 @@ public sealed class AdvisorRunnerTests
             new JsonObject { ["request"] = "build the login" },
             Record: null,
             Bar: "Prefer the cheaper answer.\n",
+            Texts: null,
             new FlowRunPlace(kit.Main, "o1", StartCommit: null, WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: orient\n    type: orient\n")),
             budgetLeftUsd);
 
@@ -186,6 +187,40 @@ public sealed class AdvisorRunnerTests
         Assert.Empty(JsonSchemaSubset.SubsetProblems(JsonNode.Parse(asked.Output.Schema)!));
         Assert.Equal("q1", asked.Output.Name);
         Assert.Null(asked.Output.AskRounds);
+    }
+
+    /// <summary>
+    /// The advisor's prompt reads each text by its name as the call names it - the workflow that declares it and its file
+    /// there, the used workflow's own and the run's alike, each read in its own workflow's directory - and a name the call
+    /// names no text for is refused saying which workflow declares none, never read as nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheAdvisorsPromptReadsEachTextInTheDirectoryOfTheWorkflowThatDeclaresIt()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "prompts", "texts.md"), "{text.closure}|{text.shared}");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "pipeline", "texts", "closure.md"), "the pipeline's closure");
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "texts", "shared.md"), "the run's shared");
+        agents.Answer = _ => new AgentRunResult(AgentRunStatus.Completed, StructuredOutput: """{"answer":"more","why":"nearly done"}""");
+        var call = Call(kit) with
+        {
+            Advisor = Call(kit).Advisor with { Prompt = "prompts/texts.md" },
+            Texts = new Dictionary<string, FlowAdvisorText>(StringComparer.Ordinal)
+            {
+                ["closure"] = new("flow/pipeline", "texts/closure.md"),
+                ["shared"] = new("flow", "texts/shared.md"),
+            },
+        };
+
+        _ = await Runner(kit, agents).AdviseAsync(call, Token);
+
+        Assert.Equal("the pipeline's closure|the run's shared", agents.Asked.Single().Prompt);
+
+        var undeclared = await Assert.ThrowsAsync<HarnessException>(() => Runner(kit, agents).AdviseAsync(call with { Texts = null }, Token));
+
+        Assert.Equal("'{text.closure}': the workflow 'flow' declares no text 'closure', and the run declares none either", undeclared.Message);
     }
 
     /// <summary>

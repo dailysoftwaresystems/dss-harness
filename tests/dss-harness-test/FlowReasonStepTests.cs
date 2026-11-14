@@ -58,7 +58,7 @@ public sealed class FlowReasonStepTests
         WorkflowDefinition definition,
         Runner runner,
         IReadOnlyDictionary<string, string>? models = null,
-        Func<string, string>? workflowFile = null,
+        Func<string?, string, string>? workflowFile = null,
         Deletions? deletions = null)
         => new(
             definition,
@@ -179,7 +179,7 @@ public sealed class FlowReasonStepTests
         var coordinator = Coordinator(
             definition,
             runner,
-            workflowFile: named => named == "prompts/plan.md" ? "Plan the work for run {run.name} with {skill.planning}." : throw new ArgumentException(named));
+            workflowFile: (owner, named) => named == "prompts/plan.md" ? "Plan the work for run {run.name} with {skill.planning}." : throw new ArgumentException(named));
 
         var end = await coordinator.RunAsync(Token);
 
@@ -219,7 +219,7 @@ public sealed class FlowReasonStepTests
         var end = await Coordinator(
             definition,
             runner,
-            workflowFile: named => named == "prompts/plan.md" ? "First attempt."
+            workflowFile: (owner, named) => named == "prompts/plan.md" ? "First attempt."
                 : named == "prompts/again.md" ? "Going on with {run.name}."
                 : throw new ArgumentException(named)).RunAsync(Token);
 
@@ -261,7 +261,7 @@ public sealed class FlowReasonStepTests
         var end = await Coordinator(
             definition,
             runner,
-            workflowFile: named => named == "prompts/plan.md" ? "First."
+            workflowFile: (owner, named) => named == "prompts/plan.md" ? "First."
                 : named == "prompts/again.md" ? "{previous.review} | {previous.review.findings} | {review.findings}"
                 : throw new ArgumentException(named)).RunAsync(Token);
 

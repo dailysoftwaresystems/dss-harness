@@ -67,6 +67,16 @@ internal static class DispatchOptions
     };
 
     /// <summary>
+    /// <c>--keep-going</c>: each leg the command builds goes on past the units that fail to build, so its line names every
+    /// one. One definition for the three commands that build legs - build, test, run - so none can say less of it.
+    /// </summary>
+    internal static Option<bool> KeepGoing { get; } = new(Core.Build.KeepGoing.Option)
+    {
+        Description = "Have each leg's build go on past the units that fail to build, so its line names every one and counts them: ninja is given -k 0 and make -k; MSBuild, dotnet and dart go on by themselves; a leg whose toolchain names no generator, or a generator with no known way, NMake's and Xcode's among them, is refused before anything runs "
+            + $"({HarnessExit.Refused}), and so is a run that builds none of its legs ({HarnessExit.UsageError}). help legs lists each generator's way.",
+    };
+
+    /// <summary>
     /// <c>--set-up</c>: each leg brings up the set-ups its work names before that work, and down after it. One definition
     /// for the two commands that take it.
     /// </summary>

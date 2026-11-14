@@ -74,7 +74,7 @@ public sealed class ReasonStepRunner(
 
         var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
         var layout = OrchestratorLayout.Of(context.Layout, place.Run);
-        var files = new WorkflowNamedFiles(fileSystem, platform.PathComparison);
+        var files = WorkflowNamedFiles.OfRun(fileSystem, platform.PathComparison, layout);
         var launch = new ReasonLaunch(fileSystem, platform, keys, updates, isolation);
 
         var promptFile = run.Step.Prompt;
@@ -126,7 +126,7 @@ public sealed class ReasonStepRunner(
         // works by everywhere: its system prompt sent as written, its capabilities, restrictions and writes on the
         // ground, its limits, and the level below the step's own for the model, the effort and the client.
         var root = ResumeChain.Root(place.Definition, run.DeclarationPath, run.Step);
-        var definition = DefinitionOf(files, context.Layout, place.Definition.Name, root.Agent);
+        var definition = DefinitionOf(files, context.Layout, root.WorkflowOf ?? place.Definition.Name, root.Agent);
         var step = ReferenceEquals(root, run.Step) ? run.Step : run.Step with { Writes = root.Writes };
 
         var resolution = AgentResolution.Of(providers, root.Tier, root.Model, run.Step.Effort, run.Step.EffortByModel, root.Client, definition);
@@ -320,7 +320,7 @@ public sealed class ReasonStepRunner(
             filled,
             ResumeTemplate: null,
             workspace,
-            OutputOf(files, context.Layout, place.Definition.Name, run.Step, run),
+            OutputOf(files, context.Layout, run.Step.WorkflowOf ?? place.Definition.Name, run.Step, run),
             Conversation: conversation,
             new AgentLimits(
                 definition?.MaxTurns,
@@ -340,8 +340,11 @@ public sealed class ReasonStepRunner(
             WebSearch = webSearch,
             Spend = spend.RecordingIn(context.Layout),
             Compaction = compaction,
-            Retries = place.Definition.RetriesOf(run.Step),
-            BackoffSeconds = run.Step.BackoffSeconds ?? place.Definition.BackoffSeconds,
+
+            // What the step falls back to where it says neither: the governing use's where one declares the key, else
+            // the run's - the one rule the engine's retry table reads too.
+            Retries = FlowUse.RetriesOf(place.Definition, run.DeclarationPath, run.Step),
+            BackoffSeconds = FlowUse.BackoffSecondsOf(place.Definition, run.DeclarationPath, run.Step),
             Program = program.Program,
             ProgramVersion = program.Version,
             Skills = skills,

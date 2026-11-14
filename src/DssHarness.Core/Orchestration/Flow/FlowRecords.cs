@@ -219,6 +219,16 @@ public sealed record FlowEvent(
 /// raised - what the triage's reporter met the issue after reads, however often that step is run again later; null for
 /// every other record.
 /// </param>
+/// <param name="Inputs">
+/// The record of the scope a used workflow's members run in - a use's block, one item or iteration of one, a handler
+/// that is one: what its <c>with</c> filled the used workflow's inputs with, as that session read them, which a resume
+/// gives back to the scope rather than reading the with values again over what has run since. Null for every other
+/// record, and for one whose with values could not be read.
+/// </param>
+/// <param name="Decided">
+/// The record of an iteration of a repeat that decides at a step of its own (<c>decideAfter</c>): the decision read at
+/// that step's ending, and the visit it was read at; null until one is read, and for every other record.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -268,7 +278,9 @@ public sealed record FlowStepRecord(
     JsonNode? Graph = null,
     long? AttemptBegan = null,
     long? EndedIn = null,
-    long? ReportedIn = null)
+    long? ReportedIn = null,
+    JsonObject? Inputs = null,
+    FlowLoopDecision? Decided = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -320,6 +332,47 @@ public sealed record FlowStepRecord(
             : Targets?.GroupBy(target => target.Agent, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"it names target '{twice.Key}' twice"
             : Skills?.Any(skill => skill is null || new[] { skill.Name, skill.Place, skill.File, skill.Digest, skill.FolderDigest, skill.Folder }.Any(string.IsNullOrWhiteSpace)) == true
                 ? "a skill it was given names no name, place, file, digest or folder"
+            : (Inputs is not null || Decided is not null) && !Group ? "it holds what only a group's own record holds: a use's inputs, or a loop's decision"
+            : Decided?.Problem() is { } decided ? $"its loop's decision: {decided}"
+            : null;
+}
+
+/// <summary>
+/// The decision a repeat that decides at a step of its own (<c>decideAfter</c>) read for one iteration, as the
+/// iteration's own record keeps it: the visit of the deciding step it was read at - a later visit of that step in the
+/// same iteration is decided anew - and what it said.
+/// </summary>
+/// <param name="At">The deciding step's visit it was read at, by its instance id.</param>
+/// <param name="To">
+/// What it said: <c>goesOn</c> (the rest of the iteration runs, and its end makes the next with no second reading),
+/// <c>ends</c> (the until read true), <c>endsLeaving</c> (blocking read false past the rounds, or the bound's question
+/// was answered accept: the loop ends with its leftover said) or <c>asks</c> (the loop stands on its bound's question).
+/// </param>
+public sealed record FlowLoopDecision(string At, string To)
+{
+    /// <summary>The rest of the iteration runs, and its end makes the next iteration with no second reading.</summary>
+    public const string GoesOn = "goesOn";
+
+    /// <summary>The until read true: the loop ends where it decided.</summary>
+    public const string Ends = "ends";
+
+    /// <summary>The loop ends where it decided with its until still false, its leftover said.</summary>
+    public const string EndsLeaving = "endsLeaving";
+
+    /// <summary>The loop stands on its bound's question, which says what follows.</summary>
+    public const string Asks = "asks";
+
+    /// <summary>Every decision a record may hold, in the order the engine reads them.</summary>
+    public static readonly IReadOnlyList<string> Outcomes = [GoesOn, Ends, EndsLeaving, Asks];
+
+    /// <summary>Whether the decision ends the loop where it was read.</summary>
+    [JsonIgnore]
+    public bool EndsTheLoop => To is Ends or EndsLeaving;
+
+    /// <summary>What is wrong with the decision; null when nothing is.</summary>
+    public string? Problem()
+        => !FlowInstanceId.IsWellFormed(At) ? $"'{At}' is not an instance id"
+            : !Outcomes.Contains(To, StringComparer.Ordinal) ? $"'{To}' is none of {string.Join(", ", Outcomes)}"
             : null;
 }
 
@@ -910,6 +963,8 @@ public sealed record FlowSnapshot(
 /// <param name="AttemptBegan">Where its latest attempt began in the run's own order (<see cref="FlowStepRecord.AttemptBegan"/>); null where none began.</param>
 /// <param name="EndedIn">Where it ended in that order (<see cref="FlowStepRecord.EndedIn"/>); null where it has not ended.</param>
 /// <param name="ReportedIn">A triage instance's: where the attempt that reported its issue began (<see cref="FlowStepRecord.ReportedIn"/>); null for every other.</param>
+/// <param name="Inputs">A use's scope's own record: what its with filled the used workflow's inputs with (<see cref="FlowStepRecord.Inputs"/>); null for every other.</param>
+/// <param name="Decided">An iteration's of a repeat that says decideAfter: the decision read at its deciding step (<see cref="FlowStepRecord.Decided"/>); null for every other.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -959,4 +1014,6 @@ public sealed record FlowSnapshotStep(
     JsonNode? Graph = null,
     long? AttemptBegan = null,
     long? EndedIn = null,
-    long? ReportedIn = null);
+    long? ReportedIn = null,
+    JsonObject? Inputs = null,
+    FlowLoopDecision? Decided = null);
