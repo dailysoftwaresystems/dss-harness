@@ -3543,7 +3543,8 @@ write reads through `ConfiguredRunnerFacts` - and `IMutationLegs`) run in the ag
 legs told to the engine as `LegRunService` says them through the request's `ILegRunWatch` (each leg placed, in a copy or
 the tree; each copy made, said where the leg takes its tree after the sync; each leg ended, said by `LegLedger` as its
 line is kept), each leg's verdict read on its own and `red` holding the red legs only, with the phase that did not pass
-(`LegEntry.TailPhase`, beside `LogTail`); the ledger (`LegRunResult.ToDocument`) and, in an agent's worktree, each red
+(`LegEntry.TailPhase`, beside `LogTail`) and, for `build`, `test` and `run`, the units its build failed as the ledger's
+`--json` says them (`FailedUnits.Document`; `{run.red}` says their line's words, `FlowChecks`); the ledger (`LegRunResult.ToDocument`) and, in an agent's worktree, each red
 leg's failing phase log are kept in the step's directory. A leg run something other than its legs ended - refused, or
 stopped - ends the step with its own code. The checks that run no legs answer `FlowStepResult.Red` where they found red,
 which the coordinator reads by `failOn` as it reads a red leg: `AnchorBalanceStepRunner` and `AnchorCitationsStepRunner`
@@ -8057,21 +8058,51 @@ live").
 stopped with 22 of its 1093 steps run and three units failed, and every unit it never reached read
 as one that built. So a leg whose build its own tool failed - not stopped, and ended by no bound of
 the harness's - carries what its adapter read of the units (`IBuildAdapter.FailedUnitsOf`, a
-`FailedUnits`). Under ninja each is a step ninja said failed (`Ninja.FailedOutputs`), named by the
-source its build line in the manifest compiles where its rule is a CMake compile
-(`CMakeNinjaRule.Compiles`) - relative to the tree where it is in it - and by its output where it
-links or runs a command. Under make each is a target the deepest make saying `*** [target] Error`
-said failed (`Make.FailedTargets`): the make that ran the target's own recipe, for CMake's makefiles
-start one make for the build and another for each target, and each above it failed only because one
-it started did; make names no source, so the unit is named by its target, the object. The leg's
-line says how many, the units are listed beneath the table, and `--json` carries them on the leg as
-`failedUnits`: `tool`, `count`, `units` - each one's `source` and `step` - `unread`, `keptGoing`,
-`stopsAtFirst`, `stepsRun`, `stepsPlanned` and `said`, the line's own words. Where which units
-failed is not read - MSBuild's, dotnet's and dart's output is not, nor a log that could not be read
-back - `count` is left out and `unread` says why, never that none failed. ninja and make stop at
-their first failures, so a build of theirs not told to go on says that every unit it never reached
-was not built and says nothing of the code, and, where ninja's last `[run/planned]` status said it
-(`Ninja.Progress`), how many of the steps it had to run it ran.
+`FailedUnits`). Only the build's own steps are units, never the lines of a build nested in one of
+them - an external project's, whose step runs a build of its own and prints its lines as the step's
+output, shaped as the outer build's: its objects relative to its own directory, a name the outer
+manifest may hold too where both projects build one target from one source.
+
+Under ninja each unit is a step the build's own ninja said failed (`Ninja.Own`): a `FAILED:` line
+directly after a status line of its own, as ninja writes a failed step's - or, for a step in the
+console pool, whose status ninja writes as it starts and whose `FAILED:` line after all it printed,
+one naming that step where its start was its own - and, for samurai, which names no outputs, a
+failed command a build line of the manifest runs. A status line is its own where what it prints
+after the count is what one of the manifest's build lines prints (`NinjaEdge.Description`, or its
+command where it has none) and its count is the one the build stands at or one more: ninja counts
+each step as it ends, a console step as it starts, and a nested build counts from one beside it, so
+its line passes both only where it prints what one of the outer build's prints at the outer build's
+count. How many it plans moves either way, up as dynamic dependencies are found and down as a step
+that restats leaves others nothing to do, so only the count is held to; and the last status of its
+own says how far it got. A unit is named by the source its build line in the manifest compiles
+where its rule is a CMake compile (`CMakeNinjaRule.Compiles`) - relative to the tree where it is in
+it - and by its output where it links or runs a command, an external project's step among them.
+Where `NINJA_STATUS` spells the status otherwise, no line is known for the build's own, and the
+units are said not read.
+
+Under make each unit is a target the build's own makes said failed (`Make.FailedTargets`), read by
+the structure GNU make writes in every language - `make[2]: *** [makefile:line: target]` and
+whatever follows, `Error 1`, `Fehler 1` or a signal's name - and along each chain of makes, never
+over the whole build: a step of a target's own `build.make` that failed, and a failure of CMake's
+driving makefiles (`Makefile`, `CMakeFiles/Makefile2`) that no earlier, deeper failure of the same
+target explains - tied by the target's directory, `CMakeFiles/app.dir/`, in the driving makefile's
+target and the step's makefile - kept by its target, so a target whose make named no failing step,
+as one that found no rule for a header, still counts. A failure is a nested build's where a step of
+this build at a shallower depth failed after it, the step whose make ran that build. GNU make before
+4 names no makefile, so its driving failures are known by their targets, and a step is tied to a
+target by its directory where its target lies under it, as an object does, else to any. make names
+no source, so the unit is named by its target, the object.
+
+The leg's line says how many, the units are listed beneath the table, and `--json` carries them on
+the leg as `failedUnits`: `tool`, `count`, `units` - each one's `source` and `step` - `unread`,
+`keptGoing`, `stopsAtFirst`, `stepsRun`, `stepsPlanned` and `said`, the line's own words
+(`FailedUnits.Document`, which a workflow step's red entry carries too). Where which units failed is
+not read - MSBuild's, dotnet's and dart's output is not, nor a log that could not be read back, nor
+one in which no line of the build's own named a failed unit (`FailedUnits.WhyUnread`) - `count` is
+left out and `unread` says why, never that none failed. ninja and make stop at their first
+failures, so a build of theirs not told to go on says that every unit it never reached was not built
+and says nothing of the code, and, where ninja's last status of its own said it, how many of the
+steps it had to run it ran.
 
 `--keep-going` (`KeepGoing.Option`), on `build`, `test` and `run`, and `keepGoing` on a workflow's
 `build`, `test` and `run` steps, has each leg's build go on past its failing units. It rides the
@@ -8087,9 +8118,20 @@ ninja 1.12, mingw32-make 4.4, NMake 14.44, MSBuild 17.14 under Visual Studio 17 
 SDK's dotnet build, and dart compile exe. A toolchain that names no generator - CMake picks its
 tool as it configures - and a generator no way is known for, Xcode's among them, are refused
 before anything is synced, locked or built (`KeepGoing.Require`, exit 13), naming every such leg at
-once, and the option on a run that builds none of its legs is a usage error (10). `help legs` lists
-every way from the adapters' own (`IBuildAdapter.KeepGoingWays`). `check-mutations` takes no
-`--keep-going`: an arm's build is judged by whether, and where, it fails.
+once, and the option on a run that builds none of its legs is a usage error (10). A leg that builds
+in a copy of its tree builds by the copy's configuration, which can differ from the tree's the run
+was weighed by: its build is refused before it starts where the copy's gives its tool no way
+(`KeepGoing.RequireFor`, 13), and the adapter never builds without its way while asked for it.
+Whether a tool went on is read from what the build phase ran with (`KeepGoingWay.GivenIn`,
+`CMakeAdapter.KeptGoing`), never from what was asked; and a ninja told to go on builds long after a
+step fails, so a failed step is no end of its build: it ended the build itself only where its last
+word under its name says so - `build stopped: cannot make progress due to previously encountered
+errors`, or an error of its own - and is stopped where it said nothing after a step failed, as a
+ninja killed from outside says nothing, or where its last word is a nested build's
+`subcommand failed`, which a ninja without a limit never says of its own (`Ninja.Stopped`): the
+steps it never ran are never said to need one that failed. `help legs` lists every way from the
+adapters' own (`IBuildAdapter.KeepGoingWays`). `check-mutations` takes no `--keep-going`: an arm's
+build is judged by whether, and where, it fails.
 
 ## CI legs
 

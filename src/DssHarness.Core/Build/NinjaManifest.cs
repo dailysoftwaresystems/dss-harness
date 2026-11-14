@@ -25,7 +25,20 @@ public sealed record NinjaEdge(
     IReadOnlyList<string> Inputs,
     string? Source,
     string? Deps,
-    string Command);
+    string Command)
+{
+    /// <summary>
+    /// What ninja prints of the edge on its status line, as it evaluates the edge's <c>description</c> - else its command,
+    /// where the description is empty; empty for a phony.
+    /// </summary>
+    public string Description { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Whether the edge runs in ninja's <c>console</c> pool, whose output reaches the terminal as it runs, so ninja prints
+    /// its status line as it starts and what it says of a failure after everything it printed.
+    /// </summary>
+    public bool Console { get; init; }
+}
 
 /// <summary>
 /// What a ninja build directory's manifest declares about how each output is built, read the way
@@ -182,6 +195,12 @@ public sealed class NinjaManifest
     /// <summary>The rule ninja builds nothing by: a line under it only stands for what it reads.</summary>
     public const string PhonyRule = "phony";
 
+    /// <summary>The pool ninja gives the terminal to while an edge in it runs.</summary>
+    public const string ConsolePool = "console";
+
+    /// <summary>Every build line the manifest declares, once each, in no order.</summary>
+    public IEnumerable<NinjaEdge> Edges => _edges.Values.Distinct();
+
     /// <summary>
     /// A path as ninja canonicalizes it: one kind of separator - <c>ninja -t deps</c> spells with
     /// forward slashes what the manifest holds with backslashes - and no <c>.</c> component, doubled
@@ -318,6 +337,7 @@ public sealed class NinjaManifest
         var deps = Variable("deps");
         var command = Variable("command");
         var response = Variable("rspfile_content");
+        var description = Variable("description");
 
         return new NinjaEdge(
             line.Rule,
@@ -325,7 +345,11 @@ public sealed class NinjaManifest
             line.Inputs,
             line.Source,
             deps.Length > 0 ? deps : null,
-            response.Length > 0 ? command + " " + response : command);
+            response.Length > 0 ? command + " " + response : command)
+        {
+            Description = description.Length > 0 ? description : command,
+            Console = Variable("pool") == ConsolePool,
+        };
     }
 
     /// <summary>A path as ninja puts it in a command for <c>$in</c> or <c>$out</c> on Windows: quoted where a space or a quote would split it.</summary>

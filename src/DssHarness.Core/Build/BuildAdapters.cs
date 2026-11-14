@@ -368,38 +368,55 @@ public sealed class CMakeAdapter : IBuildAdapter
                 + $"name one with toolchains.{toolchain}.generator");
         }
 
-        return Ninja.Generates(generator) ? NinjaWay
-            : Make.Generates(generator) ? MakeWay
-            : VisualStudio(generator) ? MsBuildWay
-            : string.Equals(generator, NMakeWay.Builds, StringComparison.OrdinalIgnoreCase) ? NMakeWay
-            : new(generator, KeepGoingHow.Never, [], $"toolchain '{toolchain}' builds with generator '{generator}', and no way is known to have its build tool go on past a failing unit");
+        return WayOf(generator)
+            ?? new(generator, KeepGoingHow.Never, [], $"toolchain '{toolchain}' builds with generator '{generator}', and no way is known to have its build tool go on past a failing unit");
     }
+
+    /// <summary>
+    /// Whether the build tool of a directory configured with <paramref name="generator"/>, run with
+    /// <paramref name="arguments"/>, went on past failing units: by itself, or given its way (<see cref="KeepGoingWay.GivenIn"/>)
+    /// - by the generator that ran, as CMake's cache records it, and what the build phase ran with, never by what was asked.
+    /// </summary>
+    /// <param name="generator">The generator CMake's cache records, or <see langword="null"/> where it records none.</param>
+    /// <param name="arguments">What the build phase ran cmake with.</param>
+    internal static bool KeptGoing(string? generator, IReadOnlyList<string> arguments)
+        => generator is not null && WayOf(generator)?.GivenIn(arguments) == true;
 
     /// <inheritdoc/>
     /// <remarks>
     /// By the generator CMake's cache says the directory was configured with, which is the build tool that ran: ninja's
-    /// lines and make's are read; every other tool's are not, and said so.
+    /// lines and make's are read; every other tool's are not, and said so. Whether it went on is read from what the build
+    /// phase ran with (<see cref="KeptGoing"/>).
     /// </remarks>
     public FailedUnits FailedUnitsOf(FailedBuild failed)
     {
         ArgumentNullException.ThrowIfNull(failed);
 
         var generator = failed.Configured?.Generator;
+        var keptGoing = KeptGoing(generator, failed.Arguments);
 
         if (Ninja.Generates(generator))
         {
-            return Ninja.FailedUnitsOf(failed);
+            return Ninja.FailedUnitsOf(failed, keptGoing);
         }
 
         if (Make.Generates(generator))
         {
-            return Make.FailedUnitsOf(failed);
+            return Make.FailedUnitsOf(failed, keptGoing);
         }
 
         return VisualStudio(generator)
-            ? FailedUnits.NotRead("MSBuild", failed.Request.KeepGoing, stopsAtFirst: false)
-            : FailedUnits.NotRead(generator is { Length: > 0 } named ? $"generator '{named}'" : "the build tool", failed.Request.KeepGoing, stopsAtFirst: false);
+            ? FailedUnits.NotRead("MSBuild", keptGoing, stopsAtFirst: false)
+            : FailedUnits.NotRead(generator is { Length: > 0 } named ? $"generator '{named}'" : "the build tool", keptGoing, stopsAtFirst: false);
     }
+
+    /// <summary>The way of the build tool <paramref name="generator"/> builds with; <see langword="null"/> where none is known.</summary>
+    private static KeepGoingWay? WayOf(string generator)
+        => Ninja.Generates(generator) ? NinjaWay
+            : Make.Generates(generator) ? MakeWay
+            : VisualStudio(generator) ? MsBuildWay
+            : string.Equals(generator, NMakeWay.Builds, StringComparison.OrdinalIgnoreCase) ? NMakeWay
+            : null;
 
     /// <summary>Whether a CMake generator is one of Visual Studio's, whose builds MSBuild runs: <c>Visual Studio 17 2022</c>.</summary>
     private static bool VisualStudio(string? generator) => generator?.StartsWith("Visual Studio ", StringComparison.OrdinalIgnoreCase) == true;
@@ -468,10 +485,16 @@ public sealed class CMakeAdapter : IBuildAdapter
 
         // What the generator's own tool is given to go on past a failing unit, after the '--' that hands cmake --build's
         // last arguments to it. A tool that goes on by itself is given nothing; one with no known way never gets here, for
-        // the run refuses the option before anything starts (KeepGoing.Require).
-        if (request.KeepGoing && KeepGoingFor(config, request.Variant.Toolchain) is { How: KeepGoingHow.WhenTold } way)
+        // its build is refused before it starts (KeepGoing.RequireFor, by the configuration the leg builds by), and is
+        // never built without its way while asked for it.
+        if (request.KeepGoing && KeepGoingFor(config, request.Variant.Toolchain) is { How: not KeepGoingHow.ByItself } way)
         {
-            build.Add("--");
+            if (way.How == KeepGoingHow.Never)
+            {
+                throw new InvalidOperationException($"Leg '{request.Leg}' was built asked to keep going with no way to: {way.Said}. KeepGoing.RequireFor refuses it first.");
+            }
+
+            build.Add(KeepGoingWay.ToTheTool);
             build.AddRange(way.Arguments);
         }
 
@@ -555,7 +578,7 @@ public sealed class DotnetAdapter : IBuildAdapter
     {
         ArgumentNullException.ThrowIfNull(failed);
 
-        return FailedUnits.NotRead(Program, failed.Request.KeepGoing, stopsAtFirst: false);
+        return FailedUnits.NotRead(Program, Way.GivenIn(failed.Arguments), stopsAtFirst: false);
     }
 
     /// <inheritdoc/>
@@ -665,7 +688,7 @@ public sealed class DartAdapter : IBuildAdapter
     {
         ArgumentNullException.ThrowIfNull(failed);
 
-        return FailedUnits.NotRead(Program, failed.Request.KeepGoing, stopsAtFirst: false);
+        return FailedUnits.NotRead(Program, Way.GivenIn(failed.Arguments), stopsAtFirst: false);
     }
 
     /// <inheritdoc/>

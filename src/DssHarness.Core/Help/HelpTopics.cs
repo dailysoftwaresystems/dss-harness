@@ -2176,11 +2176,17 @@ public static class HelpTopics
             + "names the source a failed step compiles - a step that links or runs a command by its output - or by the "
             + "target make says failed, which is the object it was building. Its line says how many, they are listed "
             + "beneath the table, and --json carries them as failedUnits: each unit's source and step, the count, the tool, "
-            + "whether the build kept going, and how far it got. Where which units failed is not read - MSBuild's, dotnet's "
-            + "and dart's output is not, nor a log that could not be read back - the line says so and why, never that none "
-            + "failed. ninja and make stop at their first failures, so the line of a build of theirs not kept going says that "
-            + "every unit it never reached was not built and says nothing of the code, and - where ninja's own [run/planned] "
-            + "status says it - how many of the steps it had to run it ran: 'ran 22 of the 1093 steps it had to run'.");
+            + "whether its tool went on past failing units, and how far it got. Only the build's own steps are units: "
+            + "ninja's FAILED line directly after a status line of its own - one printing what a build line of its manifest "
+            + "prints, at the count it stands at - and its last such status for how far it got; make's failing step of a "
+            + "target's own makefile, and a failure of CMake's driving makefiles that no deeper failure of its target explains, "
+            + "read by its structure in any language and whatever signal ended it. A build nested in a step - an external "
+            + "project's - is that step's unit, never its own lines. Where which units failed is not read - MSBuild's, "
+            + "dotnet's and dart's output is not, nor a log that could not be read back, nor one in which no line of the "
+            + "build's own named a failed unit - the line says so and why, never that none failed. ninja and make stop at "
+            + "their first failures, so the line of a build of theirs not kept going says that every unit it never reached "
+            + "was not built and says nothing of the code, and - where ninja's own [run/planned] status says it - how many "
+            + "of the steps it had to run it ran: 'ran 22 of the 1093 steps it had to run'.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2208,7 +2214,13 @@ public static class HelpTopics
             $"A toolchain that names no generator - CMake would pick its build tool as it configures - and a generator no way "
             + $"is known for, Xcode's among them, refuse {KeepGoing.Option} for each leg they build before anything runs "
             + $"({HarnessExit.Refused}), naming every one; and a run that builds none of its legs refuses it too ({HarnessExit.UsageError}). "
-            + "check-mutations takes none: an arm's build is judged by whether, and where, it fails.");
+            + "A leg that builds in a copy of its tree builds by the copy's configuration, so where the copy's gives its "
+            + $"tool no way, its build is refused before it starts ({HarnessExit.Refused}): no tool is run without its way "
+            + "while the build was asked for it. Whether a tool went on is read from what its build ran with, and a ninja "
+            + "told to go on ended its build only where its last word says so - 'cannot make progress due to previously "
+            + "encountered errors', or an error of its own: killed after a step failed, it says nothing, and the build is "
+            + "stopped, never one whose unrun steps need one that failed. check-mutations takes none: an arm's build is "
+            + "judged by whether, and where, it fails.");
     }
 
     private static string RenderSpace()
@@ -5824,7 +5836,8 @@ public static class HelpTopics
             + "is text any template reads: {run.ran}, every check that ended so far, a line each with where it ran and its "
             + "verdict, each leg's for a step that runs legs; {run.notRun}, each check not run yet, by its step's name, and each "
             + "skipped or never reached, with why; and {run.red}, each red result not seen green since by a later visit of the "
-            + "same step - a red leg, a red check of CI, an anchor check's findings, a plan's problems, a failure - each 'none' "
+            + "same step - a red leg, with what its line said of the units its build failed where its own tool failed it, a "
+            + "red check of CI, an anchor check's findings, a plan's problems, a failure - each 'none' "
             + "where it names nothing. The checks are the steps of type "
             + $"{string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step "
             + "marked independent, whatever each is named. A commit's message and variables read {carried.ran}, "

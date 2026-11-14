@@ -175,13 +175,111 @@ public sealed class KeepGoingTests
     [InlineData(2, true, true, 4, 4, null, "2 unit(s) failed to build; ninja went on past them and ran all 4 steps it had to run")]
     [InlineData(2, true, true, null, null, null, "2 unit(s) failed to build; ninja went on past them")]
     [InlineData(2, false, false, null, null, null, "2 unit(s) failed to build")]
-    [InlineData(0, false, true, 4, 9, null, "ninja named no step that failed, so the build failed outside every unit")]
+    [InlineData(0, false, true, 4, 9, null, "which units failed to build was not read: ninja named no unit that failed in any line read for them - its log says what failed")]
+    [InlineData(0, true, true, null, null, null, "which units failed to build was not read: ninja named no unit that failed in any line read for them - its log says what failed")]
     [InlineData(0, false, true, null, null, "its log is gone", "which units failed to build was not read: its log is gone")]
     public void AFailedBuildsLine_SaysItsUnits_AndHowFarItsToolGot(int units, bool keptGoing, bool stopsAtFirst, int? run, int? planned, string? unread, string said)
     {
         var failed = new FailedUnits("ninja", [.. Enumerable.Range(0, units).Select(unit => new FailedUnit($"src/{unit}.c", $"CMakeFiles/app.dir/src/{unit}.c.o"))], unread, keptGoing, stopsAtFirst, run, planned);
 
         Assert.Equal(said, failed.Describe());
+    }
+
+    /// <summary>
+    /// The document of a failed build's units - the ledger's --json, a workflow step's red entry - counts them only where
+    /// which failed was read: where none was named in a line read for them, the count is left out and why is said, as the
+    /// line says it, never a count of none.
+    /// </summary>
+    [Fact]
+    public void AFailedBuildsDocument_CountsItsUnitsOnlyWhereTheyWereRead()
+    {
+        var read = new FailedUnits("make", [new FailedUnit(null, "CMakeFiles/app.dir/a.c.o")], null, KeptGoing: true, StopsAtFirst: true).Document(path => path);
+        var none = new FailedUnits("make", [], null, KeptGoing: true, StopsAtFirst: true).Document(path => path);
+
+        Assert.Equal((1, (string?)null, "1 unit(s) failed to build; make went on past them"), (read.Count, read.Unread, read.Said));
+        Assert.Equal((null, "make named no unit that failed in any line read for them - its log says what failed"), (none.Count, none.Unread));
+        Assert.Equal($"which units failed to build was not read: {none.Unread}", none.Said);
+    }
+
+    /// <summary>
+    /// Whether a tool went on past failing units is read from what its build phase ran with: told, only where its way's
+    /// arguments follow the '--' that hands them to it; by itself, always; and a way none is known for, never.
+    /// </summary>
+    [Theory]
+    [InlineData("Ninja", new[] { "--build", "b", "--target", "app", "--", "-k", "0" }, true)]
+    [InlineData("Ninja", new[] { "--build", "b", "--target", "app" }, false)]
+    [InlineData("Ninja", new[] { "--build", "b", "--", "-k" }, false)]
+    [InlineData("Unix Makefiles", new[] { "--build", "b", "--", "-k" }, true)]
+    [InlineData("Unix Makefiles", new[] { "--build", "b", "-k" }, false)]
+    [InlineData("Visual Studio 17 2022", new[] { "--build", "b" }, true)]
+    [InlineData("NMake Makefiles", new[] { "--build", "b", "--", "/K" }, false)]
+    [InlineData("Xcode", new[] { "--build", "b" }, false)]
+    public void WhetherAToolWentOn_IsReadFromWhatItsBuildRanWith(string generator, string[] arguments, bool keptGoing)
+        => Assert.Equal(keptGoing, CMakeAdapter.KeptGoing(generator, arguments));
+
+    /// <summary>
+    /// A failed build's units say its tool went on only where what its build phase ran with gave it its way - never because
+    /// the build was asked to: a make asked to keep going and run without -k stopped at its first failure, and says so.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { "--build", "b", "--", "-k" }, true)]
+    [InlineData(new[] { "--build", "b" }, false)]
+    public void AFailedBuildsUnits_SayItsToolWentOn_AsWhatItsBuildRanWithSays(string[] arguments, bool keptGoing)
+    {
+        using var temp = new TempDirectory();
+        var phase = new Core.Execution.PhaseResult(
+            "a", "build", 1, Core.Execution.PhaseStop.None, 0, null, TimeSpan.Zero, TimeSpan.Zero, false, [], "build.log",
+            Core.Execution.PhaseOutput.Of("make[2]: *** [CMakeFiles/app.dir/build.make:76: CMakeFiles/app.dir/a.c.o] Error 1\n"));
+        var failed = new FailedBuild(
+            phase,
+            arguments,
+            Request(temp, keepGoing: true),
+            temp.Combine("build"),
+            new BuildDirectoryRecord(null, null, null, null, MakeProgram: "/usr/bin/make", Generator: "Unix Makefiles"),
+            new Core.FileSystem.PhysicalFileSystem(Core.Platform.FilePermissionsFactory.Create()));
+
+        var units = new CMakeAdapter().FailedUnitsOf(failed);
+
+        Assert.Equal((keptGoing, 1), (units.KeptGoing, units.Units.Count));
+    }
+
+    /// <summary>
+    /// A leg's build asked to keep going is refused before it starts where the configuration it builds by - a copy's, which
+    /// can differ from the tree's the run was weighed by - gives its tool no known way, naming the leg and why; and one
+    /// that gives it one, or a build not asked, goes on.
+    /// </summary>
+    [Fact]
+    public void ALegsBuild_IsRefusedByTheConfigurationItBuildsBy_WhereItGivesItsToolNoWay()
+    {
+        using var temp = new TempDirectory();
+        var adapter = new CMakeAdapter();
+
+        var refused = Assert.Throws<HarnessException>(() => KeepGoing.RequireFor(Config(("tc", null)), Request(temp, keepGoing: true), adapter));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            "--keep-going cannot be honoured for leg 'a' by the configuration it builds by, so its build was not started: toolchain 'tc' names no "
+            + "generator, so the build tool CMake picks for it - its default for the system, CMAKE_GENERATOR, or the one an earlier configure cached - "
+            + "and how that tool goes on past a failing unit are not known before it builds; name one with toolchains.tc.generator. "
+            + "Leave --keep-going out, or leave the leg out of the run with --legs.",
+            refused.Message);
+
+        KeepGoing.RequireFor(Config(("tc", "Ninja")), Request(temp, keepGoing: true), adapter);
+        KeepGoing.RequireFor(Config(("tc", null)), Request(temp, keepGoing: false), adapter);
+    }
+
+    /// <summary>
+    /// The adapter never builds a leg asked to keep going without its tool's way: where none is known, its phases throw
+    /// rather than run the tool as one that stops at its first failure, for the leg's build was refused before.
+    /// </summary>
+    [Fact]
+    public void TheBuildPhase_IsNeverMadeWithoutItsWay_WhereTheBuildWasAskedForIt()
+    {
+        using var temp = new TempDirectory();
+
+        Assert.Throws<InvalidOperationException>(() => new CMakeAdapter()
+            .Phases(Config(("tc", "Xcode")), Request(temp, keepGoing: true), temp.Combine("build"), new VariantOverlay(), new Dictionary<string, string?>())
+            .ToList());
     }
 
     /// <summary>
