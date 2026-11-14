@@ -63,7 +63,7 @@ internal interface IWorkerGraph
     /// <param name="sites">The files mutated, absolute.</param>
     IReadOnlyList<string> DependentObjects(IReadOnlyList<string> targets, IReadOnlyCollection<string> sites);
 
-    /// <summary>The steps a build's <paramref name="lines"/> say failed, as <see cref="Ninja.FailedOutputs"/> names them.</summary>
+    /// <summary>The steps a build's <paramref name="lines"/> say failed that could be its own, as <see cref="Ninja.FailedOutputs"/> names them.</summary>
     /// <param name="lines">The build phase's output, a line at a time.</param>
     IReadOnlyList<string> FailedOutputs(IEnumerable<string> lines);
 

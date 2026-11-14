@@ -23,19 +23,31 @@ public sealed record FailedUnit(string? Source, string Step)
 /// </summary>
 /// <param name="Tool">The build tool, as a line names it: ninja, samu, make, mingw32-make, MSBuild, dotnet, dart, or a generator.</param>
 /// <param name="Units">Each unit the build said failed, in the order it said them; empty where it named none or they were not read.</param>
-/// <param name="Unread">Why which units failed is not known, as a clause says it; <see langword="null"/> where they were read.</param>
-/// <param name="KeptGoing">Whether the build was told to go on past its failing units (<see cref="KeepGoing.Option"/>).</param>
+/// <param name="Unread">
+/// Why which units failed is not known, as a clause says it, where the build's output was not read for them;
+/// <see langword="null"/> where it was - and <see cref="WhyUnread"/> says why where it was read and named none.
+/// </param>
+/// <param name="KeptGoing">
+/// Whether the build's tool went on past its failing units, as what it was run with says: given its way's arguments
+/// (<see cref="KeepGoingWay.GivenIn"/>) - never only asked to (<see cref="KeepGoing.Option"/>) - or going on by itself.
+/// </param>
 /// <param name="StopsAtFirst">
 /// Whether the tool stops at its first failures unless told otherwise - ninja and make - so a build of it not told to go on
 /// left units it never reached; MSBuild, dotnet and dart go on by themselves.
 /// </param>
 /// <param name="StepsRun">How many of its steps the build ran, as ninja's <c>[run/planned]</c> progress last said it; <see langword="null"/> where nothing says.</param>
 /// <param name="StepsPlanned">How many steps the build planned to run, as the same progress said it; <see langword="null"/> where nothing says.</param>
+/// <param name="Unattributed">
+/// How many failing lines named a step that could not be told the build's own or a nested build's - ninja's reading of its
+/// lines (<c>Ninja.Own</c>) - each of which may be a unit of its own: so the line never reads as clean for them.
+/// </param>
 /// <remarks>
 /// A tool that stops at its first failures hides every unit after them: measured on a consumer's MinGW build under ninja,
 /// it stopped with 22 of its 1093 steps run and 3 units failed, and every unit it never reached would have read as clean.
 /// So a line of such a build says how far it got and names <see cref="KeepGoing.Option"/>, and where which units failed
-/// cannot be read it says so, never that none did.
+/// cannot be read it says so, never that none did: a build its own tool failed failed somewhere, and a reading that found
+/// no unit in its lines found none it could read, as GNU make in another language, or a make line written for a signal,
+/// was not read before its lines were read for their structure alone.
 /// </remarks>
 public sealed record FailedUnits(
     string Tool,
@@ -44,14 +56,15 @@ public sealed record FailedUnits(
     bool KeptGoing,
     bool StopsAtFirst,
     int? StepsRun = null,
-    int? StepsPlanned = null)
+    int? StepsPlanned = null,
+    int Unattributed = 0)
 {
     /// <summary>
     /// What a build whose tool's output is not read for its units says: which tool it is, and that its log names each it
     /// failed.
     /// </summary>
     /// <param name="tool">The build tool, as a line names it.</param>
-    /// <param name="keptGoing">Whether the build was told to go on past its failing units.</param>
+    /// <param name="keptGoing">Whether the build's tool went on past its failing units.</param>
     /// <param name="stopsAtFirst">Whether the tool stops at its first failures unless told otherwise.</param>
     public static FailedUnits NotRead(string tool, bool keptGoing, bool stopsAtFirst)
     {
@@ -61,22 +74,37 @@ public sealed record FailedUnits(
     }
 
     /// <summary>
+    /// Why which units failed is not known, as a clause says it: <see cref="Unread"/> where the output was not read, and -
+    /// where it was read and named no unit that failed - that none was found in a line read for them, which is never that
+    /// none failed; <see langword="null"/> where units were read.
+    /// </summary>
+    public string? WhyUnread => Unread ?? (Units.Count == 0
+        ? Unattributed > 0
+            ? $"{Tool} named no unit of its own that failed, and {Unattributedly} - its log names each"
+            : $"{Tool} named no unit that failed in any line read for them - its log says what failed"
+        : null);
+
+    /// <summary>The failing lines that could not be told the build's own or a nested build's, as a clause says them.</summary>
+    private string Unattributedly => $"{ReportText.Counted(Unattributed, "failing line")} could not be told its own or a nested build's";
+
+    /// <summary>
     /// What a leg's line says of the units: how many failed, or why which is not known; and, where the tool stops at its
     /// first failures, how far it got and that <see cref="KeepGoing.Option"/> builds past them - or, told to go on, what it
     /// did not run.
     /// </summary>
     public string Describe()
     {
-        if (Unread is { } unread)
+        if (WhyUnread is { } unread)
         {
             return $"which units failed to build was not read: {unread}";
         }
 
-        if (Units.Count == 0)
-        {
-            return $"{Tool} named no step that failed, so the build failed outside every unit";
-        }
+        return Unattributed > 0 ? $"{Counted()}; and {Unattributedly}, each perhaps a unit of its own - its log names each" : Counted();
+    }
 
+    /// <summary>What the line says of the units read: how many, and how far a tool that stops at its first failures got.</summary>
+    private string Counted()
+    {
         var failed = $"{ReportText.Counted(Units.Count, "unit")} failed to build";
 
         if (KeptGoing)
@@ -124,16 +152,77 @@ public sealed record FailedUnits(
 
         return outside ? source : relative;
     }
+
+    /// <summary>
+    /// The units as a document says them - a run's <c>--json</c> on the leg, and a workflow step's red entry for it - each
+    /// path shown by <paramref name="show"/>: the count only where which units failed was read (<see cref="WhyUnread"/>),
+    /// and the line's own words.
+    /// </summary>
+    /// <param name="show">How a path is shown: as it is, or a host's spelled as that host spells it.</param>
+    public FailedUnitsDocument Document(Func<string, string> show)
+    {
+        ArgumentNullException.ThrowIfNull(show);
+
+        var unread = WhyUnread;
+
+        return new(
+            Tool,
+            unread is null ? Units.Count : null,
+            [.. Units.Select(unit => new FailedUnitDocument(unit.Source is { } source ? show(source) : null, show(unit.Step)))],
+            unread is null ? null : show(unread),
+            KeptGoing,
+            StopsAtFirst,
+            StepsRun,
+            StepsPlanned,
+            Unattributed > 0 ? Unattributed : null,
+            show(Describe()));
+    }
 }
+
+/// <summary>
+/// The units a build failed to build, as a document says them (<see cref="FailedUnits.Document"/>): one shape for the
+/// ledger's <c>--json</c> and a workflow step's red entry, each member left out where it holds nothing.
+/// </summary>
+/// <param name="Tool">The build tool.</param>
+/// <param name="Count">How many units failed; <see langword="null"/> where which did was not read.</param>
+/// <param name="Units">Each unit, by its source where the build names one and its step always.</param>
+/// <param name="Unread">Why which units failed was not read; <see langword="null"/> where it was.</param>
+/// <param name="KeptGoing">Whether the build's tool went on past its failing units.</param>
+/// <param name="StopsAtFirst">Whether the tool stops at its first failures unless told otherwise.</param>
+/// <param name="StepsRun">How many of its steps the build ran, where its tool's own status says it.</param>
+/// <param name="StepsPlanned">How many steps it planned to run, where the same status says it.</param>
+/// <param name="Unattributed">How many failing lines could not be told the build's own or a nested build's; <see langword="null"/> where none.</param>
+/// <param name="Said">What the leg's line says of them (<see cref="FailedUnits.Describe"/>).</param>
+public sealed record FailedUnitsDocument(
+    string Tool,
+    int? Count,
+    IReadOnlyList<FailedUnitDocument> Units,
+    string? Unread,
+    bool KeptGoing,
+    bool StopsAtFirst,
+    int? StepsRun,
+    int? StepsPlanned,
+    int? Unattributed,
+    string Said);
+
+/// <summary>One unit as a document says it.</summary>
+/// <param name="Source">The source it compiles; <see langword="null"/> where the build names none.</param>
+/// <param name="Step">The step that failed, by its first output.</param>
+public sealed record FailedUnitDocument(string? Source, string Step);
 
 /// <summary>A build phase its tool failed, as an adapter reads it for the units it failed to build.</summary>
 /// <param name="Phase">The phase, which did not pass, exited non-zero and was stopped by no bound of the harness's.</param>
+/// <param name="Arguments">
+/// What the phase ran its program with, which says whether its tool was given its way to go on past failing units
+/// (<see cref="KeepGoingWay.GivenIn"/>) - never what the build was asked alone.
+/// </param>
 /// <param name="Request">The leg's build.</param>
 /// <param name="BuildDirectory">Where it built.</param>
 /// <param name="Configured">What CMake's cache says the directory was configured with; <see langword="null"/> where it holds none.</param>
 /// <param name="FileSystem">Reads the build's own records.</param>
 public sealed record FailedBuild(
     PhaseResult Phase,
+    IReadOnlyList<string> Arguments,
     BuildRequest Request,
     string BuildDirectory,
     BuildDirectoryRecord? Configured,

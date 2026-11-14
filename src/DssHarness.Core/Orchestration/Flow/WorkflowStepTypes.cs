@@ -473,7 +473,7 @@ public static class WorkflowStepTypes
     private static KeyDescription RunInputs => new("inputs", "the values it hands its runner's inputs");
 
     /// <summary>The key a step that builds its legs takes - <c>build</c>, <c>test</c> and <c>run</c> - as their commands take <c>--keep-going</c>.</summary>
-    private static KeyDescription KeepGoingKey => new("keepGoing", "its builds of its legs go on past the units that fail to build, as --keep-going has them, and each red leg names every unit it failed");
+    private static KeyDescription KeepGoingKey => new("keepGoing", "its builds of its legs go on past the units that fail to build, as --keep-going has them, so each red leg's entry in the step's red names, in failedUnits, every unit its build failed - by source and step, with what its line said of them - and {run.red} says that line's words");
 
     /// <summary>The keys the fold family takes, shared by <c>fold</c> and <c>delete-agent</c>.</summary>
     private static IReadOnlyList<KeyDescription> FoldKeys =>
@@ -558,7 +558,7 @@ public static class WorkflowStepTypes
         ("passed", Flag),
         ("exitCode", WholeNumber),
         ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
-        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), .. arms ? [("arm", TextOrNull)] : Array.Empty<(string, string)>()]))),
+        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
         ("runDirectory", TextOrNull),
         ("isolation", IsolationOutput));
 
@@ -625,9 +625,31 @@ public static class WorkflowStepTypes
     /// <summary>A schema of a list whose items are each <paramref name="items"/>.</summary>
     private static string ListOf(string items) => $$"""{"type":"array","items":{{items}}}""";
 
+    /// <summary>
+    /// What a red leg's entry carries of the units its build failed (<see cref="Build.FailedUnitsDocument"/>), or null where
+    /// its own tool failed no build of it: each member as the ledger's <c>--json</c> says it, left out where it holds nothing.
+    /// </summary>
+    private static string FailedUnitsOutput => ObjectOrNullOf(
+        ("tool", Text),
+        ("count", WholeNumber),
+        ("units", ListOf(ObjectOf(("source", Text), ("step", Text)))),
+        ("unread", Text),
+        ("keptGoing", Flag),
+        ("stopsAtFirst", Flag),
+        ("stepsRun", WholeNumber),
+        ("stepsPlanned", WholeNumber),
+        ("unattributed", WholeNumber),
+        ("said", Text));
+
     /// <summary>A schema of an object holding exactly <paramref name="properties"/>, each named and none other, as the subset closes every object.</summary>
-    private static string ObjectOf(params (string Name, string Schema)[] properties)
-        => $$$"""{"type":"object","additionalProperties":false,"properties":{{{{string.Join(",", properties.Select(property => $"\"{property.Name}\":{property.Schema}"))}}}}}""";
+    private static string ObjectOf(params (string Name, string Schema)[] properties) => Closed("\"object\"", properties);
+
+    /// <summary>A schema of what <see cref="ObjectOf"/> says of <paramref name="properties"/>, or null.</summary>
+    private static string ObjectOrNullOf(params (string Name, string Schema)[] properties) => Closed("""["object","null"]""", properties);
+
+    /// <summary>A schema of a closed object of the <paramref name="type"/> given, holding exactly <paramref name="properties"/>.</summary>
+    private static string Closed(string type, (string Name, string Schema)[] properties)
+        => $$$"""{"type":{{{type}}},"additionalProperties":false,"properties":{{{{string.Join(",", properties.Select(property => $"\"{property.Name}\":{property.Schema}"))}}}}}""";
 
     /// <summary>What one answer of an <c>answers</c> map takes.</summary>
     public static IReadOnlyList<KeyDescription> AnswerKeys =>

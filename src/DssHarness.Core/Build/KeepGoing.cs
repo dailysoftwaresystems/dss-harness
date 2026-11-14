@@ -29,7 +29,31 @@ public enum KeepGoingHow
 /// given nothing.
 /// </param>
 /// <param name="Said">How it goes on, or why it cannot, as help and a refusal say it.</param>
-public sealed record KeepGoingWay(string Builds, KeepGoingHow How, IReadOnlyList<string> Arguments, string Said);
+public sealed record KeepGoingWay(string Builds, KeepGoingHow How, IReadOnlyList<string> Arguments, string Said)
+{
+    /// <summary>What a build hands its tool its way after: <c>cmake --build</c>'s own end, past which its tool reads the rest.</summary>
+    public const string ToTheTool = "--";
+
+    /// <summary>
+    /// Whether a build phase run with <paramref name="arguments"/> had its tool go on past failing units: by itself, or
+    /// given this way's arguments after <see cref="ToTheTool"/> - read from what the phase ran with, so a line never says a
+    /// tool went on that was not told to.
+    /// </summary>
+    /// <param name="arguments">What the build phase ran its program with.</param>
+    public bool GivenIn(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (How != KeepGoingHow.WhenTold)
+        {
+            return How == KeepGoingHow.ByItself;
+        }
+
+        var start = arguments.ToList().IndexOf(ToTheTool);
+
+        return start >= 0 && arguments.Skip(start + 1).Take(Arguments.Count).SequenceEqual(Arguments, StringComparer.Ordinal);
+    }
+}
 
 /// <summary>
 /// <c>--keep-going</c>: a leg's build goes on past the units that fail to build, so its line names every one of them and
@@ -85,9 +109,9 @@ public static class KeepGoing
                 continue;
             }
 
-            if (adapter.KeepGoingFor(config, variant.Toolchain) is { How: KeepGoingHow.Never } never)
+            if (Unhonoured(config, adapter, variant.Toolchain) is { } why)
             {
-                refused.Add($"  - Leg '{leg.Name}': {never.Said}.");
+                refused.Add($"  - Leg '{leg.Name}': {why}.");
             }
         }
 
@@ -106,4 +130,32 @@ public static class KeepGoing
                     $"Leave {Option} out, or leave {(refused.Count == 1 ? "the leg" : "those legs")} out of the run with --legs.",
                 ]));
     }
+
+    /// <summary>
+    /// Refuses one leg's build asked to keep going where the configuration it builds by - a copy's own, which can differ
+    /// from the tree's the run was refused by before anything ran - gives its build tool no known way: so its tool is never
+    /// run without its way while the build was asked for it.
+    /// </summary>
+    /// <param name="config">The configuration the leg builds by.</param>
+    /// <param name="request">The leg's build.</param>
+    /// <param name="adapter">The adapter that builds it.</param>
+    /// <exception cref="HarnessException">The leg's build tool has no known way to go on (<see cref="HarnessExit.Refused"/>).</exception>
+    public static void RequireFor(HarnessConfig config, BuildRequest request, IBuildAdapter adapter)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(adapter);
+
+        if (request.KeepGoing && Unhonoured(config, adapter, request.Variant.Toolchain) is { } why)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"{Option} cannot be honoured for leg '{request.Leg}' by the configuration it builds by, so its build was not started: {why}. "
+                + $"Leave {Option} out, or leave the leg out of the run with --legs.");
+        }
+    }
+
+    /// <summary>Why a build by <paramref name="adapter"/> with <paramref name="toolchain"/> cannot go on past a failing unit; <see langword="null"/> where it can.</summary>
+    private static string? Unhonoured(HarnessConfig config, IBuildAdapter adapter, string toolchain)
+        => adapter.KeepGoingFor(config, toolchain) is { How: KeepGoingHow.Never } never ? never.Said : null;
 }

@@ -119,6 +119,120 @@ public sealed class KeepGoingEndToEndTests
     }
 
     /// <summary>
+    /// A build that runs another in one of its steps - an external project, whose own static library is named as this
+    /// build's and compiled from a source named as this build's, so its failing object is one this build's manifest names
+    /// too - names that step as its unit, and none of the nested build's lines: never the nested object as this build's
+    /// own source, and, under ninja, how far this build got by its own status, not the nested build's. Under ninja and under
+    /// make, kept going or not, on one core.
+    /// </summary>
+    [Theory]
+    [InlineData("Ninja", false)]
+    [InlineData("Ninja", true)]
+    [InlineData("Makefiles", false)]
+    [InlineData("Makefiles", true)]
+    public async Task ANestedBuildsLines_AreNeverReadAsThisBuildsOwn(string generator, bool keepGoing)
+    {
+        var harness = new HarnessFactory();
+        var compiler = OperatingSystem.IsWindows() ? "gcc" : "cc";
+        var (named, tool) = generator == "Ninja"
+            ? ("Ninja", "ninja")
+            : OperatingSystem.IsWindows() ? ("MinGW Makefiles", "mingw32-make") : ("Unix Makefiles", "make");
+
+        BuildTools.Need(harness.ProcessRunner, "a real build of an external project", "cmake", tool, compiler);
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        using var clock = new ClockWatch();
+
+        await WriteNestedProjectAsync(harness, temp, named, compiler, token);
+
+        try
+        {
+            string[] arguments = keepGoing ? ["build", "--legs", "native", "--keep-going", "--json", "-C", temp.Path] : ["build", "--legs", "native", "--json", "-C", temp.Path];
+            var said = FailedUnitsOf(await CliRunner.RunAsync(arguments, token));
+
+            // ninja's own status counts this build's steps - an external project's eight among them - where the nested
+            // build's, printed last as the failing step's output, counts its two.
+            if (generator == "Ninja")
+            {
+                Assert.True(said.StepsPlanned > 4 && said.StepsRun <= said.StepsPlanned, $"{said.StepsRun} of {said.StepsPlanned}: {said.Said}");
+            }
+
+            Assert.Equal([new FailedUnit(null, "ext-prefix/src/ext-stamp/ext-build")], said.Units);
+            Assert.Equal(keepGoing, said.KeptGoing);
+        }
+        catch (Exception ex) when (clock.Explains(ex))
+        {
+            Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The ninja on this machine, its output piped, holds back every other step's lines while a step in the console pool
+    /// runs - here one that sleeps while the others end, one of them failing after two that pass - and writes at its end
+    /// only the failed step's status and lines and the last one's status, so the failed step's status is written at a count
+    /// the build never wrote before it; and a step after the console step fails too. Each failure is the build's own, and
+    /// how far it got is not said, for whether the console step ended before the last status is not written.
+    /// </summary>
+    [Fact]
+    public async Task WhatARealNinjaHoldsBackWhileAConsoleStepRuns_IsTheBuildsOwn()
+    {
+        var harness = new HarnessFactory();
+
+        BuildTools.Need(harness.ProcessRunner, "a real ninja build with a console step", "cmake", "ninja");
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var cmake = "\"" + harness.ProcessRunner.FindExecutable("cmake")!.Replace("$", "$$", StringComparison.Ordinal) + "\"";
+
+        temp.WriteFile(
+            "build.ninja",
+            $"rule cons\n  command = {cmake} -E sleep 4\n  description = CONSOLE $out\n  pool = console\n"
+            + $"rule quick\n  command = {cmake} -E touch $out\n  description = QUICK $out\n"
+            + $"rule bad\n  command = {cmake} -E false\n  description = BAD $out\n"
+            + "build c1: cons\nbuild q1: quick\nbuild q2: quick\nbuild b1: bad q1 q2\nbuild after: bad c1\n");
+
+        var built = await harness.ProcessRunner.RunAsync(
+            new Core.Processes.ProcessRequest { FileName = harness.ProcessRunner.FindExecutable("ninja")!, Arguments = ["-k", "0", "-j", "8"], WorkingDirectory = temp.Path },
+            token);
+        var lines = (built.StandardOutput + "\n" + built.StandardError).Split('\n');
+        var own = Ninja.Own(lines, "ninja", NinjaManifest.Read(harness.FileSystem, temp.Path));
+
+        Assert.True(built.ExitCode != 0, built.StandardOutput);
+        Assert.Equal(["b1=Own", "after=Own"], own.Said.Select(line => $"{line.Step}={line.Whose}"));
+        Assert.Null(own.Progress);
+    }
+
+    /// <summary>
+    /// A tree whose one leg builds, with <paramref name="generator"/> and <paramref name="compiler"/> on one core, a static
+    /// library 'probe' of a source that compiles, and an external project, built after it, whose own static library
+    /// 'probe' is of a source of the same name that fails to compile - committed, its build directory ignored.
+    /// </summary>
+    private static async Task WriteNestedProjectAsync(HarnessFactory harness, TempDirectory temp, string generator, string compiler, CancellationToken token)
+    {
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { BuildCores = 1 },
+            Toolchains = { ["cc"] = new ToolchainConfig { Platforms = [platform.PlatformKey], Generator = generator, Env = { ["CC"] = compiler } } },
+            BuildConfigs = { ["debug"] = new BuildConfiguration { CmakeBuildType = "Debug" } },
+            Projects = { new ProjectConfig { Name = "probe", Type = "cmake", Path = ".", BuildOutputs = [BuildOutput.Everywhere("libprobe.a")] } },
+            Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", Toolchain = "cc" } },
+        });
+
+        temp.WriteFile(".gitignore", "build/\n");
+        temp.WriteFile("a.c", "int first(void) { return 1; }\n");
+        temp.WriteFile(
+            "CMakeLists.txt",
+            "cmake_minimum_required(VERSION 3.20)\nproject(probe C)\ninclude(ExternalProject)\nadd_library(probe STATIC a.c)\n"
+            + "ExternalProject_Add(ext SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ext DEPENDS probe INSTALL_COMMAND \"\" CMAKE_ARGS -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER})\n");
+        temp.WriteFile(Path.Combine("ext", "a.c"), "int nested(void) { return undeclared_in_nested; }\n");
+        temp.WriteFile(Path.Combine("ext", "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(ext C)\nadd_library(probe STATIC a.c)\n");
+        await harness.CommitAllAsync(temp.Path, "a nested build that fails", token);
+    }
+
+    /// <summary>
     /// A tree whose one leg builds, with <paramref name="generator"/> and <paramref name="compiler"/> on one core, a static
     /// library of two sources that each fail to compile - committed, its build directory ignored.
     /// </summary>

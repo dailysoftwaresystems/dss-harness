@@ -202,6 +202,11 @@ public sealed class BuildService(
         ArgumentNullException.ThrowIfNull(request);
 
         var adapter = BuildAdapters.For(request.Project.Type);
+
+        // By the configuration the leg builds by, which for a leg in a copy is the copy's: the run was refused by the tree's
+        // before anything ran, and a copy's can give its tool no way the tree's gave it.
+        KeepGoing.RequireFor(config, request, adapter);
+
         var buildDirectory = request.Variant.DirectoryUnder(request.TreeRoot);
         var overlay = request.Variant.Overlay(config, request.Project);
 
@@ -426,15 +431,16 @@ public sealed class BuildService(
                 var configured = buildPhase && adapter is CMakeAdapter ? _buildDirectoryGuard.Read(buildDirectory) : null;
 
                 // A build ninja did not end itself, or ended only because it was interrupted, was stopped from outside,
-                // which says nothing about the code.
+                // which says nothing about the code - and one it was told to go on past failing steps ended itself only
+                // where it said it had, as what the phase ran with says it was told.
                 var stopped = configured is not null && Ninja.Generates(configured.Generator)
-                    ? Ninja.Stopped(result, configured.MakeProgram)
+                    ? Ninja.Stopped(result, configured.MakeProgram, CMakeAdapter.KeptGoing(configured.Generator, phase.Arguments))
                     : null;
 
                 // A build its own tool failed names the units it failed to build, and where its tool stops at its first
                 // failures, how far it got: a unit it never reached is not one that built.
                 var units = buildPhase && stopped is null && result.Stopped == PhaseStop.None && result.ExitCode != 0
-                    ? adapter.FailedUnitsOf(new FailedBuild(result, request, buildDirectory, configured, _fileSystem))
+                    ? adapter.FailedUnitsOf(new FailedBuild(result, phase.Arguments, request, buildDirectory, configured, _fileSystem))
                     : null;
 
                 return await FinishAsync(stopped ?? result.Verdict(), null, units).ConfigureAwait(false);

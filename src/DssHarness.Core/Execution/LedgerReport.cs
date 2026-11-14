@@ -880,18 +880,7 @@ public sealed class LedgerReport
                 // Only where the leg's build was failed by its own tool: each unit it failed to build, by its source where the
                 // build says one and its step always, how many - or why which is not known - and how far a tool that stops at
                 // its first failures got, so a unit it never reached is never read as one that built.
-                FailedUnits = line.FailedUnits is { } failed ? new
-                {
-                    failed.Tool,
-                    Count = failed.Unread is null ? failed.Units.Count : (int?)null,
-                    Units = failed.Units.Select(unit => new { Source = unit.Source is { } source ? show(source) : null, Step = show(unit.Step) }),
-                    Unread = failed.Unread is { } unread ? show(unread) : null,
-                    failed.KeptGoing,
-                    failed.StopsAtFirst,
-                    failed.StepsRun,
-                    failed.StepsPlanned,
-                    Said = show(failed.Describe()),
-                } : null,
+                FailedUnits = line.FailedUnits?.Document(show),
 
                 // Where the leg worked: its path alone for a leg in its tree, and for a copy the tree it is a copy of and the
                 // reading it holds, where that is known - this run's, or what a run on what is staged found there.

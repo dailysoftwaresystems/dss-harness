@@ -163,15 +163,26 @@ there.
 
 A leg whose build failed names each unit it failed to build - by its source, as ninja's manifest names
 the source a failed step compiles, or by the target make says failed - counts them on its line, lists
-them under the ledger, and carries them in `--json` as `failedUnits`; where which units failed is not
-read, as of MSBuild, dotnet and dart, the line says so. ninja and make stop at their first failures,
-so a build of theirs says that every unit it never reached was not built, and how many of the steps it
-had to run it ran where ninja's status says it. `--keep-going`, on `build`, `test` and `run` - and
-`keepGoing` on a workflow's `build`, `test` and `run` steps - has each leg's build go on past its
-failing units: ninja is given `-k 0` and make `-k`, MSBuild, dotnet and dart go on by themselves and
-are given nothing, and a leg whose toolchain names no generator, or one no way is known for - NMake's
-and Xcode's - is refused (13) before anything runs, as is the option on a run that builds none of its
-legs (10). `dssharness help legs` lists each generator's way.
+them under the ledger, and carries them in `--json` as `failedUnits`. Only the build's own steps are
+units: a build nested in one of them, an external project's, is that step's unit, never its own lines;
+a failing line ninja wrote that cannot be told the build's own or a nested build's - every one, where
+`NINJA_STATUS` spells its status otherwise - is counted on the line as perhaps a unit of its own,
+never read as clean, and `check-mutations` judges an arm's build by the same reading, a nested build's
+lines alone left out; make's lines are read by their structure, in any language and whatever signal
+ended a step. Where which units failed is not read - MSBuild's, dotnet's and dart's output is not, nor
+one in which no line of the build's own named a failed unit - the line says so, never that none
+failed. ninja and make stop at their first failures, so a build of theirs says that every unit it
+never reached was not built, and how many of the steps it had to run it ran where ninja's status says
+it - not where a step in the console pool that did not fail, whose end ninja writes no status for,
+may have ended after the last. `--keep-going`, on `build`,
+`test` and `run` - and `keepGoing` on a workflow's `build`, `test` and `run` steps - has each leg's
+build go on past its failing units: ninja is given `-k 0` and make `-k`, MSBuild, dotnet and dart go
+on by themselves and are given nothing, and a leg whose toolchain names no generator, or one no way is
+known for - NMake's and Xcode's - is refused (13) before anything runs, as is the option on a run that
+builds none of its legs (10); a leg built in a copy whose configuration gives its tool no way is
+refused before its build starts (13). Whether a tool went on is read from what its build ran with, and
+a ninja told to go on that never said it ended its build was stopped from outside. `dssharness help
+legs` lists each generator's way.
 
 ## Running legs at once
 
@@ -2037,7 +2048,8 @@ held to the schema its `outputs` names, the step's output - a schema in the subs
 in the schema that says it, and which the step's start holds it to again before any client is asked; and the leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
-that failed with the phase that did not pass and its last lines, a sweep's arm with its arm - a leg in a copy letting the
+that failed with the phase that did not pass and its last lines, and for `build`, `test` and `run` the units its build
+failed as `failedUnits` (null where its own tool failed no build of it), a sweep's arm with its arm - a leg in a copy letting the
 tree go once its copy is made, and keep the ledger, and in an agent's worktree each red leg's failing log, in the step's
 directory, the work of each leg this machine runs held inside the isolation of the agents' work and answered as
 `isolation` (none here and `agentPolicy.isolation: required` fails the step, 14, nothing run); the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `ci-read`,

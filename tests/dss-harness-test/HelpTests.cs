@@ -3170,6 +3170,31 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The workflows topic says what a leg step's red entry carries of the units its build failed - failedUnits, which the
+    /// output's schema declares - and that {run.red} says what the leg's line said of them.
+    /// </summary>
+    [Fact]
+    public void WorkflowsTopic_SaysWhatARedLegsEntryCarriesOfItsUnits()
+    {
+        var prose = Prose.Words(HelpText.Of("workflows").StandardOutput);
+
+        Assert.Contains(
+            "keepGoing its builds of its legs go on past the units that fail to build, as --keep-going has them, so each red leg's "
+                + "entry in the step's red names, in failedUnits, every unit its build failed - by source and step, with what its line "
+                + "said of them - and {run.red} says that line's words",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("a red leg, with what its line said of the units its build failed where its own tool failed it, a red check of CI,", prose, StringComparison.Ordinal);
+
+        foreach (var type in new[] { "build", "test", "run" })
+        {
+            Assert.Contains("\"failedUnits\":{\"type\":[\"object\",\"null\"]", WorkflowStepTypes.Find(type)!.Output, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("failedUnits", WorkflowStepTypes.Find("check-mutations")!.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The legs topic says what a failed build names of the units it failed to build, and how --keep-going has each build
     /// tool go on past them - every way an adapter answers, as the adapter says it - and the README and the architecture
     /// say the same, the architecture naming each owner by the type that is it.
@@ -3184,12 +3209,26 @@ public sealed partial class HelpTests
             "A leg whose build its own tool failed names each unit it failed to build: by its source, as ninja's manifest names "
                 + "the source a failed step compiles - a step that links or runs a command by its output - or by the target make "
                 + "says failed, which is the object it was building. Its line says how many, they are listed beneath the table, "
-                + "and --json carries them as failedUnits: each unit's source and step, the count, the tool, whether the build kept "
-                + "going, and how far it got. Where which units failed is not read - MSBuild's, dotnet's and dart's output is not, "
-                + "nor a log that could not be read back - the line says so and why, never that none failed. ninja and make stop at "
-                + "their first failures, so the line of a build of theirs not kept going says that every unit it never reached was "
-                + "not built and says nothing of the code, and - where ninja's own [run/planned] status says it - how many of the "
-                + "steps it had to run it ran: 'ran 22 of the 1093 steps it had to run'.",
+                + "and --json carries them as failedUnits: each unit's source and step, the count, the tool, whether its tool went on "
+                + "past failing units, how many failing lines could not be told its own, and how far it got. Only the build's own "
+                + "steps are units: ninja's FAILED line directly after a status line of its own - one printing what a build line of "
+                + "its manifest prints, at a count no lower than the build stands at and no more than one higher, two after a console "
+                + "step's FAILED line, whose end has no status, and any higher while a console step runs, for ninja holds back every "
+                + "other step's lines until it ends and then writes only some of their statuses - and its last such status for how "
+                + "far it got, one more where a console step's FAILED line or start came after it, and not said where a console step "
+                + "that did not fail was followed by statuses of its own, which it may have ended before or after; make's failing "
+                + "step of a target's own makefile, and a failure of CMake's driving makefiles that no deeper failure of its target "
+                + "explains, read by its structure in any language and whatever signal ended it. A build nested in a step - an "
+                + "external project's - is that step's unit, never its own lines: a failing line ninja wrote is a nested build's only "
+                + "within a failed step's output, before the nested build's own end. One that cannot be told the build's own or a "
+                + "nested build's - after a status line not its own, as every one is where NINJA_STATUS spells the status otherwise "
+                + "- is counted on the line as perhaps a unit of its own, never read as clean; and check-mutations judges an arm's "
+                + "build by the same reading: its own failing steps and every one that cannot be told apart, a nested build's alone "
+                + "left out. Where which units failed is not read - MSBuild's, dotnet's and dart's output is not, nor a log that could "
+                + "not be read back, nor one in which no line of the build's own named a failed unit - the line says so and why, "
+                + "never that none failed. ninja and make stop at their first failures, so the line of a build of theirs not kept "
+                + "going says that every unit it never reached was not built and says nothing of the code, and - where ninja's own "
+                + "[run/planned] status says it - how many of the steps it had to run it ran: 'ran 22 of the 1093 steps it had to run'.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -3201,8 +3240,14 @@ public sealed partial class HelpTests
             "A toolchain that names no generator - CMake would pick its build tool as it configures - and a generator no way is "
                 + "known for, Xcode's among them, refuse --keep-going for each leg they build before anything runs "
                 + $"({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}), naming every one; and a run that builds none of "
-                + $"its legs refuses it too ({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}). check-mutations takes "
-                + "none: an arm's build is judged by whether, and where, it fails.",
+                + $"its legs refuses it too ({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}). A leg that builds in a "
+                + "copy of its tree builds by the copy's configuration, so where the copy's gives its tool no way, its build is "
+                + $"refused before it starts ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}): no tool is run without its "
+                + "way while the build was asked for it. Whether a tool went on is read from what its build ran with, and a ninja told "
+                + "to go on ended its build only where its last word says so - 'cannot make progress due to previously encountered "
+                + "errors', or an error of its own: killed after a step failed, it says nothing, and the build is stopped, never one "
+                + "whose unrun steps need one that failed. check-mutations takes none: an arm's build is judged by whether, and "
+                + "where, it fails.",
             prose,
             StringComparison.Ordinal);
 
@@ -3234,7 +3279,24 @@ public sealed partial class HelpTests
                 + "by themselves and are given nothing, and a leg whose toolchain names no generator, or one no way is known for - "
                 + $"NMake's and Xcode's - is refused ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}) before anything "
                 + "runs, as is the option on a run that builds none of its legs "
-                + $"({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}).",
+                + $"({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}); a leg built in a copy whose configuration gives "
+                + $"its tool no way is refused before its build starts ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}). "
+                + "Whether a tool went on is read from what its build ran with, and a ninja told to go on that never said it ended its "
+                + "build was stopped from outside.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Only the build's own steps are units: a build nested in one of them, an external project's, is that step's unit, "
+                + "never its own lines; a failing line ninja wrote that cannot be told the build's own or a nested build's - every "
+                + "one, where `NINJA_STATUS` spells its status otherwise - is counted on the line as perhaps a unit of its own, never "
+                + "read as clean, and `check-mutations` judges an arm's build by the same reading, a nested build's lines alone left "
+                + "out; make's lines are read by their structure, in any language and whatever signal ended a step.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ninja and make stop at their first failures, so a build of theirs says that every unit it never reached was not "
+                + "built, and how many of the steps it had to run it ran where ninja's status says it - not where a step in the "
+                + "console pool that did not fail, whose end ninja writes no status for, may have ended after the last.",
             readme,
             StringComparison.Ordinal);
 
@@ -3242,7 +3304,18 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "and `--json` carries them on the leg as `failedUnits`: `tool`, `count`, `units` - each one's `source` and `step` - "
-                + "`unread`, `keptGoing`, `stopsAtFirst`, `stepsRun`, `stepsPlanned` and `said`, the line's own words.",
+                + "`unread`, `keptGoing`, `stopsAtFirst`, `stepsRun`, `stepsPlanned`, `unattributed` and `said`, the line's own words "
+                + "(`FailedUnits.Document`, which a workflow step's red entry carries too).",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "So from a console step's start until its own `FAILED:` line, the count is held to from below alone.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`check-mutations` judges an arm's failed build by the same reading (`Ninja.FailedOutputs`, `OwnSteps.NotNested`): "
+                + "its own failing steps and every one that cannot be told apart, so none that could be a step not depending on a "
+                + "site is lost, and a nested build's alone left out - where nothing is nested, every failing line, as before.",
             architecture,
             StringComparison.Ordinal);
 
@@ -3255,12 +3328,21 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Build.KeepGoingWay),
             $"{nameof(DssHarness.Core.Build.KeepGoing)}.{nameof(DssHarness.Core.Build.KeepGoing.Option)}",
             $"{nameof(DssHarness.Core.Build.KeepGoing)}.{nameof(DssHarness.Core.Build.KeepGoing.Require)}",
-            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.FailedOutputs)}",
-            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.Progress)}",
+            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.Own)}",
+            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.Stopped)}",
+            $"{nameof(DssHarness.Core.Build.NinjaEdge)}.{nameof(DssHarness.Core.Build.NinjaEdge.Description)}",
+            $"{nameof(DssHarness.Core.Build.KeepGoing)}.{nameof(DssHarness.Core.Build.KeepGoing.RequireFor)}",
+            $"{nameof(DssHarness.Core.Build.KeepGoingWay)}.{nameof(DssHarness.Core.Build.KeepGoingWay.GivenIn)}",
+            $"{nameof(DssHarness.Core.Build.CMakeAdapter)}.{nameof(DssHarness.Core.Build.CMakeAdapter.KeptGoing)}",
+            $"{nameof(DssHarness.Core.Build.FailedUnits)}.{nameof(DssHarness.Core.Build.FailedUnits.WhyUnread)}",
+            $"{nameof(DssHarness.Core.Build.FailedUnits)}.{nameof(DssHarness.Core.Build.FailedUnits.Document)}",
             $"{nameof(DssHarness.Core.Build.CMakeNinjaRule)}.{nameof(DssHarness.Core.Build.CMakeNinjaRule.Compiles)}",
             $"{nameof(DssHarness.Core.Build.BuildRequest)}.{nameof(DssHarness.Core.Build.BuildRequest.KeepGoing)}",
             $"{nameof(LegWork)}.{nameof(LegWork.BuildRequest)}",
             $"{nameof(DssHarness.Core.Build.Make)}.{nameof(DssHarness.Core.Build.Make.FailedTargets)}",
+            $"{nameof(DssHarness.Core.Build.Ninja)}.{nameof(DssHarness.Core.Build.Ninja.FailedOutputs)}",
+            $"{nameof(DssHarness.Core.Build.Ninja.OwnSteps)}.{nameof(DssHarness.Core.Build.Ninja.OwnSteps.NotNested)}",
+            $"{nameof(DssHarness.Core.Build.FailedUnits)}.{nameof(DssHarness.Core.Build.FailedUnits.Unattributed)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);

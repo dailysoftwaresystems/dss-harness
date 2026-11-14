@@ -356,6 +356,25 @@ public sealed class BuildServiceTests
     }
 
     /// <summary>
+    /// A build asked to keep going is refused before anything of it runs where the configuration it builds by - a copy's,
+    /// which can differ from the tree's the run was weighed by - gives its tool no known way: never run as one that stops
+    /// at its first failure while its line would say it went on.
+    /// </summary>
+    [Fact]
+    public async Task ABuildAskedToKeepGoing_IsRefusedByTheConfigurationItBuildsBy_BeforeAnyPhase()
+    {
+        using var temp = new TempDirectory();
+        var service = await TrackedAsync(temp, TestContext.Current.CancellationToken);
+        var request = Request(temp, outputs: []) with { Project = new ProjectConfig { Name = "app", Type = "cmake", Path = "." }, KeepGoing = true };
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => service.BuildAsync(Config(), request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.StartsWith("--keep-going cannot be honoured for leg '", refused.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(request.Variant.DirectoryUnder(request.TreeRoot)));
+    }
+
+    /// <summary>
     /// The measurement that opened this: from a consumer's worktree, one markdown edit made two
     /// legs rebuild from clean, discarding a warm build directory that had cost eleven minutes.
     /// Neither named file is read by the build - so even an edit dated before the build, which would
@@ -657,6 +676,41 @@ public sealed class BuildServiceTests
         var built = await building.BuildAsync(Config(), request, token);
 
         Assert.Equal((verdict, true), (built.Verdict.Verdict, built.Verdict.Detail.StartsWith(detail, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A CMake build under ninja asked to keep going is given -k 0, and a failed step is then no end of it: it failed where
+    /// ninja's last word says it ended the build, and was stopped from outside where ninja said nothing after the step
+    /// failed - so the line never says that the steps it never ran need one that failed. Its units say ninja went on, as
+    /// what the build phase ran with says.
+    /// </summary>
+    [Theory]
+    [InlineData("FAILED: obj/app.o\n[2/9] Building CXX object obj/b.o\nninja: build stopped: cannot make progress due to previously encountered errors.\n", LegVerdict.Failed, "build exited 1")]
+    [InlineData("FAILED: obj/app.o\n[2/9] Building CXX object obj/b.o\n", LegVerdict.Stopped, "build exited 1: ninja was told to go on past failing steps and never said it had ended the build")]
+    public async Task ABuildNinjaWasToldToGoOn_EndedOnlyWhereNinjaSaidSo(string output, LegVerdict verdict, string detail)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var (factory, request) = await TrackedTreeAsync(temp, token);
+        var buildDirectory = request.Variant.DirectoryUnder(temp.Path);
+        var config = Config();
+
+        config.Toolchains[request.Variant.Toolchain] = new ToolchainConfig { Generator = "Ninja" };
+
+        var building = Service(
+            factory,
+            exitCode: 0,
+            phases: new ScriptedPhases(
+                configuring: () => File.WriteAllText(
+                    Path.Combine(buildDirectory, BuildDirectoryGuard.CMakeCacheFileName),
+                    "CMAKE_GENERATOR:INTERNAL=Ninja\nCMAKE_GENERATOR_INSTANCE:INTERNAL=\n"),
+                buildExitCode: 1,
+                buildOutput: output));
+
+        var built = await building.BuildAsync(config, request with { KeepGoing = true }, token);
+
+        Assert.Equal((verdict, true), (built.Verdict.Verdict, built.Verdict.Detail.StartsWith(detail, StringComparison.Ordinal)));
+        Assert.Equal(verdict == LegVerdict.Failed ? true : null, built.FailedUnits?.KeptGoing);
     }
 
     /// <summary>
