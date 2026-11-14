@@ -1912,11 +1912,22 @@ public sealed class RemoteWorkflowUseTests
         using var temp = new TempDirectory();
         var (_, cache, _, _) = Fixture(temp);
 
-        var held = DssHarness.Core.Execution.MachineWideFile.Update(
+        var thrown = DssHarness.Core.Execution.MachineWideFile.Update(
             Path.Combine(cache.Directory, "entries"),
             DssHarness.Core.Execution.MachineWideFile.Window,
-            () => Task.Run(() => Assert.Throws<HarnessException>(() => cache.Hold(Entry(), resolution: null, DateTimeOffset.UtcNow)), Token).GetAwaiter().GetResult());
+            () =>
+            {
+                // A thread of its own, never this one: a machine-wide section is the thread's that took it, taken again
+                // freely - and a task waited on before it began may run on the waiting thread itself.
+                Exception? refused = null;
+                var other = new Thread(() => refused = Record.Exception(() => cache.Hold(Entry(), resolution: null, DateTimeOffset.UtcNow)));
+                other.Start();
 
+                Assert.True(other.Join(DssHarness.Core.Execution.MachineWideFile.Window + TimeSpan.FromMinutes(1)), "the other thread's hold never ended");
+                return refused;
+            });
+
+        var held = Assert.IsType<HarnessException>(thrown);
         Assert.Equal(WorkflowCache.FailedExit, held.ExitCode);
         Assert.EndsWith(": the workflow cache's lock was held past its window, and the command run again once that process is done finishes", held.Message, StringComparison.Ordinal);
     }
