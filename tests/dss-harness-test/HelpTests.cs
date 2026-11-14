@@ -2754,13 +2754,18 @@ public sealed partial class HelpTests
     /// <summary>
     /// The exit codes topic, and the table the architecture keeps by hand, say that 21 is also an update of a program begun
     /// and not finished - not finished within its bound, or its download not reached - which both updaters exit with: a
-    /// code whose words named only a leg, a set-up and an agent's verbs was what each updater answered differently.
+    /// code whose words named only a leg, a set-up and an agent's verbs was what each updater answered differently. And
+    /// that it is a remote workflow's fetch not finished within its bound and the workflow cache not read, written or
+    /// locked, which the cache's commands, validate-workflow and export-workflow exit with.
     /// </summary>
     [Fact]
     public void ExitCodeTopic_SaysAnUpdateStoppedPartWayIsIncomplete()
     {
+        Assert.Equal(HarnessExit.Incomplete, WorkflowCache.FailedExit);
+
         const string Said = "or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not "
-            + "finished within its bound, or its download not reached)";
+            + "finished within its bound, or its download not reached), or a remote workflow's fetch was not finished within its "
+            + "bound or the workflow cache could not be read, written or locked within its window";
 
         Assert.Contains(Said, Prose.Words(HelpText.Of("exit-codes").StandardOutput), StringComparison.Ordinal);
         Assert.Contains($"| {HarnessExit.Incomplete} | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, {Said};", Prose.Document("docs", "architecture.md"), StringComparison.Ordinal);
