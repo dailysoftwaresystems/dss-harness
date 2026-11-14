@@ -54,12 +54,18 @@ public static class WorkflowRemote
     /// (<c>org/.github</c>, the conventional home of an organisation's shared workflows). A ref that is a full commit
     /// SHA is read in lower case, however it was spelled; whether any other ref is one git takes is
     /// <see cref="RefProblem"/>'s to say, so a source with a ref git refuses is still read as remote and refused by
-    /// name rather than taken for a local path.
+    /// name rather than taken for a local path. A source that is empty, or blank, names nothing remote, so every
+    /// caller - a use, <c>--from</c>, a run's record - is answered null for it and says its own refusal.
     /// </summary>
-    /// <param name="source">The value of a step's <c>use:</c>.</param>
+    /// <param name="source">The value of a step's <c>use:</c>, or of <c>--from</c>.</param>
     public static WorkflowRemoteSource? Source(string source)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        ArgumentNullException.ThrowIfNull(source);
+
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return null;
+        }
 
         if (source.Contains('\\', StringComparison.Ordinal) || source.Contains(':', StringComparison.Ordinal)
             || source.StartsWith('/') || source.StartsWith("./", StringComparison.Ordinal) || source.StartsWith("../", StringComparison.Ordinal))
@@ -178,5 +184,26 @@ public static class WorkflowRemote
         return parts.Length >= 6 && WorkflowRemoteSource.IsCommit(parts[4])
             ? (parts[1], parts[2], parts[3], parts[4], string.Join("/", parts[5..]))
             : null;
+    }
+
+    /// <summary>
+    /// The directories a remote workflow's files may be held under, nearest first: its own, then each above it in its
+    /// repository at the same commit - for a workflow a relative use inside a remote one names sits in a directory of that
+    /// one's, and is held by the entry fetched for it. The one walk every reader of a remote workflow's files by its name
+    /// takes, whether it reads the workflow cache, a run's own copy of it, or the resolutions a check holds; empty where
+    /// <paramref name="workflow"/> is no remote workflow's name.
+    /// </summary>
+    /// <param name="workflow">A remote workflow's name, as <see cref="Name(WorkflowRemoteSource, string)"/> wrote it.</param>
+    public static IEnumerable<(string Host, string Owner, string Repo, string Commit, string Directory)> HeldUnder(string workflow)
+    {
+        if (PartsOf(workflow) is not { } parts)
+        {
+            yield break;
+        }
+
+        for (var directory = parts.Directory; directory.Length > 0; directory = directory.LastIndexOf('/') is var at && at > 0 ? directory[..at] : string.Empty)
+        {
+            yield return (parts.Host, parts.Owner, parts.Repo, parts.Commit, directory);
+        }
     }
 }

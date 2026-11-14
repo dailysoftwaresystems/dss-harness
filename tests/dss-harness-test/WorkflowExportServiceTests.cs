@@ -300,19 +300,27 @@ public sealed class WorkflowExportServiceTests
         Assert.Null(json.Details);
         Assert.Equal("'mine' exported to '/x': 0 file(s)", WorkflowExportReports.Render(new WorkflowExport("mine", false, "/x", []), json: false).Message);
 
-        Assert.Equal(["workflow", "shipped", "destination", "files", "vendored"], document.Select(member => member.Key));
+        Assert.Equal(["workflow", "shipped", "destination", "files", "vendored", "cache"], document.Select(member => member.Key));
         Assert.Equal(Shipped, document["workflow"]!.GetValue<string>());
         Assert.True(document["shipped"]!.GetValue<bool>());
         Assert.Equal("/x/out/implementation", document["destination"]!.GetValue<string>());
         Assert.Equal(["agents/a.md", "implementation.yml"], document["files"]!.AsArray().Select(file => file!.GetValue<string>()));
         Assert.Null(document["vendored"]);
 
-        Assert.Equal(["exitCode", "summary", "workflow", "shipped", "destination", "files", "vendored"], stopped.Select(member => member.Key));
+        // The shipped workflow reads nothing remote, so its document names no workflow cache, stopped or not.
+        Assert.Null(document["cache"]);
+        Assert.Equal(["exitCode", "summary", "workflow", "shipped", "destination", "files", "vendored", "cache"], stopped.Select(member => member.Key));
         Assert.Null(stopped["workflow"]);
         Assert.True(stopped["shipped"]!.GetValue<bool>());
         Assert.Null(stopped["destination"]);
         Assert.Empty(stopped["files"]!.AsArray());
         Assert.Null(stopped["vendored"]);
+        Assert.Null(stopped["cache"]);
+
+        // Any other export's names the cache a remote workflow it resolves is read from and fetched into, on every exit.
+        var declared = JsonNode.Parse(WorkflowExportReports.Stopped(HarnessExit.Refused, "no", shipped: false))!.AsObject();
+
+        Assert.Equal(WorkflowCache.DefaultDirectoryIfNamed(), declared["cache"]?.GetValue<string>());
     }
 
     /// <summary>
@@ -385,10 +393,22 @@ public sealed class WorkflowExportServiceTests
             architecture,
             StringComparison.Ordinal);
 
-        // --from takes no workflow name and no --shipped.
+        // --from takes no workflow name, no --shipped and no blank source, and looks at its folder before it fetches.
         Assert.Contains("vendors a remote workflow into the repository at its resolved commit - no workflow named beside it, nor --shipped:", help, StringComparison.Ordinal);
-        Assert.Contains("a workflow name or `--shipped` beside it is a usage error (10)", readme, StringComparison.Ordinal);
-        Assert.Contains("a workflow name or `--shipped` beside `--from` is a usage error (10)", architecture, StringComparison.Ordinal);
+        Assert.Contains(
+            $"A workflow named beside it, --shipped, or a --from that names no remote workflow is a usage error ({HarnessExit.UsageError}), and the folder is looked at before anything is fetched, "
+                + $"one that is there refused ({HarnessExit.Refused}) with nothing written anywhere; a refusal after the fetch says what it fetched is kept in the workflow cache.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a workflow name or `--shipped` beside it, or a `--from` that names no remote workflow, is a usage error (10), and the folder is looked at before anything is fetched",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"a workflow name or `--shipped` beside `--from`, or a `--from` that names no remote workflow (`WorkflowRemote.{nameof(WorkflowRemote.Source)}` answers none for a blank one), is a "
+                + "usage error (10), and the folder is looked at before anything is fetched, so one that is there is refused (13) with nothing written anywhere",
+            architecture,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -451,7 +471,8 @@ public sealed class WorkflowExportServiceTests
                     WorkflowRemote.Source(Source)!,
                     Commit,
                     new WorkflowCacheEntry("github.com", "acme", "shared", Commit, "workflows/review", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, []),
-                    "name: review\nsteps:\n  - name: look\n    type: orient\n"))));
+                    "name: review\nsteps:\n  - name: look\n    type: orient\n",
+                    new Dictionary<string, byte[]>(StringComparer.Ordinal)))));
         var validation = NSubstitute.Substitute.For<IWorkflowValidationService>();
 
         Assert.Empty(problems);

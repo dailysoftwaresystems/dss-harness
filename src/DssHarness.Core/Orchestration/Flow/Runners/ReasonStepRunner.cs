@@ -40,7 +40,6 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
-/// <param name="cache">The hash cache of remote workflows, where a remote workflow's agent definitions and schemas are read.</param>
 public sealed class ReasonStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -57,8 +56,7 @@ public sealed class ReasonStepRunner(
     Configuration.IConfigStore? configStore = null,
     ClaudeCodeUpdateService? updates = null,
     Codebase.ICodebaseGraphService? graphService = null,
-    TimeProvider? graphClock = null,
-    WorkflowCache? cache = null) : IFlowStepTypeRunner, IFlowHandoffRunner
+    TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
     /// <inheritdoc/>
     public string Type => "reason";
@@ -76,7 +74,7 @@ public sealed class ReasonStepRunner(
 
         var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
         var layout = OrchestratorLayout.Of(context.Layout, place.Run);
-        var files = new WorkflowNamedFiles(fileSystem, platform.PathComparison, cache);
+        var files = WorkflowNamedFiles.OfRun(fileSystem, platform.PathComparison, layout);
         var launch = new ReasonLaunch(fileSystem, platform, keys, updates, isolation);
 
         var promptFile = run.Step.Prompt;

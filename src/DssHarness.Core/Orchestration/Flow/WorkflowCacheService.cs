@@ -22,7 +22,7 @@ public interface IWorkflowCacheService : IUseCase
 {
     /// <summary>Lists the workflow cache: every entry it holds, and every file of its own it could not read.</summary>
     /// <param name="cancellationToken">Stops the reading.</param>
-    /// <exception cref="HarnessException">No directory of this user's own could be named (<see cref="HarnessExit.Refused"/>).</exception>
+    /// <exception cref="HarnessException">No directory of this user's own could be named (<see cref="WorkflowCache.FailedExit"/>).</exception>
     Task<WorkflowCacheReport> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Prunes the entries no run used, and none was fetched, for <paramref name="unusedDays"/> days.</summary>
@@ -30,7 +30,7 @@ public interface IWorkflowCacheService : IUseCase
     /// <param name="cancellationToken">Stops the pruning before it begins.</param>
     /// <exception cref="HarnessException">
     /// The days are below 0 or past <see cref="WorkflowCache.MostUnusedDays"/> (<see cref="HarnessExit.UsageError"/>), with
-    /// nothing removed; no directory of this user's own could be named (<see cref="HarnessExit.Refused"/>).
+    /// nothing removed; no directory of this user's own could be named, or the lock was held past its window (<see cref="WorkflowCache.FailedExit"/>).
     /// </exception>
     Task<WorkflowCacheReport> PruneAsync(int unusedDays, CancellationToken cancellationToken = default);
 }

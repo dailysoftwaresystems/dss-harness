@@ -66,12 +66,27 @@ public sealed record WorkflowCheck(string Name, IReadOnlyList<string> Lines)
     /// <see langword="null"/> where it does not hold.
     /// </summary>
     public string? Directory { get; init; }
+
+    /// <summary>
+    /// Each remote workflow the check resolved, in the order the definition declares its uses, with every file of its
+    /// directory as the check read and hashed it - what a run that starts from the check keeps with its frozen definition
+    /// and reads as it runs; empty where the definition uses none, or does not hold.
+    /// </summary>
+    public IReadOnlyList<WorkflowRemoteResolution> Remotes { get; init; } = [];
+
+    /// <summary>Whether the check went to resolve a remote use, reading the workflow cache and fetching into it, whether or not the workflow holds.</summary>
+    public bool ResolvedRemote { get; init; }
 }
 
 /// <summary>What checking a repository's workflows found, workflow by workflow.</summary>
 /// <param name="Root">The tree whose workflows were checked.</param>
 /// <param name="Workflows">Each workflow checked, in the order it was asked for; none where the configuration declares none.</param>
-public sealed record WorkflowValidationReport(string Root, IReadOnlyList<WorkflowCheck> Workflows)
+/// <param name="Cache">
+/// The workflow cache's directory, where the remote workflows a definition uses are read from and fetched into - named on
+/// every report, whatever its definitions use; null where the check is given no cache, or no directory of this user's own
+/// can be named.
+/// </param>
+public sealed record WorkflowValidationReport(string Root, IReadOnlyList<WorkflowCheck> Workflows, string? Cache = null)
 {
     /// <summary>Every line of every workflow checked, in order: one for a workflow that holds, one per problem of one that does not.</summary>
     public IReadOnlyList<string> Lines => [.. Workflows.SelectMany(workflow => workflow.Lines)];
@@ -146,8 +161,46 @@ public sealed class WorkflowValidationService(
             workflows.Add(await CheckAsync(context, name, recorded, cancellationToken).ConfigureAwait(false));
         }
 
-        return new WorkflowValidationReport(context.Layout.RepositoryRoot, workflows);
+        return new WorkflowValidationReport(context.Layout.RepositoryRoot, workflows, _cache?.DirectoryIfNamed);
     }
+
+    /// <summary>
+    /// Resolves one remote use through the fetcher, keeping what it resolved in <paramref name="resolved"/> for the check
+    /// to read the workflow's files from: a refusal of the source goes to the resolver as it was raised, to be said as the
+    /// use's problem, and any other failure - which stops the check with its own code - says the workflow cache's
+    /// directory, where what the check had fetched before it is kept.
+    /// </summary>
+    private async Task<WorkflowRemoteResolution> ResolveRemoteAsync(
+        WorkflowRemoteFetcher remotes,
+        HarnessContext context,
+        string source,
+        Func<string, string?>? recordedCommit,
+        List<WorkflowRemoteResolution> resolved,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var resolution = await remotes.ResolveAsync(
+                WorkflowRemote.Source(source) ?? throw new HarnessException(HarnessExit.UsageError, $"'{source}' is no remote workflow source"),
+                context.Config.WorkflowSources,
+                context.Layout.MainCheckoutRoot,
+                Environment.GetEnvironmentVariable,
+                recordedCommit?.Invoke(source),
+                cancellationToken).ConfigureAwait(false);
+
+            resolved.Add(resolution);
+
+            return resolution;
+        }
+        catch (HarnessException failed) when (!WorkflowResolution.RefusesTheSource(failed) && _cache?.DirectoryIfNamed is { } kept)
+        {
+            throw new HarnessException(failed.ExitCode, $"{failed.Message.TrimEnd('.')}; {CacheSaid(kept)}", failed);
+        }
+    }
+
+    /// <summary>What a check that resolved a remote use says of the workflow cache, on whatever exit it ends.</summary>
+    /// <param name="directory">The cache's directory.</param>
+    internal static string CacheSaid(string directory) => $"remote workflows are read from and fetched into the workflow cache '{directory}'";
 
     private async Task<WorkflowCheck> CheckAsync(HarnessContext context, string name, WorkflowDefinition? recorded, CancellationToken cancellationToken)
     {
@@ -184,28 +237,30 @@ public sealed class WorkflowValidationService(
         // that the definition under the check is the one a run runs - and what a resume is refused by is what was read.
         // A local one is held to the workflows directory as the run's own is; a remote one is fetched into the workflow
         // cache, or read from it at the commit this run's own record holds, where the check goes on with a run that
-        // began at one; and a use inside a remote one is read from the same cache entry.
+        // began at one; and a use inside a remote one is read from the same directory as the resolution read it. Every
+        // file of a remote workflow is read from what its resolution read and hashed, never from the cache again, which
+        // a pruning may change meanwhile.
         var recordedCommit = RecordedCommit(recorded);
+        var fetched = new List<WorkflowRemoteResolution>();
+        var asked = false;
         var (withUses, useProblems, remoteResolutions) = await WorkflowResolver.ResolveAsync(
             definition!,
             name,
             new WorkflowResolution(
                 relative => ReadWorkflowFile(context.Layout, relative),
-                _remotes is null
+                _remotes is not { } remotes
                     ? null
-                    : async source => await _remotes.ResolveAsync(
-                        WorkflowRemote.Source(source) ?? throw new HarnessException(HarnessExit.UsageError, $"'{source}' is no remote workflow source"),
-                        context.Config.WorkflowSources,
-                        context.Layout.MainCheckoutRoot,
-                        Environment.GetEnvironmentVariable,
-                        recordedCommit?.Invoke(source),
-                        cancellationToken).ConfigureAwait(false),
-                ReadCached,
+                    : source =>
+                    {
+                        asked = true;
+                        return ResolveRemoteAsync(remotes, context, source, recordedCommit, fetched, cancellationToken);
+                    },
+                (owner, path) => ReadFetched(fetched, owner, path),
                 _platform.PathComparison)).ConfigureAwait(false);
 
         if (useProblems.Count > 0)
         {
-            return new WorkflowCheck(name, [.. useProblems.Select(problem => $"{Shown(name)}: {problem}")]);
+            return new WorkflowCheck(name, [.. useProblems.Select(problem => $"{Shown(name)}: {problem}")]) { ResolvedRemote = asked };
         }
 
         definition = withUses;
@@ -217,12 +272,12 @@ public sealed class WorkflowValidationService(
         var problems = new List<string>(WorkflowValidator.Validate(
             definition,
             context.Config.Commit.Template is not null,
-            (named, owner) => TextOf(named, owner, name, directory, context),
+            (named, owner) => TextOf(named, owner, name, directory, context, fetched),
             resolved.Providers,
             _extractors.Languages,
             Web.Search.WebSearchSources.Of(context.Config, Web.Search.WebSearchKinds.OfThisBuild),
             new AgentSkills(_fileSystem, _platform, context.Layout.RepositoryRoot)));
-        problems.AddRange(Files(definition, directory, name, context, context.Config));
+        problems.AddRange(Files(definition, directory, name, context, context.Config, fetched));
 
         // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,
         // said where the definition is checked; which names it holds is no problem at all, so a machine that only
@@ -233,7 +288,7 @@ public sealed class WorkflowValidationService(
 
         if (problems.Count > 0)
         {
-            return new WorkflowCheck(name, [.. problems.Select(problem => $"{Shown(name)}: {problem}")]);
+            return new WorkflowCheck(name, [.. problems.Select(problem => $"{Shown(name)}: {problem}")]) { ResolvedRemote = asked };
         }
 
         // The recovery is counted apart: its steps run only where something failed. Under the one line that says the
@@ -246,8 +301,8 @@ public sealed class WorkflowValidationService(
         var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
         IReadOnlyList<string> agents = resolved.Providers is { } providers
             ? [
-                .. WorkflowValidator.ModelLevels(definition, providers, (named, owner) => TextOf(named, owner, name, directory, context)),
-                .. Prices(definition, providers, (named, owner) => TextOf(named, owner, name, directory, context)),
+                .. WorkflowValidator.ModelLevels(definition, providers, (named, owner) => TextOf(named, owner, name, directory, context, fetched)),
+                .. Prices(definition, providers, (named, owner) => TextOf(named, owner, name, directory, context, fetched)),
                 .. MissingKeys(definition, providers, slot),
             ]
             : [];
@@ -255,12 +310,14 @@ public sealed class WorkflowValidationService(
             name,
             [
                 $"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}{recovery}, {reasons} reasoning)",
-                .. ResolutionsOf(definition, remoteResolutions, _cache),
+                .. ResolutionsOf(definition, remoteResolutions),
                 .. agents,
             ])
         {
             Definition = definition,
             Directory = directory,
+            Remotes = remoteResolutions,
+            ResolvedRemote = asked,
         };
     }
 
@@ -296,10 +353,10 @@ public sealed class WorkflowValidationService(
     /// silence and nothing left out in silence either - a use that governs itself saying the keys it applies and,
     /// apart, the ones it carries that nothing applies yet - and beside how a remote one was resolved where that is
     /// worth a word: a moving ref, allowed by the pin, and a resolution the cache stood in for, the network not being
-    /// there - and, for a remote one, the directory of the workflow cache it was read from or fetched into, where the
-    /// check writes what it fetches.
+    /// there. The workflow cache a remote one was read from or fetched into is named once, on the line the check ends on
+    /// (<see cref="WorkflowValidationReports.Render"/>), whatever it ends with.
     /// </summary>
-    private static IReadOnlyList<string> ResolutionsOf(WorkflowDefinition definition, IReadOnlyList<WorkflowRemoteResolution> remotes, WorkflowCache? cache)
+    private static IReadOnlyList<string> ResolutionsOf(WorkflowDefinition definition, IReadOnlyList<WorkflowRemoteResolution> remotes)
     {
         var lines = new List<string>();
 
@@ -313,7 +370,6 @@ public sealed class WorkflowValidationService(
             var resolution = remotes.FirstOrDefault(resolved => WorkflowRemote.Name(resolved.Source, resolved.Commit) == use.Name);
             var said = WorkflowRemote.PartsOf(use.Name) is { } parts
                 ? $"{parts.Host}/{parts.Owner}/{parts.Repo}/{parts.Directory} at commit {parts.Commit[..12]}"
-                    + (cache is null ? string.Empty : $", kept in the workflow cache at '{cache.Directory}'")
                 : use.Name;
             var applied = use.Own?.Declared.Where(key => !use.NotApplied.Contains(key, StringComparer.Ordinal)).ToList();
 
@@ -455,7 +511,7 @@ public sealed class WorkflowValidationService(
     /// that its commit steps fill the configuration's commit template, and that the agents it
     /// makes are named within <c>worktrees.maxNameLength</c>.
     /// </summary>
-    private IReadOnlyList<string> Files(WorkflowDefinition definition, string directory, string name, HarnessContext context, HarnessConfig config)
+    private IReadOnlyList<string> Files(WorkflowDefinition definition, string directory, string name, HarnessContext context, HarnessConfig config, IReadOnlyList<WorkflowRemoteResolution> fetched)
     {
         var problems = new List<string>();
 
@@ -474,7 +530,7 @@ public sealed class WorkflowValidationService(
             foreach (var named in WorkflowFiles.OfStep(step, where))
             {
                 problems.AddRange(step.WorkflowOf is { } ownerOf && WorkflowRemote.Is(ownerOf)
-                    ? Remote(named.File, ownerOf, named.What)
+                    ? Remote(named, ownerOf, fetched)
                     : Check(named, ownerDirectory, ownerName));
             }
 
@@ -504,7 +560,7 @@ public sealed class WorkflowValidationService(
                 foreach (var named in WorkflowFiles.OfUse(step, path))
                 {
                     problems.AddRange(WorkflowRemote.Is(use.Name)
-                        ? Remote(named.File, use.Name, named.What)
+                        ? Remote(named, use.Name, fetched)
                         : Check(named, DirectoryOf(context.Layout, use.Name), use.Name));
                 }
             }
@@ -516,34 +572,43 @@ public sealed class WorkflowValidationService(
 
     /// <summary>
     /// The problems with one file a remote workflow names: spelt as a path inside the workflow's own directory, as a
-    /// local workflow's files are, and there in the cache entry that holds the workflow - read from it under the
-    /// workflow's own directory in its repository, the entry's blobs hashed again as they are.
+    /// local workflow's files are; there in the directory its resolution read and hashed, under the workflow's own
+    /// directory in its repository; and, where it is a schema, one the engine reads (<see cref="WorkflowFiles.SchemaProblems"/>)
+    /// - the one rule a local workflow's schema is held to (<see cref="Schema"/>), so no run starts over a remote reason
+    /// step whose answer could be held to nothing.
     /// </summary>
     /// <param name="named">The file, as the definition names it.</param>
     /// <param name="owner">The remote workflow's name, as the run resolved it.</param>
-    /// <param name="what">What names the file, as a problem says it.</param>
-    private IReadOnlyList<string> Remote(string named, string owner, string what)
+    /// <param name="fetched">The remote workflows the check resolved.</param>
+    private static IReadOnlyList<string> Remote(WorkflowFiles.Named named, string owner, IReadOnlyList<WorkflowRemoteResolution> fetched)
     {
-        if (PlatformPaths.IsRootedOnAnyPlatform(named) || named.Split('/', '\\').Any(segment => segment is ".." or "." or ""))
+        if (PlatformPaths.IsRootedOnAnyPlatform(named.File) || named.File.Split('/', '\\').Any(segment => segment is ".." or "." or ""))
         {
-            return [$"'{named}', {what}, does not name a file inside the workflow's own directory; every file a workflow names is relative to it, without '.', '..' or an empty part"];
+            return [$"'{named.File}', {named.What}, does not name a file inside the workflow's own directory; every file a workflow names is relative to it, without '.', '..' or an empty part"];
         }
 
-        if (_cache?.FindNamed(owner) is not { } entry || WorkflowRemote.PartsOf(owner) is not { } parts)
+        if (WorkflowRemoteResolution.Holding(fetched, owner) is not { } holding || WorkflowRemote.PartsOf(owner) is not { } parts)
         {
-            return [$"'{named}', {what}, is of the workflow '{owner}', which the workflow cache holds no entry for"];
+            return [$"'{named.File}', {named.What}, is of the workflow '{owner}', which no remote workflow the check resolved holds"];
         }
+
+        string? text;
 
         try
         {
-            return _cache.ReadText(entry, $"{parts.Directory}/{named.Replace('\\', '/')}") is null
-                ? [$"'{named}', {what}, is not in the workflow '{owner}': the commit it was fetched at holds no such file in its directory"]
-                : [];
+            text = holding.Text($"{parts.Directory}/{named.File.Replace('\\', '/')}");
         }
         catch (HarnessException refused)
         {
             return [refused.Message];
         }
+
+        if (text is null)
+        {
+            return [$"'{named.File}', {named.What}, is not in the workflow '{owner}': the commit it was fetched at holds no such file in its directory"];
+        }
+
+        return named.IsSchema ? WorkflowFiles.SchemaProblems(named, text) : [];
     }
 
     /// <summary>
@@ -596,22 +661,18 @@ public sealed class WorkflowValidationService(
     }
 
     /// <summary>
-    /// Reads a file of a remote workflow's cache entry by its path in the remote repository, the entry found by the name
-    /// of the remote workflow it was fetched as: null where the entry names no such file.
+    /// Reads a file of a remote workflow's directory by its path in the remote repository, from what the resolution of
+    /// the remote workflow it was fetched as read and hashed - never from the cache again, which a pruning may have changed
+    /// since: null where the directory holds no such file.
     /// </summary>
     /// <exception cref="HarnessException">
-    /// The cache holds no entry the resolution just read from, or the file's blob changed on disk
-    /// (<see cref="HarnessExit.ConfigInvalid"/>) - said as the use's problem, never as a file the commit does not hold.
+    /// No resolution the check made holds the workflow, or the file is not UTF-8 text (<see cref="HarnessExit.ConfigInvalid"/>)
+    /// - said as the use's problem, never as a file the commit does not hold.
     /// </exception>
-    private string? ReadCached(string owner, string path)
-    {
-        if (_cache?.FindNamed(owner) is not { } entry)
-        {
-            throw new HarnessException(HarnessExit.ConfigInvalid, $"the workflow cache holds no entry for '{owner}', which the resolution of its use read from; fetch it again where a use names it");
-        }
-
-        return _cache.ReadText(entry, path);
-    }
+    private static string? ReadFetched(IReadOnlyList<WorkflowRemoteResolution> fetched, string owner, string path)
+        => WorkflowRemoteResolution.Holding(fetched, owner) is { } holding
+            ? holding.Text(path)
+            : throw new HarnessException(HarnessExit.ConfigInvalid, $"no remote workflow the check resolved holds '{owner}', whose use was read from one");
 
     /// <summary>
     /// V24: a run step whose runner writes the tree (<c>writesTree</c>) - the step's own, or one its run checks name,
@@ -713,21 +774,21 @@ public sealed class WorkflowValidationService(
     /// it is not a file of the workflow's own place there to read - or a changed cache file refused to give it, which
     /// the check of its files says - so the problem is said once, where the file is checked.
     /// </summary>
-    private string? TextOf(string named, string? owner, string name, string directory, HarnessContext context)
+    private string? TextOf(string named, string? owner, string name, string directory, HarnessContext context, IReadOnlyList<WorkflowRemoteResolution> fetched)
     {
         if (owner is null || !WorkflowRemote.Is(owner))
         {
             return Text(named, owner is null ? directory : DirectoryOf(context.Layout, owner), name);
         }
 
-        if (_cache?.FindNamed(owner) is not { } entry || WorkflowRemote.PartsOf(owner) is not { } parts)
+        if (WorkflowRemoteResolution.Holding(fetched, owner) is not { } holding || WorkflowRemote.PartsOf(owner) is not { } parts)
         {
             return null;
         }
 
         try
         {
-            return _cache.ReadText(entry, $"{parts.Directory}/{named}");
+            return holding.Text($"{parts.Directory}/{named}");
         }
         catch (HarnessException)
         {
@@ -811,21 +872,27 @@ public static class WorkflowValidationReports
     /// is refused <see cref="HarnessExit.ConfigInvalid"/>, the code a run of that workflow would meet.
     /// A configuration that declares none has nothing to fix in a definition and nothing that passed:
     /// the request has no subject, a precondition not met, refused <see cref="HarnessExit.Refused"/>.
+    /// Where the check went to resolve a remote use - reading the workflow cache, and fetching into it - the line it ends
+    /// on names the cache's directory, whether the workflows hold or not; the document names it on every exit.
     /// </remarks>
     public static CommandOutcome Render(WorkflowValidationReport report, bool json)
     {
         ArgumentNullException.ThrowIfNull(report);
 
-        var data = json ? [Document(report).ToJsonString(ReportJson.Options)] : Array.Empty<string>();
+        var data = json ? [Document(report.Cache, report).ToJsonString(ReportJson.Options)] : Array.Empty<string>();
 
         if (report.Workflows.Count == 0)
         {
             return CommandOutcome.Refused(NoneDeclared) with { Data = data };
         }
 
+        var cached = report.Cache is { } directory && report.Workflows.Any(workflow => workflow.ResolvedRemote)
+            ? $"; {WorkflowValidationService.CacheSaid(directory)}"
+            : string.Empty;
+
         if (report.Passed)
         {
-            return CommandOutcome.Ok($"{ReportText.Counted(report.Workflows.Count, "workflow")} checked, all valid") with
+            return CommandOutcome.Ok($"{ReportText.Counted(report.Workflows.Count, "workflow")} checked, all valid{cached}") with
             {
                 Data = data,
                 Quiet = json,
@@ -837,7 +904,7 @@ public static class WorkflowValidationReports
 
         return CommandOutcome.Failed(
             HarnessExit.ConfigInvalid,
-            $"{ReportText.Counted(valid, "workflow")} valid, {report.Workflows.Count - valid} with problems. Nothing was run.") with
+            $"{ReportText.Counted(valid, "workflow")} valid, {report.Workflows.Count - valid} with problems{cached}. Nothing was run.") with
         {
             Data = data,
             Details = json ? null : report.Lines,
@@ -845,22 +912,23 @@ public static class WorkflowValidationReports
     }
 
     /// <summary>
-    /// The document validate-workflow answers with where it stops before it reads any definition - a
-    /// <c>--directory</c> that is not there, a configuration that does not load, a workflow nobody
-    /// declared: its own, no workflows and no problems, after the code it exits with and the line it
-    /// ends on.
+    /// The document validate-workflow answers with where it stops before it has a report - a <c>--directory</c> that is
+    /// not there, a configuration that does not load, a workflow nobody declared, a remote use's fetch that could not run:
+    /// its own, no workflows and no problems, after the code it exits with and the line it ends on, and the workflow
+    /// cache's directory where one can be named.
     /// </summary>
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line it ends on.</param>
     public static string Stopped(int exitCode, string summary)
-        => ReportJson.Stopped(exitCode, summary, Document(report: null));
+        => ReportJson.Stopped(exitCode, summary, Document(WorkflowCache.DefaultDirectoryIfNamed(), report: null));
 
-    private static JsonObject Document(WorkflowValidationReport? report)
+    private static JsonObject Document(string? cache, WorkflowValidationReport? report)
         => new()
         {
             ["workflows"] = report is null
                 ? null
                 : new JsonArray([.. report.Lines.Select(line => (JsonNode)line!)]),
             ["passed"] = report?.Passed,
+            ["cache"] = cache,
         };
 }

@@ -101,13 +101,38 @@ public sealed record WorkflowCachePruning(int Entries, int Blobs, IReadOnlyList<
 /// hash of each, kept as the bytes the forge gave and shared by whatever entries hold them; the entries themselves -
 /// one for a host, a repository, a commit and a path - read strictly and held to the key they were looked up by; and
 /// the newest resolution of each ref. Each blob is hashed again as it is read, so a blob changed on disk is refused and
-/// fetched again, never silently run. Every write and every pruning is made under one machine-wide lock, so a pruning
-/// never takes the blobs a fetch is writing.
+/// fetched again, never silently run. A run keeps its own copy of the remote workflows it began with, in the same
+/// shape under its own directory (<see cref="OrchestratorLayout.RemoteWorkflowsDirectory"/>), which no pruning reaches.
 /// </summary>
+/// <remarks>
+/// One machine-wide lock orders what a pruning decides against what a fetch and a use record, and it is held for one
+/// record, or one batch of a pruning's removals, at a time - never across a fetch's blobs or a whole pruning, so it
+/// bounds what takes a moment, as every lock of the tool's does (<see cref="MachineWideFile.Window"/>). A blob is named
+/// by its content, so it is written outside the lock, before its entry; the entry is written under the lock only once
+/// every blob it names is there, written again where a pruning took it meanwhile - so a pruning, which reads under the
+/// lock which blobs the entries hold before it removes one, never takes a blob an entry holds. A use is recorded under
+/// the lock with the look that its entry is still there (<see cref="Hold"/>), so an entry a pruning removed as it was
+/// read is fetched again, never answered as held.
+/// </remarks>
 public sealed class WorkflowCache
 {
     /// <summary>The name of the cache's directory under this user's own directory for this tool.</summary>
     public const string DirectoryName = "workflow-cache";
+
+    /// <summary>
+    /// The code every failure of the cache's own ends with: its directory that cannot be named, a file of it that cannot
+    /// be written, a record of it that cannot be read, its lock held past its window. Incomplete - nothing a command was
+    /// asked about failed, and running it again once the cache can be worked on finishes it - and never a refusal or a
+    /// configuration's code, which a resolution of a remote use takes for the source's own (<see cref="WorkflowResolution.Fetch"/>):
+    /// a cache that could not be worked on is never said as a problem of the definition's.
+    /// </summary>
+    public const int FailedExit = HarnessExit.Incomplete;
+
+    /// <summary>
+    /// How many blobs a pruning removes under one holding of the lock, the entries read again before each batch: what it
+    /// takes the lock for is a moment's work, whatever the cache holds.
+    /// </summary>
+    public const int BlobsPerHold = 256;
 
     /// <summary>The most files one fetched directory may hold; a fetch past it is refused with the count.</summary>
     public const int MostFiles = 2_000;
@@ -155,12 +180,45 @@ public sealed class WorkflowCache
     /// <summary>
     /// The cache's own directory, where every entry, blob and resolution of it lands - named the first time it is asked.
     /// </summary>
-    /// <exception cref="HarnessException">No directory of this user's own could be named (<see cref="HarnessExit.Refused"/>).</exception>
+    /// <exception cref="HarnessException">No directory of this user's own could be named (<see cref="FailedExit"/>).</exception>
     public string Directory => _root.Value;
+
+    /// <summary>
+    /// The cache's own directory, as a command that resolved a remote use names it on every exit; null where no directory
+    /// of this user's own can be named - which the failure that stopped the command says.
+    /// </summary>
+    public string? DirectoryIfNamed
+    {
+        get
+        {
+            try
+            {
+                return Directory;
+            }
+            catch (HarnessException)
+            {
+                return null;
+            }
+        }
+    }
 
     /// <summary>The cache's directory for this user: <c>workflow-cache</c> under this user's own directory for this tool.</summary>
     /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
     public static string DefaultDirectory() => UserState.File(DirectoryName);
+
+    /// <summary>
+    /// The copy a run keeps of the remote workflows it began with, in the cache's own shape under the run's directory
+    /// (<see cref="OrchestratorLayout.RemoteWorkflowsDirectory"/>): kept by <see cref="Keep(WorkflowCacheEntry, IReadOnlyDictionary{string, byte[]})"/> from what the check that let
+    /// a session begin read and hashed, read by the run's steps as they run, and reached by no pruning.
+    /// </summary>
+    /// <param name="fileSystem">Reads and writes the copy.</param>
+    /// <param name="run">The run.</param>
+    public static WorkflowCache OfRun(IFileSystem fileSystem, OrchestratorLayout run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        return new WorkflowCache(fileSystem, run.RemoteWorkflowsDirectory);
+    }
 
     /// <summary>The cache's directory for this user, or null where no directory of this user's own can be named.</summary>
     public static string? DefaultDirectoryIfNamed()
@@ -182,41 +240,24 @@ public sealed class WorkflowCache
     /// </summary>
     /// <exception cref="HarnessException">
     /// The entry is there and could not be read, does not read as an entry, or is not the entry of the key it is filed
-    /// under (<see cref="HarnessExit.ConfigInvalid"/>) - never taken for one that is not there.
+    /// under (<see cref="FailedExit"/>) - never taken for one that is not there.
     /// </exception>
     public WorkflowCacheEntry? Find(string host, string owner, string repo, string commit, string path)
-    {
-        var file = EntryFile(host, owner, repo, commit, path);
-        var entry = Read<WorkflowCacheEntry>(file, "entry");
-
-        if (entry is null)
-        {
-            return null;
-        }
-
-        return EntryProblem(entry, host, owner, repo, commit, path) is { } problem
-            ? throw new HarnessException(HarnessExit.ConfigInvalid, $"the workflow cache's entry '{file}' {problem}; it was not read, and a resolution of it fetches it again")
-            : entry;
-    }
+        => Held(EntryFile(host, owner, repo, commit, path), host, owner, repo, commit, path);
 
     /// <summary>
     /// The entry that holds a remote workflow by its name - <c>remote/&lt;host&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;commit&gt;/&lt;dir&gt;</c>:
     /// the entry of its own directory, else of the nearest directory above it at the same commit, which holds every
-    /// file under it - the place a workflow a relative use inside a remote one names is read in. Null where the name is
-    /// no remote workflow's, or the cache holds none.
+    /// file under it (<see cref="WorkflowRemote.HeldUnder"/>) - the place a workflow a relative use inside a remote one
+    /// names is read in. Null where the name is no remote workflow's, or the cache holds none.
     /// </summary>
     /// <param name="workflow">A remote workflow's name, as the run resolved it.</param>
     /// <exception cref="HarnessException">The entry is there and could not be read (<see cref="Find"/>).</exception>
     public WorkflowCacheEntry? FindNamed(string workflow)
     {
-        if (WorkflowRemote.PartsOf(workflow) is not { } parts)
+        foreach (var (host, owner, repo, commit, directory) in WorkflowRemote.HeldUnder(workflow))
         {
-            return null;
-        }
-
-        for (var directory = parts.Directory; directory.Length > 0; directory = directory.LastIndexOf('/') is var at && at > 0 ? directory[..at] : string.Empty)
-        {
-            if (Find(parts.Host, parts.Owner, parts.Repo, parts.Commit, directory) is { } entry)
+            if (Find(host, owner, repo, commit, directory) is { } entry)
             {
                 return entry;
             }
@@ -235,7 +276,7 @@ public sealed class WorkflowCache
     /// <param name="repo">The repository's name.</param>
     /// <param name="path">The directory's path in the repository.</param>
     /// <param name="ref">The ref.</param>
-    /// <exception cref="HarnessException">The record is there and could not be read (<see cref="HarnessExit.ConfigInvalid"/>).</exception>
+    /// <exception cref="HarnessException">The record is there and could not be read (<see cref="FailedExit"/>).</exception>
     public WorkflowCacheResolution? LastResolved(string host, string owner, string repo, string path, string @ref)
     {
         var file = ResolutionFile(host, owner, repo, path, @ref);
@@ -250,34 +291,36 @@ public sealed class WorkflowCache
             && resolution.Owner == owner && resolution.Repo == repo && resolution.Path == path && resolution.Ref == @ref
             && WorkflowRemoteSource.IsCommit(resolution.Commit)
                 ? resolution
-                : throw new HarnessException(HarnessExit.ConfigInvalid, $"the workflow cache's resolution '{file}' is not the record of '{host}/{owner}/{repo}/{path}@{@ref}' it is filed under; it was not read");
+                : throw new HarnessException(FailedExit, $"the workflow cache's resolution '{file}' is not the record of '{host}/{owner}/{repo}/{path}@{@ref}' it is filed under; it was not read");
     }
 
     /// <summary>
-    /// Writes an entry and every file of it, blobs first, each private to this user, under the cache's lock - and the
-    /// resolution that led to it, where one did.
+    /// Writes an entry and every file of it, each private to this user, and the resolution that led to it, where one did:
+    /// the blobs first, outside the cache's lock - each is named by its content, so two processes that write one write the
+    /// same bytes - then, under the lock, every blob the entry names written again where a pruning took it meanwhile, and
+    /// the entry and its resolution, so no entry is ever recorded over a blob that is not there.
     /// </summary>
     /// <param name="entry">The entry.</param>
     /// <param name="contents">Each file's bytes, by its path as the entry names it.</param>
     /// <param name="resolution">The resolution of a ref that led to the entry; null where a commit was named.</param>
-    /// <exception cref="HarnessException">Something of it could not be written (<see cref="HarnessExit.Refused"/>): nothing of the fetch is used.</exception>
+    /// <exception cref="HarnessException">Something of it could not be written, or the lock was held past its window (<see cref="FailedExit"/>): nothing of the fetch is used.</exception>
     public void Write(WorkflowCacheEntry entry, IReadOnlyDictionary<string, byte[]> contents, WorkflowCacheResolution? resolution)
     {
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentNullException.ThrowIfNull(contents);
 
+        var blobs = entry.Files.DistinctBy(file => file.Blob, StringComparer.Ordinal).ToList();
+
+        foreach (var file in blobs)
+        {
+            WriteBlob(file.Blob, contents[file.Path]);
+        }
+
         Locked(() =>
         {
-            foreach (var file in entry.Files)
+            foreach (var file in blobs.Where(file => !BlobThere(file.Blob)))
             {
-                var blob = BlobFile(file.Blob);
-
-                Written(blob, "Nothing of the fetch was cached.", () =>
-                {
-                    _fileSystem.CreateDirectory(System.IO.Path.GetDirectoryName(blob)!);
-                    _fileSystem.WriteAtomic(blob, stream => stream.Write(contents[file.Path]));
-                    _fileSystem.ProtectSecretFile(blob);
-                });
+                WriteBlob(file.Blob, contents[file.Path]);
             }
 
             WriteRecord(EntryFile(entry.Host, entry.Owner, entry.Repo, entry.Commit, entry.Path), entry, "Nothing of the fetch was cached.");
@@ -292,37 +335,93 @@ public sealed class WorkflowCache
     }
 
     /// <summary>
-    /// Says the entry was used now, for the pruning that removes what no run used for its days, and records the
-    /// resolution that led to it where one did - under the cache's lock, so a pruning never removes an entry as it is used.
+    /// Keeps <paramref name="entry"/> and every file of it whole in this cache - as a run keeps, under its own directory,
+    /// the remote workflows it began with: an entry it holds already, every blob of it there and hashing to what it names,
+    /// stays as it is, and one it does not is written (<see cref="Write"/>). What a run keeps is what it reads as it runs,
+    /// and no pruning of the user's cache reaches it.
+    /// </summary>
+    /// <param name="entry">The entry, as a resolution read it.</param>
+    /// <param name="contents">Each file's bytes, by its path as the entry names it, as the resolution read and hashed them.</param>
+    /// <exception cref="HarnessException">Something of it could not be written (<see cref="FailedExit"/>).</exception>
+    public void Keep(WorkflowCacheEntry entry, IReadOnlyDictionary<string, byte[]> contents)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        ArgumentNullException.ThrowIfNull(contents);
+
+        WorkflowCacheEntry? held;
+
+        try
+        {
+            held = Find(entry.Host, entry.Owner, entry.Repo, entry.Commit, entry.Path);
+        }
+        catch (HarnessException)
+        {
+            // A record that does not read is written over by the whole entry.
+            held = null;
+        }
+
+        if (held is not null && held.Files.SequenceEqual(entry.Files) && held.Files.All(file => Whole(held, file.Path)))
+        {
+            return;
+        }
+
+        Write(entry, contents, resolution: null);
+    }
+
+    /// <summary>
+    /// Keeps every remote workflow <paramref name="resolutions"/> resolved whole in this cache (<see cref="Keep(WorkflowCacheEntry, IReadOnlyDictionary{string, byte[]})"/>), as the
+    /// resolution read and hashed each - what a run's own copy is filled with at each session's start, from the check that
+    /// let the session begin.
+    /// </summary>
+    /// <param name="resolutions">The remote workflows a check resolved.</param>
+    /// <exception cref="HarnessException">Something of them could not be written (<see cref="FailedExit"/>).</exception>
+    public void Keep(IEnumerable<WorkflowRemoteResolution> resolutions)
+    {
+        ArgumentNullException.ThrowIfNull(resolutions);
+
+        foreach (var resolution in resolutions)
+        {
+            Keep(resolution.Entry, resolution.Files);
+        }
+    }
+
+    /// <summary>
+    /// Records that a run used <paramref name="entry"/> now, and the resolution that led to it where one did, in one step
+    /// under the cache's lock with the look that the entry is still there: the entry as it reads now, its use dated, for
+    /// the pruning that removes what no run used for its days - or null, nothing written, where a pruning removed it
+    /// since it was read, and the resolution then fetches it again rather than answer for an entry the cache no longer
+    /// holds.
     /// </summary>
     /// <param name="entry">The entry a run resolved a use to.</param>
     /// <param name="resolution">The resolution of a ref that led to it; null where a commit was named.</param>
     /// <param name="now">Now.</param>
     /// <exception cref="HarnessException">
-    /// It could not be written (<see cref="HarnessExit.Refused"/>): what was read stands, and only the use's date and the
-    /// resolution were not kept.
+    /// It could not be read or written, or the lock was held past its window (<see cref="FailedExit"/>): what was read
+    /// stands, and only the use's date and the resolution were not kept.
     /// </exception>
-    public void Touch(WorkflowCacheEntry entry, WorkflowCacheResolution? resolution, DateTimeOffset now)
+    public WorkflowCacheEntry? Hold(WorkflowCacheEntry entry, WorkflowCacheResolution? resolution, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        Locked(() =>
+        return Locked(() =>
         {
             var file = EntryFile(entry.Host, entry.Owner, entry.Repo, entry.Commit, entry.Path);
 
-            // An entry a pruning removed between the read and now is not written again from what this process holds:
-            // its blobs went with it.
-            if (_fileSystem.KindOf(file) == PathKind.File)
+            if (Held(file, entry.Host, entry.Owner, entry.Repo, entry.Commit, entry.Path) is not { } held)
             {
-                WriteRecord(file, entry with { LastUsedAt = now }, "What was read stands; a pruning may count the entry unused.");
+                return null;
             }
+
+            var used = held with { LastUsedAt = now };
+
+            WriteRecord(file, used, "What was read stands; a pruning may count the entry unused.");
 
             if (resolution is not null)
             {
                 WriteRecord(ResolutionFile(resolution.Host, resolution.Owner, resolution.Repo, resolution.Path, resolution.Ref), resolution, "What was read stands; an offline last-resolved does not stand at this resolution.");
             }
 
-            return true;
+            return used;
         });
     }
 
@@ -363,101 +462,151 @@ public sealed class WorkflowCache
     }
 
     /// <summary>
-    /// Removes, under the cache's lock, the entries no run used and none fetched for <paramref name="unusedDays"/> days,
-    /// the resolutions that named them, and the blobs no entry left holds - every blob an entry it keeps holds kept, and
-    /// no blob removed at all where an entry could not be read, for which blobs that one holds cannot be told. Answers what
-    /// it removed, what it could not and what it could not read, for <c>workflow-cache prune</c>.
+    /// Removes the entries no run used and none fetched for <paramref name="unusedDays"/> days, the resolutions that named
+    /// them, and the blobs no entry left holds - every blob an entry the cache keeps holds kept, and no blob removed at all
+    /// where an entry could not be read, for which blobs that one holds cannot be told. Answers what it removed, what it
+    /// could not and what it could not read, for <c>workflow-cache prune</c>.
     /// </summary>
+    /// <remarks>
+    /// The lock is taken for one entry at a time, the entry read again under it so a use recorded since the listing keeps
+    /// it, and for one batch of blobs at a time (<see cref="BlobsPerHold"/>), what every entry holds read again under it
+    /// before any blob of the batch goes - so a fetch is never held off for longer than one of them, and an entry a fetch
+    /// records between two batches keeps its blobs.
+    /// </remarks>
     /// <param name="unusedDays">The days an entry may go unused before it is pruned, 0 to <see cref="MostUnusedDays"/>.</param>
     /// <param name="asOf">Now, as the caller knows it.</param>
+    /// <exception cref="HarnessException">No directory of this user's own could be named, or the lock was held past its window (<see cref="FailedExit"/>).</exception>
     public WorkflowCachePruning Prune(int unusedDays, DateTimeOffset asOf)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(unusedDays);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(unusedDays, MostUnusedDays);
 
         var cutoff = asOf - TimeSpan.FromDays(unusedDays);
+        bool Stale(WorkflowCacheEntry entry) => entry.LastUsedAt < cutoff && entry.FetchedAt < cutoff;
 
-        return Locked(() =>
+        var unread = new List<WorkflowCacheUnread>();
+        var notRemoved = new List<WorkflowCacheUnread>();
+        var entries = 0;
+
+        // The resolutions are listed once, for the entry each names; each is read again under the lock before it goes.
+        var resolutions = Records<WorkflowCacheResolution>("resolutions", unread);
+
+        foreach (var (file, listed) in Records<WorkflowCacheEntry>("entries", unread))
         {
-            var unread = new List<WorkflowCacheUnread>();
-            var notRemoved = new List<WorkflowCacheUnread>();
-            var kept = new HashSet<string>(StringComparer.Ordinal);
-            var removed = new HashSet<(string, string, string, string, string)>();
-            var entries = 0;
-
-            foreach (var (file, entry) in Records<WorkflowCacheEntry>("entries", unread))
+            if (EntryProblem(listed, listed.Host, listed.Owner, listed.Repo, listed.Commit, listed.Path) is { } problem)
             {
-                if (EntryProblem(entry, entry.Host, entry.Owner, entry.Repo, entry.Commit, entry.Path) is { } problem)
-                {
-                    unread.Add(new WorkflowCacheUnread(file, problem));
-                    continue;
-                }
+                unread.Add(new WorkflowCacheUnread(file, problem));
+                continue;
+            }
 
-                if (entry.LastUsedAt >= cutoff || entry.FetchedAt >= cutoff)
+            if (!Stale(listed))
+            {
+                continue;
+            }
+
+            Locked(() =>
+            {
+                // Decided again on the entry as it reads now: one used, or fetched again, since it was listed is kept,
+                // and one already gone is nothing to remove.
+                if (!MachineWideFile.TryRead<WorkflowCacheEntry>(_fileSystem, file, out var entry, out _) || entry is null || !Stale(entry))
                 {
-                    kept.UnionWith(entry.Files.Select(cached => cached.Blob));
-                    continue;
+                    return false;
                 }
 
                 try
                 {
                     _fileSystem.DeleteFile(file);
                     entries++;
-                    removed.Add((entry.Host.ToLowerInvariant(), entry.Owner, entry.Repo, entry.Commit, entry.Path));
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
                     // An entry that cannot be removed is said, and the blobs it holds stay with it.
                     notRemoved.Add(new WorkflowCacheUnread(file, exception.Message.TrimEnd('.')));
-                    kept.UnionWith(entry.Files.Select(cached => cached.Blob));
-                }
-            }
-
-            foreach (var (file, resolution) in Records<WorkflowCacheResolution>("resolutions", unread))
-            {
-                if (!removed.Contains((resolution.Host.ToLowerInvariant(), resolution.Owner, resolution.Repo, resolution.Commit, resolution.Path)))
-                {
-                    continue;
+                    return false;
                 }
 
-                try
+                foreach (var (named, _) in resolutions.Where(record => Names(record.Value, entry)))
                 {
-                    _fileSystem.DeleteFile(file);
-                }
-                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-                {
-                    notRemoved.Add(new WorkflowCacheUnread(file, exception.Message.TrimEnd('.')));
-                }
-            }
-
-            var blobs = 0;
-            var blobsDirectory = System.IO.Path.Combine(Directory, "blobs");
-
-            // An entry that could not be read may hold any blob: none is removed while one is there.
-            if (unread.Count == 0 && _fileSystem.DirectoryExists(blobsDirectory))
-            {
-                foreach (var blob in _fileSystem.EnumerateFiles(blobsDirectory, recursive: true).ToList())
-                {
-                    // Only a blob of the cache's own naming is ever removed, and only one no entry kept holds.
-                    if (BlobOf(blob) is not { } hash || kept.Contains(hash))
+                    // A resolution recorded again since the listing names the commit it names now, and stays where that
+                    // is another entry's.
+                    if (!MachineWideFile.TryRead<WorkflowCacheResolution>(_fileSystem, named, out var resolution, out _) || resolution is null || !Names(resolution, entry))
                     {
                         continue;
                     }
 
                     try
                     {
-                        _fileSystem.DeleteFile(blob);
-                        blobs++;
+                        _fileSystem.DeleteFile(named);
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {
-                        notRemoved.Add(new WorkflowCacheUnread(blob, exception.Message.TrimEnd('.')));
+                        notRemoved.Add(new WorkflowCacheUnread(named, exception.Message.TrimEnd('.')));
                     }
                 }
-            }
 
-            return new WorkflowCachePruning(entries, blobs, notRemoved, unread);
-        });
+                return true;
+            });
+        }
+
+        var blobs = 0;
+        var blobsDirectory = System.IO.Path.Combine(Directory, "blobs");
+
+        // An entry that could not be read may hold any blob: none is removed while one is there.
+        if (unread.Count == 0 && _fileSystem.DirectoryExists(blobsDirectory))
+        {
+            // Only a blob of the cache's own naming is ever removed, and only one no entry holds as the batch goes.
+            foreach (var batch in _fileSystem.EnumerateFiles(blobsDirectory, recursive: true).Where(blob => BlobOf(blob) is not null).ToList().Chunk(BlobsPerHold))
+            {
+                var blind = Locked(() =>
+                {
+                    var unheld = new List<WorkflowCacheUnread>();
+                    var kept = new HashSet<string>(StringComparer.Ordinal);
+
+                    foreach (var (file, entry) in Records<WorkflowCacheEntry>("entries", unheld))
+                    {
+                        if (EntryProblem(entry, entry.Host, entry.Owner, entry.Repo, entry.Commit, entry.Path) is { } problem)
+                        {
+                            unheld.Add(new WorkflowCacheUnread(file, problem));
+                            continue;
+                        }
+
+                        kept.UnionWith(entry.Files.Select(cached => cached.Blob));
+                    }
+
+                    if (unheld.Count > 0)
+                    {
+                        unread.AddRange(unheld.Where(file => !unread.Any(said => said.File == file.File)));
+                        return true;
+                    }
+
+                    foreach (var blob in batch.Where(blob => !kept.Contains(BlobOf(blob)!)))
+                    {
+                        try
+                        {
+                            _fileSystem.DeleteFile(blob);
+                            blobs++;
+                        }
+                        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                        {
+                            notRemoved.Add(new WorkflowCacheUnread(blob, exception.Message.TrimEnd('.')));
+                        }
+                    }
+
+                    return false;
+                });
+
+                if (blind)
+                {
+                    break;
+                }
+            }
+        }
+
+        return new WorkflowCachePruning(entries, blobs, notRemoved, unread);
+
+        static bool Names(WorkflowCacheResolution resolution, WorkflowCacheEntry entry)
+            => resolution.Host.Equals(entry.Host, StringComparison.OrdinalIgnoreCase)
+                && resolution.Owner == entry.Owner && resolution.Repo == entry.Repo && resolution.Commit == entry.Commit && resolution.Path == entry.Path;
     }
 
     /// <summary>
@@ -729,15 +878,73 @@ public sealed class WorkflowCache
     /// <summary>
     /// The record at <paramref name="file"/>, read strictly; null where nothing is there.
     /// </summary>
-    /// <exception cref="HarnessException">It is there and could not be read, or not as this build's record (<see cref="HarnessExit.ConfigInvalid"/>).</exception>
+    /// <exception cref="HarnessException">It is there and could not be read, or not as this build's record (<see cref="FailedExit"/>).</exception>
     private T? Read<T>(string file, string what)
         where T : class
         => MachineWideFile.TryRead<T>(_fileSystem, file, out var value, out var unread)
             ? value
             : throw new HarnessException(
-                HarnessExit.ConfigInvalid,
+                FailedExit,
                 $"the workflow cache's {what} '{file}' could not be read: {unread.Message.TrimEnd('.')}; it is not taken for one that is not there",
                 unread);
+
+    /// <summary>
+    /// The entry at <paramref name="file"/>, read strictly and held to the key it is filed under; null where nothing is
+    /// there.
+    /// </summary>
+    /// <exception cref="HarnessException">It is there and could not be read, or is not the entry of its key (<see cref="FailedExit"/>).</exception>
+    private WorkflowCacheEntry? Held(string file, string host, string owner, string repo, string commit, string path)
+    {
+        var entry = Read<WorkflowCacheEntry>(file, "entry");
+
+        if (entry is null)
+        {
+            return null;
+        }
+
+        return EntryProblem(entry, host, owner, repo, commit, path) is { } problem
+            ? throw new HarnessException(FailedExit, $"the workflow cache's entry '{file}' {problem}; it was not read, and a resolution of it fetches it again")
+            : entry;
+    }
+
+    /// <summary>Whether the file <paramref name="path"/> of <paramref name="entry"/> reads whole: its blob there and hashing to what the entry names.</summary>
+    private bool Whole(WorkflowCacheEntry entry, string path)
+    {
+        try
+        {
+            return ReadBytes(entry, path) is not null;
+        }
+        catch (HarnessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Writes one blob, private to this user, by the git hash of its content; refused naming it where it could not be.</summary>
+    private void WriteBlob(string hash, byte[] content)
+    {
+        var blob = BlobFile(hash);
+
+        Written(blob, "Nothing of the fetch was cached.", () =>
+        {
+            _fileSystem.CreateDirectory(System.IO.Path.GetDirectoryName(blob)!);
+            _fileSystem.WriteAtomic(blob, stream => stream.Write(content));
+            _fileSystem.ProtectSecretFile(blob);
+        });
+    }
+
+    /// <summary>Whether the blob <paramref name="hash"/> names is there; a blob that could not be looked at is taken for one that is not, and written again.</summary>
+    private bool BlobThere(string hash)
+    {
+        try
+        {
+            return _fileSystem.KindOf(BlobFile(hash)) == PathKind.File;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>Writes one record of the cache's, as every state file is and private to this user; refused saying <paramref name="consequence"/> where it could not be.</summary>
     private void WriteRecord<T>(string file, T record, string consequence)
@@ -748,13 +955,42 @@ public sealed class WorkflowCache
             _fileSystem.ProtectSecretFile(file);
         });
 
-    /// <summary>Does <paramref name="write"/>, refused naming <paramref name="file"/> and <paramref name="consequence"/> where it could not be done.</summary>
+    /// <summary>
+    /// Does <paramref name="write"/>, refused naming <paramref name="file"/> and <paramref name="consequence"/> where it
+    /// could not be done - a disk that is full, a directory nobody may write - as the cache's own failure (<see cref="FailedExit"/>).
+    /// </summary>
     private static void Written(string file, string consequence, Action write)
-        => MachineWideFile.Written($"The workflow cache's '{file}'", consequence, write);
+    {
+        try
+        {
+            MachineWideFile.Written($"The workflow cache's '{file}'", consequence, write);
+        }
+        catch (HarnessException unwritten)
+        {
+            throw new HarnessException(FailedExit, unwritten.Message, unwritten.InnerException);
+        }
+    }
 
-    /// <summary>Runs <paramref name="work"/> under the cache's one machine-wide lock, which every write and every pruning takes.</summary>
+    /// <summary>
+    /// Runs <paramref name="work"/> under the cache's one machine-wide lock, which every record of an entry, a use or a
+    /// resolution, and every removal of a pruning's, takes - for one record or one batch, never for bulk work: a lock held
+    /// past its window by another process is the cache's own failure (<see cref="FailedExit"/>), never a refusal of what
+    /// was asked.
+    /// </summary>
     private T Locked<T>(Func<T> work)
-        => MachineWideFile.Update(System.IO.Path.Combine(Directory, "entries"), MachineWideFile.Window, work);
+    {
+        var path = System.IO.Path.Combine(Directory, "entries");
+
+        try
+        {
+            return MachineWideFile.Update(path, MachineWideFile.Window, work);
+        }
+        catch (HarnessException held) when (held.ExitCode != FailedExit)
+        {
+            // Everything the work itself raises is the cache's own code already; what is left is the lock's refusal.
+            throw new HarnessException(FailedExit, $"{held.Message.TrimEnd('.')}: the workflow cache's lock was held past its window, and the command run again once that process is done finishes", held);
+        }
+    }
 
     /// <summary>The entry file's path: <c>entries/&lt;sha256 of host, owner, repo, commit, path&gt;.json</c>.</summary>
     private string EntryFile(string host, string owner, string repo, string commit, string path)
@@ -777,7 +1013,7 @@ public sealed class WorkflowCache
         catch (DirectoryNotFoundException ex)
         {
             throw new HarnessException(
-                HarnessExit.Refused,
+                FailedExit,
                 $"the workflow cache has nowhere to be kept: {ex.Message.TrimEnd('.')}; a remote workflow is neither fetched nor read, and a workflow that names none runs as it would",
                 ex);
         }

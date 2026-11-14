@@ -1241,9 +1241,10 @@ public sealed partial class HelpTests
                 + $"{string.Join(", ", DssHarness.Core.Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those "
                 + $"that write only the tree's own files, stay open. {WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} "
                 + "are among them: where a person's run of either would fetch a remote workflow into the workflow cache, an agent's - "
-                + $"its every child carries {DssHarness.Core.Agents.AgentChildEnvironment.AgentMarker} - reads the cache alone and writes "
-                + $"nothing to it, and one the cache does not hold is refused naming 'dssharness {WorkflowValidationService.CommandName}', "
-                + "which a person runs to fetch it.",
+                + $"told as {DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand} tells it, by {DssHarness.Core.Agents.AgentChildEnvironment.AgentMarker}, "
+                + "which its every child carries, or a process of this tool's above it in the process tree, one whose tree cannot be read "
+                + "taken as no person's - reads the cache alone and writes nothing to it, and one the cache does not hold is refused naming "
+                + $"'dssharness {WorkflowValidationService.CommandName}', which a person runs to fetch it.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(WorkflowValidationService.CommandName, DssHarness.Core.Agents.Policy.AgentPolicy.OpenVerbs);

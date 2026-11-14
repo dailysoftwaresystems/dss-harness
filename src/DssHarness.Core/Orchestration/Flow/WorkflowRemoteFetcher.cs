@@ -13,13 +13,20 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// A remote workflow a use resolved to: its source as written, the commit the ref resolved to, the cache entry its
-/// directory lives in, its own yml, and how the resolution came about - whether a moving ref was allowed and used,
-/// and whether the forge could not be reached and the cache's newest resolution stood in.
+/// directory lives in, its own yml, every file of its directory as the resolution read and hashed it, and how the
+/// resolution came about - whether a moving ref was allowed and used, and whether the forge could not be reached and the
+/// cache's newest resolution stood in.
 /// </summary>
 /// <param name="Source">The source as the use wrote it.</param>
 /// <param name="Commit">The commit the ref resolved to, 40 hex characters.</param>
 /// <param name="Entry">The cache entry holding the workflow's directory at that commit.</param>
 /// <param name="Definition">The workflow's own yml.</param>
+/// <param name="Files">
+/// Every file of the entry, its bytes by its path in the repository, as the resolution fetched or read them and checked
+/// each against its hash: what the check that resolved it reads the workflow's files from, and what a run keeps of it with
+/// its frozen definition - so nothing that reads them after the resolution reads the cache again, which a pruning may have
+/// changed since.
+/// </param>
 /// <param name="Moving">Whether the ref was a branch, allowed by <c>pin: any</c>, which moves.</param>
 /// <param name="FromLastResolved">Whether the forge could not be reached and the cache's newest resolution of the ref was used.</param>
 public sealed record WorkflowRemoteResolution(
@@ -27,8 +34,47 @@ public sealed record WorkflowRemoteResolution(
     string Commit,
     WorkflowCacheEntry Entry,
     string Definition,
+    IReadOnlyDictionary<string, byte[]> Files,
     bool Moving = false,
-    bool FromLastResolved = false);
+    bool FromLastResolved = false)
+{
+    /// <summary>The name the workflow goes by inside the run (<see cref="WorkflowRemote.Name(WorkflowRemoteSource, string)"/>).</summary>
+    public string Name => WorkflowRemote.Name(Source, Commit);
+
+    /// <summary>
+    /// The text of one file of the workflow's directory, by its path in the repository, as the resolution read it: UTF-8,
+    /// a byte order mark dropped (<see cref="WorkflowCache.Text"/>); null where the directory holds no such file.
+    /// </summary>
+    /// <param name="path">The file's path in the repository, forward slashes.</param>
+    /// <exception cref="HarnessException">The file is not UTF-8 text (<see cref="HarnessExit.ConfigInvalid"/>).</exception>
+    public string? Text(string path)
+        => Files.TryGetValue(path, out var bytes) ? WorkflowCache.Text(bytes, $"'{path}' of the workflow '{Entry.Repository}' at '{Commit}'") : null;
+
+    /// <summary>
+    /// The resolution among <paramref name="resolutions"/> whose directory holds the remote workflow <paramref name="workflow"/>:
+    /// its own, else the nearest above it at the same commit (<see cref="WorkflowRemote.HeldUnder"/>), as a workflow a
+    /// relative use inside a remote one names is held; null where none does.
+    /// </summary>
+    /// <param name="resolutions">The resolutions a check made.</param>
+    /// <param name="workflow">A remote workflow's name, as the run resolved it.</param>
+    public static WorkflowRemoteResolution? Holding(IEnumerable<WorkflowRemoteResolution> resolutions, string workflow)
+    {
+        ArgumentNullException.ThrowIfNull(resolutions);
+
+        var made = resolutions.ToList();
+
+        foreach (var (host, owner, repo, commit, directory) in WorkflowRemote.HeldUnder(workflow))
+        {
+            if (made.FirstOrDefault(resolution => resolution.Entry.Commit == commit && resolution.Entry.Path == directory
+                && resolution.Entry.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && resolution.Entry.Owner == owner && resolution.Entry.Repo == repo) is { } holding)
+            {
+                return holding;
+            }
+        }
+
+        return null;
+    }
+}
 
 /// <summary>
 /// The one way a remote workflow is fetched: a ref resolved to a commit of the named repository's own - a tag peeled to
@@ -38,14 +84,17 @@ public sealed record WorkflowRemoteResolution(
 /// workflow cache - read from it with no network where the commit is cached already. A remote source is trusted by
 /// configuration alone: the repository's <c>workflowSources</c> allows its owner, names its host and the one credential
 /// it is reached with, pins the refs it may name, and says what happens where the forge cannot be reached; nothing of
-/// that is decided by a response. A command an agent runs never reaches the forge and never writes the cache: it reads
-/// what the cache holds, or is refused naming the command a person runs to fetch it.
+/// that is decided by a response. A command that runs under an agent - told by the one rule <c>run-side-task</c> is
+/// told by, the agent's mark or a process of this tool's above it in the process tree, a tree that cannot be read taken
+/// for no person's - never reaches the forge and never writes the cache: it reads what the cache holds, or is refused
+/// naming the command a person runs to fetch it.
 /// </summary>
 /// <param name="gh">Runs the forge's tool, <c>gh api</c> among its calls.</param>
 /// <param name="cache">The workflow cache the fetch is kept in.</param>
+/// <param name="ancestry">Tells whether the command runs under an agent (<see cref="AgentAncestry.UnderAnAgentAsync"/>).</param>
 /// <param name="output">Says what a resolution is warned of - a moving ref, the cache standing in; null says nothing.</param>
 /// <param name="clock">Dates a fetch, a use and a resolution; the system's where none is given.</param>
-public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHarnessOutput? output = null, TimeProvider? clock = null)
+public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, AgentAncestry ancestry, IHarnessOutput? output = null, TimeProvider? clock = null)
 {
     /// <summary>What a resolution's warnings are said under, whichever command resolved it.</summary>
     public const string Said = "remote-workflow";
@@ -61,6 +110,7 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
 
     private readonly GhProcess _gh = gh;
     private readonly WorkflowCache _cache = cache;
+    private readonly AgentAncestry _ancestry = ancestry ?? throw new ArgumentNullException(nameof(ancestry));
     private readonly IHarnessOutput? _output = output;
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
@@ -68,8 +118,9 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
     /// Resolves the remote source a use names to a commit and a cached directory: the commit the run's own record
     /// says where it has one (<paramref name="recorded"/>, so a resume never resolves again, and a tag or branch
     /// that moved since changes no run already started), the cache where that commit is held, and the forge where
-    /// it is not - refused where the forge cannot be reached, or the cache's newest resolution where the configuration
-    /// says <c>last-resolved</c>. Where the command runs under an agent, the cache alone is read.
+    /// it is not - the cache's newest resolution standing in where the forge cannot be reached and the configuration
+    /// says <c>last-resolved</c>. Where the command runs under an agent, or cannot tell that it does not, the cache alone
+    /// is read.
     /// </summary>
     /// <param name="source">The source a step's <c>use:</c> names, parsed.</param>
     /// <param name="settings">The repository's <c>workflowSources</c>; null where the file holds none.</param>
@@ -78,12 +129,16 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
     /// <param name="recorded">The commit this run's own record holds for the source, where one does; null else.</param>
     /// <param name="cancellationToken">Stops the fetch.</param>
     /// <exception cref="HarnessException">
-    /// The ref is no ref git takes, the source's repository is not allowed, its host is not named or its credential not
-    /// there, its ref is not one the pin takes or not the repository's own, the file it names is not in the directory,
-    /// the forge refused what was asked - naming what it said - or the forge could not be reached and nothing stands in
-    /// (<see cref="HarnessExit.Refused"/>); a cache file could not be read (<see cref="HarnessExit.ConfigInvalid"/>);
-    /// the forge answered what does not read (<see cref="HarnessExit.CommandFailed"/>), or <c>gh</c> is not there
-    /// (<see cref="HarnessExit.ToolMissing"/>).
+    /// A refusal of the source itself (<see cref="HarnessExit.Refused"/>): the ref is no ref git takes, the source's
+    /// repository is not allowed, its host is not named or its credential not there, its ref is not one the pin takes -
+    /// the cache's newest resolution of it as much as the forge's - or not the repository's own, the file it names is not
+    /// in the directory, or the forge answered and refused what was asked, naming what it said; or its yml is not text
+    /// (<see cref="HarnessExit.ConfigInvalid"/>). Every other failure keeps its own code, and is no refusal of the source:
+    /// the forge not reached with nothing standing in, as the call that did not reach it raised it
+    /// (<see cref="HarnessExit.Incomplete"/> where its limit passed, <see cref="HarnessExit.CommandFailed"/> where gh said
+    /// no connection was made - <see cref="GhProcess.Unreached"/>); the forge answering what does not read
+    /// (<see cref="HarnessExit.CommandFailed"/>); <c>gh</c> not there (<see cref="HarnessExit.ToolMissing"/>); and the
+    /// workflow cache that could not be named, written or read, or whose lock was held (<see cref="WorkflowCache.FailedExit"/>).
     /// </exception>
     public async Task<WorkflowRemoteResolution> ResolveAsync(
         WorkflowRemoteSource source,
@@ -111,11 +166,19 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
                 $"'{source.Spelled}': the run's own record names '{recorded}' as the commit it began with, which is no commit's 40 hex characters; nothing was asked of the forge");
         }
 
+        // The cache is named before anything is asked of it or of the forge: a process with nowhere to keep it is told so
+        // at once, as the cache's own failure, and asks the forge nothing it could not keep.
+        _ = _cache.Directory;
+
         // A command an agent runs reads what the person's cache holds and nothing else: it reaches no forge with the
-        // person's login, and writes nothing of the tool's own.
-        if (environment(AgentChildEnvironment.AgentMarker) is not null)
+        // person's login, and writes nothing of the tool's own. It is told by the one rule run-side-task is told by -
+        // the mark, which a child can take away, and the process tree, which it cannot - and one whose tree could not be
+        // read is no person's either.
+        var origin = await _ancestry.UnderAnAgentAsync(environment, cancellationToken).ConfigureAwait(false);
+
+        if (origin.UnderAnAgent || origin.Unread is not null)
         {
-            return CachedOnly(source, settings, recorded);
+            return CachedOnly(source, settings, recorded, origin);
         }
 
         var asked = new Asked(source, settings, workingDirectory, environment, cancellationToken);
@@ -243,8 +306,10 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
 
     /// <summary>
     /// The cache's newest resolution of <paramref name="source"/>'s ref, where the forge could not be reached and the
-    /// configuration says <c>last-resolved</c> - warned of, and refused where it says <c>refuse</c> or the cache holds no
-    /// whole resolution, each refusal naming what the forge's tool said.
+    /// configuration says <c>last-resolved</c> - held to the pin (<see cref="CachedResolution"/>) and warned of. Where the
+    /// configuration says <c>refuse</c>, or the cache holds no whole resolution, nothing stands in and the failure keeps
+    /// the code of the call that did not reach the forge, naming what the forge's tool said: the network not being there
+    /// is no refusal of the source, and never a problem of the definition's.
     /// </summary>
     private WorkflowRemoteResolution LastResolved(WorkflowRemoteSource source, WorkflowSourcesConfig? settings, HarnessException failed)
     {
@@ -253,13 +318,13 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
         if (WorkflowSourceRules.OfflineOf(settings) != WorkflowSourceRules.OfflineLastResolved)
         {
             throw new HarnessException(
-                HarnessExit.Refused,
+                failed.ExitCode,
                 $"{unreached}; workflowSources.offline is refuse, so nothing stands in - last-resolved would stand at the cache's newest resolution of the ref",
                 failed);
         }
 
-        var last = _cache.LastResolved(source.Host, source.Owner, source.Repo, source.Directory, source.Ref)
-            ?? throw new HarnessException(HarnessExit.Refused, $"{unreached}; and the workflow cache holds no resolution of '{source.Ref}'", failed);
+        var last = CachedResolution(source, settings)
+            ?? throw new HarnessException(failed.ExitCode, $"{unreached}; and the workflow cache holds no resolution of '{source.Ref}'", failed);
 
         var entry = Found(source, last.Commit);
         var (cached, broken) = entry is null ? (null, "it holds no entry for the commit") : Whole(source, entry);
@@ -267,23 +332,52 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
         if (cached is null)
         {
             throw new HarnessException(
-                HarnessExit.Refused,
+                failed.ExitCode,
                 $"{unreached}; the workflow cache's newest resolution of '{source.Ref}' is the commit '{last.Commit}', whose files are not whole in the cache ({broken}); it is fetched again where the forge is reached",
                 failed);
         }
 
         _output?.Warn(Said, $"{unreached}; the workflow cache's newest resolution of '{source.Ref}' stands in, the commit {last.Commit} it resolved to on {Day(last.ResolvedAt)}, as workflowSources.offline says last-resolved");
-        Touch(source, cached.Entry, resolution: null);
+
+        // What was read and hashed stands, the forge not being there to fetch it again; a pruning that removed the entry
+        // as it was read is said.
+        if (Hold(source, cached.Entry, resolution: null) is HoldAnswer.Gone)
+        {
+            _output?.Warn(Said, $"'{source.Spelled}': the workflow cache's entry for the commit {last.Commit} was pruned as it was read; what was read stands, and it is fetched again where the forge is reached");
+        }
 
         return cached with { Moving = last.Branch, FromLastResolved = true };
     }
 
     /// <summary>
-    /// The workflow resolved from the cache alone, for a command an agent runs: the commit the run's record or the
-    /// source names, or the cache's newest resolution of its ref - read, its every file hashed again, and nothing written,
-    /// not even the use's date. Refused, naming the command a person runs to fetch it, where the cache does not hold it whole.
+    /// The cache's newest resolution of <paramref name="source"/>'s ref where it is one the pin takes - the one rule a
+    /// resolution the cache stands in with is held to, offline and under an agent alike: a ref the cache last resolved as
+    /// a branch is refused where the pin is not <c>any</c>, as the forge's own answer would be, for the cache standing in
+    /// never runs what the configuration refuses. Null where the cache recorded none.
     /// </summary>
-    private WorkflowRemoteResolution CachedOnly(WorkflowRemoteSource source, WorkflowSourcesConfig? settings, string? recorded)
+    /// <exception cref="HarnessException">
+    /// The newest resolution is a branch the pin refuses (<see cref="HarnessExit.Refused"/>); the record could not be read
+    /// (<see cref="WorkflowCache.FailedExit"/>).
+    /// </exception>
+    private WorkflowCacheResolution? CachedResolution(WorkflowRemoteSource source, WorkflowSourcesConfig? settings)
+    {
+        var last = _cache.LastResolved(source.Host, source.Owner, source.Repo, source.Directory, source.Ref);
+        var pin = WorkflowSourceRules.PinOf(settings);
+
+        return last is { Branch: true } && pin != WorkflowSourceRules.PinAny
+            ? throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{source.Spelled}' names the ref '{source.Ref}', which the workflow cache last resolved as a branch, and the cache stands in for no ref the pin refuses: workflowSources.pin is {pin}, which takes a tag or a full commit SHA - a branch moves")
+            : last;
+    }
+
+    /// <summary>
+    /// The workflow resolved from the cache alone, for a command an agent runs or one that cannot tell it is no agent's: the
+    /// commit the run's record or the source names, or the cache's newest resolution of its ref that the pin takes - read,
+    /// its every file hashed again, and nothing written, not even the use's date. Refused, naming the command a person runs
+    /// to fetch it, where the cache does not hold it whole.
+    /// </summary>
+    private WorkflowRemoteResolution CachedOnly(WorkflowRemoteSource source, WorkflowSourcesConfig? settings, string? recorded, AgentAncestryAnswer origin)
     {
         string commit;
         var branch = false;
@@ -301,45 +395,43 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
         {
             Pin(source, WorkflowSourceRules.PinOf(settings));
 
-            last = _cache.LastResolved(source.Host, source.Owner, source.Repo, source.Directory, source.Ref)
-                ?? throw Unfetched(source, $"it holds no resolution of '{source.Ref}'");
-
-            if (last.Branch && WorkflowSourceRules.PinOf(settings) != WorkflowSourceRules.PinAny)
-            {
-                throw new HarnessException(
-                    HarnessExit.Refused,
-                    $"'{source.Spelled}' names the ref '{source.Ref}', which the workflow cache last resolved as a branch; workflowSources.pin is {WorkflowSourceRules.PinOf(settings)}, which takes a tag or a full commit SHA - a branch moves");
-            }
-
+            last = CachedResolution(source, settings) ?? throw Unfetched(source, $"it holds no resolution of '{source.Ref}'", origin);
             (commit, branch) = (last.Commit, last.Branch);
         }
 
-        var entry = Found(source, commit) ?? throw Unfetched(source, $"it holds no entry for the commit '{commit}'");
+        var entry = Found(source, commit) ?? throw Unfetched(source, $"it holds no entry for the commit '{commit}'", origin);
         var (cached, broken) = Whole(source, entry);
 
         if (cached is null)
         {
-            throw Unfetched(source, $"its files of the commit '{commit}' are not whole: {broken}");
+            throw Unfetched(source, $"its files of the commit '{commit}' are not whole: {broken}", origin);
         }
 
         if (last is not null)
         {
-            _output?.Warn(Said, $"'{source.Spelled}' was resolved from the workflow cache alone, for a command an agent runs never reaches the forge: it stands at the commit {commit} the cache's newest resolution of '{source.Ref}' names, from {Day(last.ResolvedAt)}");
+            _output?.Warn(Said, $"'{source.Spelled}' was resolved from the workflow cache alone, for {Whose(origin)} never reaches the forge: it stands at the commit {commit} the cache's newest resolution of '{source.Ref}' names, from {Day(last.ResolvedAt)}");
         }
 
         return cached with { Moving = branch };
     }
 
-    /// <summary>The refusal of a resolution an agent's command would need the forge for.</summary>
-    private static HarnessException Unfetched(WorkflowRemoteSource source, string why)
+    /// <summary>What a command that reads the cache alone is, as its refusals and warnings say it.</summary>
+    private static string Whose(AgentAncestryAnswer origin)
+        => origin.UnderAnAgent ? "a command an agent runs" : "a command that cannot tell it is no agent's";
+
+    /// <summary>The refusal of a resolution a command that reads the cache alone would need the forge for.</summary>
+    private static HarnessException Unfetched(WorkflowRemoteSource source, string why, AgentAncestryAnswer origin)
         => new(
             HarnessExit.Refused,
-            $"'{source.Spelled}' is not in the workflow cache as a command an agent runs needs it ({why}): such a command never reaches the forge nor writes the cache, so a person runs '{ToolPackage.Command} {WorkflowValidationService.CommandName}' to fetch it; nothing was asked of the forge");
+            $"'{source.Spelled}' is not in the workflow cache as {Whose(origin)} needs it ({why}): "
+                + (origin is { UnderAnAgent: false, Unread: { } unread } ? $"{unread} so whether an agent runs it could not be told, and " : string.Empty)
+                + $"such a command never reaches the forge nor writes the cache, so a person runs '{ToolPackage.Command} {WorkflowValidationService.CommandName}' to fetch it; nothing was asked of the forge");
 
     /// <summary>
     /// The workflow at <paramref name="commit"/>, from the cache where it is held whole - read with no network, every
-    /// file of it hashed again - else proved the repository's own where <paramref name="proven"/> is not, fetched,
-    /// checked and cached.
+    /// file of it hashed again, and its use recorded with the look that it is still there - else proved the repository's
+    /// own where <paramref name="proven"/> is not, fetched, checked and cached: an entry a pruning removed as it was read
+    /// is fetched again, never answered as held.
     /// </summary>
     private async Task<WorkflowRemoteResolution> ReadAsync(Asked asked, string commit, bool proven, WorkflowCacheResolution? resolution)
     {
@@ -351,12 +443,17 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
 
             if (cached is not null)
             {
-                Touch(source, entry, resolution);
+                if (Hold(source, entry, resolution) is not HoldAnswer.Gone)
+                {
+                    return cached;
+                }
 
-                return cached;
+                _output?.Warn(Said, $"'{source.Spelled}': the workflow cache's entry for the commit {commit} was pruned as it was read; its directory is fetched again whole");
             }
-
-            _output?.Warn(Said, $"'{source.Spelled}': the workflow cache's entry for the commit {commit} is not whole ({broken}); its directory is fetched again whole");
+            else
+            {
+                _output?.Warn(Said, $"'{source.Spelled}': the workflow cache's entry for the commit {commit} is not whole ({broken}); its directory is fetched again whole");
+            }
         }
 
         if (!proven)
@@ -367,14 +464,17 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
         return await FetchAsync(asked, commit, resolution).ConfigureAwait(false);
     }
 
-    /// <summary>The cache's entry for <paramref name="source"/>'s directory at <paramref name="commit"/>; null where it holds none, or one it could not read, which is said and fetched again.</summary>
+    /// <summary>
+    /// The cache's entry for <paramref name="source"/>'s directory at <paramref name="commit"/>; null where it holds none,
+    /// or one whose record could not be read, which is said and fetched again over it.
+    /// </summary>
     private WorkflowCacheEntry? Found(WorkflowRemoteSource source, string commit)
     {
         try
         {
             return _cache.Find(source.Host, source.Owner, source.Repo, commit, source.Directory);
         }
-        catch (HarnessException unread) when (unread.ExitCode == HarnessExit.ConfigInvalid)
+        catch (HarnessException unread) when (unread.ExitCode == WorkflowCache.FailedExit)
         {
             _output?.Warn(Said, $"'{source.Spelled}': {unread.Message}");
             return null;
@@ -396,15 +496,13 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
             throw NoSuchFile(source, entry.Commit, entry.Files.Select(file => file.Path));
         }
 
-        byte[]? definition = null;
+        var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
 
         foreach (var file in entry.Files)
         {
             try
             {
-                var bytes = _cache.ReadBytes(entry, file.Path);
-
-                definition = file.Path == source.File ? bytes : definition;
+                files[file.Path] = _cache.ReadBytes(entry, file.Path)!;
             }
             catch (HarnessException broken)
             {
@@ -412,22 +510,32 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
             }
         }
 
-        return (new WorkflowRemoteResolution(source, entry.Commit, entry, WorkflowCache.Text(definition!, $"'{source.Spelled}'")), null);
+        return (new WorkflowRemoteResolution(source, entry.Commit, entry, WorkflowCache.Text(files[source.File], $"'{source.Spelled}'"), files), null);
+    }
+
+    /// <summary>How recording a use went: recorded, gone - a pruning removed the entry as it was read - or not recorded, the cache not being written.</summary>
+    private enum HoldAnswer
+    {
+        Held,
+        Gone,
+        Unrecorded,
     }
 
     /// <summary>
-    /// Records that a run used <paramref name="entry"/> now, and the resolution that led to it; a cache that cannot be
-    /// written is warned of, and what was read stands.
+    /// Records that a run used <paramref name="entry"/> now, and the resolution that led to it, in one step with the look
+    /// that the entry is still there (<see cref="WorkflowCache.Hold"/>); a cache that cannot be written is warned of, and
+    /// what was read stands, for only the use's date and the resolution go unkept.
     /// </summary>
-    private void Touch(WorkflowRemoteSource source, WorkflowCacheEntry entry, WorkflowCacheResolution? resolution)
+    private HoldAnswer Hold(WorkflowRemoteSource source, WorkflowCacheEntry entry, WorkflowCacheResolution? resolution)
     {
         try
         {
-            _cache.Touch(entry, resolution, _clock.GetUtcNow());
+            return _cache.Hold(entry, resolution, _clock.GetUtcNow()) is null ? HoldAnswer.Gone : HoldAnswer.Held;
         }
         catch (HarnessException unwritten)
         {
             _output?.Warn(Said, $"'{source.Spelled}': {unwritten.Message}");
+            return HoldAnswer.Unrecorded;
         }
     }
 
@@ -658,7 +766,7 @@ public sealed class WorkflowRemoteFetcher(GhProcess gh, WorkflowCache cache, IHa
 
         _cache.Write(written, contents, resolution);
 
-        return new WorkflowRemoteResolution(source, commit, written, definition);
+        return new WorkflowRemoteResolution(source, commit, written, definition, contents);
     }
 
     /// <summary>The refusal of a use whose file the commit's directory does not hold, naming what it holds.</summary>

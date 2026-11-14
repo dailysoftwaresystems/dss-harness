@@ -3427,9 +3427,11 @@ public static class HelpTopics
             + "refused to every agent by name, a side-task's as well as a step's: "
             + $"{string.Join(", ", Agents.Policy.AgentPolicy.SlotOrStateVerbs)}; those that only read, and those that "
             + $"write only the tree's own files, stay open. {WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} are among "
-            + "them: where a person's run of either would fetch a remote workflow into the workflow cache, an agent's - its every "
-            + $"child carries {Agents.AgentChildEnvironment.AgentMarker} - reads the cache alone and writes nothing to it, and one the cache "
-            + $"does not hold is refused naming '{ToolPackage.Command} {WorkflowValidationService.CommandName}', which a person runs to fetch it.";
+            + "them: where a person's run of either would fetch a remote workflow into the workflow cache, an agent's - told as "
+            + $"{Agents.SideTasks.SideTaskService.RunCommand} tells it, by {Agents.AgentChildEnvironment.AgentMarker}, which its every child carries, or a "
+            + "process of this tool's above it in the process tree, one whose tree cannot be read taken as no person's - reads the "
+            + "cache alone and writes nothing to it, and one the cache does not hold is refused naming "
+            + $"'{ToolPackage.Command} {WorkflowValidationService.CommandName}', which a person runs to fetch it.";
 
     /// <summary>
     /// The places the user keeps credentials in that the isolation hides, said from their one list
@@ -5222,10 +5224,15 @@ public static class HelpTopics
             + $"workflow cache, {WorkflowCache.DirectoryName}/ under this user's own directory for this tool, named the first time a "
             + "remote use needs it: each blob as its bytes at blobs/<first 2 hex>/<remaining 38 hex>, one entry per repository, commit "
             + "and directory, held to its key as it is read, and each ref's newest resolution with its time; every blob is hashed "
-            + "again as it is read, so a blob changed on disk is refused and its directory fetched again. A second run of a pinned "
-            + "SHA reads the cache with no network, a tag needs one call at each run's start, and a run records each use's "
-            + "resolution: a resume uses the recorded commit and never resolves again, so a tag or branch that moved since changes "
-            + "no run already started. A remote workflow is trusted by configuration alone - it directs agents and machine steps in "
+            + "again as it is read, so a blob changed on disk is refused and its directory fetched again, and a use is recorded "
+            + "with the look that its entry is still there, so one a pruning removed as it was read is fetched again. A second run "
+            + "of a pinned SHA reads the cache with no network, a tag needs one call at each run's start, and a run records each "
+            + "use's resolution: a resume uses the recorded commit and never resolves again, so a tag or branch that moved since "
+            + "changes no run already started. A run keeps every file of the remote workflows it began with beside its frozen "
+            + $"definition, in {OrchestratorLayout.RemoteWorkflowsDirectoryName}/ of its own directory, as the check that let it start "
+            + "read and hashed them, and its steps read them there as it runs: no pruning of the cache takes a file from a run that "
+            + "started, and each session's start keeps again what the run's copy does not hold whole. A remote workflow is "
+            + "trusted by configuration alone - it directs agents and machine steps in "
             + "this repository - so workflowSources in config.json allows its owner (empty by default, and a remote use is refused "
             + "until then); names each GitHub Enterprise host with its one credential, \"credential\": {\"from\": \"env\", \"name\": "
             + $"\"<VARIABLE>\"}}, given to its calls as {GhProcess.TokenVariable} for a *.ghe.com host and {GhProcess.EnterpriseTokenVariable} for any "
@@ -5233,14 +5240,27 @@ public static class HelpTopics
             + "reaches github.com with the machine's own gh login, every call naming its host; pins the refs it takes "
             + $"({WorkflowSourceRules.PinTagOrCommit} by default, {WorkflowSourceRules.PinCommit}, or {WorkflowSourceRules.PinAny}, which allows a branch, "
             + $"warned of wherever one is resolved); and says what stands in where the network keeps the forge from being reached "
-            + $"({WorkflowSourceRules.OfflineRefuse}, or {WorkflowSourceRules.OfflineLastResolved}, the cache's newest resolution of the ref, warned of where "
-            + "it stands in) - a forge that answered, refusing the credential or naming a thing not there, is refused with what gh "
-            + "said, and nothing stands in for it. Its files resolve against its cache entry as a local workflow's do against its "
-            + "directory, a relative use inside it resolves inside the same entry - one that leaves the entry refused - and no local "
-            + "use resolves under remote/, the cache's own reserved place in the workflows folder, as no workflow is named remote. "
-            + "A command an agent runs never reaches the forge nor writes the cache: "
-            + $"{WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} under an agent read the cache alone, and are refused "
-            + $"naming '{ToolPackage.Command} {WorkflowValidationService.CommandName}', which a person runs to fetch what they need.";
+            + $"({WorkflowSourceRules.OfflineRefuse}, or {WorkflowSourceRules.OfflineLastResolved}, the cache's newest resolution of the ref, held to the pin "
+            + "as the forge's own answer is - a ref the cache last resolved as a branch refused where the pin is not any - and "
+            + "warned of where it stands in) - a forge that answered, refusing the credential or naming a thing not there, is "
+            + "refused with what gh said, and nothing stands in for it. A refusal of what the source is - not allowed, a host or "
+            + "credential not named, a ref the pin refuses or that is not the repository's own, a file the directory does not "
+            + "hold, a forge that answered and refused - is the definition's problem, said with the use; a fetch that could not run "
+            + $"keeps its own code: gh missing ({HarnessExit.ToolMissing}), the forge not reached with nothing standing in "
+            + $"({HarnessExit.Incomplete} where the call's limit passed, {HarnessExit.CommandFailed} where gh said no connection was made), an "
+            + $"answer of the forge's that does not read ({HarnessExit.CommandFailed}), and the workflow cache that could not be named, "
+            + $"written or read, or whose lock another process held past its window ({WorkflowCache.FailedExit}). Its files resolve against "
+            + "its cache entry as a local workflow's do against its directory, a relative use inside it resolves inside the same "
+            + "entry - one that leaves the entry refused - and no local use resolves under remote/, the cache's own reserved place "
+            + "in the workflows folder, as no workflow is named remote. A remote workflow's schemas are held to the subset of JSON "
+            + "Schema the engine reads as a local one's are. A command that runs under an agent - told by the one rule "
+            + $"{Agents.SideTasks.SideTaskService.RunCommand} is told by, the agent's mark or a process of this tool's above it in the "
+            + "process tree, one whose tree cannot be read taken as no person's - never reaches the forge nor writes the cache: "
+            + $"{WorkflowValidationService.CommandName} and {WorkflowExportService.CommandName} there read the cache alone, and are refused "
+            + $"naming '{ToolPackage.Command} {WorkflowValidationService.CommandName}', which a person runs to fetch what they need. "
+            + $"{WorkflowValidationService.CommandName} names the workflow cache's directory on the line it ends on wherever it went to "
+            + $"resolve a remote use, whether the workflows hold or not, and {WorkflowExportService.CommandName} --from on its own; "
+            + "both name it in --json, as cache, on every exit.";
 
     /// <summary>What the workflow-cache verbs do, every bound named from the code that holds it.</summary>
     internal static string WorkflowCacheHelp
@@ -5251,7 +5271,11 @@ public static class HelpTopics
             + "entries no run used and none was fetched for N days, the resolutions that named them, and the blobs no entry left "
             + "holds - every blob an entry it keeps holds kept, and no blob removed at all while a file of the cache's own could not "
             + $"be read; a file it could not remove or read is said, and the pruning ends incomplete ({HarnessExit.Incomplete}). Both name "
-            + "the cache's directory, in text and in --json, and every write and pruning of the cache is made under one lock.";
+            + "the cache's directory, in text and in --json. Every record of an entry, a use or a resolution, and every removal a "
+            + "pruning makes, is made under one lock, held for one record or one batch of blobs at a time - a fetch's blobs are "
+            + "written before its entry, outside it, and the entry only once every blob it names is there - so a pruning never "
+            + "takes a blob an entry holds and never holds a fetch off for longer than a moment; a cache that could not be named, "
+            + $"written or read, or whose lock another process held past its window, ends incomplete ({WorkflowCache.FailedExit}).";
 
     private static string RenderWorkflows()
     {
@@ -5412,7 +5436,11 @@ public static class HelpTopics
         builder.AppendLine("repository at its resolved commit - no workflow named beside it, nor --shipped: every file");
         builder.AppendLine("of its directory, byte for byte, and source.md, a note of where it came from and how the");
         builder.AppendLine("commit came about where that is worth a word, a directory holding a source.md of its own");
-        builder.AppendLine("refused - so a team can review what is written and use it as ./.");
+        builder.AppendLine("refused - so a team can review what is written and use it as ./. A workflow named beside");
+        builder.AppendLine($"it, --shipped, or a --from that names no remote workflow is a usage error ({HarnessExit.UsageError}), and the");
+        builder.AppendLine($"folder is looked at before anything is fetched, one that is there refused ({HarnessExit.Refused}) with");
+        builder.AppendLine("nothing written anywhere; a refusal after the fetch says what it fetched is kept in the");
+        builder.AppendLine("workflow cache.");
         builder.AppendLine();
         AppendWrapped(builder, WorkflowCacheHelp);
         builder.AppendLine();
