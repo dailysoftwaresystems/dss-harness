@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -30,15 +32,73 @@ public static class WorkflowFiles
     /// Why a schema the definition names is not one the engine reads, each problem
     /// <see cref="Schemas.JsonSchemaSubset.TextProblems"/> says on its own line naming the file and what names it; none
     /// where it is one. Said where a repository's workflow is checked and where this build's own is read, so a
-    /// definition never holds over a schema no answer could be held to.
+    /// definition never holds over a schema no answer could be held to. Where the files beside the schema are read,
+    /// the definitions its references share with them are taken into it first (<see cref="Schemas.JsonSchemaSubset.Shared"/>),
+    /// so a schema may hold its work-item shape by one shared definition.
     /// </summary>
     /// <param name="named">The schema, as the definition names it.</param>
     /// <param name="text">Its text.</param>
-    public static IReadOnlyList<string> SchemaProblems(Named named, string text)
+    /// <param name="neighbours">
+    /// The parsed root of the schema file a shared reference names, or null where none is read beside the schema;
+    /// null where the files beside it are not read at all, and a shared reference stands refused.
+    /// </param>
+    public static IReadOnlyList<string> SchemaProblems(Named named, string text, Func<string, JsonObject?>? neighbours = null)
     {
         ArgumentNullException.ThrowIfNull(named);
+        ArgumentNullException.ThrowIfNull(text);
 
-        return [.. Schemas.JsonSchemaSubset.TextProblems(text).Select(problem => $"'{named.File}', {named.What}, is not a schema the engine reads: {problem}")];
+        JsonNode? parsed;
+
+        try
+        {
+            parsed = JsonNode.Parse(text);
+        }
+        catch (JsonException ex)
+        {
+            return [$"'{named.File}', {named.What}, is not a schema the engine reads: $: is not JSON ({ex.Message})"];
+        }
+
+        // JSON's null parses to no node at all, and is no schema as any other value that is not an object is not.
+        var problems = parsed is not JsonObject schema
+            ? ["$: a schema is a JSON object"]
+            : Schemas.JsonSchemaSubset.SubsetProblems(neighbours is null ? schema : Schemas.JsonSchemaSubset.Shared(schema, neighbours));
+
+        return [.. problems.Select(problem => $"'{named.File}', {named.What}, is not a schema the engine reads: {problem}")];
+    }
+
+    /// <summary>
+    /// The file a schema file's neighbour names, as a shared reference writes it: the file under the schema's own
+    /// directory of the workflow, one name beside the schema - <c>plan.schema.json</c> of
+    /// <c>schemas/plan-audit.schema.json</c> is <c>schemas/plan.schema.json</c>.
+    /// </summary>
+    /// <param name="named">The schema, as the definition names it.</param>
+    /// <param name="beside">The neighbour, as a shared reference names it: one file name, no directory.</param>
+    public static string Beside(string named, string beside)
+    {
+        ArgumentNullException.ThrowIfNull(named);
+        ArgumentNullException.ThrowIfNull(beside);
+
+        var at = named.LastIndexOf('/');
+
+        return at < 0 ? beside : $"{named[..at]}/{beside}";
+    }
+
+    /// <summary>
+    /// A schema file's text as the root the engine reads, or <see langword="null"/> where it is none to read: not
+    /// there, unreadable, not JSON, or no JSON object - the answer the sharing of a definition takes for a file
+    /// beside the schema that answers nothing.
+    /// </summary>
+    /// <param name="text">The file's text, or null where none was read.</param>
+    public static JsonObject? RootOf(string? text)
+    {
+        try
+        {
+            return text is not null && JsonNode.Parse(text) is JsonObject root ? root : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

@@ -29,6 +29,15 @@ namespace DssHarness.Core.Schemas;
 /// definitions it names - since the drafts disagree on whether what is said beside one is read at all.
 /// </para>
 /// <para>
+/// A <c>$ref</c> may also name a definition of a schema file beside the one holding it -
+/// <c>plan.schema.json#/$defs/workItem</c>, one file name and one definition of it. Such a definition is shared:
+/// it is taken into the schema's own <c>$defs</c>, and the reference is made the local one, wherever the schema is
+/// read with the files beside it (<see cref="Shared"/>) - so the work items of a plan, a self-audit and a
+/// diagnosis are one definition, held once, beside the schemas that share it. A shared reference the files beside
+/// the schema do not answer is left as it is written, and the subset check refuses it as it refuses a local one
+/// that names nothing.
+/// </para>
+/// <para>
 /// The same class answers whether a document answers a schema, and its problems name the document's own path -
 /// <c>$.output.findings[2].severity: "urgent" is not one of ...</c>, a name no identifier spells written
 /// <c>$["a.b"]</c> - for a person, and for a model asked to repair its answer. Every key a schema says holds at
@@ -225,6 +234,174 @@ public static class JsonSchemaSubset
                 left.Push(inner);
             }
         }
+    }
+
+    /// <summary>
+    /// The schema with the definitions its references share with the schema files beside it taken in: each
+    /// <c>$ref</c> that names a definition of another schema file - <c>plan.schema.json#/$defs/workItem</c>, the
+    /// file beside this schema's own - and each definition those reach, in the files they come from, is copied into
+    /// the schema's own <c>$defs</c> and the reference is made the local one, so schemas that share a definition
+    /// hold it once, between them. A reference that names nothing the files beside the schema answer - a file not
+    /// there, a definition it does not hold, or a name this schema holds already, said otherwise - is left as it is
+    /// written, for <see cref="SubsetProblems"/> to refuse. The schema given is never changed: what comes back is a
+    /// copy.
+    /// </summary>
+    /// <param name="schema">A schema's root, as its file holds it.</param>
+    /// <param name="neighbours">
+    /// The parsed root of the schema file a reference names, or <see langword="null"/> where none is read beside
+    /// the schema - missing, unreadable, or no JSON object. Where the files sit is the caller's to know; this, the
+    /// one rule of sharing a definition, stays here.
+    /// </param>
+    public static JsonObject Shared(JsonObject schema, Func<string, JsonObject?> neighbours)
+    {
+        ArgumentNullException.ThrowIfNull(schema);
+        ArgumentNullException.ThrowIfNull(neighbours);
+
+        var whole = (JsonObject)schema.DeepClone();
+        var found = new List<(JsonObject Holder, string? File, string Name)>();
+        References(whole, found);
+
+        var sharing = found.Where(reference => reference.File is not null).ToList();
+
+        if (sharing.Count == 0)
+        {
+            return whole;
+        }
+
+        var definitions = whole["$defs"] as JsonObject ?? new JsonObject();
+        whole["$defs"] = definitions;
+
+        // Each name taken, with the file it was taken from: a name the schema already holds is answered only where
+        // what it holds is the definition the file names - the very one, taken from that file, or its equal.
+        var taken = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var (holder, file, name) in sharing)
+        {
+            if (Take(file!, name) is { } local)
+            {
+                holder["$ref"] = local;
+            }
+        }
+
+        return whole;
+
+        // Where a reference lands once taken - <c>#/$defs/name</c> - or null where nothing answers it beside the schema.
+        string? Take(string file, string name)
+        {
+            if (definitions.ContainsKey(name)
+                && !(taken.TryGetValue(name, out var from) && string.Equals(from, file, StringComparison.Ordinal))
+                && !JsonNode.DeepEquals(definitions[name], neighbours(file)?["$defs"]?[name]))
+            {
+                return null;
+            }
+
+            if (!definitions.ContainsKey(name))
+            {
+                if (neighbours(file) is not { } root || root["$defs"]?[name] is not JsonObject definition)
+                {
+                    return null;
+                }
+
+                var copy = (JsonObject)definition.DeepClone();
+
+                definitions[name] = copy;
+                taken[name] = file;
+
+                // What the taken definition itself reaches - a definition of its own file, or of one beside that -
+                // is taken with it, for a definition left pointing at a file the schema does not hold is no whole.
+                var inner = new List<(JsonObject Holder, string? File, string Name)>();
+                References(copy, inner);
+
+                foreach (var (holder, innerFile, innerName) in inner)
+                {
+                    if (Take(innerFile ?? file, innerName) is { } local)
+                    {
+                        holder["$ref"] = local;
+                    }
+                }
+            }
+
+            return Definitions + name;
+        }
+    }
+
+    /// <summary>
+    /// Every reference the schema holds, with where each stands: the schema that says it, the file a shared one
+    /// names (<see cref="Shared"/>), and the definition it names - of the schema itself where the reference is
+    /// local, which the schema's own <c>$defs</c> already answers or does not, and never a take's to mend.
+    /// </summary>
+    private static void References(JsonNode? node, List<(JsonObject Holder, string? File, string Name)> found)
+    {
+        switch (node)
+        {
+            case JsonObject schema:
+                if (schema["$ref"] is JsonValue reference && reference.TryGetValue<string>(out var written))
+                {
+                    if (SharedName(written, out var file, out var name))
+                    {
+                        found.Add((schema, file, name));
+                    }
+                    else if (written.StartsWith(Definitions, StringComparison.Ordinal)
+                        && written.AsSpan(Definitions.Length).IndexOfAny('/', '#') < 0
+                        && written.Length > Definitions.Length)
+                    {
+                        found.Add((schema, null, written[Definitions.Length..]));
+                    }
+                }
+
+                foreach (var (_, value) in schema)
+                {
+                    References(value, found);
+                }
+
+                break;
+
+            case JsonArray list:
+                foreach (var value in list)
+                {
+                    References(value, found);
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="written"/> names a definition of a schema file beside the one holding it -
+    /// <c>plan.schema.json#/$defs/workItem</c>, one file name and one definition of it - and which.
+    /// </summary>
+    /// <param name="written">The reference, as the schema writes it.</param>
+    /// <param name="file">The file it names.</param>
+    /// <param name="name">The definition of that file it names.</param>
+    private static bool SharedName(string written, out string file, out string name)
+    {
+        file = string.Empty;
+        name = string.Empty;
+
+        var beside = written.IndexOf('#');
+
+        if (beside < 1)
+        {
+            return false;
+        }
+
+        file = written[..beside];
+
+        if (file.IndexOfAny(['/', '\\']) >= 0 || file is "." or "..")
+        {
+            return false;
+        }
+
+        var target = written[beside..];
+
+        if (!target.StartsWith(Definitions, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        name = target[Definitions.Length..];
+
+        return name.Length > 0 && name.IndexOfAny(['/', '#']) < 0;
     }
 
     /// <summary>
@@ -637,6 +814,12 @@ public static class JsonSchemaSubset
                     else if (Definition(root, reference.GetValue<string>()) is { } target)
                     {
                         references.Add(new Reference(owner, $"{at}.$ref", target));
+                    }
+                    else if (SharedName(reference.GetValue<string>(), out var file, out var name))
+                    {
+                        problems.Add(
+                            $"{at}.$ref: '{reference.GetValue<string>()}' names a definition of the schema file '{file}' beside this one, and it was not taken into this schema's own definitions"
+                                + $" - the file is not beside it, or holds no definition '{name}', or this schema holds the name already, said otherwise");
                     }
                     else
                     {

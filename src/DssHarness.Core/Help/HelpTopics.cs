@@ -5655,7 +5655,12 @@ public static class HelpTopics
             + "the wrong shape; no path owned by two items, and none an item owns that it must not touch; the path budget of the "
             + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
-            + "each thing it creates. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
+            + "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "
+            + "decides none, the classes held to what the tree and the item's own paths say of them: a class id used once in the "
+            + "plan, the home among the item's own paths and there in the tree where it exists, every site that changes the "
+            + "item's too - patching some of a class's sites is never done - more than one site consolidated at the home, as one "
+            + "site that is not the home is, each class searched by data its queries name again, its universe holding the axes "
+            + "the repository declares, and one home belonging to one item. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
             + "with the items, each problem among the rest: each piece of one of the four kinds (added, changed, removed, told) "
             + "and its texts; an added or a changed piece's item an item of the list, a removed piece's of a work item's shape; "
             + "no two pieces naming one work item; a changed or a removed piece naming a work item the plan had before the "
@@ -5935,7 +5940,11 @@ public static class HelpTopics
             + "template key or a prompt reads, every file the definition names, each step's schema one the engine reads (each "
             + "problem naming the file, the step and the place in the schema; a step's start holds it there again) - and "
             + $"refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
-            + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it is "
+            + "config.json that does not hold is refused. A schema may share a definition with the schema files beside it: a "
+            + "$ref of the form plan.schema.json#/$defs/workItem names one, and where the schema is read - the check, a run, "
+            + "a path typed by it - the definition is taken into the schema's own $defs, so the work-item shape the shipped "
+            + "plan, self-audit and diagnosis schemas hold is one definition among them; a reference nothing beside the schema "
+            + "answers is refused where the schema is checked, naming the file. Where config.json declares no workflow there is nothing to check, and it is "
             + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");
         builder.AppendLine();
         builder.AppendLine("Worked examples, each a whole workflow as a file holds it: the two ways a step is raised");

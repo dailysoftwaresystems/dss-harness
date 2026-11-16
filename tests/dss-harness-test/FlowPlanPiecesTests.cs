@@ -115,7 +115,14 @@ public sealed class FlowPlanPiecesTests
 
     /// <summary>A work item of the plan.</summary>
     private static JsonObject Item(string name)
-        => new() { ["name"] = name, ["title"] = $"The {name} item", ["ownedPaths"] = new JsonArray($"src/{name}/**") };
+        => new()
+        {
+            ["name"] = name,
+            ["title"] = $"The {name} item",
+            ["ownedPaths"] = new JsonArray($"src/{name}/**"),
+            ["classes"] = new JsonArray(),
+            ["noClass"] = $"the {name} item decides nothing: it adds a file",
+        };
 
     /// <summary>One piece of the plan's scope, as the planning step concluded it.</summary>
     private static JsonObject Piece(string kind, JsonNode item, string changed)

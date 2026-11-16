@@ -2097,7 +2097,13 @@ kind an answer names, and every file the
 definition points at, beside the definition that names it - each schema a step names held to the subset the engine
 reads by the one check of a schema's text (`JsonSchemaSubset.TextProblems`, through `WorkflowFiles.SchemaProblems`),
 each problem on its own line naming the file, the step and the place in the schema, so no run starts over a schema no
-answer could be held to; the shipped definition's schemas are held to it where this build reads them - a runner or a leg no configuration
+answer could be held to. A schema may share a definition with the schema files beside it - a `$ref` of the form
+`plan.schema.json#/$defs/workItem` - and every reader of one takes the shared definitions in
+(`JsonSchemaSubset.Shared`, through `WorkflowFiles.SchemaProblems` where a definition is checked, `WorkflowValidator`'s
+typing and the step's own reading of its schema at a run): the definitions its references name, and those they reach,
+are copied into the schema's own `$defs` and the references made local, so the shipped plan, self-audit and diagnosis
+schemas hold one work-item definition between them, and a reference nothing beside the schema answers is refused where
+the schema is checked, naming the file; the shipped definition's schemas are held to it where this build reads them - a runner or a leg no configuration
 declares is said the same way, as is a definition that cannot be read, and a workflow whose
 directory leads out of the workflows directory, or whose definition out of its own directory, once
 their links are followed. Every problem is collected and reported together (12), without running
@@ -2876,7 +2882,13 @@ are machine steps, each a thin adapter over the owner of its rule: `OrientRunner
 `OrchestrationRules.OpenAgents`, `TreeHolders`); `GraphifyCodebaseRunner` checks the graph's longest path against the
 run's directory and syncs the run's one codebase graph through `ICodebaseGraphService` (`Core.Codebase`, below);
 `PlanCheckRunner` holds the items its `items` yields to `PlanValidator`, whose path budget is
-`FlowRunPaths`'s with the deepest file an item owns; `CreateAgentRunner` makes the agent the coordinator named
+`FlowRunPaths`'s with the deepest file an item owns, and which also holds each item to its classes (P-C1 to P-C8):
+an item declares the classes of the decisions it changes or says in `noClass` why it decides none; a class id names
+one class in a plan; the home is among the item's own paths and there in the tree where it exists; every site that
+changes - `reads-home` or `deleted` - is the item's too, for patching some of a class's sites is never done; more
+than one site means consolidate, as one site that is not the home does; a class is searched by data its queries name
+again, and its universe holds the axes the repository declares; and one home belongs to one item;
+`CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both
 written to `step.json` before `IAgentService.CreateAsync` is called; run again it reads the agent first and finishes or

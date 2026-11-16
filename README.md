@@ -620,8 +620,8 @@ directory read in a prompt as `{text.<name>}` the same live way - the used workf
 where the reading step is one of its, and the run's where none between them declares the name - and
 the shipped flow declares its `recommendations` and its `closure` there, `closure.md` being the
 repository's own from the day init writes it: the universe its decisions range over, and what else
-judges them. No prompt the tool ships reads `{text.closure}` yet, and the file says so: what a
-repository writes there reaches an agent once a prompt of its own reads it.
+judges them. The planner's, the plan audit's and the item audit's prompts read `{text.closure}`,
+and the file says so: what a repository writes there weighs on what they decide a class covers.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its
@@ -2039,7 +2039,11 @@ the run's folds changed that it has not taken yet and every path a commit change
 once its agent is no longer live - and a sync of its own that fails is said, owed until one goes through, and never
 fails the step (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
 `validate-plan`, the machine's check of a plan's
-work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
+work items - each declaring the classes of the decisions it changes or saying in `noClass` why it decides none, the
+classes held to what the tree and the item's own paths say: one id to a class in a plan, the home among the item's own
+paths and there in the tree where it exists, every site that changes the item's too, more than one site consolidated at
+the home, each class searched by data its queries name again, its universe holding the axes the repository declares,
+and one home belonging to one item; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
 first reason step runs on, both recorded before the agent is made so a step run again asks for the same one;
 `reason`, which works the step's agent - the one its `in` names or the work it goes on with (`resume`), or, where it
 names neither, the engine's own read-only agent, with no worktree, made before the step runs and deleted once no step
@@ -2050,7 +2054,10 @@ directory; the work it goes on with rendered as its continuation record, and its
 stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer,
 held to the schema its `outputs` names, the step's output - a schema in the subset the engine reads, which
 `validate-workflow` and a run's start refuse otherwise (exit 12), each problem naming the file, the step and the place
-in the schema that says it, and which the step's start holds it to again before any client is asked; and the leg
+in the schema that says it, and which the step's start holds it to again before any client is asked; a schema may share
+a definition with the schema files beside it, a `$ref` of the form `plan.schema.json#/$defs/workItem` naming one, and
+where the schema is read - the check, a run, a path typed by it - the definition is taken into the schema's own
+`$defs`, so the shipped plan, self-audit and diagnosis schemas hold one work-item definition between them; and the leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass and its last lines, and for `build`, `test` and `run` the units its build

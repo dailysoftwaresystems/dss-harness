@@ -620,7 +620,27 @@ public sealed class WorkflowValidationService(
             return [$"'{named.File}', {named.What}, is not in the workflow '{owner}': the commit it was fetched at holds no such file in its directory"];
         }
 
-        return named.IsSchema ? WorkflowFiles.SchemaProblems(named, text) : [];
+        // The schema files beside it in the remote workflow's directory, read from what the resolution fetched and
+        // hashed, as its own text is: the definitions its references share with them are taken in as a local schema's are.
+        return named.IsSchema
+            ? WorkflowFiles.SchemaProblems(
+                named,
+                text,
+                beside => WorkflowFiles.RootOf(FetchedText(fetched, owner, $"{parts.Directory}/{WorkflowFiles.Beside(named.File, beside).Replace('\\', '/')}")))
+            : [];
+    }
+
+    /// <summary>The text of a file of a remote workflow's directory, or null where the commit holds none or it is refused - a neighbour that answers nothing.</summary>
+    private static string? FetchedText(IReadOnlyList<WorkflowRemoteResolution> fetched, string owner, string path)
+    {
+        try
+        {
+            return ReadFetched(fetched, owner, path);
+        }
+        catch (HarnessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -833,7 +853,8 @@ public sealed class WorkflowValidationService(
     /// <summary>
     /// That a schema file is there, can be read, and is a schema the engine reads (<see cref="WorkflowFiles.SchemaProblems"/>):
     /// the check a step's schema is held to again before its client is taken, made here so that no run starts over a
-    /// schema no answer could be held to.
+    /// schema no answer could be held to. The schema files beside it are read with it, for the definitions its
+    /// references share with them to be taken in (<see cref="Schemas.JsonSchemaSubset.Shared"/>).
     /// </summary>
     private IReadOnlyList<string> Schema(WorkflowFiles.Named named, string directory, string name)
     {
@@ -853,8 +874,20 @@ public sealed class WorkflowValidationService(
             return [$"'{named.File}', {named.What}, could not be read: {exception.Message}"];
         }
 
-        return WorkflowFiles.SchemaProblems(named, text);
+        return WorkflowFiles.SchemaProblems(named, text, beside => NeighbourRoot(named, beside, directory, name));
     }
+
+    /// <summary>
+    /// The root of the schema file a shared reference of <paramref name="named"/> names, read beside it in the
+    /// workflow's own directory under the same rule as the schema itself; <see langword="null"/> where none is there
+    /// to read - which the sharing of a definition takes for a file that answers nothing.
+    /// </summary>
+    /// <param name="named">The schema holding the reference.</param>
+    /// <param name="beside">The file the reference names, as it writes it.</param>
+    /// <param name="directory">The workflow's directory, as the schema's own check reads it in.</param>
+    /// <param name="name">The workflow.</param>
+    private JsonObject? NeighbourRoot(WorkflowFiles.Named named, string beside, string directory, string name)
+        => WorkflowFiles.RootOf(Text(WorkflowFiles.Beside(named.File, beside), directory, name));
 
     private static string Shown(string name)
         => $"{HarnessLayout.WorkflowsDirectoryRelative}/{name}/{name}{HarnessLayout.WorkflowFileExtension}";

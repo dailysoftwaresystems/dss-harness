@@ -5,6 +5,7 @@
     "go",
     "findings",
     "checked",
+    "closure",
     "preExisting"
   ],
   "properties": {
@@ -24,6 +25,39 @@
       "description": "What you verified against the code or the request, so a reader knows what the verdict stands on; and, each starting not checked:, what you could not verify and why.",
       "items": {
         "type": "string"
+      }
+    },
+    "closure": {
+      "type": "array",
+      "description": "What the closure part of the audit found, one entry for each class it checked: the sites it searched out itself that the plan's site list lacks, and the cells of the universe, per the repository's closure text, that the plan's universe leaves out without a reason. Empty where it found none - and a site the plan missed, an axis left out without a reason, an item that patches one site of several, and an item that changes a decision and declares no class are findings, which hold go back.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "class",
+          "missingSites",
+          "missingCells"
+        ],
+        "properties": {
+          "class": {
+            "type": "string",
+            "description": "The class, by the id the plan names it by."
+          },
+          "missingSites": {
+            "type": "array",
+            "description": "Each site the audit found that the plan's site list lacks, named by its path and its symbol.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "missingCells": {
+            "type": "array",
+            "description": "Each axis or cell of the universe, per the repository's closure text, that the plan's universe leaves out without a reason.",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       }
     },
     "preExisting": {

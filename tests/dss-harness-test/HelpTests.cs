@@ -5522,6 +5522,15 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
+            "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "
+                + "decides none, the classes held to what the tree and the item's own paths say of them: a class id used once in the "
+                + "plan, the home among the item's own paths and there in the tree where it exists, every site that changes the "
+                + "item's too - patching some of a class's sites is never done - more than one site consolidated at the home, as one "
+                + "site that is not the home is, each class searched by data its queries name again, its universe holding the axes "
+                + "the repository declares, and one home belonging to one item.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "create-agent makes the agent the engine named for it - a<N>, one past the highest the run's agent directories and step records hold, never given twice - for the model of the first reason step that works in it, or the default tier's first model where none does, both written to the step's record before the agent is made.",
             prose,
             StringComparison.Ordinal);
@@ -5693,7 +5702,11 @@ public sealed partial class HelpTests
                 + "or a prompt reads, every file the definition names, each step's schema one the engine reads (each problem naming "
                 + "the file, the step and the place in the schema; a step's start holds it there again) - and refuses "
                 + $"({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
-                + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it "
+                + "config.json that does not hold is refused. A schema may share a definition with the schema files beside it: a "
+                + "$ref of the form plan.schema.json#/$defs/workItem names one, and where the schema is read - the check, a run, "
+                + "a path typed by it - the definition is taken into the schema's own $defs, so the work-item shape the shipped "
+                + "plan, self-audit and diagnosis schemas hold is one definition among them; a reference nothing beside the schema "
+                + "answers is refused where the schema is checked, naming the file. Where config.json declares no workflow there is nothing to check, and it "
                 + $"is refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] "
                 + "declares the one init writes.",
             prose,

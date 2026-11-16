@@ -57,7 +57,9 @@ Where a line says that a step left no output, that thing was not read or did not
 3. Decide the course by the cause:
    - **fix**: work items that put it right - at most four, each sized to one builder's cycle, with the paths it owns,
      the test filter that shows the failure is gone, and its definition of done, of which the first statement is that
-     `{source.step}` would now pass. Reuse what the repository has; change only what the cause needs. No file under
+     `{source.step}` would now pass. Each item that changes a decision gives its class - its invariant, its one home,
+     its sites, its searches, its universe - and one that decides none says why in noClass; a machine check refuses an
+     item without either. Reuse what the repository has; change only what the cause needs. No file under
      two items; the code a fix corrects goes under reuses, and replaces stays empty.
    - **retry**: nothing to change, and why running the step again will pass where it did not.
    - **person**: what only a person can give, and the choices, at least two, each with what it leads to. Recommend

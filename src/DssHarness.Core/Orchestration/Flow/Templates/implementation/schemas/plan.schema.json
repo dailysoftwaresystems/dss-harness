@@ -171,7 +171,9 @@
         "reuses",
         "creates",
         "replaces",
-        "testFilter"
+        "testFilter",
+        "classes",
+        "noClass"
       ],
       "properties": {
         "name": {
@@ -278,6 +280,190 @@
         "testFilter": {
           "type": "string",
           "description": "The filter that names the tests this item's change affects - the test classes that test what it changes, the tests it writes among them; for a runner that selects tests by name, their names - written in what each leg's test runner takes after its filter option, as the task lists them; it names only tests that are there or that the item writes. The engine tests the item on it alone where the run's input affectedTests is on, and every test runs once every item of the round is built. Empty is no filter: every test of each leg runs."
+        },
+        "classes": {
+          "type": "array",
+          "description": "Each class of defect or behaviour the item changes, one entry per class: the invariant, its one home, every site that decides it today, the searches that found the sites, the universe its decision ranges over, and what the item does about it. The work of a class goes to one item, which owns every site that changes; a class with more than one site is consolidated at its home. Empty only where the item decides nothing - a document, a rename the tools make, a dependency bump - which noClass says why.",
+          "items": {
+            "$ref": "#/$defs/closureClass"
+          }
+        },
+        "noClass": {
+          "type": "string",
+          "description": "Where classes is empty, why the item decides nothing: what makes its work a document, a rename or a bump rather than a decision changed. Empty where classes is not."
+        }
+      }
+    },
+    "closureClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "invariant",
+        "home",
+        "sites",
+        "searches",
+        "universe",
+        "action",
+        "notCovered"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Short, and unique in the plan (C1, C2, ...): how findings, records and the ledger name the class."
+        },
+        "invariant": {
+          "type": "string",
+          "description": "One sentence: X is decided by Y for every Z."
+        },
+        "home": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "symbol",
+            "exists"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "The file of the one place that decides the class."
+            },
+            "symbol": {
+              "type": "string",
+              "description": "The symbol there that decides it - a type, a function, a table; empty where the file as a whole is the home."
+            },
+            "exists": {
+              "type": "boolean",
+              "description": "false where no place decides it today and creating the home is the fix."
+            }
+          }
+        },
+        "sites": {
+          "type": "array",
+          "description": "Each place that decides the class today, searched by the data across every tier, format, target and file kind - never the file the defect was seen in alone. A class with one site names the home itself.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "symbol",
+              "decides",
+              "then"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "The file of the site."
+              },
+              "symbol": {
+                "type": "string",
+                "description": "The symbol there that decides; empty where the file as a whole decides."
+              },
+              "decides": {
+                "type": "string",
+                "description": "What it decides of the invariant, in a sentence."
+              },
+              "then": {
+                "type": "string",
+                "enum": [
+                  "home",
+                  "reads-home",
+                  "deleted"
+                ],
+                "description": "What becomes of the site: home - it is the home; reads-home - it will read the home; deleted - its duplicate deciding is removed in this item."
+              }
+            }
+          }
+        },
+        "searches": {
+          "type": "array",
+          "description": "Each search made to find the sites, by the data that decides - a kind, a schema key, a diagnostic, a verb, a literal - so the list can be made again: the graph's sites operation first where the graph sees the data, text search for what it lists only, and each said in notCovered.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "data",
+              "via",
+              "query",
+              "hits"
+            ],
+            "properties": {
+              "data": {
+                "type": "string",
+                "description": "What was searched: a kind, a schema key, a diagnostic, a verb, a literal."
+              },
+              "via": {
+                "type": "string",
+                "description": "How it was searched: a graph operation, or text where the graph does not see the data."
+              },
+              "query": {
+                "type": "string",
+                "description": "The query as it was made, so it can be made again."
+              },
+              "hits": {
+                "type": "integer",
+                "description": "How many places it found."
+              }
+            }
+          }
+        },
+        "universe": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "axes",
+            "cells"
+          ],
+          "properties": {
+            "axes": {
+              "type": "array",
+              "description": "The axes the class's decision ranges over, taken from the repository's closure text, each with where it is declared.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "values",
+                  "declaredIn"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The axis: a kind, a target, a configuration, a format, an entry point, a tier, a form, a direction."
+                  },
+                  "values": {
+                    "type": "array",
+                    "description": "The values the repository declares for it.",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "declaredIn": {
+                    "type": "string",
+                    "description": "Where the repository declares them."
+                  }
+                }
+              }
+            },
+            "cells": {
+              "type": "integer",
+              "description": "The count of the axes' product: the cells the decision ranges over."
+            }
+          }
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "fix-at-home",
+            "consolidate",
+            "create-home"
+          ],
+          "description": "What the item does: fix-at-home - the home decides and the fix is made there; consolidate - more than one site decides, and every other site will read the home; create-home - nothing decides it in one place today, and creating the home is the fix."
+        },
+        "notCovered": {
+          "type": "string",
+          "description": "What was searched by text because the graph does not see it, by file kind, said plainly; empty where the graph covered every search."
         }
       }
     }

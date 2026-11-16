@@ -10,6 +10,11 @@ Go: {previous.plan-audit.go}. Findings:
 
 {previous.plan-audit.findings}
 
+What the auditor's closure part found, each class with the sites it searched out that the plan lacks and the cells of
+its universe it leaves out:
+
+{previous.plan-audit.closure}
+
 ## What the person said
 
 Answer: {previous.approval.answer}. What to change:
@@ -23,7 +28,9 @@ Where a line says that a step left no output, that step did not run in the last 
 Act on every problem, every finding and everything the person asked for; where the person's words and a finding
 disagree, the person's words hold. Where you think a finding is wrong, keep that point and say in the summary which
 finding and what you read that shows it wrong. Change what has to change and leave the rest, so that what already
-passed still passes.
+passed still passes. Where the auditor's closure part names a site your plan lacks, search the data for it yourself
+before you add it, and extend the class's site list, its searches and its universe to hold what you find; an item that
+changes a decision still gives the class, and one that decides none still says why in noClass.
 
 A finding that the plan builds what the repository already has, or writes a rule a second time, is settled by
 planning the extension of what exists, not by a better reason for the new thing - unless the code it names does not

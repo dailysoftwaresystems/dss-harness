@@ -10,7 +10,11 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class JsonSchemaSubsetTests
 {
-    /// <summary>Every schema the shipped workflow holds is a schema this engine reads.</summary>
+    /// <summary>
+    /// Every schema the shipped workflow holds is a schema this engine reads - each read whole, with the
+    /// definitions its references share with the schema files beside it taken in, as the engine reads them where it
+    /// loads one.
+    /// </summary>
     [Fact]
     public void EveryShippedSchema_IsOneThisEngineReads()
     {
@@ -27,8 +31,142 @@ public sealed class JsonSchemaSubsetTests
             var schema = JsonNode.Parse(text!);
 
             Assert.NotNull(schema);
-            Assert.Empty(JsonSchemaSubset.SubsetProblems(schema!));
+
+            var whole = JsonSchemaSubset.Shared(
+                (JsonObject)schema!,
+                beside => file.LastIndexOf('/') is var at && at < 0
+                    ? null
+                    : JsonNode.Parse(WorkflowTemplates.TextOf($"{file[..at]}/{beside}") ?? "null") as JsonObject);
+
+            Assert.Empty(JsonSchemaSubset.SubsetProblems(whole));
         }
+    }
+
+    /// <summary>
+    /// A definition shared with the files beside the schema is taken into the schema's own definitions where it is
+    /// read, and the reference is made the local one: the schema holds the definition's shape, a document is held
+    /// to it as to one of its own, and the schema given is never changed.
+    /// </summary>
+    [Fact]
+    public void ADefinitionSharedWithTheFilesBesideTheSchema_IsTakenInWhereItIsRead()
+    {
+        var plan = Schema("""
+            {"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}},"$defs":{"workItem":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}}}
+            """);
+        var selfAudit = (JsonObject)Schema("""
+            {"type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"}}}}
+            """);
+
+        var whole = JsonSchemaSubset.Shared(selfAudit, beside => beside == "plan.schema.json" ? (JsonObject)plan : null);
+
+        Assert.Empty(JsonSchemaSubset.SubsetProblems(whole));
+        Assert.True(JsonNode.DeepEquals(plan["$defs"]!["workItem"], whole["$defs"]!["workItem"]));
+        Assert.Equal("#/$defs/workItem", whole["properties"]!["items"]!["items"]!["$ref"]!.GetValue<string>());
+
+        // The definition is read through, not copied aside: a document that misses what it requires is refused at
+        // the document's own path under the shared shape, and closed as the definition closes.
+        Assert.Equal(
+            ["$.items[0]: 'name' is required and missing", "$.items[0].title: is said by no property of the schema"],
+            JsonSchemaSubset.Problems(whole, Schema("""{"items":[{"title":"the report"}]}""")));
+
+        // The schema given keeps its shared reference and gains nothing: what comes back is a copy.
+        Assert.Equal("plan.schema.json#/$defs/workItem", selfAudit["properties"]!["items"]!["items"]!["$ref"]!.GetValue<string>());
+        Assert.False(selfAudit.ContainsKey("$defs"));
+    }
+
+    /// <summary>
+    /// What a shared definition reaches is taken with it: a definition of its own file, and one of a file beside
+    /// that, each reference made local, however deep the reach.
+    /// </summary>
+    [Fact]
+    public void WhatASharedDefinitionReaches_IsTakenWithIt()
+    {
+        var other = Schema("""
+            {"type":"object","additionalProperties":false,"required":["cell"],"properties":{"cell":{"type":"string"}},"$defs":{"cell":{"type":"string"}}}
+            """);
+        var plan = Schema("""
+            {"$defs":{"workItem":{"type":"object","additionalProperties":false,"required":["paths"],"properties":{"paths":{"$ref":"#/$defs/pathList"},"cell":{"$ref":"other.schema.json#/$defs/cell"}}},"pathList":{"type":"array","items":{"type":"string"}}}}
+            """);
+        var diagnosis = (JsonObject)Schema("""
+            {"type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"}}}}
+            """);
+
+        var whole = JsonSchemaSubset.Shared(diagnosis, beside => beside switch { "plan.schema.json" => (JsonObject)plan, "other.schema.json" => (JsonObject)other, _ => null });
+
+        Assert.Empty(JsonSchemaSubset.SubsetProblems(whole));
+        Assert.Equal(["workItem", "pathList", "cell"], [.. whole["$defs"]!.AsObject().Select(member => member.Key)]);
+        Assert.Equal("#/$defs/pathList", whole["$defs"]!["workItem"]!["properties"]!["paths"]!["$ref"]!.GetValue<string>());
+        Assert.Equal("#/$defs/cell", whole["$defs"]!["workItem"]!["properties"]!["cell"]!["$ref"]!.GetValue<string>());
+        Assert.Equal(
+            ["$.items[0].paths: \"src/**\" is not an array"],
+            JsonSchemaSubset.Problems(whole, Schema("""{"items":[{"paths":"src/**","cell":"kind"}]}""")));
+    }
+
+    /// <summary>
+    /// A shared reference nothing beside the schema answers is refused where the schema is checked, naming the file
+    /// and what it lacks: a file not there, one that holds no such definition - and a reference that names a
+    /// directory rather than a file beside the schema is refused as one that names no definition of it at all.
+    /// </summary>
+    [Fact]
+    public void ASharedReferenceNothingBesideTheSchemaAnswers_IsRefused()
+    {
+        var plan = Schema("""{"$defs":{"other":{"type":"string"}}}""");
+        var held = (JsonObject)Schema("""{"$ref":"plan.schema.json#/$defs/workItem"}""");
+
+        Assert.Equal(
+            ["$.$ref: 'plan.schema.json#/$defs/workItem' names a definition of the schema file 'plan.schema.json' beside this one, and it was not taken into this schema's own definitions - the file is not beside it, or holds no definition 'workItem', or this schema holds the name already, said otherwise"],
+            JsonSchemaSubset.SubsetProblems(JsonSchemaSubset.Shared(held, _ => null)));
+
+        Assert.Equal(
+            ["$.$ref: 'plan.schema.json#/$defs/workItem' names a definition of the schema file 'plan.schema.json' beside this one, and it was not taken into this schema's own definitions - the file is not beside it, or holds no definition 'workItem', or this schema holds the name already, said otherwise"],
+            JsonSchemaSubset.SubsetProblems(JsonSchemaSubset.Shared((JsonObject)held.DeepClone(), _ => (JsonObject?)plan)));
+
+        Assert.Equal(
+            ["$.$ref: 'schemas/plan.schema.json#/$defs/workItem' names no definition of this schema"],
+            JsonSchemaSubset.SubsetProblems(Schema("""{"$ref":"schemas/plan.schema.json#/$defs/workItem"}""")));
+    }
+
+    /// <summary>
+    /// A name the schema holds already is not taken over: a shared definition of the same name is taken only where
+    /// it is the same definition, and one that says otherwise stands refused.
+    /// </summary>
+    [Fact]
+    public void ANameTheSchemaHoldsAlready_IsTakenOnlyWhereItIsTheSameDefinition()
+    {
+        var plan = Schema("""
+            {"$defs":{"workItem":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}}}
+            """);
+        var same = Schema("""
+            {"type":"object","additionalProperties":false,"required":["list"],"properties":{"list":{"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"}}},"$defs":{"workItem":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}}}
+            """);
+        var otherwise = (JsonObject)Schema("""
+            {"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"},"$defs":{"workItem":{"type":"string"}}}
+            """);
+
+        Assert.Empty(JsonSchemaSubset.SubsetProblems(JsonSchemaSubset.Shared((JsonObject)same, _ => (JsonObject?)plan)));
+        Assert.True(JsonNode.DeepEquals(plan["$defs"]!["workItem"], JsonSchemaSubset.Shared((JsonObject)same, _ => (JsonObject?)plan)["$defs"]!["workItem"]));
+
+        Assert.Equal(
+            ["$.items.$ref: 'plan.schema.json#/$defs/workItem' names a definition of the schema file 'plan.schema.json' beside this one, and it was not taken into this schema's own definitions - the file is not beside it, or holds no definition 'workItem', or this schema holds the name already, said otherwise"],
+            JsonSchemaSubset.SubsetProblems(JsonSchemaSubset.Shared(otherwise, _ => (JsonObject?)plan)));
+    }
+
+    /// <summary>A definition that reaches itself through the files beside the schema is refused as the recursion it is.</summary>
+    [Fact]
+    public void ASharedDefinitionThatReachesItselfAcrossFiles_IsRefusedAsARecursion()
+    {
+        var one = Schema("""{"$defs":{"a":{"$ref":"two.schema.json#/$defs/b"}}}""");
+        var two = Schema("""{"$defs":{"b":{"$ref":"one.schema.json#/$defs/a"}}}""");
+        var held = (JsonObject)Schema("""{"type":"array","items":{"$ref":"one.schema.json#/$defs/a"}}""");
+
+        var whole = JsonSchemaSubset.Shared(held, beside => beside switch { "one.schema.json" => (JsonObject)one, "two.schema.json" => (JsonObject)two, _ => null });
+
+        Assert.Equal(
+            [
+                "$.$defs.a.$ref: '#/$defs/b' reaches itself, and a definition never recurses",
+                "$.$defs.b.$ref: '#/$defs/a' reaches itself, and a definition never recurses",
+            ],
+            JsonSchemaSubset.SubsetProblems(whole));
     }
 
     /// <summary>A schema from its text, refused by the parse itself where the text is not JSON.</summary>

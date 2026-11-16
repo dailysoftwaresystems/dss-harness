@@ -28,9 +28,9 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
-        Assert.Equal(82, Count(definition.Steps));
-        Assert.Equal(48, Count(definition.Recover!.Steps));
-        Assert.Equal(48, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(83, Count(definition.Steps));
+        Assert.Equal(49, Count(definition.Recover!.Steps));
+        Assert.Equal(49, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "affectedTests" && input.Default == "off");
         Assert.Equal(["on", "off"], definition.Inputs.Single(input => input.Name == "affectedTests").Options);
@@ -149,6 +149,7 @@ public sealed class WorkflowTemplatesTests
             ("plan", null, null),
             ("plan-update", null, null),
             ("plan-audit", "off", null),
+            ("item-audit", "off", null),
             ("implement", null, null),
             ("unblock", null, null),
             ("redo", null, null),
@@ -570,23 +571,29 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains(schema.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
         Assert.Contains("one builder's cycle", schema.GetProperty("properties").GetProperty("items").GetProperty("description").GetString(), StringComparison.Ordinal);
 
-        // The work item is one definition: the plan's items and a scope piece's item both refer to it.
+        // The work item is one definition, shared by every list that holds one: the plan's items and a scope piece's
+        // item both refer to it, and it alone says what a work item is - its definition of done among that, and now
+        // its classes and its noClass.
         var item = schema.GetProperty("$defs").GetProperty("workItem");
 
         Assert.Equal("#/$defs/workItem", schema.GetProperty("properties").GetProperty("items").GetProperty("items").GetProperty("$ref").GetString());
         Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
+        Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "classes");
+        Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "noClass");
         Assert.Equal("string", item.GetProperty("properties").GetProperty("done").GetProperty("type").GetString());
+        Assert.Equal("#/$defs/closureClass", item.GetProperty("properties").GetProperty("classes").GetProperty("items").GetProperty("$ref").GetString());
 
         var piece = schema.GetProperty("properties").GetProperty("scope").GetProperty("items").GetProperty("properties").GetProperty("item");
 
         Assert.Contains(piece.GetProperty("anyOf").EnumerateArray(), shape => shape.TryGetProperty("$ref", out var reference) && reference.GetString() == "#/$defs/workItem");
 
-        // A further round's items and a recovery's are work items as the plan's are: each carries its definition of done.
+        // A further round's items and a recovery's hold no shape of their own: each names the plan's one definition,
+        // which carries its definition of done and its classes with it wherever it is shared.
         foreach (var further in new[] { "schemas/self-audit.schema.json", "schemas/diagnosis.schema.json" })
         {
             var items = JsonDocument.Parse(Read(further)).RootElement.GetProperty("properties").GetProperty("items").GetProperty("items");
 
-            Assert.Contains(items.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
+            Assert.Equal("plan.schema.json#/$defs/workItem", items.GetProperty("$ref").GetString());
         }
 
         var pipeline = Read("item-pipeline/item-pipeline.yml");
@@ -641,23 +648,27 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
-    /// <c>closure.md</c> says what reads it, as what ships does: an agent is given it only where its step's prompt reads
-    /// <c>{text.closure}</c>, and no file shipped beside it does yet - so a repository that fills its heading is told
-    /// that its words reach no agent until a prompt of its own reads them, never left to think the shipped flow weighs
-    /// them; the README says the same. A shipped prompt that comes to read it changes both sentences in the same change.
+    /// <c>closure.md</c> says what reads it, as what ships does: an agent is given it only where its step's prompt
+    /// reads <c>{text.closure}</c> - the planner's, the plan audit's and the item audit's, the three that plan and
+    /// check the classes of the work items - and the file tells a repository its words weigh on what those prompts
+    /// decide; the README says the same.
     /// </summary>
     [Fact]
-    public void ClosureMd_SaysNoShippedPromptReadsIt_AsNoneDoes()
+    public void ClosureMd_IsReadByTheThreePromptsThatPlanAndCheckTheClasses()
     {
-        Assert.DoesNotContain(WorkflowTemplates.Files.Where(file => file != "closure.md"), file => WorkflowTemplates.TextOf(file)!.Contains("{text.closure}", StringComparison.Ordinal));
+        Assert.Equal(
+            ["prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
+            [.. WorkflowTemplates.Files
+                .Where(file => file != "closure.md" && WorkflowTemplates.TextOf(file)!.Contains("{text.closure}", StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal)]);
         Assert.Contains(
-            "an agent is given it where its step's prompt reads `{text.closure}`, as the file stands when the prompt is given. "
-                + "None of the prompts shipped beside it reads it: what is written here reaches an agent once a prompt of this "
-                + "repository's says `{text.closure}` where its agent is to weigh it.",
+            "an agent is given it where its step's prompt reads `{text.closure}`, as the file stands when the prompt is given. The "
+                + "prompts shipped beside it that read it are the plan's, the plan audit's and the item audit's, which plan and check the classes "
+                + "of the work items: what is written here weighs on what they decide a class covers, so keep it true of the repository.",
             Prose.Words(WorkflowTemplates.TextOf("closure.md")!),
             StringComparison.Ordinal);
         Assert.Contains(
-            "No prompt the tool ships reads `{text.closure}` yet, and the file says so: what a repository writes there reaches an agent once a prompt of its own reads it.",
+            "The planner's, the plan audit's and the item audit's prompts read `{text.closure}`, and the file says so: what a repository writes there weighs on what they decide a class covers.",
             Prose.Document("README.md"),
             StringComparison.Ordinal);
     }
@@ -684,7 +695,7 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(FlowRecover.PauseOnFailure, recover.OnFailure);
         Assert.Equal(5, recover.MaxVisits);
         Assert.Equal("diagnose", recover.Steps[0].Resume);
-        Assert.Equal(["diagnose", "direction", "redirect", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
+        Assert.Equal(["diagnose", "direction", "remedy-check", "redirect", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
 
         var passedOver = new List<string>();
         var untried = new List<string>();

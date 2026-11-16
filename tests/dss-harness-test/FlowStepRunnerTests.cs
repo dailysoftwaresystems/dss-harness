@@ -461,6 +461,8 @@ public sealed class FlowStepRunnerTests : IDisposable
             ["reuses"] = reuses is null ? new JsonArray() : new JsonArray(new JsonObject { ["path"] = reuses, ["what"] = "it" }),
             ["creates"] = new JsonArray(),
             ["replaces"] = new JsonArray(),
+            ["classes"] = new JsonArray(),
+            ["noClass"] = "the item decides nothing: it carries a document",
         };
 
     private static async Task<IReadOnlyList<string>> CheckAsync(HarnessFactory harness, TempDirectory repository, params JsonNode?[] items)

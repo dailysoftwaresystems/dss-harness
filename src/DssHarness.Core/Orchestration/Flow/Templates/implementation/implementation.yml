@@ -254,7 +254,7 @@ steps:
   - name: rounds
     dependsOn: [planning]
     repeat:
-      until: 'self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && empty(round-checks.findings)'
+      until: 'self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && (item-audit.go ?? true) && empty(round-checks.findings)'
       maxIterations: 2
       leftover: 'self-audit.findings'
     answers:
@@ -278,6 +278,21 @@ steps:
           This round's work items still do not pass the plan check, after the planner was given the problems to settle and its plan was audited and approved: {item-check.problems}
           Answer continue to build them as they are, or abort.
         options: [continue]
+      - name: item-audit
+        type: reason
+        graph: off
+        agent: plan-auditor
+        tier: high
+        effort: xhigh
+        independent: true
+        dependsOn: [item-problems]
+        when: 'iteration != 1'
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
+        onPreExisting: triage-pre-existing-issue
+        prompt: prompts/item-audit.md
+        outputs: schemas/plan-audit.schema.json
       - name: items
         dependsOn: [item-problems]
         forEach: 'item-check.items'
@@ -474,7 +489,11 @@ recover:
   # Reached by a failure of a step that says onFailure: recover - a test, a fold, a commit,
   # a push, the wait for the checks - and by an issue triage-pre-existing-issue sends to be
   # fixed; never by a reasoning step's own failure, which is tried again,
-  # on its fallback, and then asked. Once its steps are done, the step that gave it its
+  # on its fallback, and then asked. The diagnosis's remedy items pass the plan's own check
+  # (remedy-check) before they are built; a problem it finds goes back to the diagnostician
+  # through redirect, its problems in the prompt, and the remedies wait until they pass - the
+  # step that failed runs again and, where it still fails, the recovery sees the revised
+  # diagnosis. Once its steps are done, the step that gave it its
   # failure runs again from where it stopped (onSuccess: failed-step), now that what stood
   # in its way was put right. Should that step fail again, its own onFailure: recover brings
   # it back here, to the diagnostician who saw the last attempt - until the step passes or
@@ -512,11 +531,17 @@ recover:
         Answer retry once it was dealt with, to run the step again as it is; or continue, with what the run is to do.
       options: [retry, continue]
       text: [continue]
+    - name: remedy-check
+      type: validate-plan
+      dependsOn: [diagnose]
+      when: "diagnose.latest.course == 'fix'"
+      items: 'diagnose.latest.items'
+      onFailure: pause
     - name: redirect
       type: reason
       resume: diagnose
-      dependsOn: [direction]
-      when: "(direction.answer ?? '') == 'continue'"
+      dependsOn: [direction, remedy-check]
+      when: "(direction.answer ?? '') == 'continue' || !(remedy-check.ok ?? true)"
       retries: 3
       backoffSeconds: 30
       onFailure: pause
@@ -526,7 +551,7 @@ recover:
       outputs: schemas/diagnosis.schema.json
     - name: remedies
       dependsOn: [redirect]
-      when: "diagnose.latest.course == 'fix'"
+      when: "diagnose.latest.course == 'fix' && (remedy-check.ok ?? true)"
       forEach: 'diagnose.latest.items'
       # The item pipeline again, used by the recovery as the rounds use it: each remedy is built in
       # an agent of its own, tested, reviewed, folded and checkpointed. This use builds one with the

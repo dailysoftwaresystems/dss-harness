@@ -659,9 +659,13 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The output the step's answer is held to, where it names one: its schema file read whole, the step's own name the
+    /// The output the step's answer is held to, where it names one: its schema file read whole - the definitions its
+    /// references share with the schema files beside it taken in (<see cref="Schemas.JsonSchemaSubset.Shared"/>), so
+    /// the schema the client is sent and the schema the answer is held to are one and hold - the step's own name the
     /// name its output is read by, and - where the step may ask - the rounds it may ask in one attempt, less what its
-    /// answers already spent: after the last the agent is offered no questions and told so.
+    /// answers already spent: after the last the agent is offered no questions and told so. A schema no answer could
+    /// be held to is refused (13) naming why: the definition's check said its problems when the run began, and this
+    /// says where they are again.
     /// </summary>
     /// <param name="files">Reads the files the workflow names.</param>
     /// <param name="layout">The repository's layout.</param>
@@ -672,10 +676,59 @@ public sealed class ReasonStepRunner(
         => step.Outputs is { } named
             ? new AgentOutput(
                 step.Name,
-                files.ReadText(layout, workflow, named, "a schema"),
+                SchemaWholeOf(files, layout, workflow, step, named),
                 MaxRepairs: 2,
                 AskRounds: step.Ask == true ? Math.Max(0, (step.AskRounds ?? 2) - run.Answers.Count(given => given.Kind == "ask" && given.Attempt == run.Attempt)) : null)
             : null;
+
+    /// <summary>
+    /// The step's output schema read whole: where its references name definitions the schema files beside it share
+    /// (<see cref="Schemas.JsonSchemaSubset.Shared"/>), they are taken in - so the schema the client is sent and the
+    /// schema the answer is held to are one, and hold - and where nothing is shared, the schema stands as its file
+    /// wrote it, judged where a definition is checked, not here. A shared definition nothing beside the schema
+    /// answers is refused (13) naming why: the definition's check said it when the run began, and this says where
+    /// it is again.
+    /// </summary>
+    /// <param name="files">Reads the files the workflow names, beside the schema among them.</param>
+    /// <param name="layout">The repository's layout.</param>
+    /// <param name="workflow">The workflow's name.</param>
+    /// <param name="step">The step the schema is the output of.</param>
+    /// <param name="named">The schema, as the step names it.</param>
+    private static string SchemaWholeOf(WorkflowNamedFiles files, HarnessLayout layout, string workflow, WorkflowStep step, string named)
+    {
+        var why = $"'{named}', the output schema of step '{step.Name}'";
+        string text = files.ReadText(layout, workflow, named, "a schema");
+        JsonObject schema;
+
+        try
+        {
+            schema = (JsonNode.Parse(text) as JsonObject)!;
+        }
+        catch (JsonException ex)
+        {
+            throw new HarnessException(HarnessExit.ConfigInvalid, $"{why} is not a schema the engine reads: $: is not JSON ({ex.Message})");
+        }
+
+        if (schema is null)
+        {
+            throw new HarnessException(HarnessExit.ConfigInvalid, $"{why} is not a schema the engine reads: $: a schema is a JSON object");
+        }
+
+        var whole = Schemas.JsonSchemaSubset.Shared(
+            schema,
+            beside => WorkflowFiles.RootOf(files.ReadTextIfThere(layout, workflow, WorkflowFiles.Beside(named, beside), "a schema beside it")));
+
+        if (JsonNode.DeepEquals(schema, whole))
+        {
+            return text;
+        }
+
+        var problems = Schemas.JsonSchemaSubset.SubsetProblems(whole);
+
+        return problems.Count > 0
+            ? throw new HarnessException(HarnessExit.ConfigInvalid, $"{why} is not a schema the engine reads: {string.Join("; ", problems)}")
+            : whole.ToJsonString();
+    }
 
     /// <summary>
     /// The web search the step's agent is given, where its configuration names sources and the slot answers their keys;

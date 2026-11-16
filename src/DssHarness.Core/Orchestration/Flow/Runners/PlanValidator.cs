@@ -13,7 +13,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// paths; the path budget of the worktree each would get, with the copies and workers its legs keep inside it and the
 /// deepest file it owns; and the lists that hold an item to what the repository has - every path it reuses or replaces
 /// there in the main tree, something under one of the three, and a reason and a search for everything it creates. Each
-/// breach is a problem of the plan, worded once here; none is a failure.
+/// item also carries its classes - the decisions it changes, each with its one home, its sites, its searches and its
+/// universe - or says in <c>noClass</c> why it decides nothing, and the classes are held to what the tree and the
+/// item's own paths say of them (P-C1 to P-C8). Each breach is a problem of the plan, worded once here; none is a
+/// failure.
 /// </summary>
 /// <param name="fileSystem">Reads the main tree for the paths the items reuse and replace.</param>
 /// <param name="pathBudget">Reckons the paths of the worktree each item would get.</param>
@@ -98,7 +101,11 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             }
 
             ListProblems(item, context.Layout.MainCheckoutRoot, problems);
+            ClassesProblems(item, context.Layout.MainCheckoutRoot, comparison, problems);
         }
+
+        ClassIdProblems(read, problems);
+        HomeProblems(read, comparison, problems);
 
         return problems;
     }
@@ -248,6 +255,19 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             problems.Add($"{where} owns no path, and an item writes only the paths it owns: name them");
         }
 
+        // P-C1: an item declares its classes or says why it has none - one without either decides something unnamed.
+        var classes = item["classes"] as JsonArray;
+        var noClass = Text(item["noClass"]);
+
+        if ((classes?.Count ?? 0) == 0 && noClass is null)
+        {
+            problems.Add($"{where} declares no class and says no reason: an item that changes a decision gives it a class, and one that decides nothing - a document, a rename the tools make, a dependency bump - says why in noClass");
+        }
+        else if ((classes?.Count ?? 0) > 0 && noClass is not null)
+        {
+            problems.Add($"{where} gives both classes and noClass: noClass says why an item decides nothing, and this one has classes");
+        }
+
         return new Item(name, owned, forbidden, item);
     }
 
@@ -321,6 +341,204 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             }
         }
     }
+
+    /// <summary>
+    /// What a work item's classes say of the repository and of the item's own paths (P-C3 to P-C7): the home of each
+    /// class is the item's to change and there in the tree where it exists; every site that changes is the item's too,
+    /// for patching some of a class's sites is never done; more than one site means consolidate, as one site that is
+    /// not the home does; a class without a search, a search without a query and a universe without axes decide
+    /// nothing checkable.
+    /// </summary>
+    /// <param name="item">The work item, its classes read as they are given.</param>
+    /// <param name="root">The main tree's root, the paths of a home and a site are checked against.</param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    /// <param name="problems">The problems of the plan, each breach added to.</param>
+    private void ClassesProblems(Item item, string root, StringComparison comparison, List<string> problems)
+    {
+        var where = $"work item '{item.Name}'";
+
+        foreach (var (node, at) in (item.Node["classes"] as JsonArray ?? []).Select((node, at) => (node, at)))
+        {
+            if (node is not JsonObject @class)
+            {
+                problems.Add($"{where}'s class {(at + 1).ToString(CultureInfo.InvariantCulture)} is of the wrong shape: it is no object");
+                continue;
+            }
+
+            var id = Text(@class["id"]) ?? $"class {(at + 1).ToString(CultureInfo.InvariantCulture)}";
+            var home = @class["home"] as JsonObject;
+            var homePath = Text(home?["path"]);
+            var homeSymbol = SymbolOf(home?["symbol"]);
+            var homeExists = home?["exists"] is JsonValue exists && exists.TryGetValue<bool>(out var there) && there;
+            var sites = @class["sites"] as JsonArray ?? [];
+            var action = Text(@class["action"]);
+
+            if (homePath is null)
+            {
+                problems.Add($"{where}'s {id} names no home: the one place that decides the class, or one to create where none does");
+                continue;
+            }
+
+            // P-C3: the home is the item's to change, and where it exists it is in the tree.
+            if (!item.Owned.Any(pattern => pattern.Pattern.Matches(homePath, comparison)))
+            {
+                problems.Add($"{where}'s {id} has its home at '{homePath}', which the item does not own: the home changes, and the item that changes it owns it");
+            }
+
+            if (homeExists && fileSystem.KindOf(Path.Combine(root, PathPatterns.Normalize(homePath))) == PathKind.None)
+            {
+                problems.Add($"{where}'s {id} has its home at '{homePath}', which is not in the main tree: a class is closed at what is there, or its home is created (exists: false)");
+            }
+
+            var homeIsASite = false;
+
+            foreach (var (site, atSite) in sites.Select((site, atSite) => (site, atSite)))
+            {
+                var path = Text((site as JsonObject)?["path"]);
+
+                if (path is null)
+                {
+                    problems.Add($"{where}'s {id} has a site that names no path");
+                    continue;
+                }
+
+                var symbol = SymbolOf((site as JsonObject)?["symbol"]);
+                var then = Text((site as JsonObject)?["then"]);
+
+                if (fileSystem.KindOf(Path.Combine(root, PathPatterns.Normalize(path))) == PathKind.None)
+                {
+                    problems.Add($"{where}'s {id} has its site at '{path}', which is not in the main tree: the sites are the places that decide today");
+                }
+
+                // P-C4: every site that must change is the item's - patching N-1 of N is refused.
+                if (then is "reads-home" or "deleted" && !item.Owned.Any(pattern => pattern.Pattern.Matches(path, comparison)))
+                {
+                    problems.Add($"{where}'s {id} has its site at '{path}' ({then}) outside the item: the item owns it, or the class belongs to the item that owns it");
+                }
+
+                homeIsASite |= string.Equals(path, homePath, comparison) && string.Equals(symbol, homeSymbol, StringComparison.Ordinal);
+            }
+
+            // P-C5: one decision, one place - a class of many sites is consolidated, and one site that is not the home
+            // is a duplicate deciding; creating a home is where none exists.
+            if (sites.Count > 1 && !string.Equals(action, "consolidate", StringComparison.Ordinal))
+            {
+                problems.Add($"{where}'s {id} holds {sites.Count.ToString(CultureInfo.InvariantCulture)} sites and its action is '{action}': more than one site means consolidate - the home decides, every other site reads it");
+            }
+
+            if (sites.Count == 1 && !homeIsASite && !string.Equals(action, "consolidate", StringComparison.Ordinal))
+            {
+                problems.Add($"{where}'s {id} holds one site, which is not its home, and its action is '{action}': consolidate - the home decides, every other site reads it");
+            }
+
+            if (string.Equals(action, "create-home", StringComparison.Ordinal) && homeExists)
+            {
+                problems.Add($"{where}'s {id} says create-home and its home exists: create-home is where no place decides it today");
+            }
+
+            // P-C6: the sites are found by searching the data, and each search can be made again.
+            var searches = @class["searches"] as JsonArray ?? [];
+
+            if (searches.Count == 0)
+            {
+                problems.Add($"{where}'s {id} names no search: the sites are found by searching the data, and each search is recorded");
+            }
+
+            foreach (var search in searches)
+            {
+                if (Text((search as JsonObject)?["query"]) is null)
+                {
+                    problems.Add($"{where}'s {id} has a search that gives no query: a search is made again by its query");
+                }
+            }
+
+            // P-C7: the universe is the axes the repository declares, each with its values.
+            var axes = (@class["universe"] as JsonObject)?["axes"] as JsonArray;
+
+            if (axes is not { Count: > 0 })
+            {
+                problems.Add($"{where}'s {id} names no axis of its universe: the repository's closure text declares the axes a decision ranges over");
+            }
+            else
+            {
+                foreach (var axis in axes)
+                {
+                    var name = Text((axis as JsonObject)?["name"]) ?? "an axis";
+
+                    if (!((axis as JsonObject)?["values"] is JsonArray { Count: > 0 }))
+                    {
+                        problems.Add($"{where}'s {id} holds no value for the axis '{name}': an axis holds what the repository declares for it");
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// P-C2: a class id is used once in a plan - findings, records and the ledger name a class by it, so it names one.
+    /// </summary>
+    private static void ClassIdProblems(IReadOnlyList<Item> items, List<string> problems)
+    {
+        var byId = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var item in items)
+        {
+            foreach (var @class in item.Node["classes"] as JsonArray ?? [])
+            {
+                if (Text((@class as JsonObject)?["id"]) is not { } id)
+                {
+                    continue;
+                }
+
+                if (byId.TryGetValue(id, out var first))
+                {
+                    problems.Add($"the class id '{id}' is used twice in the plan, by work items '{first}' and '{item.Name}': an id names one class");
+                }
+                else
+                {
+                    byId[id] = item.Name;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// P-C8: two items' classes name the same home, by path and symbol - one home, one item, for a home two items
+    /// change is a home decided in two places.
+    /// </summary>
+    private static void HomeProblems(IReadOnlyList<Item> items, StringComparison comparison, List<string> problems)
+    {
+        Func<string, string> fold = comparison == StringComparison.OrdinalIgnoreCase
+            ? static path => path.ToUpperInvariant()
+            : static path => path;
+        var homes = new Dictionary<(string Path, string Symbol), string>();
+
+        foreach (var item in items)
+        {
+            foreach (var @class in item.Node["classes"] as JsonArray ?? [])
+            {
+                if (Text(((@class as JsonObject)?["home"] as JsonObject)?["path"]) is not { } path)
+                {
+                    continue;
+                }
+
+                var named = (Path: fold(PathPatterns.Normalize(path)), Symbol: SymbolOf(((@class as JsonObject)?["home"] as JsonObject)?["symbol"]));
+
+                if (homes.TryGetValue(named, out var first))
+                {
+                    problems.Add($"work items '{first}' and '{item.Name}' both hold a class whose home is '{path}' at '{named.Symbol}': one home, one item");
+                }
+                else
+                {
+                    homes[named] = item.Name;
+                }
+            }
+        }
+    }
+
+    /// <summary>A symbol as the class rules compare it: its text, or empty where none is given.</summary>
+    private static string SymbolOf(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var symbol) ? symbol : string.Empty;
 
     /// <summary>A pattern's part before its first wildcard: the deepest path it names outright, from the tree's root.</summary>
     private static string Literal(string pattern)

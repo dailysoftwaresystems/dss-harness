@@ -6273,15 +6273,18 @@ public sealed class ImplementationFlowTests
             ["creates"] = new JsonArray(),
             ["replaces"] = replaces is null ? new JsonArray() : new JsonArray(new JsonObject { ["path"] = replaces, ["what"] = "the report, built again" }),
             ["testFilter"] = "",
+            ["classes"] = new JsonArray(),
+            ["noClass"] = "the item decides nothing: the report is a document",
         };
 
-    /// <summary>An audit that passes or refuses, with its findings and what it checked.</summary>
+    /// <summary>An audit that passes or refuses, with its findings, what it checked and what its closure part found.</summary>
     private static JsonObject Audit(bool go = true, params string[] findings)
         => new()
         {
             ["go"] = go,
             ["findings"] = new JsonArray([.. findings]),
             ["checked"] = new JsonArray("each item's reused path is in the tree"),
+            ["closure"] = new JsonArray(),
             ["preExisting"] = new JsonArray(),
         };
 
@@ -6407,6 +6410,8 @@ public sealed class ImplementationFlowTests
             ["creates"] = new JsonArray(),
             ["replaces"] = new JsonArray(),
             ["testFilter"] = "",
+            ["classes"] = new JsonArray(),
+            ["noClass"] = "the remedy decides nothing: it names a job",
         };
 
     /// <summary>One choice a diagnosis offers a person, with what it leads to.</summary>

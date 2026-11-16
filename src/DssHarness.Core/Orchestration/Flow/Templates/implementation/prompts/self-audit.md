@@ -29,6 +29,16 @@ audit's after that, with any a change of plan added:
 
 {item-check.items}
 
+Where this is past the first round, the item audit searched the data for what these items' classes decide, before they
+were built. Its findings, with the sites it found that the items' site lists lacked and the cells of their universes
+they left out:
+
+{item-audit.latest.findings}
+
+{item-audit.latest.closure}
+
+Where a line says that a step left no output, that audit did not run: the round's items were the plan's own.
+
 The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` shows all of it.
 
 ## What the engine recorded
@@ -88,5 +98,7 @@ every test runs.
 
 Whether the round is clean, which is true exactly when you give no work item; the findings; what you could not
 verify; and the work items of a further round, shaped as the plan's items are and at most 8: each sized to one
-builder's cycle, never more and never a sliver of one, and each with its own definition of done - statements a check
-can answer one by one, the first of them the finding it settles.
+builder's cycle, never more and never a sliver of one, each with its own definition of done - statements a check can
+answer one by one, the first of them the finding it settles - and each that changes a decision with its classes, or
+saying why in noClass where it decides none. Where the item audit found a site an item's class lacked or a cell its
+universe left out, the item that settles it carries the class whole: its site list extended by what the audit found.

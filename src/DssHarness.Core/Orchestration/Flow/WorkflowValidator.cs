@@ -4632,6 +4632,9 @@ public static class WorkflowValidator
         /// <summary>
         /// The schema the reason step's <paramref name="outputs"/> names, as a reading; <see langword="null"/> where no
         /// files are given, the file is not there, or it is no schema the subset reads - each said by whoever reads files.
+        /// The definitions its references share with the schema files beside it are taken in first
+        /// (<see cref="Schemas.JsonSchemaSubset.Shared"/>), so a schema holding its work items by a shared definition
+        /// types them as the definition says.
         /// </summary>
         private JsonSchemaSubset.Reading? SchemaOf(string outputs, string? workflow = null)
         {
@@ -4644,11 +4647,14 @@ public static class WorkflowValidator
             {
                 try
                 {
-                    reading = _files(outputs, workflow) is { } text
-                        && JsonNode.Parse(text) is JsonObject schema
-                        && JsonSchemaSubset.SubsetProblems(schema).Count == 0
-                            ? JsonSchemaSubset.Read(schema)
-                            : null;
+                    reading = _files(outputs, workflow) is { } text && JsonNode.Parse(text) is JsonObject schema
+                        ? Schemas.JsonSchemaSubset.Shared(
+                                schema,
+                                beside => WorkflowFiles.RootOf(_files(WorkflowFiles.Beside(outputs, beside), workflow))) is { } whole
+                            && Schemas.JsonSchemaSubset.SubsetProblems(whole).Count == 0
+                                ? Schemas.JsonSchemaSubset.Read(whole)
+                                : null
+                        : null;
                 }
                 catch (JsonException)
                 {

@@ -358,6 +358,8 @@ public sealed class FlowPlanToldTests
             ["creates"] = new JsonArray(),
             ["replaces"] = new JsonArray(),
             ["testFilter"] = "",
+            ["classes"] = new JsonArray(),
+            ["noClass"] = $"the {name} item decides nothing: it adds a file",
         };
 
     /// <summary>One piece of the plan's scope that tells work under way, as the planning step concluded it.</summary>
