@@ -304,6 +304,367 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>What an anchor check answered: whether it passed, and each finding's line, joined by " | ".</summary>
+    /// <summary>
+    /// The <c>class-closure</c> check judges the builder's record against the classes the plan declares, the item's
+    /// stored streams and the agent's worktree, with no model: a search cited that no call of the streams made, a
+    /// neighbour measured by no measure call, a deleted site that still declares its symbol, a site that reads its home
+    /// where the agent changed nothing, a pin that names a test the worktree does not declare, a claim that names no
+    /// axis, and a class with no entry at all - each a problem the fold waits behind, exit 1. A record that holds all of
+    /// it passes, its touches stated.
+    /// </summary>
+    [Fact]
+    public async Task TheClassClosureCheck_JudgesTheRecordAgainstTheClassesTheStreamsAndTheTree()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("builder");
+        var layout = kit.Layout;
+
+        // The home still declares its symbol in the worktree (text, for the run made no graph), and the pin's one test
+        // is named there too - the second is not.
+        Directory.CreateDirectory(Path.Combine(worktree, "src"));
+        File.WriteAllText(Path.Combine(worktree, "src", "Home.cs"), "class Home { public int Plan() => 1; } // tests: PlanTest, OtherTest\n");
+        File.WriteAllText(Path.Combine(worktree, "src", "Old.cs"), "class Old { public void Site() { } }\n");
+
+        // One search made as a call of the stored stream, its input holding its query; one measurement by the measure
+        // tool; and a search and a measurement the record cites that no call made.
+        WriteStream(
+            kit.Harness,
+            layout,
+            "builder",
+            [
+                new DssHarness.Core.Agents.ToolCallStarted("call-1", "graph", DssHarness.Core.Agents.AgentToolRunner.Harness),
+                new DssHarness.Core.Agents.ToolCallFinished("call-1", Ok: true, TimeSpan.Zero, """{"query":"turnover:","operation":"find"}""", "found 3"),
+                new DssHarness.Core.Agents.ToolCallStarted("call-2", "measure", DssHarness.Core.Agents.AgentToolRunner.Harness),
+                new DssHarness.Core.Agents.ToolCallFinished("call-2", Ok: true, TimeSpan.Zero, """{"leg":"windows","cell":"turnover:x"}""", "passed"),
+            ]);
+
+        var sync = SyncKit.Service(kit.Harness);
+        var agents = Substitute.For<DssHarness.Core.Orchestration.IAgentService>();
+        agents.FoldAsync(Arg.Any<DssHarness.Core.Orchestration.FoldAgentRequest>(), Arg.Any<CancellationToken>())
+            .Returns(DssHarness.Core.Application.UseCaseResult<DssHarness.Core.Orchestration.AgentVerbFacts>.From(
+                new CommandOutcome(HarnessExit.Success, "dry run") { Facts = new DssHarness.Core.Orchestration.AgentVerbFacts(0, "dry run", false, null, null, [], [], []) { Planned = new DssHarness.Core.Orchestration.AgentPlanned([], [], [], [], null) { Written = ["src/Home.cs"] } } }));
+        var graphs = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
+
+        var result = await new ClassClosureStepRunner(
+            kit.Harness.ContextLoader,
+            kit.Harness.Platform,
+            kit.Harness.OrchestrationStore,
+            kit.Harness.FileSystem,
+            agents,
+            graphs,
+            kit.Harness.GitClient,
+            new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform)).RunAsync(
+            Run(
+                new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = "HEAD" },
+                kit.Main,
+                read: new Dictionary<string, FlowValue>
+                {
+                    ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home", site: "src/Old.cs"))),
+                    ["record"] = FlowValue.Of(new JsonArray(
+                        Entry(
+                            "c-rate",
+                            home: "src/Home.cs",
+                            sites: [("src/Old.cs", "Old", "deleted"), ("src/MadeUp.cs", "Made", "reads-home")],
+                            searches: [("the turnover", "turnover:", "call-1"), ("the references", "Home", "call-9")],
+                            neighbours: [("turnover:x", "call-2", "passed", "")],
+                            tests: ["PlanTest", "NopeTest"],
+                            axes: ["format"],
+                            claim: "The rate holds over every form"))),
+                },
+                worksIn: "builder",
+                instance: "rounds#1.items[0].class-closure",
+                run: OrchestrationKit.Orchestrator),
+            Token);
+
+        Assert.False(result.Output!["passed"]!.GetValue<bool>());
+        Assert.Equal(ClassClosureExit.Findings, result.Exit);
+        Assert.Equal(
+            [
+                "class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Old'",
+                "class 'c-rate': the site 'src/MadeUp.cs' reads its home, but the agent changed nothing at it",
+                "class 'c-rate': the search for 'the references' cites the call 'call-9', which is not a tool call of this item's stored streams",
+                "class 'c-rate': the test 'NopeTest' of the pin is not declared in the worktree",
+                "class 'c-rate': the claim does not name the axis 'format'",
+            ],
+            [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        Assert.Empty(result.Output["hotspots"]!.AsArray());
+        Assert.Equal("src/Home.cs", result.Output["touches"]!.AsArray()[0]!["path"]!.GetValue<string>());
+
+        // The record complete - every planned site accounted for, the searches made, the pin declared, the claim naming
+        // the universe - passes, its touches stated and nothing hot.
+        var passing = await new ClassClosureStepRunner(
+            kit.Harness.ContextLoader,
+            kit.Harness.Platform,
+            kit.Harness.OrchestrationStore,
+            kit.Harness.FileSystem,
+            agents,
+            graphs,
+            kit.Harness.GitClient,
+            new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform)).RunAsync(
+            Run(
+                new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = "HEAD" },
+                kit.Main,
+                read: new Dictionary<string, FlowValue>
+                {
+                    ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home", site: "src/Old.cs"))),
+                    ["record"] = FlowValue.Of(new JsonArray(
+                        Entry(
+                            "c-rate",
+                            home: "src/Home.cs",
+                            sites: [("src/Old.cs", "Old", "deleted"), ("src/Home.cs", "Home", "home")],
+                            searches: [("the turnover", "turnover:", "call-1")],
+                            neighbours: [("turnover:x", "call-2", "passed", "")],
+                            tests: ["PlanTest"],
+                            axes: ["format"],
+                            claim: "The rate holds over every format"))),
+                },
+                worksIn: "builder",
+                instance: "rounds#1.items[0].class-closure",
+                run: OrchestrationKit.Orchestrator),
+            Token);
+
+        // The site deleted above still declares its symbol in the worktree, so the complete record still fails on it -
+        // the deleted file's text has to go for the record to pass; here it does.
+        File.Delete(Path.Combine(worktree, "src", "Old.cs"));
+
+        var passed = await new ClassClosureStepRunner(
+            kit.Harness.ContextLoader,
+            kit.Harness.Platform,
+            kit.Harness.OrchestrationStore,
+            kit.Harness.FileSystem,
+            agents,
+            graphs,
+            kit.Harness.GitClient,
+            new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform)).RunAsync(
+            Run(
+                new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = "HEAD" },
+                kit.Main,
+                read: new Dictionary<string, FlowValue>
+                {
+                    ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home", site: "src/Old.cs"))),
+                    ["record"] = FlowValue.Of(new JsonArray(
+                        Entry(
+                            "c-rate",
+                            home: "src/Home.cs",
+                            sites: [("src/Old.cs", "Old", "deleted"), ("src/Home.cs", "Home", "home")],
+                            searches: [("the turnover", "turnover:", "call-1")],
+                            neighbours: [("turnover:x", "call-2", "passed", "")],
+                            tests: ["PlanTest"],
+                            axes: ["format"],
+                            claim: "The rate holds over every format"))),
+                },
+                worksIn: "builder",
+                instance: "rounds#1.items[0].class-closure",
+                run: OrchestrationKit.Orchestrator),
+            Token);
+
+        Assert.True(passed.Output!["passed"]!.GetValue<bool>());
+        Assert.True(passed.Passed);
+        Assert.Equal(HarnessExit.Success, passed.Exit);
+    }
+
+    /// <summary>
+    /// The home's touches are counted since the base, the item's own commits left out - the fold ledger attributes them
+    /// to instances of one item - so a rework of the item's own class after its first send-back is never a second hand,
+    /// and another item's commit is. Where the record carries no home audit and the home was touched by other work, the
+    /// check fails as a home audit (exit 2), its repair <c>home-audit</c> and not a closing of the record.
+    /// </summary>
+    [Fact]
+    public async Task TheClassClosureCheck_CountsAHomeSTouches_LeavingOutTheItemsOwnCommits()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("builder");
+        var layout = kit.Layout;
+        var baseCommit = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+
+        // Another item's commit touches the home; the item's own fold, committed, touches it again.
+        Directory.CreateDirectory(Path.Combine(kit.Main, "src"));
+        File.WriteAllText(Path.Combine(kit.Main, "src", "Home.cs"), "one\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "another item", Token);
+        var other = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
+        File.WriteAllText(Path.Combine(kit.Main, "src", "Home.cs"), "two\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the item's own", Token);
+        var own = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
+
+        kit.Harness.OrchestrationStore.UpdateFolds(layout, ledger => ledger with
+        {
+            Folds = [new FlowFoldEntry("f1", "rounds#1.items[0].fold", 1, "fold", "builder", FlowFoldEntry.Intended, DateTimeOffset.UtcNow, [new FlowFoldPath("src/Home.cs", "written", null)], [])],
+            Commits = [new FlowCommitEntry("c1", "rounds#1.items[0].checkpoint", 1, FlowCommitEntry.Committed, null, [new FlowCommitPath("src/Home.cs", null)], ["f1"], DateTimeOffset.UtcNow, DateTimeOffset.UtcNow) { Sha = own }],
+        });
+
+        var sync = SyncKit.Service(kit.Harness);
+        var agents = Substitute.For<DssHarness.Core.Orchestration.IAgentService>();
+        agents.FoldAsync(Arg.Any<DssHarness.Core.Orchestration.FoldAgentRequest>(), Arg.Any<CancellationToken>())
+            .Returns(DssHarness.Core.Application.UseCaseResult<DssHarness.Core.Orchestration.AgentVerbFacts>.From(
+                new CommandOutcome(HarnessExit.Success, "dry run") { Facts = new DssHarness.Core.Orchestration.AgentVerbFacts(0, "dry run", false, null, null, [], [], []) { Planned = new DssHarness.Core.Orchestration.AgentPlanned([], [], [], [], null) } }));
+        var graphs = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
+
+        var result = await ClosureAsync(kit, agents, graphs, baseCommit);
+
+        Assert.False(result.Output!["passed"]!.GetValue<bool>());
+        Assert.Equal(ClassClosureExit.HomeAudit, result.Exit);
+        Assert.Equal(
+            ["class 'c-rate': home touched 1 times in this run by other work"],
+            [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        var touch = result.Output["touches"]!.AsArray().Single();
+        Assert.Equal(("src/Home.cs", 1, 2), (touch!["path"]!.GetValue<string>(), touch["byOthers"]!.GetValue<int>(), touch["all"]!.GetValue<int>()));
+
+        // The record that carries its home audit passes: the audit is what the touches asked for.
+        var audited = await ClosureAsync(kit, agents, graphs, baseCommit, homeAudit: true);
+
+        Assert.True(audited.Output!["passed"]!.GetValue<bool>());
+
+        return;
+
+        async Task<FlowStepResult> ClosureAsync(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService graphs, string from, bool homeAudit = false)
+        {
+            var entry = Entry("c-rate", home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [("the data", "query", "call-1")], neighbours: [], tests: [], axes: [], claim: "The rate holds");
+            var record = new JsonArray(entry);
+
+            if (homeAudit)
+            {
+                entry["homeAudit"] = new JsonObject { ["consolidated"] = new JsonArray("the rate"), ["invariants"] = new JsonArray("one place"), ["structural"] = new JsonArray("Home holds it") };
+            }
+
+            await WriteStreamAsync();
+            return await new ClassClosureStepRunner(
+                kit.Harness.ContextLoader,
+                kit.Harness.Platform,
+                kit.Harness.OrchestrationStore,
+                kit.Harness.FileSystem,
+                agents,
+                graphs,
+                kit.Harness.GitClient,
+                new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform)).RunAsync(
+                Run(
+                    new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = from },
+                    kit.Main,
+                    read: new Dictionary<string, FlowValue>
+                    {
+                        ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home"))),
+                        ["record"] = FlowValue.Of(record),
+                    },
+                    worksIn: "builder",
+                    instance: "rounds#1.items[0].class-closure",
+                    run: OrchestrationKit.Orchestrator),
+                Token);
+
+            async Task WriteStreamAsync()
+            {
+                Directory.CreateDirectory(layout.AgentStepDirectory("builder", "impl-1"));
+                await File.WriteAllTextAsync(
+                    Path.Combine(layout.AgentStepDirectory("builder", "impl-1"), DssHarness.Core.Agents.StoredStream.FileName),
+                    string.Join("\n",
+                        System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallStarted("call-1", "graph", DssHarness.Core.Agents.AgentToolRunner.Harness), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions),
+                        System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallFinished("call-1", Ok: true, TimeSpan.Zero, """{"query":"query"}""", "found"), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions)) + "\n");
+            }
+        }
+    }
+
+    /// <summary>A class the run's ledger says was reopened a second time is refused without a home audit, the record's own health apart.</summary>
+    [Fact]
+    public void AClassReopenedTwice_IsRefusedWithoutAHomeAudit()
+    {
+        var judged = ClassClosureRules.Judge(
+            [PlannedClass.In(Class("c-rate", home: "src/Home.cs", symbol: "Home"))!],
+            [ClassClosureRecord.In(Entry("c-rate", home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [], neighbours: [], tests: [], axes: [], claim: "The rate holds"))!],
+            new ClassClosureProof(
+                new List<string>(),
+                new Dictionary<string, ClassClosureCall>(),
+                Declares: null,
+                TestDeclared: null,
+                new List<(string Id, string Site)>(),
+                ArmsDeclared: false,
+                new Dictionary<string, int>(),
+                new Dictionary<string, int>(),
+                TouchesRequired: 1,
+                HotspotAt: 5,
+                new HashSet<string>(["c-rate"], StringComparer.Ordinal)));
+
+        Assert.Equal(["class 'c-rate' reopened twice"], judged.Audits);
+        Assert.False(judged.Passed);
+        Assert.Empty(judged.Problems);
+    }
+
+    /// <summary>One planned class of the item's plan, as the plan's own check reads it.</summary>
+    private static JsonObject Class(string id, string home, string symbol, string? site = null)
+    {
+        var sites = new JsonArray();
+
+        if (site is { })
+        {
+            sites.Add(new JsonObject { ["path"] = site, ["symbol"] = "Old", ["decides"] = "the same", ["then"] = "deleted" });
+        }
+
+        return new JsonObject
+        {
+            ["id"] = id,
+            ["invariant"] = "the rate is decided in one place",
+            ["home"] = new JsonObject { ["path"] = home, ["symbol"] = symbol, ["exists"] = true },
+            ["sites"] = sites,
+            ["searches"] = new JsonArray(new JsonObject { ["data"] = "the turnover", ["via"] = "graph", ["query"] = "turnover:", ["hits"] = 3 }),
+            ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "format", ["values"] = new JsonArray("a", "b"), ["declaredIn"] = "src/Home.cs" }), ["cells"] = 2 },
+            ["action"] = "fix-at-home",
+            ["notCovered"] = "none",
+        };
+    }
+
+    /// <summary>One entry of the builder's closing record, as the implement schema holds it.</summary>
+    private static JsonObject Entry(
+        string id,
+        string home,
+        (string Path, string Symbol, string After)[] sites,
+        (string Data, string Query, string Call)[] searches,
+        (string Cell, string MeasuredBy, string Result, string Reason)[] neighbours,
+        string[] tests,
+        string[] axes,
+        string claim)
+    {
+        var entry = new JsonObject
+        {
+            ["class"] = id,
+            ["invariant"] = "the rate is decided in one place",
+            ["home"] = new JsonObject { ["path"] = home, ["symbol"] = "Home" },
+            ["sites"] = new JsonArray(sites.Select(site => (JsonNode?)new JsonObject { ["path"] = site.Path, ["symbol"] = site.Symbol, ["before"] = "each file", ["after"] = site.After }).ToArray()),
+            ["searches"] = new JsonArray(searches.Select(search => (JsonNode?)new JsonObject { ["data"] = search.Data, ["via"] = "graph", ["query"] = search.Query, ["call"] = search.Call }).ToArray()),
+            ["universe"] = new JsonObject
+            {
+                ["axes"] = new JsonArray(axes.Select(axis => (JsonNode?)new JsonObject { ["name"] = axis, ["values"] = new JsonArray("a") }).ToArray()),
+                ["cellsPinned"] = 1,
+                ["cellsArmed"] = 0,
+            },
+            ["pin"] = new JsonObject { ["tests"] = new JsonArray(tests.Select(test => (JsonNode?)test).ToArray()), ["tableDriven"] = true, ["over"] = "the universe" },
+            ["arm"] = new JsonObject { ["why"] = "the repository keeps no arms" },
+            ["neighbours"] = new JsonArray(neighbours.Select(neighbour => (JsonNode?)new JsonObject
+            {
+                ["cell"] = neighbour.Cell,
+                ["direction"] = "the same",
+                ["form"] = "the same source",
+                ["reference"] = "the leg",
+                ["measuredBy"] = neighbour.MeasuredBy,
+                ["result"] = neighbour.Result,
+                ["reason"] = neighbour.Reason,
+            }).ToArray()),
+            ["claim"] = claim,
+        };
+
+        return entry;
+    }
+
+    /// <summary>Writes a step's stored stream under the agent's own directory, one event a line.</summary>
+    private static void WriteStream(HarnessFactory harness, OrchestratorLayout layout, string agent, IReadOnlyList<DssHarness.Core.Agents.AgentEvent> events)
+    {
+        Directory.CreateDirectory(layout.AgentStepDirectory(agent, "impl-1"));
+
+        var lines = events.Select(@event => System.Text.Json.JsonSerializer.SerializeToNode(@event, typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions));
+
+        File.WriteAllLines(Path.Combine(layout.AgentStepDirectory(agent, "impl-1"), DssHarness.Core.Agents.StoredStream.FileName), lines);
+    }
+
     private static (bool Passed, string Findings) Findings(FlowStepResult result)
         => (result.Output!["passed"]!.GetValue<bool>(), string.Join(" | ", result.Output!["findings"]!.AsArray().Select(line => line!.GetValue<string>())));
 
@@ -332,8 +693,8 @@ public sealed class CheckStepRunnerTests : IDisposable
                 new AnchorFinding("anchors/pending.md", 0, registryWide, "the registry has no header"),
             ]);
 
-    private static FlowStepRun Run(WorkflowStep step, string repository, IReadOnlyDictionary<string, FlowValue>? read = null, IReadOnlyList<FlowAnswerGiven>? answers = null)
-        => new(step, step.Name, 1, FlowValue.Missing, null, null, answers ?? [], new NoEvents(), Place: new FlowRunPlace(repository, "r1", null, Flow), Read: read);
+    private static FlowStepRun Run(WorkflowStep step, string repository, IReadOnlyDictionary<string, FlowValue>? read = null, IReadOnlyList<FlowAnswerGiven>? answers = null, string? worksIn = null, string? instance = null, string run = "r1")
+        => new(step, instance ?? step.Name, 1, FlowValue.Missing, null, null, answers ?? [], new NoEvents(), Place: new FlowRunPlace(repository, run, null, Flow), Read: read, WorksIn: worksIn);
 
     /// <summary>A repository with the harness initialised, committed, on branch 'work'.</summary>
     private async Task<(HarnessFactory Harness, TempDirectory Repository)> RepositoryAsync()

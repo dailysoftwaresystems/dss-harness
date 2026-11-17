@@ -145,7 +145,7 @@ public sealed class ImplementationFlowTests
             harness.ConfigStore,
             updates);
 
-        var machineTypes = "build test run check-mutations anchor-balance anchor-citations ci-read ci-wait fold delete-agent refresh rebase"
+        var machineTypes = "build test run check-mutations anchor-balance anchor-citations class-closure ci-read ci-wait fold delete-agent refresh rebase"
             .Split(' ')
             .ToList();
 

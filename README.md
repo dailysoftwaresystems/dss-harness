@@ -627,7 +627,20 @@ at its one home, over the universe it names, nothing folded without the record o
 and every prompt that goes on with an item (mend, rework, reconcile, anchors, unblock, redo and
 undo) is given the item's classes and the record so far under "The class you are closing", so a
 fresh agent holds the class as text, never a memory of it; and a step whose prompt reads the
-item's classes has its context pack seeded from every site and home of them.
+item's classes has its context pack seeded from every site and home of them. Before every fold of
+an item, the `class-closure` check judges the record with no model - every planned site accounted
+for, a deleted site no longer declaring its symbol in the worktree, every search a tool call of
+the item's stored streams whose input holds its query, every neighbour measured by a `measure`
+call or reasoned why not, every test of the pin declared, the arm one of the registry's and
+mutating the home's own file, the claim naming every axis of the universe - and each home's
+touches since the run's start commit, the item's own commits left out: a home touched by other
+work, or a class reopened twice, must carry a home audit. The record's problems are repaired by
+`close-class`, which goes on with the implementation, and a missing audit by `home-audit`, which
+reads the whole home and makes its invariants structural; a home touched often enough is named a
+hotspot in the check's answer. A lane folded by hand joins the same rule opt-in:
+`anchors.closure: "required"` has `fold-agent` refuse a row whose status moves to closed unless
+its directory holds `closure.json`, judged by the same rules, its searches and measurements read
+as given - no consent lifts it.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its

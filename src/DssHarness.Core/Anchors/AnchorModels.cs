@@ -241,6 +241,12 @@ public sealed record AnchorRowDeclaration(string Id, string Status, string Trigg
 {
     /// <summary>Its priority; null keeps an existing row's, and a new row must declare one.</summary>
     public string? Priority { get; init; }
+
+    /// <summary>
+    /// Its closing record, as <c>closure.json</c> holds it, where a lane folded by hand closes its classes by record;
+    /// null where the row directory holds none. Judged where it is weighed, not read here.
+    /// </summary>
+    public string? Closure { get; init; }
 }
 
 /// <summary>

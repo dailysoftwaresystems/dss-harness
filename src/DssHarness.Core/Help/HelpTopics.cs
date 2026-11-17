@@ -4233,6 +4233,14 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("A row is closed exactly when its Status cell starts with the closed mark. Closing");
         builder.AppendLine("an anchor moves its row to the done registry, and any other status moves it back.");
+        builder.AppendLine("Closing by record. Where anchors.closure says 'required', a lane folded by hand");
+        builder.AppendLine("with fold-agent closes its classes by record: a row whose status moves to closed is");
+        builder.AppendLine("refused unless its directory holds closure.json, the closing record, read against");
+        builder.AppendLine("the same schema the run's implement answer is held to and judged by the same rules");
+        builder.AppendLine("the run's class-closure check reads. No consent lifts it: the record is written or");
+        builder.AppendLine("the row does not close. A manual lane has no records of its calls, so its searches");
+        builder.AppendLine("and measurements are read as given, their command lines, and the fold's dry run says");
+        builder.AppendLine("so. The default is 'off', and a row closes as it always did.");
         builder.AppendLine("No verdict is read from the prose beside the Status, unless anchors.triggerCarriesVerdict");
         builder.AppendLine("is true: then a closed row's Trigger opens with the closed mark and no other row's");
         builder.AppendLine("does, write-anchor and set-anchor refuse a row whose two cells disagree, and");
@@ -4800,7 +4808,9 @@ public static class HelpTopics
             + $"'{OrchestrationReports.Named(ConsentKind.FoldOverCells)}' ({AnchorBatchRequest.AcceptOverOption}) "
             + $"or '{OrchestrationReports.Named(ConsentKind.FoldTwoChanges)}' ({FoldAllowances.MergeOption}) - and refusals each "
             + $"reason it is refused for, '{OrchestrationReports.Named(RefusalKind.Conflict)}' where a path both trees changed has "
-            + $"a merge that conflicts and '{OrchestrationReports.Named(RefusalKind.Other)}' for anything else, so a request "
+            + $"a merge that conflicts, '{OrchestrationReports.Named(RefusalKind.Closure)}' where a row whose status moves to "
+            + "closed holds no closing record that closes its classes - under anchors.closure: required, of a lane folded by "
+            + $"hand, its searches and measurements read as given - and '{OrchestrationReports.Named(RefusalKind.Other)}' for anything else, so a request "
             + $"refused for conflicting merges alone says '{OrchestrationReports.Named(RefusalKind.Conflict)}' and nothing else; "
             + "folded says what the --apply of a fold and of a deletion did, gone through or stopped part way after writing some "
             + "of it - what it wrote, deleted, merged and handed, the arm registry merged by arm, the registries and rows it "
@@ -5768,7 +5778,15 @@ public static class HelpTopics
             + "to its rows or its paths where it names them: the anchors among those rows the change opened, closed and lost, a "
             + "problem at a line of one of them and every problem of a registry as a whole, or the citations in those files; a rows "
             + "or paths expression that reads nothing names nothing. Each answers passed and findings, each a line as the check "
-            + "prints it. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
+            + "prints it. class-closure runs before every fold of an item: it judges the classes the item's plan declares "
+            + "against the closing record its builder answered - every planned site accounted for, a deleted site no longer "
+            + "declaring its symbol in the worktree, every search a tool call of the item's stored streams whose input holds "
+            + "its query, every neighbour measured by a measure call of the same streams or reasoned why not, every test of "
+            + "the pin declared, the arm one of the registry's and mutating the home's own file, the claim naming every axis "
+            + "of the universe - and each home's touches since its base, the item's own commits left out, a record without "
+            + "a home audit refused where the home was touched by other work or the class was reopened twice. Its problems "
+            + "are the record's (1, which close-class repairs) apart from a missing home audit (2, which home-audit makes), "
+            + "and it answers passed, problems, hotspots - the homes touched hotspot times or more - and touches. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
             + "it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as check-ci-legs --json "
             + "gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the commit the run last "
             + $"pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore names - a job "

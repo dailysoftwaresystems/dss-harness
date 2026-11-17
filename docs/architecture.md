@@ -2898,7 +2898,20 @@ item declares; where the repository declares legs, each reason step's agent is g
 (`AgentMeasureSupport` on the step's request and run, offered by the tool runtime to a ground that runs commands,
 standing alone in its turn), whose every call - a leg, its variant, a filter, the cell measured - runs through
 `ITestLegs` as any leg is run, in the agent's worktree where it has one and in a local copy of the main tree where it
-does not (`ReasonStepRunner.MeasuredAsync`), its id what the record's `measuredBy` cites;
+does not (`ReasonStepRunner.MeasuredAsync`), its id what the record's `measuredBy` cites. Before every fold of an
+item, the `class-closure` check (`ClassClosureStepRunner`) judges the record by `ClassClosureRules` - the one owner of
+the judgement - against the classes the plan declares, the item's stored streams (`OrchestrationStore.ReadStepStream`,
+every step of the agent's own directory), the paths the agent changed (the fold's own dry weighing,
+`IAgentService.FoldAsync`), the graph's view of the worktree or its text, the arms registry (`ArmListingReader`) and
+each home's touches since the base (`IGitClient.CountTouchesAsync`, the item's own commits left out by the fold ledger
+through `FlowInstanceId.ItemOf`): every planned site accounted for and a deleted site no longer declaring its symbol,
+every search a tool call of the streams whose input holds its query, every neighbour measured or reasoned, the pin's
+tests declared, the arm one of the registry's and mutating the home's own file, the claim naming every axis; a record
+without a home audit is refused where the home was touched by other work or the class was reopened twice, and a home
+touched often enough is a hotspot in the check's answer. The record's problems (1) are repaired by `close-class` and a
+missing audit (2) by `home-audit`, reason steps that go on with the implementation; the same rules judge a manual
+lane's `closure.json` where `anchors.closure` says `required` (`AgentService.ClosureProblemsAsync`, a refusal of its
+own kind `RefusalKind.Closure` that no consent lifts, the searches and measurements read as given).
 `CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both

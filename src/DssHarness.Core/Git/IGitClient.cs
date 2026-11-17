@@ -375,6 +375,27 @@ public interface IGitClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Each commit between <paramref name="from"/> and <paramref name="to"/> that touched one of
+    /// <paramref name="paths"/>, renames followed - a rename names the path it moved to - as
+    /// <c>git log --name-status --find-renames</c> reads them: one commit and one path a pair, a
+    /// path touched twice by one commit twice. What asks is the class-closure check, which counts
+    /// the hands a home felt: every pair names whose hand it was, so the item's own commits are
+    /// left out by the one that reads them.
+    /// </summary>
+    /// <param name="directory">The repository.</param>
+    /// <param name="from">The commit the count starts after.</param>
+    /// <param name="to">The commit it counts to.</param>
+    /// <param name="paths">The paths counted, as git names them.</param>
+    /// <param name="cancellationToken">Stops the walk.</param>
+    /// <exception cref="HarnessException">git could not walk the history.</exception>
+    Task<IReadOnlyList<GitTouch>> CountTouchesAsync(
+        string directory,
+        string from,
+        string to,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// What <see cref="CountCommitsAsync"/> answers, asked of the repository whose git directory is
     /// <paramref name="gitDirectory"/>, without its work tree, which may be gone: a submodule's
     /// repository after its checkout was removed, for one.
@@ -747,3 +768,8 @@ public sealed record GitCredential(string Username, string Password)
     /// <returns>The user's name alone.</returns>
     public override string ToString() => $"GitCredential {{ Username = {Username} }}";
 }
+
+/// <summary>One commit of a touch count: which commit touched the path, so the counter can leave out those it knows.</summary>
+/// <param name="Commit">The commit's id.</param>
+/// <param name="Path">The path it touched, renames followed: the path it moved to.</param>
+public sealed record GitTouch(string Commit, string Path);

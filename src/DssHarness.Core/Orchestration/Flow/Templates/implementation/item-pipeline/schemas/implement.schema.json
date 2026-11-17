@@ -346,6 +346,29 @@
           "claim": {
             "type": "string",
             "description": "The closing claim, which names the universe and never the case: 'Invariant I holds over U; cells C measured on references R; cells N not measured because B'."
+          },
+          "homeAudit": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["consolidated", "invariants", "structural"],
+            "description": "The home audit, where the home was touched by other work of this run or the class was reopened twice: what the audit consolidated, the invariants the home should uphold, and what is now structural - one decision, one place.",
+            "properties": {
+              "consolidated": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "What was consolidated: each decision the home took over from its sites."
+              },
+              "invariants": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "The invariants the home should uphold, and those it upheld only by coincidence."
+              },
+              "structural": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "What is now structural: one decision, one place, with where it lives."
+              }
+            }
           }
         }
       }

@@ -4007,6 +4007,21 @@ public sealed partial class HelpTests
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
         }
+
+        // Closing by record: where anchors.closure says 'required', a lane folded by hand closes its classes by record -
+        // closure.json judged by the rules the run's class-closure check reads, its searches and measurements read as given.
+        Assert.Contains(
+            "Closing by record. Where anchors.closure says 'required', a lane folded by hand",
+            result.StandardOutput,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "refused unless its directory holds closure.json, the closing record, read against",
+            result.StandardOutput,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A manual lane has no records of its calls, so its searches",
+            result.StandardOutput,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -4887,7 +4902,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, class-closure, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -5142,7 +5157,9 @@ public sealed partial class HelpTests
             + "the process, the run and since when its sweep's claim records. Beside them, needs names each consent the "
             + "request lacks - 'fold-new-rows' (--new), 'fold-lost-rows' (--accept-lost), 'fold-over-cells' (--accept-over) "
             + "or 'fold-two-changes' (--merge) - and refusals each reason it is refused for, 'conflict' where a path both "
-            + "trees changed has a merge that conflicts and 'other' for anything else, so a request refused for conflicting "
+            + "trees changed has a merge that conflicts, 'closure' where a row whose status moves to closed holds no closing "
+            + "record that closes its classes - under anchors.closure: required, of a lane folded by hand, its searches and "
+            + "measurements read as given - and 'other' for anything else, so a request refused for conflicting "
             + "merges alone says 'conflict' and nothing else; folded says what the --apply of a fold and of a deletion did, gone "
             + "through or stopped part way after writing some of it - what it wrote, deleted, merged and handed, the arm registry "
             + "merged by arm, the registries and rows it applied, and the cells --accept-over took - and is null for every other "
@@ -5506,7 +5523,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
-                + "create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
+                + "create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, class-closure, ci-read, ci-wait, fold, delete-agent, "
                 + "refresh, rebase, commit, push, pull-request, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
             prose,
@@ -5648,7 +5665,15 @@ public sealed partial class HelpTests
                 + $"{AnchorCitationSubjects.Default} where it names none) - each held to its rows or its paths where it names them: the anchors "
                 + "among those rows the change opened, closed and lost, a problem at a line of one of them and every problem of a registry as a "
                 + "whole, or the citations in those files; a rows or paths expression that reads nothing names nothing. Each answers passed and "
-                + "findings, each a line as the check prints it. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out "
+                + "findings, each a line as the check prints it. class-closure runs before every fold of an item: it judges the classes the item's "
+                + "plan declares against the closing record its builder answered - every planned site accounted for, a deleted site no longer "
+                + "declaring its symbol in the worktree, every search a tool call of the item's stored streams whose input holds its query, every "
+                + "neighbour measured by a measure call of the same streams or reasoned why not, every test of the pin declared, the arm one of "
+                + "the registry's and mutating the home's own file, the claim naming every axis of the universe - and each home's touches since "
+                + "its base, the item's own commits left out, a record without a home audit refused where the home was touched by other work or "
+                + "the class was reopened twice. Its problems are the record's (1, which close-class repairs) apart from a missing home audit (2, "
+                + "which home-audit makes), and it answers passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
+                + "ci-read reads the legs check-ci-legs reads, of its branch - the one checked out "
                 + "in the main checkout where it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as "
                 + "check-ci-legs --json gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the "
                 + $"commit the run last pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore "

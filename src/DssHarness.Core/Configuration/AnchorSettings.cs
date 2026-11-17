@@ -46,6 +46,22 @@ public sealed class AnchorSettings
     public int MinimumIdSegments { get; init; } = 3;
 
     /// <summary>
+    /// Whether a lane folded by hand with <c>fold-agent</c> must close its classes by record:
+    /// <c>required</c>, a row whose status moves to closed is refused unless its directory holds
+    /// <c>closure.json</c>, the closing record judged by the same rules the run's own
+    /// <c>class-closure</c> check reads; <c>off</c> (the default), a row closes as it always
+    /// did. What a manual lane cannot prove is said: its searches and measurements are read as
+    /// given, their command lines, for no stored stream holds them.
+    /// </summary>
+    public string Closure { get; init; } = DefaultClosure;
+
+    /// <summary>The closure setting a repository names none of.</summary>
+    public const string DefaultClosure = "off";
+
+    /// <summary>What <see cref="Closure"/> may say: off, or required.</summary>
+    public static IReadOnlyList<string> ClosureValues { get; } = [DefaultClosure, "required"];
+
+    /// <summary>
     /// Files and directories, relative to the repository root, where every cited anchor id must
     /// resolve to a row. Nothing outside a declared root is scanned.
     /// </summary>

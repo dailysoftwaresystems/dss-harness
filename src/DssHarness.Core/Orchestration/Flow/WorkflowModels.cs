@@ -1082,6 +1082,18 @@ public sealed record WorkflowStep
     /// <summary>The row ids an anchor balance is held to, written out or as an expression.</summary>
     public FlowList? Rows { get; init; } = null;
 
+    /// <summary>An expression yielding the classes a class-closure check judges - the item's planned classes.</summary>
+    public string? Classes { get; init; } = null;
+
+    /// <summary>An expression yielding the closing record a class-closure check judges - the builder's answer.</summary>
+    public string? Record { get; init; } = null;
+
+    /// <summary>How many touches of a home by other work require a home audit; 1 where the file says nothing.</summary>
+    public int? Touches { get; init; } = null;
+
+    /// <summary>How many touches name a home a hotspot; 5 where the file says nothing.</summary>
+    public int? Hotspot { get; init; } = null;
+
     /// <summary>What an anchor citations check judges: <c>currentTree</c> (the default), <c>currentCommit</c> or <c>currentPullRequest</c>.</summary>
     public string? Subject { get; init; } = null;
 

@@ -747,6 +747,7 @@ public static class OrchestrationReports
     public static string Named(RefusalKind kind) => kind switch
     {
         RefusalKind.Conflict => "conflict",
+        RefusalKind.Closure => "closure",
         RefusalKind.Other => "other",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Not a reason a request is refused for."),
     };

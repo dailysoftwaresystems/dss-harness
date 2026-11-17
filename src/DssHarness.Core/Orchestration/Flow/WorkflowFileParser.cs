@@ -1345,6 +1345,17 @@ public static class WorkflowFileParser
                 RefuseGivenEmpty(keys, $"{where}.paths", "name the files it is held to", "the whole tree judged", problems);
                 break;
 
+            case "class-closure":
+                step = step with
+                {
+                    Classes = ScalarIn(keys, $"{where}.classes", problems),
+                    Record = ScalarIn(keys, $"{where}.record", problems),
+                    Base = ScalarIn(keys, $"{where}.base", problems),
+                    Touches = IntIn(keys, $"{where}.touches", problems),
+                    Hotspot = IntIn(keys, $"{where}.hotspot", problems),
+                };
+                break;
+
             case "ci-read":
                 step = step with
                 {

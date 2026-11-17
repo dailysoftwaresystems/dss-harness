@@ -141,7 +141,8 @@ public sealed class HarnessFactory
             new OrchestrationLog(fileSystem, TimeProvider.System, Output),
             SessionsOver(fileSystem),
             TimeProvider.System,
-            ProcessContext);
+            ProcessContext,
+            new DssHarness.Core.Mutations.ArmListingReader(SyncKit.Service(this, fileSystem: fileSystem, git: gitClient), fileSystem, Platform));
     }
 
     /// <summary>

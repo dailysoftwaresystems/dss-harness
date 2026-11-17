@@ -2372,6 +2372,94 @@ public sealed class AgentServiceTests
         }
     }
 
+    /// <summary>
+    /// Where <c>anchors.closure</c> says <c>required</c>, fold-agent refuses a row whose status moves to closed unless its
+    /// directory holds <c>closure.json</c> - read against the schema the run's own implement answer is held to, and judged
+    /// by the same rules the <c>class-closure</c> step reads, a manual lane's searches and measurements read as given.
+    /// No consent lifts it; the record is written or the row does not close. Where the configuration says nothing, a row
+    /// closes as it always did.
+    /// </summary>
+    [Fact]
+    public async Task FoldAgentUnderAnchorsClosureRequired_RefusesARowThatClosesWithNoClosureJson()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        kit.Harness.WriteConfig(
+            kit.Main,
+            new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings, Anchors = new Core.Configuration.AnchorSettings { Closure = "required" } });
+
+        OrchestrationKit.Write(worktree, "a.txt", "one\nthe agent's own\n");
+        OrchestrationKit.WriteRow(
+            kit.Layout.RowsDirectory("ag"),
+            "D-ONE-TWO-THREE",
+            ("status", Core.Anchors.AnchorStatus.ClosedMark + " CLOSED"),
+            ("trigger", "always"),
+            ("closing", "the rate holds"),
+            ("cross-refs", ""),
+            ("priority", "P2"));
+        var rows = new Core.Orchestration.FoldAllowances { New = ["D-ONE-TWO-THREE"] };
+
+        var refused = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: false, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.True(
+            refused.Details!.Any(line => line.Contains("closes, and this repository's lanes close their classes by record: its directory holds no closure.json", StringComparison.Ordinal)),
+            string.Join(" || ", refused.Details!));
+        Assert.Contains(Core.Orchestration.RefusalKind.Closure, (refused.Facts as Core.Orchestration.AgentVerbFacts)!.Refusals);
+
+        var applied = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: true, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, applied.ExitCode);
+        Assert.Equal("one\n", OrchestrationKit.Read(kit.Main, "a.txt"));
+
+        // The record the schema refuses: a claim that names no axis of the universe it declares.
+        OrchestrationKit.Write(
+            kit.Layout.RowsDirectory("ag"),
+            "D-ONE-TWO-THREE/closure.json",
+            """
+            [{"class":"c-rate","invariant":"one place","home":{"path":"a.txt","symbol":"Rate"},
+            "sites":[],"searches":[],"universe":{"axes":[{"name":"format","values":["a"]}],"cellsPinned":0,"cellsArmed":0},
+            "pin":{"tests":[],"tableDriven":true,"over":"the universe"},"arm":{"why":"no arms"},
+            "neighbours":[],"claim":"the rate holds"}]
+            """);
+
+        var judged = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: false, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, judged.ExitCode);
+        Assert.True(
+            judged.Details!.Any(line => line.Contains("class 'c-rate': the claim does not name the axis 'format'", StringComparison.Ordinal)),
+            string.Join(" || ", judged.Details!));
+
+        // The record that closes: the fold goes through, saying what a manual lane's record cannot prove.
+        OrchestrationKit.Write(
+            kit.Layout.RowsDirectory("ag"),
+            "D-ONE-TWO-THREE/closure.json",
+            """
+            [{"class":"c-rate","invariant":"one place","home":{"path":"a.txt","symbol":"Rate"},
+            "sites":[],"searches":[],"universe":{"axes":[{"name":"format","values":["a"]}],"cellsPinned":0,"cellsArmed":0},
+            "pin":{"tests":[],"tableDriven":true,"over":"the universe"},"arm":{"why":"no arms"},
+            "neighbours":[],"claim":"the rate holds over every format"}]
+            """);
+
+        var done = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: false, cancellationToken: Token);
+
+        Assert.True(done.Succeeded, OrchestrationKit.Describe(done));
+        Assert.True(
+            done.Details!.Any(line => line.Contains("judged as the run's class-closure check judges", StringComparison.Ordinal)
+                && line.Contains("their searches and measurements are read as given, their command lines, for no stored stream holds them", StringComparison.Ordinal)),
+            string.Join(" ||| ", done.Details!));
+
+        // Where the configuration says nothing, a row closes as it always did.
+        kit.Harness.WriteConfig(kit.Main, new Core.Configuration.HarnessConfig { Worktrees = OrchestrationKit.Settings });
+        File.Delete(Path.Combine(kit.Layout.RowsDirectory("ag"), "D-ONE-TWO-THREE", "closure.json"));
+
+        var asAlways = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: true, cancellationToken: Token);
+
+        Assert.True(asAlways.Succeeded, OrchestrationKit.Describe(asAlways));
+    }
+
     /// <summary>The real file system, except that one file cannot be read, as while another program holds it.</summary>
     private sealed class UnreadableFileSystem(Core.FileSystem.IFileSystem inner, string held) : PassThroughFileSystem(inner)
     {

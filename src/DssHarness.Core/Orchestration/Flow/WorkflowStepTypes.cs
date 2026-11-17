@@ -282,6 +282,23 @@ public static class WorkflowStepTypes
             null,
             AnchorOutput),
         new(
+            "class-closure",
+            [
+                new("in", "the create-agent step whose agent's worktree it works in, which it waits for through dependsOn"),
+                new("classes", "an expression yielding the classes the item's plan declares") { Required = true },
+                new("record", "an expression yielding the closing record the builder answered") { Required = true },
+                new("base", "the commit the home's touches are counted from"),
+                new("touches", $"how many touches of a home by other work require a home audit; {DefaultTouches} where the file says nothing"),
+                new("hotspot", $"how many touches name a home a hotspot; {DefaultHotspot} where the file says nothing"),
+                new("failOn", "what a red finding does: red (the default) or never"),
+            ],
+            ["base"],
+            "red",
+            "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), OrchestrationStore.ReadStepStream, CodebaseGraphService.ReadOnlyAsync, ArmListingReader, IGitClient.CountTouchesAsync",
+            ["read main", "read the agent's tree where in names one"],
+            null,
+            ClassClosureOutput),
+        new(
             "ci-read",
             [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("failOn", "what a red leg does: never (the default) or red")],
             ["branch"],
@@ -594,6 +611,19 @@ public static class WorkflowStepTypes
 
     /// <summary>What an anchor check answers: whether it passed, and each finding as a line the check prints.</summary>
     private static string AnchorOutput => ObjectOf(("passed", Flag), ("findings", ListOf(Text)));
+
+    /// <summary>What a class-closure check answers: whether every class of the item is closed by its record, each problem as a line, the hotspots among its homes, and each home's touches.</summary>
+    private static string ClassClosureOutput => ObjectOf(
+        ("passed", Flag),
+        ("problems", ListOf(Text)),
+        ("hotspots", ListOf(ObjectOf(("class", Text), ("path", Text), ("touches", WholeNumber)))),
+        ("touches", ListOf(ObjectOf(("class", Text), ("path", Text), ("byOthers", WholeNumber), ("all", WholeNumber)))));
+
+    /// <summary>How many touches of a home by other work require a home audit, where a workflow says nothing.</summary>
+    public const int DefaultTouches = 1;
+
+    /// <summary>How many touches name a home a hotspot, where a workflow says nothing.</summary>
+    public const int DefaultHotspot = 5;
 
     /// <summary>What a wait for the checks answers: whether they passed, the commit, each check, the red ones with their logs, and those still pending or unsettled.</summary>
     private static string CiWaitOutput => ObjectOf(

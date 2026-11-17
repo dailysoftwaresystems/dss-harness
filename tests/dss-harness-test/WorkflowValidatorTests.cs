@@ -3115,6 +3115,39 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// A <c>class-closure</c> step reads its classes and its record where it starts, as expressions the engine resolves,
+    /// and the thresholds of its homes' touches are whole numbers from one up - a home touched by no other hand needs no
+    /// audit, and a hotspot of one touch is every home.
+    /// </summary>
+    [Fact]
+    public void AClassClosureStep_TakesItsClassesAndRecordAsExpressions_AndItsThresholdsFromOne()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: closing
+                type: class-closure
+                classes: 'plan.latest.classes'
+                record: 'implement.latest.closure'
+                touches: 0
+                hotspot: -1
+            """);
+
+        string[] expected =
+        [
+            "'closing.classes' reads 'plan.latest.classes', which no step before 'closing', no input and no param provides",
+            "'closing.record' reads 'implement.latest.closure', which no step before 'closing', no input and no param provides",
+            "step 'closing': touches is 0, and so not one or more",
+            "step 'closing': hotspot is -1, and so not one or more",
+        ];
+
+        Assert.Equal(
+            [.. expected.Order(StringComparer.Ordinal)],
+            [.. problems.Order(StringComparer.Ordinal)]);
+    }
+
+    /// <summary>
     /// A handler's keys are whole: it is raised by another step, by codes from 1 to 255 given once each and never beside
     /// a success, waits for nothing but its source, is never always, and is visited from 1 to 20 times; only a handler
     /// says then or maxVisits, and its then goes to a step it sees - outward too - never to itself. A group is held to

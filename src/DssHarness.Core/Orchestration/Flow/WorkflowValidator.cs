@@ -727,6 +727,17 @@ public static class WorkflowValidator
 
                         break;
 
+                    case "class-closure":
+                        // The classes and the record are read where the step starts, as expressions the engine resolves;
+                        // the thresholds of its homes' touches are whole numbers from one up - a home touched by no other
+                        // hand needs no audit, and a hotspot of one touch is every home.
+                        Expression(entry, entry.Step.Classes ?? string.Empty, "classes");
+                        Expression(entry, entry.Step.Record ?? string.Empty, "record");
+                        Positive(entry.Step.Touches, $"{where}: touches");
+                        Positive(entry.Step.Hotspot, $"{where}: hotspot");
+
+                        break;
+
                     case "ci-read":
                     case "ci-wait":
                         Positive(entry.Step.Limit, $"{where}: limit");

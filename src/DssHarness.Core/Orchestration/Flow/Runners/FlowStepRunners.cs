@@ -28,7 +28,7 @@ public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
 {
     /// <summary>The step types this build serves, in the order help says them: the tool registers a runner for each, and none other.</summary>
     public static IReadOnlyList<string> Served { get; } =
-        ["orient", "graphify-codebase", "validate-plan", "create-agent", "reason", "build", "test", "run", "check-mutations", "anchor-balance", "anchor-citations", "ci-read", "ci-wait", "fold", "delete-agent", "refresh", "rebase", "commit", "push", "pull-request"];
+        ["orient", "graphify-codebase", "validate-plan", "create-agent", "reason", "build", "test", "run", "check-mutations", "anchor-balance", "anchor-citations", "class-closure", "ci-read", "ci-wait", "fold", "delete-agent", "refresh", "rebase", "commit", "push", "pull-request"];
 
     private readonly IReadOnlyDictionary<string, IFlowStepTypeRunner> _byType;
     private readonly FlowGraphSyncs _graph;

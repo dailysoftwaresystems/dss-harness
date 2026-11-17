@@ -146,6 +146,7 @@ public interface IAgentService : IUseCase
 /// <param name="sessions">Ends what an orchestrator's steps left running once their starter has gone - a contained child's session, a leg's process group - first in every command over it.</param>
 /// <param name="clock">When things happen.</param>
 /// <param name="processContext">This process's current directory, read per call: where a verb was typed, when none is named.</param>
+/// <param name="listings">The one reading of the arms registry, which judges a manual lane's closing records where it holds arms.</param>
 public sealed class AgentService(
     IHarnessContextLoader contextLoader,
     IGitClient gitClient,
@@ -165,7 +166,8 @@ public sealed class AgentService(
     OrchestrationLog log,
     ChildSessions sessions,
     TimeProvider clock,
-    IProcessContext processContext) : IAgentService
+    IProcessContext processContext,
+    Mutations.ArmListingReader listings) : IAgentService
 {
     /// <summary>The command that creates an agent.</summary>
     public const string CreateCommand = "create-agent";
@@ -204,6 +206,7 @@ public sealed class AgentService(
     private readonly ChildSessions _sessions = sessions;
     private readonly TimeProvider _clock = clock;
     private readonly IProcessContext _processContext = processContext;
+    private readonly Mutations.ArmListingReader _listings = listings;
     private readonly AgentFold _fold = new(gitClient, fileSystem, permissions, platform);
     private readonly AgentEvidence _evidence = new(fileSystem, platform);
 
@@ -1695,6 +1698,12 @@ public sealed class AgentService(
 
             var (tail, line) = Ending(FoldCommand, record, allowances, measured.Rows.Batch, "write them");
 
+            // What a manual lane cannot prove is said where its records were judged: no stored stream holds its calls, so
+            // its searches and measurements are read as given, their command lines.
+            var judged = measured.Rows.ClosureJudged > 0
+                ? [$"  {ReportText.Counted(measured.Rows.ClosureJudged, "closing record")} judged as the run's class-closure check judges: their searches and measurements are read as given, their command lines, for no stored stream holds them"]
+                : Array.Empty<string>();
+
             return Dry(
                 json,
                 context.Layout,
@@ -1702,7 +1711,7 @@ public sealed class AgentService(
                 CommandOutcome.Ok(
                     $"dry run: folding {Lower(Agent(record))} writes {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
                     + $"{Merging(measured.Plan, "merges")}{Handing(measured.Plan, "hands")}removes {measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
-                    [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. line]),
+                    [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. judged, .. line]),
                 standing,
                 typed,
                 heldTrees);
@@ -2680,7 +2689,7 @@ public sealed class AgentService(
             // The directories at the top of the tree its fold makes count as the tree's, before its files are written and
             // after, so a path a row cites into one of them is judged the same both times.
             var roots = plan.Written.Where(written => written.Contains('/', StringComparison.Ordinal)).Select(written => written[..written.IndexOf('/', StringComparison.Ordinal)]);
-            rows = await MeasureRowsAsync(main, layout, record, allowances, mode, [.. roots.Distinct(StringComparer.Ordinal)], cancellationToken).ConfigureAwait(false);
+            rows = await MeasureRowsAsync(main, context, layout, record, allowances, mode, [.. roots.Distinct(StringComparer.Ordinal)], cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -2743,6 +2752,7 @@ public sealed class AgentService(
     /// </remarks>
     private async Task<(AgentRowsPlan Plan, AnchorBatchRequest Request, IReadOnlyList<AnchorRowDeclaration> All)> MeasureRowsAsync(
         string main,
+        Repository.HarnessContext context,
         OrchestratorLayout layout,
         AgentRecord record,
         FoldAllowances allowances,
@@ -2785,7 +2795,106 @@ public sealed class AgentService(
         var batch = await _anchors.ApplyAsync(main, request, mode, cancellationToken).ConfigureAwait(false);
         var untouched = batch.Rows.Where(outcome => outcome.Action == AnchorRowAction.Untouched).Select(outcome => outcome.Id).ToList();
 
-        return (new AgentRowsPlan(batch with { Problems = [.. unfiled, .. batch.Problems] }, untouched), request, declared);
+        // Where the configuration says a lane folded by hand closes its classes by record, every row whose status moves
+        // to closed is judged before the fold is weighed: its closure.json read against the record's own schema and its
+        // classes closed by the same rules the run's class-closure check reads - searched by data and measurements read
+        // as given, their command lines, for no stored stream holds a manual lane's calls.
+        var closure = context.Config.Anchors.Closure == Configuration.AnchorSettings.DefaultClosure
+            ? (Problems: new List<(string Problem, bool Judged)>(), Judged: 0)
+            : await ClosureProblemsAsync(context, declared, batch, cancellationToken).ConfigureAwait(false);
+
+        return (
+            new AgentRowsPlan(
+                batch with { Problems = [.. unfiled, .. batch.Problems, .. closure.Problems.Select(problem => problem.Problem)] },
+                untouched)
+            {
+                Closure = [.. closure.Problems.Select(problem => problem.Problem)],
+                ClosureJudged = closure.Judged,
+            },
+            request,
+            declared);
+    }
+
+    /// <summary>
+    /// Why the closing records of rows that close refuse the fold, and how many were judged: a row whose status moves to
+    /// closed holds none, or the record it holds does not close its classes - read against the schema the run's own
+    /// implement answer is held to, and judged by <see cref="ClassClosureRules"/> as a manual lane is judged, its searches
+    /// and measurements read as given.
+    /// </summary>
+    private async Task<(List<(string Problem, bool Judged)> Problems, int Judged)> ClosureProblemsAsync(
+        Repository.HarnessContext context,
+        IReadOnlyList<AnchorRowDeclaration> declared,
+        AnchorBatch batch,
+        CancellationToken cancellationToken)
+    {
+        var problems = new List<(string Problem, bool Judged)>();
+        var judged = 0;
+        var byId = declared.ToDictionary(row => row.Id, AnchorIdMatch.Comparer);
+        var armsDeclared = Mutations.MutationService.Declares(context, _fileSystem);
+        IReadOnlyList<(string Id, string Site)> arms = [];
+
+        foreach (var outcome in batch.Rows)
+        {
+            if (outcome.Action == AnchorRowAction.Untouched
+                || outcome.Change is not { } change
+                || !Anchors.AnchorStatus.IsClosed(change.StatusAfter)
+                || (change.StatusBefore is { } before && Anchors.AnchorStatus.IsClosed(before)))
+            {
+                continue;
+            }
+
+            if (!byId.TryGetValue(outcome.Id, out var row) || row.Closure is not { Length: > 0 } record)
+            {
+                if (byId.TryGetValue(outcome.Id, out var filed))
+                {
+                    problems.Add((
+                        $"'{filed.Id}' closes, and this repository's lanes close their classes by record: its directory holds no "
+                        + $"{AgentRows.ClosureCell}. Write the record - the classes, their sites, their searches and their measurements - "
+                        + "or the row does not close",
+                        Judged: false));
+                }
+
+                continue;
+            }
+
+            System.Text.Json.Nodes.JsonNode? read;
+
+            try
+            {
+                read = System.Text.Json.Nodes.JsonNode.Parse(record);
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                problems.Add(($"'{row.Id}' holds a {AgentRows.ClosureCell} that does not read as JSON: {ex.Message.TrimEnd('.')}", true));
+                judged++;
+                continue;
+            }
+
+            judged++;
+
+            if (ClassClosureRules.RecordSchema() is { } schema)
+            {
+                foreach (var problem in Schemas.JsonSchemaSubset.Problems(schema, read))
+                {
+                    problems.Add(($"'{row.Id}': {problem}", true));
+                }
+            }
+
+            if (armsDeclared && arms.Count == 0)
+            {
+                arms = [.. (await _listings.ReadListingAsync(context, null, null, FoldCommand, cancellationToken).ConfigureAwait(false)).Arms.Selected.Select(arm => (arm.Id, arm.Own.Site))];
+            }
+
+            List<ClassClosureRecord> entries = [.. (read as System.Text.Json.Nodes.JsonArray ?? []).Select(ClassClosureRecord.In).OfType<ClassClosureRecord>()];
+            var verdict = ClassClosureRules.Judge([], entries, ClassClosureProof.Manual(arms, armsDeclared));
+
+            foreach (var problem in verdict.Problems)
+            {
+                problems.Add(($"'{row.Id}': {problem}", true));
+            }
+        }
+
+        return (problems, judged);
     }
 
     /// <summary>That the options <paramref name="allowances"/> gives let a fold through what it otherwise refuses, for a refusal of them.</summary>
@@ -2874,6 +2983,10 @@ public sealed class AgentService(
 
         var needs = NeedsOf(rowNeeds, measured.Plan?.Mergeable ?? []);
 
+        // Where a closing record refused the fold, the refusal is typed as its own kind: no consent lifts it - the record
+        // is written or the row does not close - so it is never weighed as a consent it sounds like.
+        var closureRefused = measured.Rows.Closure.Count > 0;
+
         if (measured.Refusal is { } refused)
         {
             var standing = DryRuns.StandingOf(refused);
@@ -2888,7 +3001,13 @@ public sealed class AgentService(
                 return (standing, new Typed(needs, [RefusalKind.Other], planned));
             }
 
-            var weighed = Weighed(plan.Refusals.Count, plan.Mergeable, plan.Conflicting, rowNeeds, batch.Problems.Count > batch.UnnamedNew.Count);
+            var weighed = Weighed(
+                plan.Refusals.Count,
+                plan.Mergeable,
+                plan.Conflicting,
+                rowNeeds,
+                batch.Problems.Count > batch.UnnamedNew.Count + measured.Rows.Closure.Count,
+                closureRefused);
 
             return (weighed.Standing, new Typed(weighed.Needs, weighed.Reasons, planned));
         }
@@ -2900,36 +3019,40 @@ public sealed class AgentService(
     /// How a refused plan of the fold family stands - a fold's, a deletion's fold's, a refresh's or a move of an agent's base -
     /// the one rule all four are weighed by: needing consent where every refusal is a clean merge nobody asked for and its
     /// rows lack only consents too, and refused otherwise - for a conflict where a path both changed has a merge that
-    /// conflicts, and for something else where any refusal is neither that nor a clean merge, or a row is refused for more
-    /// than a consent. A clean merge nobody asked for is a consent the request lacks, whatever else refuses it.
+    /// conflicts, for a closing record where a row that closes holds none that closes its classes, and for something else
+    /// where any refusal is neither those nor a clean merge, or a row is refused for more than a consent. A clean merge
+    /// nobody asked for is a consent the request lacks, whatever else refuses it.
     /// </summary>
     /// <param name="refusals">How many paths its plan refuses, clean merges and conflicts among them.</param>
     /// <param name="mergeable">The paths both changed whose merge is clean and that nobody named to be merged.</param>
     /// <param name="conflicting">The paths both changed whose merge conflicts.</param>
     /// <param name="rowNeeds">The consents its rows lack; none for a refresh and a move of an agent's base.</param>
-    /// <param name="rowsOtherwiseRefused">Whether a row is refused for more than a consent it lacks.</param>
+    /// <param name="rowsOtherwiseRefused">Whether a row is refused for more than a consent it lacks, a closing record apart.</param>
+    /// <param name="closureRefused">Whether a closing record refused it: a row that closes, holding none that closes its classes.</param>
     private static (RequestStanding Standing, IReadOnlyList<ConsentKind> Needs, IReadOnlyList<RefusalKind> Reasons) Weighed(
         int refusals,
         IReadOnlyList<string> mergeable,
         IReadOnlyList<string> conflicting,
         IReadOnlyList<ConsentKind> rowNeeds,
-        bool rowsOtherwiseRefused)
+        bool rowsOtherwiseRefused,
+        bool closureRefused = false)
     {
         var needs = NeedsOf(rowNeeds, mergeable);
 
         // Refused with nothing it lacks would read as a consent nobody can give: what refused it is something else.
-        if (refusals == mergeable.Count && !rowsOtherwiseRefused && needs.Count > 0)
+        if (refusals == mergeable.Count && !rowsOtherwiseRefused && !closureRefused && needs.Count > 0)
         {
             return (RequestStanding.NeedsConsent, needs, []);
         }
 
-        var otherwise = refusals > conflicting.Count + mergeable.Count || rowsOtherwiseRefused;
+        var otherwise = refusals > conflicting.Count + mergeable.Count || rowsOtherwiseRefused || closureRefused;
 
         return (
             RequestStanding.Refused,
             needs,
             [
                 .. conflicting.Count > 0 ? [RefusalKind.Conflict] : Array.Empty<RefusalKind>(),
+                .. closureRefused ? [RefusalKind.Closure] : Array.Empty<RefusalKind>(),
                 .. otherwise ? [RefusalKind.Other] : Array.Empty<RefusalKind>(),
             ]);
     }

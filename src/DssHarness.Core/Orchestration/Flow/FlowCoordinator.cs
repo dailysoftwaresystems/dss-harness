@@ -11564,6 +11564,7 @@ public sealed class FlowCoordinator
             "reason" => [("writes", step.Writes?.Expression, false, StartRead.Names)],
             "anchor-balance" => [("rows", step.Rows?.Expression, true, StartRead.Names)],
             "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true, StartRead.Names)],
+            "class-closure" => [("classes", step.Classes, false, StartRead.Value), ("record", step.Record, true, StartRead.Value)],
             "fold" or "delete-agent" =>
             [
                 ("within", step.Within?.Expression, false, StartRead.Names),

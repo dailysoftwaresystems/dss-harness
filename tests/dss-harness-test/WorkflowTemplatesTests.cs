@@ -28,9 +28,9 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
-        Assert.Equal(83, Count(definition.Steps));
-        Assert.Equal(49, Count(definition.Recover!.Steps));
-        Assert.Equal(49, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(89, Count(definition.Steps));
+        Assert.Equal(55, Count(definition.Recover!.Steps));
+        Assert.Equal(57, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "affectedTests" && input.Default == "off");
         Assert.Equal(["on", "off"], definition.Inputs.Single(input => input.Name == "affectedTests").Options);
@@ -157,6 +157,8 @@ public sealed class WorkflowTemplatesTests
             ("mend", null, "changes"),
             ("settle", null, "changes"),
             ("cite", null, "changes"),
+            ("close-class", null, "changes"),
+            ("home-audit", null, "changes"),
             ("review-scope", "map", "changes"),
             ("correctness", null, "changes"),
             ("errors", null, "changes"),
@@ -166,6 +168,8 @@ public sealed class WorkflowTemplatesTests
             ("simplicity", null, "changes"),
             ("rework", null, "changes"),
             ("remend", null, "changes"),
+            ("reclose-class", null, "changes"),
+            ("rehome-audit", null, "changes"),
             ("resettle", null, "changes"),
             ("recite", null, "changes"),
             ("self-audit", null, "changes"),
@@ -691,6 +695,8 @@ public sealed class WorkflowTemplatesTests
         string[] goesOn =
         [
             "item-pipeline/prompts/anchors.md",
+            "item-pipeline/prompts/closure-record.md",
+            "item-pipeline/prompts/home-audit.md",
             "item-pipeline/prompts/mend.md",
             "item-pipeline/prompts/redo.md",
             "item-pipeline/prompts/reconcile.md",

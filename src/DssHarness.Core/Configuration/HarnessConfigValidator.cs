@@ -285,6 +285,11 @@ public static partial class HarnessConfigValidator
 
         RequireAtLeastOne(anchors.MinimumIdSegments, "anchors.minimumIdSegments", problems);
 
+        if (!AnchorSettings.ClosureValues.Contains(anchors.Closure, StringComparer.Ordinal))
+        {
+            problems.Add($"anchors.closure '{anchors.Closure}' is not one of the settings it takes: {string.Join(", ", AnchorSettings.ClosureValues.Select(value => $"'{value}'"))}");
+        }
+
         RequireRelativePaths(anchors.CitationRoots, "anchors.citationRoots", problems);
 
         // A pass word is trimmed and matched, ignoring case, where no letter or digit runs into it from before and a run

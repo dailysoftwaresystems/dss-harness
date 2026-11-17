@@ -160,6 +160,47 @@ steps:
     graphFrom: changes
     prompt: prompts/mend.md
     outputs: schemas/implement.schema.json
+  - name: class-closure
+    type: class-closure
+    in: item-agent
+    classes: 'input.item.classes'
+    record: 'implement.latest.closure'
+    base: '{input.orient.startCommit}'
+    dependsOn: [verify, mend]
+    when: "(item-blocked.answer ?? 'continue') != 'skip'"
+    onFailure: '{input.failTo}'
+  - name: close-class
+    type: reason
+    resume: implement
+    on:
+      step: class-closure
+      outcome: failure
+      codes: [1]
+    then: class-closure
+    maxVisits: 2
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
+    onPreExisting: triage-pre-existing-issue
+    graphFrom: changes
+    prompt: prompts/closure-record.md
+    outputs: schemas/implement.schema.json
+  - name: home-audit
+    type: reason
+    resume: implement
+    on:
+      step: class-closure
+      outcome: failure
+      codes: [2]
+    then: class-closure
+    maxVisits: 2
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
+    onPreExisting: triage-pre-existing-issue
+    graphFrom: changes
+    prompt: prompts/home-audit.md
+    outputs: schemas/implement.schema.json
   - name: fold
     type: fold
     of: item-agent
@@ -171,7 +212,7 @@ steps:
       foldTwoChanges: merge
       foldConflicts: fail
       foldOutside: fail
-    dependsOn: [verify, mend]
+    dependsOn: [verify, mend, class-closure]
     when: "(item-blocked.answer ?? 'continue') != 'skip'"
     onFailure: '{input.failTo}'
   - name: reconcile
@@ -415,6 +456,46 @@ steps:
             graphFrom: changes
             prompt: prompts/mend.md
             outputs: schemas/implement.schema.json
+          - name: reclass-closure
+            type: class-closure
+            in: item-agent
+            classes: 'input.item.classes'
+            record: 'implement.latest.closure'
+            base: '{input.orient.startCommit}'
+            dependsOn: [rework, reverify, remend]
+            onFailure: '{input.failTo}'
+          - name: reclose-class
+            type: reason
+            resume: implement
+            on:
+              step: reclass-closure
+              outcome: failure
+              codes: [1]
+            then: reclass-closure
+            maxVisits: 2
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/closure-record.md
+            outputs: schemas/implement.schema.json
+          - name: rehome-audit
+            type: reason
+            resume: implement
+            on:
+              step: reclass-closure
+              outcome: failure
+              codes: [2]
+            then: reclass-closure
+            maxVisits: 2
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graphFrom: changes
+            prompt: prompts/home-audit.md
+            outputs: schemas/implement.schema.json
           - name: refold
             type: fold
             of: item-agent
@@ -426,7 +507,7 @@ steps:
               foldTwoChanges: merge
               foldConflicts: fail
               foldOutside: fail
-            dependsOn: [reverify, remend]
+            dependsOn: [reverify, remend, reclass-closure]
             onFailure: '{input.failTo}'
           - name: rereconcile
             on:
