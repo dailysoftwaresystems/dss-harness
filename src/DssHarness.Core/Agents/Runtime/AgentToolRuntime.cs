@@ -200,6 +200,19 @@ public sealed partial class AgentToolRuntime : IDisposable
                 CodebaseGraphTool.Schema(operations)));
         }
 
+        // The run's measure tool, where it is given one: offered among the harness's own to a ground that runs commands,
+        // for what it measures it builds and tests. It stands alone in its turn and holds a side-task's lock (Barrier): a
+        // measurement is a build and a test run, never a read beside others.
+        if (run.Measure is not null && ground.Capabilities.Contains(AgentCapability.Run))
+        {
+            tools.Add(new AgentToolDefinition(
+                AgentMeasureSupport.ToolName,
+                AgentCapability.Run,
+                Barrier: true,
+                AgentMeasureSupport.Told,
+                AgentMeasureSupport.Asked));
+        }
+
         Tools = tools;
         _tools = tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
         _schemas = Tools.ToDictionary(tool => tool.Name, tool => JsonNode.Parse(tool.Schema)!, StringComparer.Ordinal);
@@ -519,6 +532,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.WebFetch => await FetchAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebSearch => await WebSearchAsync(input, cancellationToken).ConfigureAwait(false),
             AgentGraphSupport.ToolName => await GraphAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentMeasureSupport.ToolName => await MeasureAsync(input, cancellationToken).ConfigureAwait(false),
             _ => throw new InvalidOperationException($"the runtime offers '{tool.Name}' and runs no such tool"),
         };
     }
@@ -572,6 +586,47 @@ public sealed partial class AgentToolRuntime : IDisposable
             GraphToolOutcome.Refused => Answer.Failed(answer.Text),
             _ => Answer.Done(answer.Text),
         };
+    }
+
+    /// <summary>
+    /// One call of the run's measure tool, answered by what it was given and recorded as each of its calls is: the call's
+    /// leg, variant, filter and cell said back with what they showed - the run's verdict and its detail where the cell
+    /// measured, the reason where it could not be - so the agent's record cites the id of a call whose input and answer
+    /// the run's stored stream holds whole.
+    /// </summary>
+    /// <param name="input">The call's input, its leg, variant, filter and cell among it.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    private async Task<Answer> MeasureAsync(JsonObject input, CancellationToken cancellationToken)
+    {
+        string Text(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : string.Empty;
+
+        var asked = new AgentMeasureCall(Text(input["leg"]), Text(input["variant"]), Text(input["filter"]), Text(input["cell"]));
+        var answer = await _run.Measure!.Measure(asked, cancellationToken).ConfigureAwait(false);
+        var said = new JsonObject
+        {
+            ["leg"] = asked.Leg,
+            ["variant"] = asked.Variant,
+            ["filter"] = asked.Filter,
+            ["cell"] = asked.Cell,
+            ["result"] = !answer.Measured ? "unmeasured" : answer.Passed ? "passed" : "failed",
+        };
+
+        if (answer.Verdict.Length > 0)
+        {
+            said["verdict"] = answer.Verdict;
+        }
+
+        if (answer.Detail is { Length: > 0 } detail)
+        {
+            said["detail"] = detail;
+        }
+
+        if (answer.Reason is { Length: > 0 } reason)
+        {
+            said["reason"] = reason;
+        }
+
+        return answer.Measured && answer.Passed ? Answer.Done(said.ToJsonString()) : Answer.Failed(said.ToJsonString());
     }
 
     /// <summary>

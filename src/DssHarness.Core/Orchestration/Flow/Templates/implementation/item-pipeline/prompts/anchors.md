@@ -8,6 +8,19 @@ One check holds the registry in balance against the commit this run started from
 row to a row that is there. Both judged only what your last fold brought: the balance the rows it applied, the
 citations the files it wrote. Each finding names the row or the place.
 
+## The class you are closing
+
+The classes of the decisions this item changes, each with its invariant, its one home and its sites:
+
+{input.item.classes}
+
+The record of each class so far, as the last report gave it:
+
+{implement.latest.closure}
+
+Act by them: a site the list missed is yours to add and to close with the rest, and nothing of the class is done
+while one of its sites is left.
+
 ## What to do
 
 1. Read each finding and find what in your change caused it: a row filed and never cited, a citation of a row that is

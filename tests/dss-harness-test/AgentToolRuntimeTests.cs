@@ -90,6 +90,58 @@ public sealed class AgentToolRuntimeTests : IDisposable
         static IEnumerable<string> Names(AgentToolRuntime runtime) => runtime.Tools.Select(tool => tool.Name);
     }
 
+    /// <summary>
+    /// The run's measure tool, where its run is given one: offered among the harness's own to a ground that runs
+    /// commands - one that does not is not offered it - standing alone in its turn (Barrier), for a measurement is a
+    /// build and a test run, never a read beside others. Its call is answered with what the cell showed, the leg, the
+    /// variant, the filter and the cell said back, so a record's <c>measuredBy</c> cites a call whose input the run's
+    /// stored stream holds whole; a cell that could not be measured is a failed call carrying the reason, which the
+    /// agent names unmeasured.
+    /// </summary>
+    [Fact]
+    public async Task TheRunsMeasureTool_IsOfferedToAGroundThatRunsCommands_AndItsCallAnswersWhatTheCellShowed()
+    {
+        AgentMeasureCall? asked = null;
+        var runtime = Open(measure: new((call, _) =>
+        {
+            asked = call;
+            return Task.FromResult(call.Cell == "the good cell"
+                ? new AgentMeasureAnswer(Measured: true, Passed: true, "passed", "the tests passed", null)
+                : new AgentMeasureAnswer(false, false, string.Empty, null, "the tree's lock was held"));
+        }));
+
+        Assert.Contains(AgentMeasureSupport.ToolName, runtime.Tools.Select(tool => tool.Name));
+        Assert.DoesNotContain(AgentMeasureSupport.ToolName, Open(capabilities: [AgentCapability.Read], measure: new((_, _) => Task.FromResult(new AgentMeasureAnswer(true, true, "passed", null, null)))).Tools.Select(tool => tool.Name));
+
+        // It stands alone: after every call before it and before every call after.
+        Assert.True(runtime.Alone(new AgentToolCallRequest("call_2", AgentMeasureSupport.ToolName, """{"leg":"windows","variant":"debug","filter":"","cell":"x"}""")));
+        Assert.True(runtime.Locks(new AgentToolCallRequest("call_3", AgentMeasureSupport.ToolName, """{"leg":"windows","variant":"debug","filter":"","cell":"x"}""")));
+
+        var passed = await Call(runtime, AgentMeasureSupport.ToolName, ("leg", "windows"), ("variant", "debug"), ("filter", "Shape"), ("cell", "the good cell"));
+
+        Assert.True(passed.Ok, passed.Text);
+        Assert.Equal(new AgentMeasureCall("windows", "debug", "Shape", "the good cell"), asked);
+
+        var said = JsonNode.Parse(passed.Text)!;
+
+        Assert.Equal("windows", said!["leg"]!.GetValue<string>());
+        Assert.Equal("debug", said["variant"]!.GetValue<string>());
+        Assert.Equal("Shape", said["filter"]!.GetValue<string>());
+        Assert.Equal("the good cell", said["cell"]!.GetValue<string>());
+        Assert.Equal("passed", said["result"]!.GetValue<string>());
+        Assert.Equal("passed", said["verdict"]!.GetValue<string>());
+        Assert.Equal("the tests passed", said["detail"]!.GetValue<string>());
+
+        var unmeasured = await Call(runtime, AgentMeasureSupport.ToolName, "call_2", ("leg", "windows"), ("variant", "debug"), ("filter", ""), ("cell", "the held cell"));
+
+        Assert.False(unmeasured.Ok);
+
+        var held = JsonNode.Parse(unmeasured.Text)!;
+
+        Assert.Equal("unmeasured", held!["result"]!.GetValue<string>());
+        Assert.Equal("the tree's lock was held", held["reason"]!.GetValue<string>());
+    }
+
     /// <summary>A call of a tool the step was not given is refused, and recorded as every denial is: a line, an event, its end.</summary>
     [Fact]
     public async Task ACallOfAToolNotGiven_IsRefused_AndRecorded()
@@ -2289,6 +2341,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         bool sideTask = false,
         Func<string?>? liveRun = null,
         AgentGraphSupport? graph = null,
+        AgentMeasureSupport? measure = null,
         Func<string, CancellationToken, Task<DssHarness.Core.Platform.MachineWideHold?>>? treeLock = null)
     {
         var ground = PolicyGrounds.Of(
@@ -2315,7 +2368,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         {
             TreeLock = treeLock ?? DssHarness.Core.Orchestration.MainTreeWriteLock.HoldAsync,
         };
-        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire(), Isolation = isolation?.Processes, Graph = graph }, _events, native);
+        var runtime = host.Open(AgentRuns.Of(_step, _worktree, mask, ground, limits, commands, withheld, webSearch) with { NativeSearch = native is null ? null : new NoWire(), Isolation = isolation?.Processes, Graph = graph, Measure = measure }, _events, native);
 
         _opened.Add(fetch);
         _opened.Add(runtime);

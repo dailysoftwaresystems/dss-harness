@@ -206,6 +206,13 @@ public sealed class ClaudeCodeClient(
             served = [.. served, AgentGraphSupport.ToolName];
         }
 
+        // The run's measure tool, served the same way where its run is given one: what an agent measures a neighbour of
+        // a class with, from the same owner the API clients' tool comes from.
+        if (run.Measure is not null && !served.Contains(AgentMeasureSupport.ToolName, StringComparer.Ordinal))
+        {
+            served = [.. served, AgentMeasureSupport.ToolName];
+        }
+
         if (served.Count > 0 && _tools is null)
         {
             return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"the launch takes {string.Join(", ", served)} from the engine's tool server, and this client was given no tool runtime to serve them with", run);

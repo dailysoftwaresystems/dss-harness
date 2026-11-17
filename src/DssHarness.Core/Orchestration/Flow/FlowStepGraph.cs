@@ -259,6 +259,7 @@ public sealed class FlowStepGraph
                     Tokens = tokens,
                     Writes = policy.StepWrites,
                     Worked = worked,
+                    Closure = ClosureOf(run),
                     Changes = changed,
                     ChangesUnread = changesUnread,
                 })
@@ -506,6 +507,40 @@ public sealed class FlowStepGraph
                 ["stated"] = escapes.Count(line => line.Escape == GraphEscapeLine.Stated),
             },
         };
+    }
+
+    /// <summary>
+    /// Every site and home of the classes of the work item <paramref name="run"/> is an instance of, where the engine
+    /// read them for it under <c>classes</c> because its prompt reads them (<c>{input.item.classes}</c>): each class's
+    /// one home and every site of its list, as the pack's closure seed source takes them. Empty for a step that reads
+    /// no classes, holds no work item, or whose item declares none - a member the shape does not hold reads nothing.
+    /// </summary>
+    private static IReadOnlyList<ContextPackClosure> ClosureOf(FlowStepRun run)
+    {
+        if (run.Read is not { } read || !read.TryGetValue("classes", out var classes) || classes.ToNode() is not JsonArray declared)
+        {
+            return [];
+        }
+
+        List<ContextPackClosure> sites = [];
+
+        foreach (var item in declared.OfType<JsonObject>())
+        {
+            if (item["home"] is JsonObject home)
+            {
+                sites.Add(new(Text(home["path"]), Text(home["symbol"]), Home: true));
+            }
+
+            if (item["sites"] is JsonArray list)
+            {
+                sites.AddRange(list.OfType<JsonObject>().Select(site => new ContextPackClosure(Text(site["path"]), Text(site["symbol"]), Home: false)));
+            }
+        }
+
+        return sites;
+
+        static string Text(JsonNode? node)
+            => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : string.Empty;
     }
 
     /// <summary>

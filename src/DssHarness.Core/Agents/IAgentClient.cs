@@ -536,6 +536,13 @@ public sealed record AgentStepRequest(
     public AgentGraphSupport? Graph { get; init; }
 
     /// <summary>
+    /// The run's measure tool, where it is given one - a repository that declares legs gives each reason step's run one:
+    /// the <c>measure</c> tool the runtime offers among the harness's own, which runs the tests it is asked of one of the
+    /// run's legs through the test service, as any leg is run, where the agent works. Null where none is given.
+    /// </summary>
+    public AgentMeasureSupport? Measure { get; init; }
+
+    /// <summary>
     /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of the first user message of each launch that begins a
     /// conversation of its own, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason
     /// step's context pack, or the sentence for a graph the run never built; null where the run was given none.
@@ -543,11 +550,11 @@ public sealed record AgentStepRequest(
     public string? Codebase { get; init; }
 
     /// <summary>
-    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of the
-    /// first user message of each launch that begins a conversation of its own (<see cref="AgentPromptParts"/>): the run's
-    /// own, made once for each ground of reads its steps share, from the base as it stood when the first graphed reason
-    /// step of that ground was given its prompt - the same bytes for every step that reads alike, so a client that caches
-    /// a prefix reads it from the cache; null where the run was given none.
+    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of the first
+    /// user message of each launch that begins a conversation of its own (<see cref="AgentPromptParts"/>): the run's
+    /// own, made once for each ground of reads the run's steps share, from the base as it stood when the first graphed
+    /// reason step of that ground was given its prompt - the same bytes for every step that reads alike, so a client that
+    /// caches a prefix reads it from the cache; null where the run was given none.
     /// </summary>
     public string? Map { get; init; }
 
@@ -794,16 +801,25 @@ public sealed record AgentRun(
     public AgentGraphSupport? Graph { get; init; }
 
     /// <summary>
-    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of its first user message where the conversation is a
-    /// new one, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason step's context pack,
-    /// or the sentence for a graph the run never built; null where the run was given none.
+    /// The run's measure tool, where it is given one - a repository that declares legs gives each reason step's run one:
+    /// the <c>measure</c> tool the runtime offers among the harness's own, which runs the tests it is asked of one of the
+    /// run's legs through the test service, as any leg is run, where the agent works. Null where none is given.
+    /// </summary>
+    public AgentMeasureSupport? Measure { get; init; }
+
+    /// <summary>
+    /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of the first user message of each launch that begins a
+    /// conversation of its own, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason
+    /// step's context pack, or the sentence for a graph the run never built; null where the run was given none.
     /// </summary>
     public string? Codebase { get; init; }
 
     /// <summary>
-    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of its
-    /// first user message where the conversation is a new one (<see cref="AgentPromptParts"/>): the run's own, made once for
-    /// each ground of reads - the same bytes for every step that reads alike, so a client that caches a prefix reads it
+    /// The run's repository map, the <c>&lt;repository-map&gt;</c> part ahead of the <c>&lt;codebase&gt;</c> part of the
+    /// first user message of each launch that begins a conversation of its own (<see cref="AgentPromptParts"/>): the run's
+    /// own, made once for each ground of reads the run's steps share, from the base as it stood when the first graphed
+    /// reason step of that ground was given its prompt - the same bytes for every step that reads alike, so a client that
+    /// caches a prefix reads it
     /// from the cache; null where the run was given none.
     /// </summary>
     public string? Map { get; init; }
@@ -953,3 +969,51 @@ public sealed record AgentGraphSupport(
     /// <summary>Why no graph was built, where none was - every call of the tool answers it, and the run's codebase section says it; null where one was.</summary>
     public string? Gone { get; init; }
 }
+
+/// <summary>
+/// The run's measure tool, where it is given one: how an agent measures a neighbour of a class it closes - one cell of
+/// the universe, on one of the run's legs - through the test service, as any leg is run, where the agent works. Offered
+/// by the tool runtime to every client whose run carries it and whose ground runs commands; each call is a tool call of
+/// the run's stored stream, and the id it is recorded under is what a closure record's <c>measuredBy</c> cites.
+/// </summary>
+/// <param name="Measure">Answers one call: runs what it asks and says what it showed, or why it could not be measured.</param>
+public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToken, Task<AgentMeasureAnswer>> Measure)
+{
+    /// <summary>The tool's name, as the runtime offers it and an agent calls it.</summary>
+    public const string ToolName = "measure";
+
+    /// <summary>How the tool describes itself to the agent that is offered it.</summary>
+    public const string Told =
+        "Measures one cell of the universe a class of your item names: runs the tests the filter names on the leg, built "
+        + "as its variant says - the build configuration the leg's configuration declares - where this run works, and answers what they showed. "
+        + "The id of the call is what your record's measuredBy cites. A leg that is not declared, or a configuration the leg does not build, "
+        + "is answered unmeasured, with the reason.";
+
+    /// <summary>What the tool asks, as its input schema says it.</summary>
+    public const string Asked =
+        """
+        {"type":"object","additionalProperties":false,"required":["leg","variant","filter","cell"],"properties":{
+        "leg":{"type":"string","description":"The leg to measure on, one this run's configuration declares."},
+        "variant":{"type":"string","description":"The build configuration to measure as: the one the leg's configuration declares."},
+        "filter":{"type":"string","description":"The tests to run, as the leg's test runner's own filter takes it; empty for all of them."},
+        "cell":{"type":"string","description":"The cell of the universe being measured, as the record will name it."}}}
+        """;
+}
+
+/// <summary>One call of the measure tool: the leg, its variant, the filter and the cell, as the agent gave them.</summary>
+/// <param name="Leg">The leg to measure on.</param>
+/// <param name="Variant">The build configuration to measure as.</param>
+/// <param name="Filter">The tests to run, as the leg's runner takes it; empty for all of them.</param>
+/// <param name="Cell">The cell of the universe being measured, as the record will name it.</param>
+public sealed record AgentMeasureCall(string Leg, string Variant, string Filter, string Cell);
+
+/// <summary>
+/// What one measure call showed: the verdict of the tests it ran, with their detail - or, where the cell could not be
+/// measured, the reason and nothing run.
+/// </summary>
+/// <param name="Measured">Whether the cell was measured at all.</param>
+/// <param name="Passed">Whether the tests it ran passed.</param>
+/// <param name="Verdict">The leg run's verdict, as the ledger spells it; empty where it never ran.</param>
+/// <param name="Detail">What the leg's line said - the phase that did not pass and its last lines, where it did not; null where none.</param>
+/// <param name="Reason">Why the cell could not be measured, where it could not; null where it was.</param>
+public sealed record AgentMeasureAnswer(bool Measured, bool Passed, string Verdict, string? Detail, string? Reason);

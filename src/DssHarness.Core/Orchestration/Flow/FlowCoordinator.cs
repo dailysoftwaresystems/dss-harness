@@ -6960,7 +6960,18 @@ public sealed class FlowCoordinator
                             promptFile = filledFile;
                         }
 
-                        if (FlowTemplate.FillAroundSkills(readFile(step.WorkflowOf, promptFile), path => Read(path, instance.DeclaredScope!, reader: instance), name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
+                        var raw = readFile(step.WorkflowOf, promptFile);
+
+                        // A reason step whose prompt reads the classes of the work item it is an instance of
+                        // ({input.item.classes}, as the item pipeline's prompts spell it) is served them in its pack:
+                        // read here, once, from the raw template before it is filled, and handed its runner under
+                        // 'classes' (FlowStepGraph seeds the pack from them).
+                        if (promptKey == "prompt" && FlowStepTemplates.ClassesOf(raw, instance.Item.ToNode()) is { } declared)
+                        {
+                            read["classes"] = FlowValue.Of(declared);
+                        }
+
+                        if (FlowTemplate.FillAroundSkills(raw, path => Read(path, instance.DeclaredScope!, reader: instance), name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
                         {
                             _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
                             return;

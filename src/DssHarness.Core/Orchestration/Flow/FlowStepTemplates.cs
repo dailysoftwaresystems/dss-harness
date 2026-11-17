@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -119,5 +120,28 @@ public static class FlowStepTemplates
         }
 
         return mapped;
+    }
+
+    /// <summary>
+    /// The classes of the work item <paramref name="item"/> - the whole <c>classes</c> array as the item declares it -
+    /// where <paramref name="template"/>, a reason step's prompt, reads them (<c>{item.classes}</c>, or
+    /// <c>{input.item.classes}</c> as the item pipeline's prompts spell it): the one reading whose place the classes are
+    /// handed to the step's runner under <c>classes</c>, for its pack to be seeded from (<see cref="FlowStepGraph"/>).
+    /// Null for a template that reads no classes, and for an item that holds none.
+    /// </summary>
+    /// <param name="template">The prompt's text, as written before it is filled.</param>
+    /// <param name="item">The work item of the <c>forEach</c> the step reading the template is an instance of; null outside every one.</param>
+    public static JsonArray? ClassesOf(string template, JsonNode? item)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+
+        if (!WorkflowExpressions.TemplateReads(template).Any(read =>
+                (read.Root == "input" && read.Names is ["input", "item", "classes"])
+                || (read.Root == "item" && read.Names is ["item", "classes"])))
+        {
+            return null;
+        }
+
+        return item is JsonObject held && held["classes"] is JsonArray classes ? [.. classes.OfType<JsonNode>().Select(node => node.DeepClone())] : null;
     }
 }

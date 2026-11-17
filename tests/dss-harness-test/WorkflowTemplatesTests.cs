@@ -649,28 +649,95 @@ public sealed class WorkflowTemplatesTests
 
     /// <summary>
     /// <c>closure.md</c> says what reads it, as what ships does: an agent is given it only where its step's prompt
-    /// reads <c>{text.closure}</c> - the planner's, the plan audit's and the item audit's, the three that plan and
-    /// check the classes of the work items - and the file tells a repository its words weigh on what those prompts
-    /// decide; the README says the same.
+    /// reads <c>{text.closure}</c> - the planner's, the plan audit's, the item audit's and the builders', the prompts
+    /// that plan, check and close the classes of the work items - and the file tells a repository its words weigh on
+    /// what those prompts decide; the README says the same.
     /// </summary>
     [Fact]
-    public void ClosureMd_IsReadByTheThreePromptsThatPlanAndCheckTheClasses()
+    public void ClosureMd_IsReadByThePromptsThatPlanCheckAndCloseTheClasses()
     {
         Assert.Equal(
-            ["prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
+            ["item-pipeline/prompts/implement.md", "item-pipeline/prompts/remedy.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
             [.. WorkflowTemplates.Files
                 .Where(file => file != "closure.md" && WorkflowTemplates.TextOf(file)!.Contains("{text.closure}", StringComparison.Ordinal))
                 .Order(StringComparer.Ordinal)]);
         Assert.Contains(
             "an agent is given it where its step's prompt reads `{text.closure}`, as the file stands when the prompt is given. The "
-                + "prompts shipped beside it that read it are the plan's, the plan audit's and the item audit's, which plan and check the classes "
-                + "of the work items: what is written here weighs on what they decide a class covers, so keep it true of the repository.",
+                + "prompts shipped beside it that read it are the plan's, the plan audit's, the item audit's and the builders' - the "
+                + "implement prompt and the recovery's remedy - which plan, check and close the classes of the work items: what is "
+                + "written here weighs on what they decide a class covers, so keep it true of the repository.",
             Prose.Words(WorkflowTemplates.TextOf("closure.md")!),
             StringComparison.Ordinal);
         Assert.Contains(
-            "The planner's, the plan audit's and the item audit's prompts read `{text.closure}`, and the file says so: what a repository writes there weighs on what they decide a class covers.",
+            "The planner's, the plan audit's, the item audit's and the builders' prompts read `{text.closure}`, and the file says so: what a repository writes there weighs on what they decide a class covers.",
             Prose.Document("README.md"),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every prompt of the item pipeline that builds or goes on with an item reads the item's classes: the builders'
+    /// prompts hold the class-closure paragraph beside the item's classes, its noClass reason and the repository's
+    /// universe, the implementer's definition holds the paragraph, and every prompt that goes on with an item - mend
+    /// (which serves remend too), rework, reconcile (resettle), anchors (recite), unblock, redo and undo - reads them
+    /// with the record so far under "The class you are closing", so a fresh agent is given the class, never trusted to
+    /// remember it. The recovery's remedy builds fresh, so it holds the builders' part alone: its record starts empty,
+    /// and a step's prompt reads no step that is not before it. No other shipped prompt reads the classes: the
+    /// reviewers judge what the change-first pack shows them. The record is what the implement step's answer schema
+    /// requires, closure and arms among its members.
+    /// </summary>
+    [Fact]
+    public void EveryPromptThatBuildsOrGoesOnWithAnItem_IsGivenTheClassItCloses_AndTheRecordSoFar()
+    {
+        string[] goesOn =
+        [
+            "item-pipeline/prompts/anchors.md",
+            "item-pipeline/prompts/mend.md",
+            "item-pipeline/prompts/redo.md",
+            "item-pipeline/prompts/reconcile.md",
+            "item-pipeline/prompts/rework.md",
+            "item-pipeline/prompts/undo.md",
+            "item-pipeline/prompts/unblock.md",
+        ];
+
+        foreach (var prompt in goesOn)
+        {
+            var text = WorkflowTemplates.TextOf(prompt)!;
+
+            Assert.Contains("## The class you are closing", text, StringComparison.Ordinal);
+            Assert.Contains("{input.item.classes}", text, StringComparison.Ordinal);
+            Assert.Contains("{implement.latest.closure}", text, StringComparison.Ordinal);
+        }
+
+        foreach (var builds in new[] { "item-pipeline/prompts/implement.md", "item-pipeline/prompts/remedy.md" })
+        {
+            var text = Prose.Words(WorkflowTemplates.TextOf(builds)!);
+
+            Assert.Contains(
+                "For every class of your item, before you edit: read its invariant, its one home and its site list below, and check them in the code; a site the list missed is yours to add",
+                text,
+                StringComparison.Ordinal);
+            Assert.Contains("Nothing is folded without the record.", text, StringComparison.Ordinal);
+            Assert.Contains("{input.item.classes}", text, StringComparison.Ordinal);
+            Assert.Contains("{input.item.noClass}", text, StringComparison.Ordinal);
+            Assert.Contains("{text.closure}", text, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "For every class of your item, before you edit: read its invariant, its one home and its site list below, and check them in the code",
+            Prose.Words(WorkflowTemplates.TextOf("item-pipeline/agents/implementer.md")!),
+            StringComparison.Ordinal);
+
+        // The builders and the goings-on alone read the classes; no other shipped file does.
+        Assert.Equal(
+            [.. goesOn.Append("item-pipeline/prompts/implement.md").Append("item-pipeline/prompts/remedy.md").Order(StringComparer.Ordinal)],
+            [.. WorkflowTemplates.Files
+                .Where(file => WorkflowTemplates.TextOf(file)!.Contains("{input.item.classes}", StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal)]);
+
+        var schema = JsonDocument.Parse(Read("item-pipeline/schemas/implement.schema.json")).RootElement;
+
+        Assert.Contains(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "closure");
+        Assert.Contains(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "arms");
     }
 
     /// <summary>

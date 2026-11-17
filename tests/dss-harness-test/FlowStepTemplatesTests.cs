@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using DssHarness.Core.Orchestration.Flow;
 
 namespace DssHarness.Tests;
@@ -129,5 +130,32 @@ public sealed class FlowStepTemplatesTests
             problem = null;
             return template.StartsWith('{') ? string.Empty : template;
         }
+    }
+
+    /// <summary>
+    /// The classes of the work item a reason step's prompt reads (<see cref="FlowStepTemplates.ClassesOf"/>): a prompt
+    /// that reads <c>{input.item.classes}</c> - or <c>{item.classes}</c>, as a step of the flow's own names the
+    /// <c>forEach</c> variable - is handed the item's whole classes array, taken apart from the item; one that reads no
+    /// classes, a step outside every <c>forEach</c>, or an item that declares none, is handed nothing.
+    /// </summary>
+    [Fact]
+    public void APromptThatReadsTheItemsClasses_IsHandedThem_AndOneThatReadsNoneIsHandedNothing()
+    {
+        var item = JsonNode.Parse("""{"title": "one", "classes": [{"id": "C1"}, {"id": "C2"}]}""")!;
+
+        var throughInput = FlowStepTemplates.ClassesOf("The classes you are closing:\n\n{input.item.classes}", item);
+        var throughItem = FlowStepTemplates.ClassesOf("The classes you are closing:\n\n{item.classes}", item);
+
+        Assert.Equal("""[{"id":"C1"},{"id":"C2"}]""", throughInput!.ToJsonString());
+        Assert.Equal(throughInput!.ToJsonString(), throughItem!.ToJsonString());
+
+        // Taken apart from the item: what the step does of its classes does not touch the item the run holds.
+        Assert.Equal(2, item["classes"]!.AsArray().Count);
+        throughInput.Add(JsonNode.Parse("""{"id":"C3"}"""));
+        Assert.Equal(2, item["classes"]!.AsArray().Count);
+
+        Assert.Null(FlowStepTemplates.ClassesOf("Build this work item: {input.item.title}.", item));
+        Assert.Null(FlowStepTemplates.ClassesOf("The classes you are closing:\n\n{input.item.classes}", null));
+        Assert.Null(FlowStepTemplates.ClassesOf("The classes you are closing:\n\n{input.item.classes}", JsonNode.Parse("""{"title": "one", "noClass": "nothing to decide"}""")));
     }
 }

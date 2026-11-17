@@ -20,6 +20,16 @@ public enum ContextPackFrom
 /// <param name="Edited">Whether the step that worked with it edited it.</param>
 public sealed record ContextPackWorked(string Id, bool Edited);
 
+/// <summary>
+/// One site or home of a class of the work item a step's prompt reads the classes of: the path it stands at, the
+/// declaration it is - empty where the site is a whole file, a configuration entry or a literal - and whether it is
+/// the class's one home.
+/// </summary>
+/// <param name="Path">The path the site stands at, relative to the tree.</param>
+/// <param name="Symbol">The declaration at the site; null or empty where the site names a file, an entry or a literal.</param>
+/// <param name="Home">Whether the site is the class's one home.</param>
+public sealed record ContextPackClosure(string Path, string? Symbol, bool Home);
+
 /// <summary>What a step's context pack is made from, beside the view: its filled prompt, its read rule, and what the step says of its work.</summary>
 /// <param name="Prompt">The step's filled prompt: the request, the plan item, each upstream output it reads.</param>
 /// <param name="MayRead">Whether the step's read rule lets a file be read, by its path relative to the tree: a node of a file it does not is left out, never named, and counted.</param>
@@ -39,6 +49,13 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
 
     /// <summary>The nodes of the working sets the step is given, in the order they are given.</summary>
     public IReadOnlyList<ContextPackWorked> Worked { get; init; } = [];
+
+    /// <summary>
+    /// Every site and home of the classes of the work item the step goes on with, where its prompt reads them: each a
+    /// seed of the weight of a named symbol, so a fresh agent's pack holds every site's declaration, not only those
+    /// near the defect. Empty for a step whose prompt reads no classes.
+    /// </summary>
+    public IReadOnlyList<ContextPackClosure> Closure { get; init; } = [];
 
     /// <summary>
     /// What the tree holds otherwise than its base, where it was read: the files that differ (<see cref="ICodebaseGraphService.DifferingAsync"/>,
@@ -95,8 +112,10 @@ public static class EstimatedTokens
 /// The context pack (value 370) and change-first (value 371): the part of the graph a step's work touches, made at its
 /// start from the view and what the step says alone - so the same step on the same tree is given the same pack - and
 /// written as lines within its cap. Its seeds are what the prompt names exactly (a symbol or a path in backquotes, a
-/// qualified name, a handle, a <c>path:line</c>), the working sets it is given, the declarations of the files its
-/// <c>writes</c> covers and the nodes its words match best; from each the walk goes <see cref="NamedHops"/> hops from a
+/// qualified name, a handle, a <c>path:line</c>), every site and home of the classes of the work item its prompt reads
+/// the classes of (<see cref="ContextPackRequest.Closure"/>, each at the weight of a named symbol), the working sets
+/// it is given, the declarations of the files its <c>writes</c> covers and the nodes its words match best; from each
+/// the walk goes <see cref="NamedHops"/> hops from a
 /// node named or worked with and <see cref="OtherHops"/> from the others over the edges <see cref="Walked"/> names, each
 /// node scored by its seed's weight halved at each hop and weighed by each edge's confidence, and not gone through along
 /// a kind it is a hub of. Under <see cref="ContextPackFrom.Changes"/> the declarations the work changed lead, then their
@@ -300,12 +319,20 @@ public static partial class CodebaseContextPack
             return new ContextPack(text, seeds, nodes, lines, EstimatedTokens.Of(text), leftOut, _refused.Count, near);
         }
 
-        /// <summary>Every seed, in the order the walk takes them: what the prompt names, the working sets, the files the step writes, the words' best matches.</summary>
+        /// <summary>Every seed, in the order the walk takes them: what the prompt names, the classes' sites and homes, the working sets, the files the step writes, the words' best matches.</summary>
         private void Seeded()
         {
             foreach (var (card, weight, hops, why, kind) in Named())
             {
                 Seed(card, weight, hops, why, kind);
+            }
+
+            foreach (var closure in request.Closure)
+            {
+                foreach (var (card, weight, hops, why) in AtSite(closure))
+                {
+                    Seed(card, weight, hops, why, SeedKind.Closure);
+                }
             }
 
             foreach (var worked in request.Worked.Where(one => queries.Holds(one.Id)))
@@ -435,6 +462,28 @@ public static partial class CodebaseContextPack
                     => [.. read.Select(card => (card, WrittenWeight, NamedHops, $"one of {Number(read.Count)} named '{name}'", SeedKind.Named))],
                 _ => [],
             };
+        }
+
+        /// <summary>
+        /// The seeds of one site or home of a class the item closes: the declaration the site's symbol names in the
+        /// site's file, at the weight of a named symbol - each of them, where the name is one several of the file's
+        /// declarations carry - and, where the site names no symbol or nothing in the file carries it, the file's
+        /// declarations as a file the prompt names. Nothing where the view holds no such file.
+        /// </summary>
+        private IEnumerable<(GraphCard Card, double Weight, int Hops, string Why)> AtSite(ContextPackClosure closure)
+        {
+            var declared = Declarations(closure.Path).ToList();
+            var why = closure.Home ? "the home of a class the item closes" : "a site of a class the item closes";
+
+            var named = closure.Symbol is { Length: > 0 } symbol
+                ? declared.Where(card => string.Equals(card.Name, symbol, StringComparison.Ordinal)
+                    || string.Equals(card.Qualified, symbol, StringComparison.Ordinal)
+                    || card.Qualified.EndsWith("." + symbol, StringComparison.Ordinal)).ToList()
+                : [];
+
+            return named.Count > 0
+                ? named.Select(card => (card, NamedWeight, NamedHops, why))
+                : declared.Select(card => (card, FileWeight, OtherHops, "in a file a class of the item names"));
         }
 
         /// <summary>
@@ -797,6 +846,7 @@ public static partial class CodebaseContextPack
         private static string Said(SeedKind kind, int count) => kind switch
         {
             SeedKind.Named => ReportText.Counted(count, "node") + " it names",
+            SeedKind.Closure => ReportText.Counted(count, "site") + " and home of the classes it is to close",
             SeedKind.File => ReportText.Counted(count, "declaration") + " of the files it names",
             SeedKind.Worked => ReportText.Counted(count, "working set node"),
             SeedKind.Written => ReportText.Counted(count, "declaration") + " of the files the step writes",
@@ -857,6 +907,7 @@ public static partial class CodebaseContextPack
     private enum SeedKind
     {
         Named,
+        Closure,
         File,
         Worked,
         Written,

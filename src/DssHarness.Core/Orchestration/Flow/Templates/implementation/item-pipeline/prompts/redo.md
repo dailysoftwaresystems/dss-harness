@@ -41,6 +41,19 @@ That account is the engine's, from its records. It says where the earlier work i
 the agent before you left it, or in the tree you were given, in the commits it names. Read what is there before you
 change anything, and trust the files over the account where they differ.
 
+## The class you are closing
+
+The classes of the decisions this item changes, each with its invariant, its one home and its sites:
+
+{input.item.classes}
+
+The record of each class so far, as the last report gave it:
+
+{implement.latest.closure}
+
+Act by them: a site the list missed is yours to add and to close with the rest, and nothing of the class is done
+while one of its sites is left.
+
 ## Where you work
 
 Your worktree is `{worktree}`. Nothing you do is committed by you: the engine folds your changes into the main tree

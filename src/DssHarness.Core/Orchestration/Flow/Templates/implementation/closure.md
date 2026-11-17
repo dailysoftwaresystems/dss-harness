@@ -8,9 +8,10 @@ closing a class of defects at its one home begins.
 
 The workflow declares this file as its text `closure`, and an agent is given it where its
 step's prompt reads `{text.closure}`, as the file stands when the prompt is given. The
-prompts shipped beside it that read it are the plan's, the plan audit's and the item
-audit's, which plan and check the classes of the work items: what is written here weighs
-on what they decide a class covers, so keep it true of the repository.
+prompts shipped beside it that read it are the plan's, the plan audit's, the item audit's
+and the builders' - the implement prompt and the recovery's remedy - which plan, check and
+close the classes of the work items: what is written here weighs on what they decide a
+class covers, so keep it true of the repository.
 
 ## The axes
 

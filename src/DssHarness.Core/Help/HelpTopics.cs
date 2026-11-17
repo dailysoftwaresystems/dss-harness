@@ -3816,7 +3816,8 @@ public static class HelpTopics
             Agents.ClaudeCode.ClaudeCodeTools.Table.Select(row =>
                 $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"
                 + (Agents.ClaudeCode.ClaudeCodeTools.ServedOf(row.Capability) is [_, ..] served ? $", but {string.Join(" and ", served)} of the engine's tool server beside them" : string.Empty)))
-            + $"; and a step that has a codebase graph (graph: tools) takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentGraphSupport.ToolName)} of the engine's tool server beside them, only where its step is given one";
+             + $"; and a step that has a codebase graph (graph: tools) takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentGraphSupport.ToolName)} of the engine's tool server beside them, only where its step is given one"
+             + $", and a step of a repository that declares legs takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentMeasureSupport.ToolName)}, which measures one cell of the universe a class of the item names on one of the run's legs";
         var controlled = string.Join(", ", Agents.Policy.ClaudeSettings.Controlled.Select(name => $"{name.Key}={name.Value}"));
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
@@ -3839,6 +3840,8 @@ public static class HelpTopics
             + "its tool list and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask "
             + "rule, and run by the tool runtime below as on the API clients, each address decided and recorded, the graph's calls "
             + "answered by the same owner that answers them on the API clients and each recorded as a line of the step's graph - "
+            + "a step of a repository that declares legs takes the measure tool from the same server, its calls answered and "
+            + "recorded as every tool call is - "
             + "but its edit operation is not given on this client: the probe measured an Edit taken after a ranged Read, inside "
             + "the range and outside it, on every version taken, so an agent that means to change a body reads its lines with Read "
             + "and Edits them. A step's first user message holds the run's repository map first, then its context pack, then "
@@ -5230,7 +5233,7 @@ public static class HelpTopics
             builder,
             "A reason step is given, at its start, its context pack - the part of the graph its work touches, made from its view and what the step says alone, "
             + "so the same step on the same tree is given the same pack. Its seeds are what its prompt names exactly - a symbol or a path in backquotes, a qualified name or its last parts (Order.Total), "
-            + $"a handle, a path:line as a stack frame or a compiler writes one - the working sets it is given, the declarations of the files its writes covers, and the {CodebaseContextPack.WordSeeds} nodes its words match best. "
+            + $"a handle, a path:line as a stack frame or a compiler writes one - every site and home of the classes of the work item it is an instance of, where its prompt reads them ({{input.item.classes}}), each at the weight of a node named, so a fresh agent holds every site's declaration - the working sets it is given, the declarations of the files its writes covers, and the {CodebaseContextPack.WordSeeds} nodes its words match best. "
             + $"The walk goes {CodebaseContextPack.NamedHops} hops from a node named or worked with and {CodebaseContextPack.OtherHops} from the others, over calls both ways, the type relations, tests and the types a node names, each node scored by its seed's weight "
             + $"halved at each hop and weighed by each edge's confidence ({string.Join(", ", CodeConfidences.All.Select(confidence => $"{confidence} {CodebaseContextPack.Confidence(confidence).ToString(CultureInfo.InvariantCulture)}"))}), "
             + $"and not gone through along a kind it has more edges of than the view's 99th percentile, and at least {CodebaseGraphQueries.CrowdFloor}, which its line says. It is written best first by file, "
@@ -5682,7 +5685,13 @@ public static class HelpTopics
             + "the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
             + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new "
             + "launch rendered where it does not; and its answer, held to the schema its outputs names - one the engine reads, "
-            + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. A failed "
+            + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. Where the "
+            + "repository declares legs, the step's agent is given the measure tool on every client: one call takes a leg, its "
+            + "variant - the build configuration the leg's own configuration declares - a test filter and the cell of a universe "
+            + "being measured, runs those tests of that leg through the test service as any leg is run, in the agent's worktree "
+            + "where it has one and in a local copy of the main tree where it does not, and answers what they showed or why the "
+            + "cell could not be measured; the call is a tool call of the step's stored stream, its id what a closure record's "
+            + "measuredBy cites. A failed "
             + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, "
             + "absent the workflow's, twice as long before each later try - and then on each model of its order; a run that ended "
             + "on a key the provider refused moves to the next key at once, with no wait, and the run's pause ends the wait "

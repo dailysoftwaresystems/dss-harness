@@ -115,7 +115,7 @@ public sealed class ReasonStepRunnerTests
         return (kit, runner);
     }
 
-    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null, DssHarness.Core.Codebase.ICodebaseGraphService? graphService = null)
+    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null, DssHarness.Core.Codebase.ICodebaseGraphService? graphService = null, MeasuredTests? tests = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -128,10 +128,65 @@ public sealed class ReasonStepRunnerTests
             kit.Harness.Output,
             TimeProvider.System,
             isolation ?? new TestIsolation(),
+            tests ?? new MeasuredTests(),
             kit.Harness.GitClient,
             kit.Harness.ConfigStore,
             updates,
             graphService);
+
+    /// <summary>
+    /// The kit's configuration with one leg declared, of the configuration <c>debug</c>: what a step's measure tool is
+    /// offered and answered over.
+    /// </summary>
+    private static void WithLegs(OrchestrationKit kit)
+    {
+        var config = Path.Combine(kit.Main, ".harness-config", "config.json");
+
+        File.WriteAllText(
+            config,
+            File.ReadAllText(config).Replace(
+                "\"worktrees\":",
+                "\"legs\": {\"windows\": {\"os\": \"windows\", \"processor\": \"x86_64\", \"config\": \"debug\"}},\n  \"buildConfigs\": {\"debug\": {}},\n  \"worktrees\":",
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The test service a step's measure tool is answered by, keeping every request it was asked and answering the
+    /// verdict a test sets.
+    /// </summary>
+    private sealed class MeasuredTests : DssHarness.Core.Application.Legs.ITestLegs
+    {
+        public List<DssHarness.Core.Application.Legs.TestLegsRequest> Asked { get; } = [];
+
+        public bool RunPassed { get; set; } = true;
+
+        public Task<DssHarness.Core.Runs.LegRunResult> RunAsync(DssHarness.Core.Application.Legs.TestLegsRequest request, DssHarness.Core.Execution.RunId run, CancellationToken cancellationToken = default)
+        {
+            Asked.Add(request);
+
+            return Task.FromResult(new DssHarness.Core.Runs.LegRunResult(
+                "test",
+                run,
+                null,
+                DssHarness.Core.Execution.LedgerReport.From(
+                    [
+                        new()
+                        {
+                            Leg = request.LegNames is [var leg] ? leg : "windows",
+                            Verdict = RunPassed ? DssHarness.Core.Execution.LegVerdict.Passed : DssHarness.Core.Execution.LegVerdict.Failed,
+                            Duration = TimeSpan.Zero,
+                            Detail = RunPassed ? "the tests passed" : "the tests failed",
+                            LogTail = ["last line of the run"],
+                        },
+                    ],
+                    0),
+                RunPassed ? 0 : 20,
+                RunPassed ? "the run passed" : "the run failed",
+                Cancelled: false,
+                [],
+                []));
+        }
+    }
 
     /// <summary>The kit's slot, as the runner reads it.</summary>
     private static AgentKeyStore Keys(OrchestrationKit kit)
@@ -1530,6 +1585,139 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal("tools", result.Graph["mode"]!.GetValue<string>());
         Assert.Equal("base", result.Graph["view"]!.GetValue<string>());
         Assert.Equal(WorkflowStep.GraphFromTask, result.Graph["from"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A reason step the engine reads the classes of the work item it is an instance of for - under <c>classes</c>,
+    /// where its prompt reads <c>{input.item.classes}</c> - is served a pack seeded from every site and home of those
+    /// classes, so a fresh agent holds every site's declaration, not only those near the defect: the home's and each
+    /// site's declaration is in the pack, said by why it is a seed.
+    /// </summary>
+    [Fact]
+    public async Task AStepTheEngineReadsTheItemsClassesFor_IsServedAPackSeededFromEverySiteAndHome()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit, (Path.Combine("src", "Keys.cs"), "namespace Demo;\n\npublic static class Keys\n{\n    public static string TokenOf(string key) => key;\n}\n"));
+
+        var classes = JsonNode.Parse(
+            """
+            [{"id": "C1", "invariant": "a plan's token is read one way", "home": {"path": "src/Planner.cs", "symbol": "Plan", "exists": true},
+              "sites": [{"path": "src/Planner.cs", "symbol": "Plan", "decides": "the plan", "then": "home"},
+                        {"path": "src/Keys.cs", "symbol": "TokenOf", "decides": "the token", "then": "reads-home"}]}]
+            """);
+
+        var run = Graphing(kit, Graphed()) with
+        {
+            Read = new Dictionary<string, FlowValue>(StringComparer.Ordinal) { ["classes"] = FlowValue.Of(classes) },
+        };
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(run, Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.Contains("member public int Plan() | src/Planner.cs", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("member public static string TokenOf(string key) | src/Keys.cs", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("| the home of a class the item closes", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("| a site of a class the item closes", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("2 site(s) and home of the classes it is to close", asked.Codebase, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A reason step of a repository that declares legs is given the measure tool: each call answered through the test
+    /// service, as any leg is run - the leg it names, built as the variant it names, tested with the filter it names -
+    /// in a local copy of the main tree where the step's agent has no worktree of its own, so no fold in flight changes
+    /// what it measures. A call naming a configuration the leg does not build, or a leg that is not declared, is
+    /// answered unmeasured with the reason, nothing run. A repository that declares no leg gives its steps no measure
+    /// tool, for there is nothing to measure on.
+    /// </summary>
+    [Fact]
+    public async Task AStepOfARepositoryThatDeclaresLegs_IsGivenTheMeasureTool_AnsweredAsAnyLegIsRun()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        WithLegs(kit);
+        var tests = new MeasuredTests();
+
+        var result = await Runner(kit, agents, tests: tests).RunAsync(Graphing(kit, Graphed()), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.NotNull(asked.Measure);
+
+        var answer = await asked.Measure!.Measure(new AgentMeasureCall("windows", "debug", "TheShape", "windows / the plain form"), Token);
+
+        Assert.True(answer.Measured && answer.Passed, answer.Reason ?? answer.Detail);
+        Assert.Equal("Passed", answer.Verdict);
+        Assert.Contains("the tests passed", answer.Detail, StringComparison.Ordinal);
+
+        var request = Assert.Single(tests.Asked);
+
+        Assert.Equal(kit.Main, request.Directory);
+        Assert.Equal(["windows"], request.LegNames);
+        Assert.Equal("TheShape", request.Filter);
+        Assert.True(request.LocalCopy);
+
+        // A configuration the leg does not build, and a leg that is not declared: unmeasured, with the reason, and nothing run.
+        var otherConfig = await asked.Measure.Measure(new AgentMeasureCall("windows", "release", "TheShape", "windows / release"), Token);
+
+        Assert.False(otherConfig.Measured);
+        Assert.Equal("the leg 'windows' builds the configuration 'debug'", otherConfig.Reason);
+
+        var noLeg = await asked.Measure.Measure(new AgentMeasureCall("linux", "debug", "TheShape", "linux"), Token);
+
+        Assert.False(noLeg.Measured);
+        Assert.Contains("no leg 'linux' is declared", noLeg.Reason, StringComparison.Ordinal);
+        Assert.Single(tests.Asked);
+    }
+
+    /// <summary>
+    /// A reason step whose agent has a worktree of its own - a builder in the item pipeline - measures in it: the leg
+    /// the call names works on the worktree as a test step's does, and no copy is made.
+    /// </summary>
+    [Fact]
+    public async Task AStepWorkingInAnAgentsWorktree_MeasuresInIt_NoCopyMade()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        var worktree = await kit.CreateAgentAsync("a1");
+        WithLegs(kit);
+        var tests = new MeasuredTests();
+
+        var result = await Runner(kit, agents, tests: tests).RunAsync(Graphing(kit, Graphed(), agent: "a1", made: false, prompt: "Go on."), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.Equal(worktree, asked.Workspace.Worktree);
+
+        var answer = await asked.Measure!.Measure(new AgentMeasureCall("windows", "debug", "", "windows / the plain form"), Token);
+
+        Assert.True(answer.Measured, answer.Reason);
+
+        var request = Assert.Single(tests.Asked);
+
+        Assert.Equal(worktree, request.Directory);
+        Assert.False(request.LocalCopy);
+        Assert.Null(request.Filter);
+    }
+
+    /// <summary>A repository that declares no leg gives its reason steps no measure tool, for there is nothing to measure on.</summary>
+    [Fact]
+    public async Task ARepositoryThatDeclaresNoLeg_GivesItsReasonStepsNoMeasureTool()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+
+        var result = await Runner(kit, agents).RunAsync(Graphing(kit, Graphed()), Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Null(agents.Asked.Single().Measure);
     }
 
     /// <summary>

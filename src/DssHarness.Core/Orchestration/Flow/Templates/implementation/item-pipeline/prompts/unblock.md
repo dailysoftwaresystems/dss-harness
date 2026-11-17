@@ -8,6 +8,19 @@ Your last report said what you could not do, what stood in the way and what you 
 are in what you were given. The answer above is the person's: what you are to do instead, or what they did to lift
 what stood in the way.
 
+## The class you are closing
+
+The classes of the decisions this item changes, each with its invariant, its one home and its sites:
+
+{input.item.classes}
+
+The record of each class so far, as the last report gave it:
+
+{implement.latest.closure}
+
+Act by them: a site the list missed is yours to add and to close with the rest, and nothing of the class is done
+while one of its sites is left.
+
 ## What to do
 
 1. Read the answer against what you said. Where it settles what stood in the way, do what you could not do before.

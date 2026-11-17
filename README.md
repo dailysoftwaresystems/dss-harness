@@ -620,8 +620,14 @@ directory read in a prompt as `{text.<name>}` the same live way - the used workf
 where the reading step is one of its, and the run's where none between them declares the name - and
 the shipped flow declares its `recommendations` and its `closure` there, `closure.md` being the
 repository's own from the day init writes it: the universe its decisions range over, and what else
-judges them. The planner's, the plan audit's and the item audit's prompts read `{text.closure}`,
-and the file says so: what a repository writes there weighs on what they decide a class covers.
+judges them. The planner's, the plan audit's, the item audit's and the builders' prompts read
+`{text.closure}`, and the file says so: what a repository writes there weighs on what they
+decide a class covers. The builders' prompts hold the class-closure paragraph - close the class,
+at its one home, over the universe it names, nothing folded without the record of each class -
+and every prompt that goes on with an item (mend, rework, reconcile, anchors, unblock, redo and
+undo) is given the item's classes and the record so far under "The class you are closing", so a
+fresh agent holds the class as text, never a memory of it; and a step whose prompt reads the
+item's classes has its context pack seeded from every site and home of them.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its
@@ -2057,7 +2063,12 @@ held to the schema its `outputs` names, the step's output - a schema in the subs
 in the schema that says it, and which the step's start holds it to again before any client is asked; a schema may share
 a definition with the schema files beside it, a `$ref` of the form `plan.schema.json#/$defs/workItem` naming one, and
 where the schema is read - the check, a run, a path typed by it - the definition is taken into the schema's own
-`$defs`, so the shipped plan, self-audit and diagnosis schemas hold one work-item definition between them; and the leg
+`$defs`, so the shipped plan, self-audit and diagnosis schemas hold one work-item definition between them; and where
+the repository declares legs, the step's agent is given the `measure` tool on every client: one call takes a leg, its
+variant (the build configuration the leg's own configuration declares), a test filter and the cell of a universe being
+measured, runs those tests of that leg through the test service as any leg is run - in the agent's worktree where it
+has one, in a local copy of the main tree where it does not - and answers what they showed or why the cell could not
+be measured, the call a tool call of the step's stored stream whose id a closure record's `measuredBy` cites. The leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass and its last lines, and for `build`, `test` and `run` the units its build

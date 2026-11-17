@@ -253,8 +253,20 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         }
     }
 
+    /// <summary>
+    /// The isolation of the work of legs run for a step of this engine - a test step's, or a measure call a reason
+    /// step's agent makes - from the leg's own ground (<see cref="ExecutionGrounds.OfLeg"/>): no writes beside the
+    /// tree's own, for a leg step writes none beside its tree.
+    /// </summary>
+    /// <param name="isolation">Decides the isolation the legs' work is held inside.</param>
+    /// <param name="config">The repository's configuration.</param>
+    /// <param name="mainCheckout">The main checkout's root.</param>
+    /// <param name="tree">The tree the legs work in.</param>
+    internal static ILegIsolation LegIsolationOf(IAgentIsolation isolation, HarnessConfig config, string mainCheckout, string tree)
+        => new StepLegIsolation(isolation, config, mainCheckout, tree, besides: _ => []);
+
     /// <summary>The isolation of the work of one leg of the step, from the leg's own ground (<see cref="ExecutionGrounds.OfLeg"/>).</summary>
-    private sealed class StepLegIsolation(IAgentIsolation isolation, HarnessConfig config, string mainCheckout, string tree, Func<string, IReadOnlyList<string>> besides) : ILegIsolation
+    internal sealed class StepLegIsolation(IAgentIsolation isolation, HarnessConfig config, string mainCheckout, string tree, Func<string, IReadOnlyList<string>> besides) : ILegIsolation
     {
         /// <inheritdoc/>
         public Task<ExecutionIsolation> ForLegAsync(string legTree, IReadOnlyList<string> writes, CancellationToken cancellationToken)

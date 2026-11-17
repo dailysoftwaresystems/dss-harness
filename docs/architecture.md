@@ -2887,7 +2887,18 @@ an item declares the classes of the decisions it changes or says in `noClass` wh
 one class in a plan; the home is among the item's own paths and there in the tree where it exists; every site that
 changes - `reads-home` or `deleted` - is the item's too, for patching some of a class's sites is never done; more
 than one site means consolidate, as one site that is not the home does; a class is searched by data its queries name
-again, and its universe holds the axes the repository declares; and one home belongs to one item;
+again, and its universe holds the axes the repository declares; and one home belongs to one item. The builder closes
+the class (part 01's B and C): the implementer's definition and the implement and remedy prompts hold the
+class-closure paragraph, every prompt that goes on with an item - mend, rework, reconcile, anchors, unblock, redo and
+undo - reads the item's classes and the record so far (`{input.item.classes}`, `{implement.latest.closure}`) under
+"The class you are closing", and the implement step's answer schema requires the record of each class (`closure`:
+class, invariant, home, sites before and after, searches citing the tool calls that made them, the universe covered,
+the pin, the arm, each neighbour and its measurement, the closing claim) beside `arms`, the flat list of the arms the
+item declares; where the repository declares legs, each reason step's agent is given the `measure` tool
+(`AgentMeasureSupport` on the step's request and run, offered by the tool runtime to a ground that runs commands,
+standing alone in its turn), whose every call - a leg, its variant, a filter, the cell measured - runs through
+`ITestLegs` as any leg is run, in the agent's worktree where it has one and in a local copy of the main tree where it
+does not (`ReasonStepRunner.MeasuredAsync`), its id what the record's `measuredBy` cites;
 `CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both
@@ -4441,8 +4452,13 @@ or its last parts, a handle, a `path:line` as a stack frame or a compiler writes
 foreign path's endings the view holds or the one file it holds that ends with it - each a weight of 4 (a name several readable nodes
 carry, up to `CodeConfidences.MostCandidates`, 2 each), a working set's nodes 4 and an edited one 5, a named file's
 declarations (`CodeNodeKinds.Declarations`) 3, the declarations of the files the step's `writes` covers
-(`AgentPolicy.StepWrites`) 2, and the ten nodes the prompt's words match best (`find`'s ranking, over declarations) 2.
-The walk goes two hops from a node named or worked with and one from the others over `CodebaseContextPack.Walked` -
+(`AgentPolicy.StepWrites`) 2, and the ten nodes the prompt's words match best (`find`'s ranking, over declarations) 2 -
+beside which every site and home of the classes of the work item the step is an instance of seeds the pack
+(`ContextPackRequest.Closure`, each a `ContextPackClosure`: the declaration the site's symbol names in the site's file,
+at the weight of a node named - the file's declarations where the site names no symbol or its file carries it not), the
+engine reading the classes where the step's prompt is read and handing them its runner under `classes`
+(`FlowStepTemplates.ClassesOf`, `FlowStepRun.Read`), so a fresh agent's pack holds every site's declaration, not only
+those near the defect. The walk goes two hops from a node named or worked with and one from the others over `CodebaseContextPack.Walked` -
 `calls`, `inherits`, `mixesIn`, `implements`, `overrides`, `dispatches` and `tests` both ways, `references` out, the
 steps of each `CodebaseGraphQueries.Steps` gives - each node keeping its best score (its seed's weight halved at each
 hop, times 1, 0.7 or 0.3 by each edge's confidence) and its relation to the node it was reached from (`calls

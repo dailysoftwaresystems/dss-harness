@@ -140,6 +140,7 @@ public sealed class ImplementationFlowTests
             harness.Output,
             TimeProvider.System,
             new TestIsolation(),
+            new NoTests(),
             harness.GitClient,
             harness.ConfigStore,
             updates);
@@ -205,6 +206,13 @@ public sealed class ImplementationFlowTests
             new TestIsolation(),
             clock: null,
             timings: Quick);
+    }
+
+    /// <summary>The test service these flows' reason steps are given: none of them measures a neighbour, so it is never asked.</summary>
+    private sealed class NoTests : DssHarness.Core.Application.Legs.ITestLegs
+    {
+        public Task<DssHarness.Core.Runs.LegRunResult> RunAsync(DssHarness.Core.Application.Legs.TestLegsRequest request, DssHarness.Core.Execution.RunId run, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("these flows measure nothing");
     }
 
     /// <summary>The run's own driving: a start over the shipped workflow with its inputs, within the bound.</summary>
@@ -6295,6 +6303,8 @@ public sealed class ImplementationFlowTests
             ["summary"] = "Built the item.",
             ["done"] = new JsonArray(new JsonObject { ["statement"] = "the report ships", ["holds"] = true, ["shows"] = "its code, read again" }),
             ["claims"] = new JsonObject { ["built"] = "src/one/one.cs", ["tested"] = "nothing run: the repository keeps no legs" },
+            ["closure"] = new JsonArray(),
+            ["arms"] = new JsonArray(),
             ["reuse"] = "",
             ["newRows"] = new JsonArray(),
             ["blocked"] = new JsonArray([.. blocked ?? []]),

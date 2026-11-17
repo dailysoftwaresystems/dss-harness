@@ -216,11 +216,13 @@ public sealed class ClaudeToolDeciderTests : IDisposable
     [Fact]
     public void TheServersTools_AreTheRuntimesWebTools_ByTheServersNames()
     {
-        Assert.Equal([AgentTools.WebFetch, AgentTools.WebSearch, AgentGraphSupport.ToolName], ClaudeCodeTools.ServerTools);
+        Assert.Equal([AgentTools.WebFetch, AgentTools.WebSearch, AgentGraphSupport.ToolName, AgentMeasureSupport.ToolName], ClaudeCodeTools.ServerTools);
         Assert.Equal("mcp__dssharness__web_search", ClaudeCodeTools.ServedName(AgentTools.WebSearch));
         Assert.Equal("mcp__dssharness__graph", ClaudeCodeTools.ServedName(AgentGraphSupport.ToolName));
+        Assert.Equal("mcp__dssharness__measure", ClaudeCodeTools.ServedName(AgentMeasureSupport.ToolName));
         Assert.Equal(AgentTools.WebFetch, ClaudeCodeTools.ServedAs("mcp__dssharness__web_fetch"));
         Assert.Equal(AgentGraphSupport.ToolName, ClaudeCodeTools.ServedAs("mcp__dssharness__graph"));
+        Assert.Equal(AgentMeasureSupport.ToolName, ClaudeCodeTools.ServedAs("mcp__dssharness__measure"));
         Assert.Equal(AgentTools.ViewFile, ClaudeCodeTools.ServedAs("mcp__dssharness__view_file"));
         Assert.Null(ClaudeCodeTools.ServedAs("mcp__dssharness__run_command"));
         Assert.Null(ClaudeCodeTools.ServedAs("mcp__other__web_fetch"));

@@ -34,6 +34,19 @@ That account is the engine's, from its records: each fold of the item, with the 
 deleted, each commit, and where the work is now. It is where you start, and the files decide: read each path before
 you change it.
 
+## The class you are closing
+
+The classes of the decisions the item changed, each with its invariant, its one home and its sites:
+
+{input.item.classes}
+
+The record of each class so far, as the last report gave it:
+
+{implement.latest.closure}
+
+Take the class back with the rest: what the item's class closed is either taken back with its sites or left whole
+with a reason, never half.
+
 ## Where you work
 
 Your worktree is `{worktree}`. Nothing you do is committed by you: the engine folds your changes into the main tree

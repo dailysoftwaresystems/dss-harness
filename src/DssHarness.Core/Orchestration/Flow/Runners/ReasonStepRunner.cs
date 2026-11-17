@@ -4,13 +4,16 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Runs;
 using DssHarness.Core.Secrets;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -40,6 +43,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
+/// <param name="tests">Tests the legs, for the measure tool the step's agent is given where the repository declares legs.</param>
 public sealed class ReasonStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -52,6 +56,7 @@ public sealed class ReasonStepRunner(
     Output.IHarnessOutput harnessOutput,
     TimeProvider clock,
     Agents.Isolation.IAgentIsolation isolation,
+    Application.Legs.ITestLegs tests,
     Git.IGitClient? gitClient = null,
     Configuration.IConfigStore? configStore = null,
     ClaudeCodeUpdateService? updates = null,
@@ -361,6 +366,10 @@ public sealed class ReasonStepRunner(
             Graph = stepGraph?.Support,
             CodebaseGiven = stepGraph is null ? null : stepGraph.Given,
 
+            // The measure tool, where the repository declares legs: what the step's agent measures a neighbour of a
+            // class with, served on every client and answered by the test service as any leg is run.
+            Measure = Measured(context, place, workspace),
+
             // What the engine tells the attempt's agent while it works - a plan update's message into the
             // conversation, its handoff where one ends the step in order - and what a plan update that told this
             // work said, in the part of its own the attempt's first message holds.
@@ -402,6 +411,89 @@ public sealed class ReasonStepRunner(
         {
             return FlowStepResult.Ended(passed: false, refused.ExitCode, refused.Message);
         }
+    }
+
+    /// <summary>
+    /// The step's measure tool, where the repository declares legs and the step works somewhere: each call answered
+    /// through the test service, as any leg is run (<see cref="MeasuredAsync"/>). Null where the repository declares no
+    /// leg - there is nothing to measure on - and for a run held in memory alone.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="place">The run's place; null for a run held in memory alone.</param>
+    /// <param name="workspace">Where the step's agent works.</param>
+    private AgentMeasureSupport? Measured(HarnessContext context, FlowRunPlace? place, AgentWorkspace workspace)
+        => place is null || context.Config.Legs.Count == 0
+            ? null
+            : new((call, token) => MeasuredAsync(context, place, workspace, call, token));
+
+    /// <summary>
+    /// One measure call answered: the leg it names, built as the variant it names - the build configuration the leg's
+    /// own configuration declares, the only one a measurement of the leg runs - tested with the filter it names through
+    /// the test service, in the tree the agent works in where it has a worktree of its own, else in a local copy of the
+    /// main tree the leg makes as a leg's local copy is, so no fold in flight changes what it measures. A leg that is
+    /// not declared, a configuration the leg does not build, or a run that ended before its leg said anything, is
+    /// answered unmeasured, with the reason and nothing run.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="place">The run's place.</param>
+    /// <param name="workspace">Where the step's agent works.</param>
+    /// <param name="call">The call: its leg, variant, filter and cell.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    private async Task<AgentMeasureAnswer> MeasuredAsync(HarnessContext context, FlowRunPlace place, AgentWorkspace workspace, AgentMeasureCall call, CancellationToken cancellationToken)
+    {
+        if (!context.Config.Legs.TryGetValue(call.Leg, out var leg))
+        {
+            return new AgentMeasureAnswer(
+                Measured: false,
+                Passed: false,
+                Verdict: string.Empty,
+                Detail: null,
+                Reason: context.Config.Legs.Count == 0
+                    ? "this repository declares no leg"
+                    : $"no leg '{call.Leg}' is declared: the run's legs are {string.Join(", ", context.Config.Legs.Keys.Order(StringComparer.Ordinal))}");
+        }
+
+        if (!string.Equals(call.Variant, leg.Config, StringComparison.Ordinal))
+        {
+            return new AgentMeasureAnswer(false, false, string.Empty, null, $"the leg '{call.Leg}' builds the configuration '{leg.Config}'");
+        }
+
+        var tree = workspace.Worktree ?? place.Repository;
+        LegRunResult result;
+
+        try
+        {
+            result = await tests.RunAsync(
+                new TestLegsRequest
+                {
+                    Directory = tree,
+                    LegNames = [call.Leg],
+                    Filter = call.Filter.Length > 0 ? call.Filter : null,
+                    LocalCopy = workspace.Worktree is null,
+                    Isolation = LegStepRunner.LegIsolationOf(isolation, context.Config, context.Layout.MainCheckoutRoot, tree),
+                },
+                RunId.New(),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException refused)
+        {
+            return new AgentMeasureAnswer(false, false, string.Empty, null, refused.Message);
+        }
+
+        if (result.Cancelled || result.Stopped || result.Report.Lines.Count == 0)
+        {
+            return new AgentMeasureAnswer(false, false, string.Empty, null, result.Message);
+        }
+
+        var line = result.Report.Lines.FirstOrDefault(one => one.Leg == call.Leg);
+        var detail = line is { LogTail: { Count: > 0 } tail } ? $"{line.Detail}\n{string.Join("\n", tail)}" : line?.Detail;
+
+        return new AgentMeasureAnswer(
+            Measured: true,
+            Passed: LegStepRunner.Output(result, arms: false)["passed"]!.GetValue<bool>(),
+            Verdict: line is { } read ? read.Verdict.ToString() : string.Empty,
+            Detail: detail,
+            Reason: null);
     }
 
     /// <summary>

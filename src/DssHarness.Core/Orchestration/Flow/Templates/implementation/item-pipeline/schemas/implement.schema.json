@@ -5,6 +5,8 @@
     "summary",
     "done",
     "claims",
+    "closure",
+    "arms",
     "reuse",
     "newRows",
     "blocked",
@@ -61,6 +63,299 @@
         }
       },
       "description": "What you claim of your own work. The engine builds and tests it itself, so say what you saw, not what you expect."
+    },
+    "closure": {
+      "type": "array",
+      "description": "The record of each class of this item's work, one entry per class - those the item's classes name and any the builder found that the plan lacked, under a new id of its own (N1, N2, ...). Empty only where the item declares no class and found none. Nothing is folded without the record.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "class",
+          "invariant",
+          "home",
+          "sites",
+          "searches",
+          "universe",
+          "pin",
+          "arm",
+          "neighbours",
+          "claim"
+        ],
+        "properties": {
+          "class": {
+            "type": "string",
+            "description": "The class's id, as the item's classes name it - or the new id (N1, N2, ...) of a class the builder found that the plan lacked."
+          },
+          "invariant": {
+            "type": "string",
+            "description": "The invariant the class holds, as the item planned it or as the work now holds it."
+          },
+          "home": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "symbol"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "The one home's path, from the repository's root."
+              },
+              "symbol": {
+                "type": "string",
+                "description": "The declaration that is the home."
+              }
+            },
+            "description": "The one home that decides, as the item planned it or as the work moved it."
+          },
+          "homeMoved": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "why"
+            ],
+            "properties": {
+              "why": {
+                "type": "string",
+                "description": "Why the home moved, where the work moved it."
+              }
+            },
+            "description": "Given only where the work moved the home."
+          },
+          "sites": {
+            "type": "array",
+            "description": "Every site of the class, before and after the work: a site the plan missed that the search found is added here. One entry per site, the home among them.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "symbol",
+                "before",
+                "after"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "The site's path, from the repository's root."
+                },
+                "symbol": {
+                  "type": "string",
+                  "description": "The declaration at the site; empty where the site is a whole file, a configuration entry or a literal."
+                },
+                "before": {
+                  "type": "string",
+                  "description": "What the site was before the work: how it decided the class's question then."
+                },
+                "after": {
+                  "type": "string",
+                  "enum": ["home", "reads-home", "deleted", "only-one"],
+                  "description": "What the work left the site: the home (one entry only), a reader of the home, deleted, or the only site there was."
+                }
+              }
+            }
+          },
+          "searches": {
+            "type": "array",
+            "description": "Each search that looked for sites of the class, by the data that decides - the kind, the key, the diagnostic, the literal.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "data",
+                "via",
+                "query",
+                "call"
+              ],
+              "properties": {
+                "data": {
+                  "type": "string",
+                  "description": "The data the search searched: the kind, the key, the diagnostic or the literal."
+                },
+                "via": {
+                  "type": "string",
+                  "description": "What ran the search: the graph tool, a command, a reading of files."
+                },
+                "query": {
+                  "type": "string",
+                  "description": "What the search asked, word for word."
+                },
+                "call": {
+                  "type": "string",
+                  "description": "The id of the tool call in this item's stored streams that made the search; empty where the search was made without one."
+                }
+              }
+            }
+          },
+          "universe": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "axes",
+              "cellsPinned",
+              "cellsArmed"
+            ],
+            "properties": {
+              "axes": {
+                "type": "array",
+                "description": "Each axis of the universe the class names, with the values the work covered.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "values"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "The axis's name."
+                    },
+                    "values": {
+                      "type": "array",
+                      "description": "The values of the axis the work covered, each direction and form among them.",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "cellsPinned": {
+                "type": "integer",
+                "description": "How many cells of the universe the pin covers."
+              },
+              "cellsArmed": {
+                "type": "integer",
+                "description": "How many cells of the universe the arm covers, where the repository keeps mutation arms; else 0."
+              }
+            }
+          },
+          "pin": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tests",
+              "tableDriven",
+              "over"
+            ],
+            "properties": {
+              "tests": {
+                "type": "array",
+                "description": "The tests that pin the invariant, by name.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tableDriven": {
+                "type": "boolean",
+                "description": "True only where the tests are table-driven over the universe the class names - not over the reported case."
+              },
+              "over": {
+                "type": "string",
+                "description": "The table the tests are driven by: the vocabulary's source, named as the code holds it."
+              }
+            }
+          },
+          "arm": {
+            "description": "The mutation arm of the class, where the repository keeps mutation arms: the arm's id and its site - the home. Where it keeps none, or the class has no arm, an object holding why. Where it keeps them and the class has one, an empty arm is refused by the fold's check.",
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "site"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "The arm's id, as the registry names it."
+                  },
+                  "site": {
+                    "type": "string",
+                    "description": "The site the arm mutates - the home."
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "why"
+                ],
+                "properties": {
+                  "why": {
+                    "type": "string",
+                    "description": "Why the class has no arm: the repository keeps none, or the class has nothing to mutate."
+                  }
+                }
+              }
+            ]
+          },
+          "neighbours": {
+            "type": "array",
+            "description": "Each neighbour swept before reporting: the same invariant at the other cells, the opposite direction, and the optimised form of the same source - measured with the measure tool on each leg and each reference separately, or named unmeasured with the reason.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cell",
+                "direction",
+                "form",
+                "reference",
+                "measuredBy",
+                "result",
+                "reason"
+              ],
+              "properties": {
+                "cell": {
+                  "type": "string",
+                  "description": "The cell of the universe measured."
+                },
+                "direction": {
+                  "type": "string",
+                  "description": "The direction measured: the same, or the opposite."
+                },
+                "form": {
+                  "type": "string",
+                  "description": "The form measured: the same source, or its optimised form as closure.md names it."
+                },
+                "reference": {
+                  "type": "string",
+                  "description": "What it was measured on: the leg, or the reference."
+                },
+                "measuredBy": {
+                  "type": "string",
+                  "description": "The id of the measure call that measured it; empty where it is unmeasured."
+                },
+                "result": {
+                  "type": "string",
+                  "enum": ["passed", "failed-fixed", "unmeasured"],
+                  "description": "What the measurement showed: passed, failed and fixed in this item, or unmeasured."
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Where it is unmeasured, why; empty where it measured."
+                }
+              }
+            }
+          },
+          "claim": {
+            "type": "string",
+            "description": "The closing claim, which names the universe and never the case: 'Invariant I holds over U; cells C measured on references R; cells N not measured because B'."
+          }
+        }
+      }
+    },
+    "arms": {
+      "type": "array",
+      "description": "The mutation arms this item's work declares, by id, as the registry will name them - the flat list of every class's arm, read by the item's own sweep after its checkpoint. Empty where the repository keeps no mutation arms or the work declares none.",
+      "items": {
+        "type": "string"
+      }
     },
     "reuse": {
       "type": "string",
