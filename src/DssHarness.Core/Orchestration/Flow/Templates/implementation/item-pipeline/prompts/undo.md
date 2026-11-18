@@ -19,9 +19,9 @@ What the change means for this item: {piece.changed}
 - The paths you may write, and the only ones: {input.item.ownedPaths}
 - The paths you must not touch: {input.item.forbiddenPaths}
 - What must hold once it is taken back, checked statement by statement before you report: {input.item.done}
-- The filter that names the tests the item affects: `{input.item.testFilter}`; the engine runs only those when you report
-  where the run's input affectedTests is on (`{input.affectedTests}`), and every test where it is off or the filter is
-  empty
+- The tests that show the rest still stands, one unit to an entry: {input.item.tests}; the engine runs only those when
+  you report, with the units your answer's tests add
+- Where the item names no test, why none can show it: {input.item.noTests}; the engine then runs none
 - How the engine runs the tests, leg by leg: {input.orient.tests}
 
 The plan this item was part of, as it now is: {input.planSummary}
@@ -33,6 +33,19 @@ The plan this item was part of, as it now is: {input.planSummary}
 That account is the engine's, from its records: each fold of the item, with the paths it wrote and the paths it
 deleted, each commit, and where the work is now. It is where you start, and the files decide: read each path before
 you change it.
+
+## The class you are closing
+
+The classes of the decisions the item changed, each with its invariant, its one home and its sites:
+
+{input.item.classes}
+
+The record of each class so far, as the last report gave it:
+
+{implement.latest.closure}
+
+Take the class back with the rest: what the item's class closed is either taken back with its sites or left whole
+with a reason, never half.
 
 ## Where you work
 
@@ -46,7 +59,7 @@ when you report. Taking an item back is a change like any other: built, tested, 
    Read what the item changed in the commits the account names (`git show <commit> -- <path>`).
 2. Put back what the item deleted or replaced, where the plan as it now is still needs it.
 3. Remove the tests that exist only for what you removed. Do not remove a test to make a red result go away. Where
-   the filter above names one you remove, list that as what you cannot do.
+   the tests above name one you remove, list that as what you cannot do.
 4. Look for what came to depend on the item since: a caller, a registration, a document, a configuration entry.
    Put right each one inside your paths; list each outside them as what you cannot do, with the path.
 5. Build and run the tests as the engine runs them: the rest has to stand without the item. Where you cannot, say

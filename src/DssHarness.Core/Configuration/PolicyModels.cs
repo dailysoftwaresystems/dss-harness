@@ -77,8 +77,10 @@ public sealed class SyncConfig
     /// metadata, what orchestrators keep - their records, logs and the evidence and transcripts
     /// they kept - what side-tasks keep - their records, streams and transcripts - and the tree's own
     /// copies, its mutation workers and the copies its legs work in, which belong to the machine they
-    /// were made on. Never deleted in a copy either, so a sync into a host's copy leaves that copy's
-    /// own copies where they are.
+    /// were made on, with the slots an earlier version kept such copies in
+    /// (<see cref="Repository.HarnessLayout.FormerRootSlots"/>), whose former workers are that machine's
+    /// until a clean removes them. Never deleted in a copy either, so a sync into a host's copy leaves
+    /// that copy's own copies where they are.
     /// </summary>
     /// <remarks>
     /// A constant rather than a default value. A default is replaced by whatever list a
@@ -92,7 +94,8 @@ public sealed class SyncConfig
     /// its actions, which a leg on another host has to be able to run.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<string> NeverTransferFloor { get; } = [".git", .. Repository.HarnessLayout.NamedRootSlots];
+    public static IReadOnlyList<string> NeverTransferFloor { get; } =
+        [".git", .. Repository.HarnessLayout.NamedRootSlots, .. Repository.HarnessLayout.FormerRootSlots];
 
     /// <summary>Paths to exclude in addition to those git already ignores.</summary>
     public List<string> Exclude { get; init; } = [];

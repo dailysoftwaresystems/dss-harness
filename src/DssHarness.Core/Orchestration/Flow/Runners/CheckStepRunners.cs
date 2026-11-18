@@ -1,9 +1,12 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Application;
 using DssHarness.Core.Ci;
+using DssHarness.Core.Codebase;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
@@ -102,6 +105,277 @@ public sealed class AnchorCitationsStepRunner(IHarnessContextLoader contextLoade
                 ["passed"] = held.Passed,
                 ["findings"] = new JsonArray([.. held.Unresolved.Select(citation => (JsonNode?)AnchorCitationReports.Line(citation))]),
             });
+    }
+}
+
+/// <summary>
+/// Runs a <c>class-closure</c> step: the classes the item's plan declares and the closing record its builder answered,
+/// judged by <see cref="ClassClosureRules"/> before the fold - nothing is folded without a record that closes its
+/// classes. What the record is judged against the runner gathers: the paths the agent changed - what the fold's own dry
+/// weighing of its worktree would write, remove or merge, and what the run's ledger of its folds says its earlier folds
+/// of the agent changed, so a site folded before a review is still the agent's work after it; every tool call of the
+/// agent's stored streams, by the one reading of a stream's calls (<see cref="Agents.AgentStreamCalls"/>), and what each
+/// of their measure calls measured - its leg, variant, filter and cell - and answered, by its own record in the directory
+/// of the step whose stream holds it, and when that
+/// record was written (<see cref="ClassClosureMeasure"/>); what its
+/// worktree still declares, through the graph's view of its tree - synced where the step starts - or text; the arms the
+/// registry of its worktree declares, where an arm its work adds stands before the fold merges it in; and each home's
+/// touches since the base the step names, the item's own commits left out by the run's fold ledger. A dry weighing that
+/// could not be made fails the step with its own code and words, for nothing it would have answered is read as none.
+/// Its answer is an output - <c>{passed, problems, hotspots, touches}</c> - and a failure of its own kind: the record's
+/// problems (1), which <c>close-class</c> repairs, or a home audit it requires and lacks (2), which <c>home-audit</c>
+/// makes.
+/// </summary>
+/// <param name="contextLoader">Finds the repository and its configuration, and the agent's worktree's.</param>
+/// <param name="platform">This machine.</param>
+/// <param name="store">Reads the agent's record, the item's stored streams and the run's fold ledger.</param>
+/// <param name="fileSystem">Reads a worktree's files where the graph lists the file only.</param>
+/// <param name="agents">Weighs the fold, for the paths the agent changed.</param>
+/// <param name="graphs">The run's codebase graph, for the view of the agent's tree.</param>
+/// <param name="gitClient">Counts each home's touches.</param>
+/// <param name="listings">The one reading of the arms registry.</param>
+public sealed class ClassClosureStepRunner(
+    IHarnessContextLoader contextLoader,
+    IHostPlatform platform,
+    OrchestrationStore store,
+    IFileSystem fileSystem,
+    IAgentService agents,
+    ICodebaseGraphService graphs,
+    IGitClient gitClient,
+    Mutations.ArmListingReader listings) : IFlowStepTypeRunner
+{
+    /// <inheritdoc/>
+    public string Type => "class-closure";
+
+    /// <inheritdoc/>
+    public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
+
+        if ((run.WorksIn ?? run.Target) is not { } agent)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.InternalError, $"'{run.Instance}' is a {Type} step, and the engine named no agent whose work it judges");
+        }
+
+        if (run.Read is not { } read || !read.TryGetValue("classes", out var given) || given.IsMissing || given.ToNode() is not JsonArray declared)
+        {
+            return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' checks the classes its classes yields, and it yields no list");
+        }
+
+        if (!read.TryGetValue("record", out var answered) || answered.IsMissing || answered.ToNode() is not JsonArray record)
+        {
+            record = [];
+        }
+
+        List<PlannedClass> planned = [.. declared.Select(PlannedClass.In).OfType<PlannedClass>()];
+        List<ClassClosureRecord> entries = [.. record.Select(ClassClosureRecord.In).OfType<ClassClosureRecord>()];
+        var layout = OrchestratorLayout.Of(context.Layout, place.Run);
+        var worksOn = store.ReadAgent(layout, agent);
+        var worktree = worksOn?.WorktreePath(context.Layout);
+
+        // The paths the agent changed: what the fold itself would write now - one owner of that - and what the run's
+        // earlier folds of the agent changed, which the fold no longer writes once the main tree holds them as it does.
+        var weighed = await WeighedAsync(place, agent, cancellationToken).ConfigureAwait(false);
+
+        if (weighed.Failed is { } failed)
+        {
+            return failed;
+        }
+
+        IReadOnlyList<string> changed =
+        [
+            .. weighed.Planned!.WouldWrite
+                .Concat(weighed.Planned.Conflicting)
+                .Concat(FoldLedger.Changed((store.ReadFolds(layout)?.Folds ?? []).Where(entry => entry.Settled && string.Equals(entry.Agent, agent, StringComparison.Ordinal))))
+                .Distinct(StringComparer.Ordinal),
+        ];
+
+        // Every tool call of the agent's stored streams - each step of its own directory - by the one reading of a stream's
+        // calls: paired with its answer by its id, its tool by the runtime's name, whichever client made it, each with
+        // whether its tool ran. Each measure call, whatever it answered, with what its own record - kept in the directory of
+        // the step whose stream holds it - says it measured, its leg, variant, filter and cell, and when the record was written.
+        var calls = new Dictionary<string, Agents.AgentStreamCall>(StringComparer.Ordinal);
+        var measures = new Dictionary<string, ClassClosureMeasure>(StringComparer.Ordinal);
+
+        if (fileSystem.DirectoryExists(layout.AgentStepsDirectory(agent)))
+        {
+            foreach (var step in fileSystem.EnumerateDirectories(layout.AgentStepsDirectory(agent)))
+            {
+                foreach (var call in Agents.AgentStreamCalls.Answered(store.ReadStepStream(step)))
+                {
+                    calls[call.Id] = call;
+
+                    if (call.Tool == Agents.AgentMeasureSupport.ToolName)
+                    {
+                        measures[call.Id] = ClassClosureMeasure.Of(fileSystem, step, call.Id);
+                    }
+                }
+            }
+        }
+
+        // The graph's view of the agent's tree, where the run made one - synced where the step started, so it is the tree
+        // as the work left it: what a site's file still declares is read from it, or from the worktree's text where the
+        // graph lists the file only.
+        var view = await graphs.ReadOnlyAsync(layout, agent, cancellationToken).ConfigureAwait(false);
+        var queries = view is null ? null : new CodebaseGraphQueries(view);
+
+        bool Declares(string path, string symbol)
+        {
+            if (queries?.OutlineFile(path) is { } outlined && queries.UnsureOfFile(path) is null)
+            {
+                return outlined
+                    .Where(card => CodeNodeKinds.Declarations.Contains(card.Kind, StringComparer.Ordinal))
+                    .Any(card => string.Equals(card.Name, symbol, StringComparison.Ordinal)
+                        || string.Equals(card.Qualified, symbol, StringComparison.Ordinal)
+                        || card.Qualified.EndsWith("." + symbol, StringComparison.Ordinal));
+            }
+
+            return worktree is null
+                ? false
+                : fileSystem.FileExists(Path.Combine(worktree, path))
+                    && FileText(Path.Combine(worktree, path)).Contains(symbol, StringComparison.Ordinal);
+        }
+
+        bool TestDeclared(string name)
+        {
+            if (queries?.Resolve(name) is GraphResolve.Found or GraphResolve.Candidates)
+            {
+                return true;
+            }
+
+            return worktree is not null
+                && entries.SelectMany(entry => new[] { entry.HomePath }.Concat(entry.Sites.Select(site => site.Path)))
+                    .Concat(changed)
+                    .Distinct(StringComparer.Ordinal)
+                    .Any(path => fileSystem.FileExists(Path.Combine(worktree, path)) && FileText(Path.Combine(worktree, path)).Contains(name, StringComparison.Ordinal));
+        }
+
+        string FileText(string path)
+        {
+            using var stream = fileSystem.OpenRead(path);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+
+        // The arms the registry of the agent's worktree declares, where its configuration declares one: an arm the work
+        // adds is there, and reaches the main tree's only through the fold - the registry alone, no leg's tree read.
+        var tree = worktree is null ? context : await contextLoader.LoadAsync(worktree, cancellationToken).ConfigureAwait(false);
+        var arms = await listings.DeclaredArmsAsync(tree, Type, cancellationToken).ConfigureAwait(false);
+
+        List<string> homes = [.. entries.Select(entry => entry.HomePath).Distinct(platform.PathComparer())];
+        var touches = await TouchesAsync(place, layout, store, run, homes, cancellationToken).ConfigureAwait(false);
+
+        var judged = ClassClosureRules.Judge(planned, entries, new ClassClosureProof(
+            changed,
+            calls,
+            measures,
+            Declares,
+            TestDeclared,
+            arms,
+            TouchesByOthers: touches.ByOthers,
+            TouchesAll: touches.All,
+            TouchesRequired: run.Step.Touches ?? WorkflowStepTypes.DefaultTouches,
+            HotspotAt: run.Step.Hotspot ?? WorkflowStepTypes.DefaultHotspot,
+            platform.PathComparison));
+
+        var output = new JsonObject
+        {
+            ["passed"] = judged.Passed,
+            ["problems"] = new JsonArray([.. judged.Problems.Concat(judged.Audits).Select(problem => (JsonNode?)problem)]),
+            ["hotspots"] = new JsonArray([.. judged.Hotspots.Select(hotspot => new JsonObject
+            {
+                ["class"] = hotspot.Class,
+                ["path"] = hotspot.Path,
+                ["touches"] = hotspot.Touches,
+            })]),
+            ["touches"] = new JsonArray([.. judged.Touches.Select(touch => new JsonObject
+            {
+                ["class"] = touch.Class,
+                ["path"] = touch.Path,
+                ["byOthers"] = touch.ByOthers,
+                ["all"] = touch.All,
+            })]),
+        };
+
+        if (judged.Problems.Count > 0)
+        {
+            return CheckResults.Checked(false, ClassClosureExit.Findings, $"the class closure found {ReportText.Counted(judged.Problems.Count, "problem")}", output);
+        }
+
+        return judged.Audits.Count > 0
+            ? CheckResults.Checked(false, ClassClosureExit.HomeAudit, $"the class closure requires {ReportText.Counted(judged.Audits.Count, "home audit")}", output)
+            : CheckResults.Checked(true, ClassClosureExit.Findings, string.Empty, output);
+    }
+
+    /// <summary>
+    /// The fold's own dry weighing of the agent's worktree, a step of a run asking it: what it plans, or - where it could not
+    /// be weighed, its worktree gone or a tree it cannot read - the step's failure, with the weighing's own code and words.
+    /// The check never reads a weighing it could not make as one that changes nothing: every site that reads its home would
+    /// pass unchecked.
+    /// </summary>
+    private async Task<(AgentPlanned? Planned, FlowStepResult? Failed)> WeighedAsync(FlowRunPlace place, string agent, CancellationToken cancellationToken)
+    {
+        UseCaseResult<AgentVerbFacts> weighed;
+
+        try
+        {
+            weighed = await agents.FoldAsync(
+                new FoldAgentRequest(place.Repository, place.Run, agent, new FoldAllowances(), Apply: false) { ByRun = true },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException refused)
+        {
+            return (null, FlowStepResult.Ended(passed: false, refused.ExitCode, $"the paths agent '{agent}' changed could not be weighed: {refused.Message}"));
+        }
+
+        return weighed.Facts?.Planned is { } planned
+            ? (planned, null)
+            : (null, FlowStepResult.Failed(
+                weighed.Outcome.Succeeded ? new CommandOutcome(HarnessExit.InternalError, weighed.Outcome.Message) : weighed.Outcome,
+                $"the paths agent '{agent}' changed could not be weighed: {weighed.Outcome.Message}"));
+    }
+
+    /// <summary>
+    /// Each home's touches since the base: every commit the range holds counted, and the item's own commits - those the
+    /// run's fold ledger attributes to instances of this item - left out of the count by others.
+    /// </summary>
+    private async Task<(IReadOnlyDictionary<string, int> ByOthers, IReadOnlyDictionary<string, int> All)> TouchesAsync(
+        FlowRunPlace place,
+        OrchestratorLayout layout,
+        OrchestrationStore store,
+        FlowStepRun run,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken)
+    {
+        if (paths.Count == 0 || string.IsNullOrWhiteSpace(run.Step.Base))
+        {
+            return (new Dictionary<string, int>(), new Dictionary<string, int>());
+        }
+
+        var touches = await gitClient.CountTouchesAsync(place.Repository, run.Step.Base.Trim(), "HEAD", paths, platform.PathComparison, cancellationToken).ConfigureAwait(false);
+        var ledger = store.ReadFolds(layout);
+        var item = FlowInstanceId.ItemOf(run.Instance);
+
+        bool Own(string commit)
+            => ledger?.Commits.FirstOrDefault(entry => string.Equals(entry.Sha, commit, StringComparison.Ordinal)) is { } made
+                && made.Folds.Any(fold => ledger.Of(fold) is { } attributed && FlowInstanceId.ItemOf(attributed.Instance) == item);
+
+        var byOthers = new Dictionary<string, int>(StringComparer.Ordinal);
+        var all = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var touch in touches)
+        {
+            all[touch.Path] = all.TryGetValue(touch.Path, out var counted) ? counted + 1 : 1;
+
+            if (!Own(touch.Commit))
+            {
+                byOthers[touch.Path] = byOthers.TryGetValue(touch.Path, out var others) ? others + 1 : 1;
+            }
+        }
+
+        return (byOthers, all);
     }
 }
 

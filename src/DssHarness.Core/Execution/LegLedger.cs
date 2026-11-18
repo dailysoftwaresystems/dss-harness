@@ -239,6 +239,15 @@ public sealed record LegEntry
     public Results.HarnessException? EndsTheRun { get; init; }
 
     /// <summary>
+    /// What each start of the leg's command on its host said, in order, where the host's DssHarness failed there as a
+    /// defect before anything ran and the command was started once more (<see cref="Runs.RemoteLegRunner.MostRestarts"/>) -
+    /// its check's before this machine took its slot first, then its run's: said on the line whatever the leg then
+    /// reached, so a failure the next start did not meet is never hidden (<see cref="Runs.HostRestarts"/>, the one owner of
+    /// how it is said). Empty where each was started once.
+    /// </summary>
+    public IReadOnlyList<string> Retried { get; init; } = [];
+
+    /// <summary>
     /// The tree the leg worked in: its path, and for a copy a sync made, the tree it is a copy of and which reading it
     /// holds. Filled by the run that placed the leg - it made the copy - and never read from a host's answer.
     /// <see langword="null"/> for a leg that was never placed.

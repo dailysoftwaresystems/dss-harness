@@ -1,4 +1,6 @@
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Results;
 using DssHarness.Core.Worktrees;
 
@@ -570,6 +572,36 @@ public sealed class WorktreeDeletionTests
         Assert.Equal(HarnessExit.Refused, outcome.Outcome.ExitCode);
         Assert.DoesNotContain('\n', outcome.Outcome.Message);
         Assert.Contains("\"two\\nlines.txt\"", outcome.Outcome.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A worktree holding submodules whose removal stops once its files are gone names, beside the checkout that puts back
+    /// what its index holds, the submodule update that puts back its submodules' - a checkout never makes a submodule's
+    /// directory or its .git file again.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalOfAWorktreeHoldingSubmodules_NamesTheUpdateThatPutsThemBack()
+    {
+        using var temp = new TempDirectory();
+        using var library = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, path) = await PrepareWithSubmoduleAsync(temp, library, "withsub");
+        var git = new InterceptingGitClient(harness.GitClient)
+        {
+            InsteadOfRun = arguments => arguments is ["worktree", "remove", ..]
+                ? new GitCommandResult(255, string.Empty, "error: could not lock the worktree's record")
+                : null,
+        };
+
+        var failed = await new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext).DeleteAsync(temp.Path, "withsub", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, failed.Outcome.ExitCode);
+        Assert.Equal(
+            "git could not remove worktree 'withsub': error: could not lock the worktree's record. It stopped part way: its files are already "
+            + $"gone, and its .git file and git's record of it are still there, so it is still a worktree: 'git -C {path} checkout -- .' puts back "
+            + $"the files its index holds, and 'git -C {path} submodule update --init --recursive' those of its submodules. Every check passed "
+            + $"before removal began, so run '{ToolPackage.Command} delete-worktree withsub --force' to finish deleting it.",
+            failed.Outcome.Message);
     }
 
     private static async Task<HarnessFactory> PrepareAsync(TempDirectory temp, WorktreeSettings? settings = null)

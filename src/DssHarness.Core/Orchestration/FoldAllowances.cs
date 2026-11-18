@@ -43,7 +43,8 @@ public sealed record FoldAllowances
 
     /// <summary>
     /// The cells of rows an earlier fold of the agent applied that the registries and the agent both changed since, each
-    /// otherwise, whose agent's text its fold may write over the registries', each as <see cref="AnchorRowCell.Form"/>:
+    /// otherwise - those that carry a row's verdict among them where they are weighed so (<see cref="AnchorCellMerge"/>) -
+    /// whose agent's text its fold may write over the registries', each as <see cref="AnchorRowCell.Form"/>:
     /// <see cref="AnchorBatchRequest.AcceptOverOption"/>. It accepts, for a prose cell, the loss of what the registries hold.
     /// </summary>
     public IReadOnlyList<string> AcceptOver { get; init; } = [];

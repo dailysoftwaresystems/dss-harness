@@ -1244,13 +1244,17 @@ public static class WorkflowFileParser
             case "test":
                 step = step with
                 {
-                    Filter = ScalarIn(keys, $"{where}.filter", problems),
+                    Filter = FlowListIn(keys, $"{where}.filter", problems),
                     FilterWhen = ScalarIn(keys, $"{where}.filterWhen", problems),
+                    Affected = ScalarIn(keys, $"{where}.affected", problems),
+                    NoTests = ScalarIn(keys, $"{where}.noTests", problems),
                     Exclude = StringListIn(keys, $"{where}.exclude", problems) ?? [],
                     Labels = StringListIn(keys, $"{where}.labels", problems) ?? [],
                     SkipBuild = BooleanIn(keys, $"{where}.skipBuild", problems),
                     KeepGoing = BooleanIn(keys, $"{where}.keepGoing", problems),
                 };
+
+                RefuseGivenEmpty(keys, $"{where}.filter", "name the units it runs", "every test of its legs", problems);
                 break;
 
             case "run":
@@ -1343,6 +1347,17 @@ public static class WorkflowFileParser
                 };
 
                 RefuseGivenEmpty(keys, $"{where}.paths", "name the files it is held to", "the whole tree judged", problems);
+                break;
+
+            case "class-closure":
+                step = step with
+                {
+                    Classes = ScalarIn(keys, $"{where}.classes", problems),
+                    Record = ScalarIn(keys, $"{where}.record", problems),
+                    Base = ScalarIn(keys, $"{where}.base", problems),
+                    Touches = IntIn(keys, $"{where}.touches", problems),
+                    Hotspot = IntIn(keys, $"{where}.hotspot", problems),
+                };
                 break;
 
             case "ci-read":

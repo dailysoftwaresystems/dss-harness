@@ -397,6 +397,55 @@ public sealed class BuildServiceTests
     }
 
     /// <summary>
+    /// A build directory another variant built in last - a mutation worker's, named by the key two variants' names can
+    /// come to alike - is that variant's, as its record says: the build starts it from clean, saying whose it was, and
+    /// before the guard is asked, which would refuse the directory for the build type CMake cached for the other; a build
+    /// of the variant the record names keeps it warm.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryAnotherVariantBuiltInLast_IsStartedFromClean_BeforeTheGuardIsAsked()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var (factory, tracked) = await TrackedTreeAsync(temp, token);
+        var shared = temp.Combine(".m", tracked.Variant.CopyKey + "w-1", "build", tracked.Variant.CopyKey);
+        var debug = tracked with { BuildDirectory = shared };
+        var release = tracked with { Variant = tracked.Variant with { Config = "release" }, BuildDirectory = shared };
+        var config = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { StallSeconds = 0 },
+            BuildConfigs =
+            {
+                ["debug"] = new BuildConfiguration { CmakeBuildType = "Debug" },
+                ["release"] = new BuildConfiguration { CmakeBuildType = "Release" },
+            },
+        };
+
+        Task<BuildResult> BuildAsync(BuildRequest request) => Service(factory, exitCode: 0).BuildAsync(config, request, token);
+
+        Assert.Equal(LegVerdict.Passed, (await BuildAsync(debug)).Verdict.Verdict);
+        Assert.Null((await BuildAsync(debug)).RebuiltFromClean);
+        Assert.Equal(tracked.Variant.DirectoryName, BuildRecord.VariantIn(factory.FileSystem, shared));
+
+        // What CMake cached there for the variant that built last, which the guard refuses another build type over.
+        await File.WriteAllTextAsync(
+            Path.Combine(shared, BuildDirectoryGuard.CMakeCacheFileName),
+            $"CMAKE_HOME_DIRECTORY:INTERNAL={temp.Path.Replace('\\', '/')}\nCMAKE_BUILD_TYPE:STRING=Debug\n",
+            token);
+        await File.WriteAllTextAsync(Path.Combine(shared, "debug.o"), "the other variant's object", token);
+
+        var other = await BuildAsync(release);
+
+        Assert.Equal(LegVerdict.Passed, other.Verdict.Verdict);
+        Assert.Equal(
+            $"another variant's build: the last build here was of '{tracked.Variant.DirectoryName}', and this one is of '{release.Variant.DirectoryName}'",
+            other.RebuiltFromClean);
+        Assert.False(File.Exists(Path.Combine(shared, "debug.o")), "the other variant's objects were kept");
+        Assert.Equal(release.Variant.DirectoryName, BuildRecord.VariantIn(factory.FileSystem, shared));
+        Assert.Null((await BuildAsync(release)).RebuiltFromClean);
+    }
+
+    /// <summary>
     /// A tree git tracks nothing in - as a copy a sync made was, its files written and none staged - is
     /// said as that: nothing is watched while it builds, and the record it leaves holds no fingerprint,
     /// so the next build starts from clean and says why. Measured on a consumer's host copy: every build
@@ -2511,6 +2560,47 @@ public sealed class BuildServiceTests
 
         Assert.Equal(LegVerdict.Passed, (await tree.BuildAsync(Config(), inPlace, token)).Verdict.Verdict);
         Assert.DoesNotContain("starts from nothing", treeFactory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A build whose directory another tree's leg removed to make room says so as it starts again from nothing - in a copy
+    /// in place of the copy's own first-build line - and only once: the note is taken by that build, and one left where a
+    /// build has stood again since is dropped unsaid.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ABuildAnotherTreesLegRemoved_SaysSoOnce_AsItStartsFromNothing(bool copy, bool builtSince)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var request = copy ? Request(temp, outputs: ["bin/app.dll"]) with { CopyOf = temp.Path } : Request(temp, outputs: ["bin/app.dll"]);
+        var (service, factory) = await TrackedWithFactoryAsync(temp, token, leaves: [Path.Combine("bin", "app.dll")]);
+        var buildDirectory = request.Variant.DirectoryUnder(temp.Path);
+        var said = "its build directory was removed 2026-11-15 10:02 UTC, to make room for leg 'linux' of worktree o1/xa";
+
+        if (builtSince)
+        {
+            Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
+            factory.StandardOutput.GetStringBuilder().Clear();
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(buildDirectory)!);
+        ReclaimedBuildNote.Write(new PhysicalFileSystem(FilePermissionsFactory.Create()), buildDirectory, said);
+
+        Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
+
+        var output = factory.StandardOutput.ToString();
+
+        Assert.Equal(builtSince ? 0 : 1, output.Split("starts from nothing").Length - 1);
+        Assert.True(builtSince || output.Contains($"{request.Leg}: {said}, so this build starts from nothing", StringComparison.Ordinal), output);
+        Assert.False(File.Exists(ReclaimedBuildNote.PathOf(buildDirectory)));
+
+        factory.StandardOutput.GetStringBuilder().Clear();
+
+        Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
+        Assert.DoesNotContain("starts from nothing", factory.StandardOutput.ToString(), StringComparison.Ordinal);
     }
 
     private static BuildRequest Request(TempDirectory temp, IReadOnlyList<string> outputs)

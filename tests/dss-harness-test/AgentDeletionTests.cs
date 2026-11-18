@@ -724,6 +724,80 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
+    /// delete-worktree refuses a live agent's worktree, exit 13, naming the delete-agent that deletes it with the agent,
+    /// and removes nothing: deleting it alone would leave a live agent whose worktree is gone. delete-agent, which deletes
+    /// it through the same removal, is never refused by that, and the agent closes with its worktree gone.
+    /// </summary>
+    [Fact]
+    public async Task DeleteWorktree_RefusesALiveAgentsWorktree_NamingDeleteAgent()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        var worktree = kit.Worktree("ag");
+
+        var refused = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: false, deleteEvidence: true, discardUncommitted: true, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.Equal(
+            "Worktree 'o1/ag' is the worktree of agent 'ag' of orchestrator 'o1', which is live, and is deleted with the agent: "
+            + $"'{Core.Hosts.ToolPackage.Command} delete-agent o1 ag' says what deleting it keeps and removes, and with --apply deletes it, its evidence and "
+            + "transcripts kept. Nothing was deleted; --force deletes the worktree anyway, leaving the agent's record naming a worktree that is gone.",
+            refused.Outcome.Message);
+        Assert.True(Directory.Exists(Path.Combine(worktree, ".git")));
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+
+        var deleted = await kit.DeleteAsync("ag", apply: true);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.False(Directory.Exists(worktree));
+        Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
+    }
+
+    /// <summary>
+    /// --force deletes a live agent's worktree all the same, as the remedies that name it ask; a closed agent's worktree is
+    /// no live agent's and is deleted unforced; and an agent's record that cannot be read refuses the deletion, since
+    /// whether the agent is live cannot be told.
+    /// </summary>
+    [Fact]
+    public async Task DeleteWorktree_OfAnAgentsWorktree_IsForcedThrough_DeletedOnceClosed_AndRefusedOverAnUnreadableRecord()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("forced");
+        await kit.CreateAgentAsync("closed");
+        await kit.CreateAgentAsync("unread");
+
+        var forced = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/forced", force: true, deleteEvidence: false, cancellationToken: Token);
+
+        Assert.True(forced.Succeeded, forced.Outcome.Message);
+        Assert.False(Directory.Exists(kit.Worktree("forced")));
+
+        kit.Harness.OrchestrationStore.WriteAgent(kit.Layout, kit.Record("closed") with
+        {
+            State = AgentStates.Closed,
+            Abandoned = false,
+            Closing = new AgentClosing { At = DateTimeOffset.UtcNow, Evidence = string.Empty, Stamp = "1:1", Held = [] },
+        });
+        var closed = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/closed", force: false, deleteEvidence: true, discardUncommitted: true, cancellationToken: Token);
+
+        Assert.True(closed.Succeeded, closed.Outcome.Message);
+        Assert.False(Directory.Exists(kit.Worktree("closed")));
+
+        File.WriteAllText(kit.Layout.AgentRecordFile("unread"), "{ not a record");
+        var unread = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/unread", force: false, deleteEvidence: true, discardUncommitted: true, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, unread.Outcome.ExitCode);
+        Assert.StartsWith("Whether worktree 'o1/unread' is the worktree of a live agent of orchestrator 'o1' cannot be told: ", unread.Outcome.Message, StringComparison.Ordinal);
+        Assert.EndsWith(
+            $"Nothing was deleted: a live agent's worktree is deleted with the agent, by '{Core.Hosts.ToolPackage.Command} delete-agent o1 unread'; put its record right, "
+            + "or pass --force to delete the worktree anyway.",
+            unread.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.True(Directory.Exists(Path.Combine(kit.Worktree("unread"), ".git")));
+    }
+
+    /// <summary>
     /// delete-worktree asks the lock for a leg copy kept in the worktree as the lock keys it, links followed: where the
     /// worktrees root is a link and a run holds the copy as git spells the worktree, the deletion is refused, exit 13,
     /// naming the run, and removes nothing.
@@ -739,7 +813,7 @@ public sealed class AgentDeletionTests
 
         await using var held = await HoldTheCopyAsync(kit, kit.Harness.FileSystem.ResolveLinks(copy), run);
 
-        var refused = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: false, deleteEvidence: true, cancellationToken: Token);
+        var refused = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: false, deleteEvidence: true, asItsAgent: true, cancellationToken: Token);
 
         Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
         Assert.StartsWith(
@@ -753,7 +827,7 @@ public sealed class AgentDeletionTests
 
     /// <summary>
     /// A sweep this machine runs on a host holds its key in the host's copy of the worktree - one more copy in that copy's
-    /// .mutations - and removing the copy takes everything in it: the dry run names the sweep on a <c>held now:</c> line
+    /// .m - and removing the copy takes everything in it: the dry run names the sweep on a <c>held now:</c> line
     /// and is unfinished, exit 21, as its --apply is, which closes the agent and leaves the copy recorded without asking
     /// the host to remove a copy the sweep works in. With <c>--json</c> the sweep is in <c>heldNow</c>, holding a copy.
     /// </summary>
@@ -1149,7 +1223,7 @@ public sealed class AgentDeletionTests
         outside.WriteFile("kept.log", "not the worktree's\n");
         TestLinks.DirectoryLink(Path.Combine(created.Path, "evidence"), outside.Path);
 
-        var deleted = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "plain", force: false, deleteEvidence: false, discardUncommitted: true, Token);
+        var deleted = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "plain", force: false, deleteEvidence: false, discardUncommitted: true, cancellationToken: Token);
 
         Assert.True(deleted.Succeeded, deleted.Outcome.Message);
         Assert.True(File.Exists(outside.Combine("kept.log")));

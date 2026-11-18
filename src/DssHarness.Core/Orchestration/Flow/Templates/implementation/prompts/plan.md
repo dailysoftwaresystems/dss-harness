@@ -47,25 +47,56 @@ Where a line says that a step left no output, that thing was not read or did not
 
 ## How the tests are run
 
-Each item names the filter that selects the tests its change affects: the test classes that test what the item
-changes, the tests it writes among them - or, for a runner that selects tests by name, those tests' names. Write
+Each item names the tests its change affects, in tests, one unit to an entry: the test classes that test what the
+item changes, the tests it writes among them - or, for a runner that selects tests by name, those tests' names. Write
 test classes, not the classes the item changes: a runner selects tests, and which tests reach a class is not known
-from the class. The engine tests each item on its filter alone where the run's input affectedTests is on (it is
-`{input.affectedTests}`), and every test runs once every item of the round is built; where it is off, every test runs
-for each item, and the filter is kept for a run that turns it on. The legs this run tests on, each with its test
-runner as the repository's settings give it, the option a filter is given through, and what the leg leaves out:
+from the class. The engine tests each item on its units alone - with any its builder adds as it works - and the gate
+of each round on the units of every item built in the run, or on every test where the run's input finalTests says all
+(it is `{input.finalTests}`). An item whose change affects no test leaves tests empty and says in noTests why: what
+makes its work a document, a comment or a file no test reads. It is tested on none, and its review judges the reason.
+The legs this run tests on, each with its test runner as the repository's settings give it, the option a filter is
+given through, and what the leg leaves out:
 
 {orient.tests}
 
-The filter is given to the runner after that option, as one argument, exactly as you write it: write it in what that
-option takes for that runner. One filter is given to every leg the item is tested on, so it has to mean the same tests
-to each. It may name only tests that are there or that the item writes. One that a leg's own exclusions leave nothing
-of is refused before anything is built, and a person is asked. Left empty, there is no filter: every test runs for the
-item.
+Each unit is given to the runner after that option exactly as you write it - the units joined into one argument where
+the leg's settings join them, each after an option of its own where they do not: write each in what that option takes
+for that runner. The units are given to every leg the item is tested on, so each has to mean the same tests to each
+leg. A unit may name only tests that are there or that the item writes. One that a leg's own exclusions leave nothing
+of is refused before anything is built, and a person is asked.
 
 ## How recommendations are made in this repository
 
 {recommendations}
+
+## The universe this repository declares
+
+{text.closure}
+
+Where the file above says a heading is empty, the repository has not declared its universe yet: take the axes from what
+the repository builds and tests - its kinds, targets, configurations, formats, entry points, tiers and forms, both
+directions - and name each in the universe of the class it belongs to.
+
+## Close the class, at its one home
+
+For every defect the plan fixes and every behaviour it changes, write the class it belongs to, and work it as one item:
+
+1. Write the invariant in one sentence: X is decided by Y for every Z.
+2. Find the one home that should decide it - or say that no place does today, and creating the home is the fix.
+3. Find every site that decides it today, by searching the data - the kind, the key, the diagnostic, the verb, the
+   literal - across every tier, format, target and file kind, never the file the defect was seen in alone. The graph
+   first where it sees the data - its find for the names, its node and related for what reads and calls them - and
+   text search for what it does not see, each such search said in notCovered.
+4. Record each search: what was searched, how, the query as it was made, and how many places it found.
+5. Write the universe from the axes the repository declares, and the count of their product.
+6. Where more than one site decides, the action is consolidate: the home decides, every other site reads it, and the
+   item owns every path that changes. Patching some of a class's sites is never done; a class with one site names the
+   home itself, and its searches prove it is the only one. The site at the home's path and symbol is marked home, and
+   no other is: every other site reads the home or is deleted.
+
+The work of a class goes to one item, which owns every site that changes, so items are split by classes before they are
+split by files. An item that decides nothing - a document, a rename the tools make, a dependency bump - gives no class
+and says why in noClass.
 
 ## What to do
 
@@ -87,7 +118,7 @@ item.
    part of its item cannot be done says so, and a person is asked before anything of the item is folded.
 6. For each item write: instructions a builder with none of this conversation can follow; its definition of done, as
    statements a check can answer one by one - each behaviour, the test that pins it, and what is true of the tree
-   when the builder reports; the paths it owns and the paths it must not touch; its test filter; what it reuses, by
+   when the builder reports; the paths it owns and the paths it must not touch; its tests, or why it affects none; what it reuses, by
    path and for what; what it creates, with why nothing that exists serves and where you searched; and what it
    replaces because the request asked, by path, with what becomes of the old one.
 
@@ -96,9 +127,14 @@ item.
 A summary of the plan, naming each part of the request no item covers, with the reason; the plan's definition of
 done - what holds when the whole plan is built, as statements a check can answer one by one, which the run's final
 audit holds every round against; whether it was built on a plan a person gave or made here; each departure from a
-given plan, with its reason; the items; and under `scope` an empty list, since nothing is being updated.
+given plan, with its reason; the items, each with its classes or its noClass; and under `scope` an empty list, since
+nothing is being updated.
 
 A machine checks the items before anyone builds them: every name valid, no file under two items, forbidden paths kept,
-every path an item reuses or replaces there in the tree, and every item saying what it reuses, creates or replaces.
-An independent auditor then checks the plan against the code, searching for itself what you say does not exist. Then
+every path an item reuses or replaces there in the tree, every item saying what it reuses, creates or replaces, each
+home and site a path inside the tree, each class's home among the item's own paths and there in the tree, a site marked
+home only where it is the home, every other site the item's too, more than one site consolidated at the home, each
+class searched by data its queries name again, the universe holding the axes the repository declares, one class id
+used once, and one home belonging to one item. An independent auditor then checks
+the plan against the code, searching for itself what you say does not exist - the classes above all. Then
 a person approves it, unless they approved it beforehand in what they gave this run.

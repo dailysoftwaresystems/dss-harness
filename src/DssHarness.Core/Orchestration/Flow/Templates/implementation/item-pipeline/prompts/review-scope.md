@@ -8,7 +8,9 @@ It is what this run changed under these paths since commit `{input.orient.startC
 
 Read it in the main tree: `git diff {input.orient.startCommit} HEAD -- <paths>` shows it, with the paths above after `--`.
 
+Where the item names no test, the reason it gives, which the review of tests judges: {input.item.noTests}
+
 ## What to return
 
 For each of the five aspects - errors, tests, types, comments, simplicity - true or false. Where you are not sure,
-true.
+true. Where a reason stands above for the item's naming no test, tests is true.

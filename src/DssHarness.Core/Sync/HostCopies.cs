@@ -47,29 +47,16 @@ public static partial class HostCopies
     }
 
     /// <summary>
-    /// Where <paramref name="host"/> keeps the copy of <paramref name="treeRoot"/>, by the repositoryPath
-    /// <paramref name="config"/> declares for it.
+    /// Where <paramref name="host"/> keeps the copy of <paramref name="treeRoot"/>, a tree of <paramref name="context"/>'s
+    /// repository, beside where it keeps the main checkout's for this machine (<see cref="RepositoryOf"/>).
     /// </summary>
-    /// <param name="config">The configuration that declares the host.</param>
+    /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
     /// <param name="host">The host.</param>
-    /// <param name="layout">The repository the tree belongs to.</param>
     /// <param name="treeRoot">The tree: the main checkout, or one of its worktrees.</param>
     /// <param name="comparison">How this machine compares paths.</param>
-    /// <param name="worktreesDirectory">The worktrees root; the configured one, where none is given.</param>
-    /// <exception cref="HarnessException">The host declares no repositoryPath.</exception>
-    public static string Of(
-        HarnessConfig config,
-        HostId host,
-        HarnessLayout layout,
-        string treeRoot,
-        StringComparison comparison,
-        string? worktreesDirectory = null)
-        => For(
-            RepositoryPathOf(config, host),
-            layout,
-            treeRoot,
-            worktreesDirectory ?? layout.WorktreesDirectoryUnder(config.Worktrees.Root),
-            comparison);
+    /// <exception cref="HarnessException">Where the host keeps its copies is not known: see <see cref="RepositoryOf"/>.</exception>
+    public static string Of(HarnessContext context, HostId host, string treeRoot, StringComparison comparison)
+        => HostCopyPlace.Of(context, host, treeRoot, comparison).Copy;
 
     /// <summary>
     /// Where a host whose main copy is at <paramref name="repositoryPath"/> keeps the copy of
@@ -195,14 +182,87 @@ public static partial class HostCopies
             : copy;
     }
 
-    /// <summary>Where a host keeps the main checkout's copy, as the configuration declares it.</summary>
-    /// <param name="config">The configuration that declares the host.</param>
+    /// <summary>
+    /// The host's copy of the main checkout that <paramref name="tree"/> - a tree a host was sent legs to run in: its copy
+    /// of a tree, or a leg's own copy of one kept in that copy's .legs (<see cref="HolderOf"/>) - belongs to
+    /// (<see cref="MainCopyOf"/>).
+    /// </summary>
+    /// <param name="tree">The tree, as the host spells it.</param>
+    /// <param name="comparison">How the machine the tree is on compares paths.</param>
+    public static string MainCopyOfTree(string tree, StringComparison comparison)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        return MainCopyOf(HolderOf(tree, comparison) ?? Path.TrimEndingDirectorySeparator(tree));
+    }
+
+    /// <summary>
+    /// The tree whose <c>.legs</c> keeps <paramref name="tree"/> - a leg's own copy of it, <c>&lt;tree&gt;/.legs/&lt;key&gt;</c> -
+    /// or <see langword="null"/> where no tree's .legs keeps it: the one rule by which a copy made for a leg is told from
+    /// the tree it was made of, wherever a machine asks which repository a tree is of.
+    /// </summary>
+    /// <param name="tree">The tree, as the machine it is on spells it.</param>
+    /// <param name="comparison">How that machine compares paths.</param>
+    public static string? HolderOf(string tree, StringComparison comparison)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        return Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(tree)) is { } slot
+            && string.Equals(Path.GetFileName(slot), HarnessLayout.LegsDirectoryName, comparison)
+            && Path.GetDirectoryName(slot) is { Length: > 0 } holder
+                ? holder
+                : null;
+    }
+
+    /// <summary>Where a host keeps the main checkout's copy for this machine: see <see cref="RepositoryOf"/>.</summary>
+    /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
     /// <param name="host">The host.</param>
-    /// <exception cref="HarnessException">The host declares no repositoryPath.</exception>
-    public static string RepositoryPathOf(HarnessConfig config, HostId host)
-        => DeclaredFor(config, host)?.RepositoryPath ?? throw new HarnessException(
-            HarnessExit.ConfigInvalid,
-            $"Host {host} declares no repositoryPath, so there is nowhere to keep its copy.");
+    /// <exception cref="HarnessException">Where the host keeps its copies is not known: see <see cref="RepositoryOf"/>.</exception>
+    public static string RepositoryPathOf(HarnessContext context, HostId host) => RepositoryOf(context, host).Path;
+
+    /// <summary>
+    /// Where a host keeps the main checkout's copy for this machine, and what says so: the <c>REPOSITORY_PATH</c> its item's
+    /// .env sets, which is this machine's own; else the repositoryPath config.json declares, the default a fresh clone uses.
+    /// The one answer every reader of a host's copies asks - a sync, a leg placed there, host-exec, a listing, a clean - so
+    /// none of them reads config.json's past an item that sets its own.
+    /// </summary>
+    /// <remarks>
+    /// Asked on the machine that reaches the host, which holds its item: a host's own copy holds none, and a DssHarness
+    /// there finds its copies from the copy it was sent to run in (<see cref="MainCopyOfTree"/>), never from config.json.
+    /// </remarks>
+    /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
+    /// <param name="host">The host.</param>
+    /// <exception cref="HarnessException">
+    /// The host's item this machine holds cannot be read (<see cref="HarnessExit.HostUnavailable"/>), so where it keeps its
+    /// copies for this machine is not known; or neither the item nor config.json says (<see cref="HarnessExit.ConfigInvalid"/>).
+    /// </exception>
+    public static HostRepositoryPath RepositoryOf(HarnessContext context, HostId host)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(host);
+
+        var item = context.HostItems.Of(host);
+
+        // Never config.json's in its place: an item set by its user to keep the copy elsewhere would see a sync write, and
+        // a clean or a removal delete, where that user keeps something else.
+        if (item.Problem is { } problem)
+        {
+            throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"Where host {host} keeps its copies for this machine is not known, since its item cannot be read: {problem}.");
+        }
+
+        if (item.RepositoryPath is { } set)
+        {
+            return new HostRepositoryPath(set, $"{Secrets.HostSecretsStore.RepositoryPathKey} in '{item.File}'");
+        }
+
+        return DeclaredFor(context.Config, host)?.RepositoryPath is { } declared
+            ? new HostRepositoryPath(declared, $"repositoryPath in '{HarnessLayout.ConfigFileRelative}'")
+            : throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"Host {host} declares no repositoryPath, so there is nowhere to keep its copy.");
+    }
 
     /// <summary>What <paramref name="config"/> declares for <paramref name="host"/>, or <see langword="null"/> where it declares nothing.</summary>
     /// <param name="config">The configuration.</param>
@@ -229,6 +289,49 @@ public static partial class HostCopies
     private static partial Regex CopyName();
 }
 
+/// <summary>Where a host keeps the main checkout's copy for this machine, and what says so.</summary>
+/// <param name="Path">The path, as it is written: <c>~/src/app</c> keeps the account out of it.</param>
+/// <param name="From">
+/// What set it, as a reader goes to change it: <c>REPOSITORY_PATH in '.harness-config/wslDistros/ubuntu/.env'</c>, or
+/// <c>repositoryPath in '.harness-config/config.json'</c>.
+/// </param>
+public sealed record HostRepositoryPath(string Path, string From);
+
+/// <summary>Where a host keeps the copy of one tree for this machine, and where it keeps the main checkout's beside it.</summary>
+/// <param name="Copy">The tree's copy, as it is written.</param>
+/// <param name="Repository">Where the main checkout's is, and what set it.</param>
+public sealed record HostCopyPlace(string Copy, HostRepositoryPath Repository)
+{
+    /// <summary>
+    /// Where <paramref name="host"/> keeps the copy of <paramref name="treeRoot"/>, a tree of <paramref name="context"/>'s
+    /// repository, for this machine (<see cref="HostCopies.RepositoryOf"/>).
+    /// </summary>
+    /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
+    /// <param name="host">A WSL distribution or an ssh host.</param>
+    /// <param name="treeRoot">The tree.</param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    /// <exception cref="HarnessException">Where the host keeps its copies is not known.</exception>
+    public static HostCopyPlace Of(HarnessContext context, HostId host, string treeRoot, StringComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var repository = HostCopies.RepositoryOf(context, host);
+
+        return new HostCopyPlace(
+            HostCopies.For(repository.Path, context.Layout, treeRoot, context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root), comparison),
+            repository);
+    }
+
+    /// <summary>
+    /// The place as a line says it: <c>keeps this tree's copy at '~/src/app', as REPOSITORY_PATH in '...' sets</c>, with
+    /// the main checkout's beside a worktree's.
+    /// </summary>
+    public string Describe()
+        => $"keeps this tree's copy at '{Copy}'"
+            + (string.Equals(Copy, Repository.Path, StringComparison.Ordinal) ? string.Empty : $", beside '{Repository.Path}'")
+            + $", as {Repository.From} sets";
+}
+
 /// <summary>One worktree's copy on one host.</summary>
 /// <param name="Worktree">The name the worktree's copies are kept under.</param>
 /// <param name="Host">The host, as <see cref="HostId.ToString"/> spells it.</param>
@@ -245,7 +348,81 @@ public sealed record HostCopyEntry(string Worktree, string Host, string Path, st
         return string.Equals(Host, other.Host, StringComparison.OrdinalIgnoreCase)
             && string.Equals(Path, other.Path, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The copy of the main checkout this entry's copy was kept beside - its path, as the host spells it, with
+    /// <see cref="HostCopies.WorktreeSuffix"/> and its name taken off - or <see langword="null"/> where its path is not where
+    /// a worktree's copy is kept. The one place its host is asked about it, by a listing and by a clean's measuring alike, as
+    /// its removal acts on its path whatever the host's item or config.json say of where the host keeps its copies now: a
+    /// copy recorded beside an earlier repositoryPath is still there, and still this machine's.
+    /// </summary>
+    /// <remarks>A method, never a property: the record is written as its four fields, and a property would be written too.</remarks>
+    public string? KeptBeside()
+    {
+        var path = Path.TrimEnd('/', '\\');
+        var family = HostCopies.WorktreeSuffix + Worktree;
+
+        return path.Length > family.Length && path.EndsWith(family, StringComparison.Ordinal) ? path[..^family.Length] : null;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="copy"/>, a copy a host listed beside where it keeps the main checkout's copy, is this entry's:
+    /// one directory, spelt as the host spells it.
+    /// </summary>
+    /// <param name="copy">The copy the host listed.</param>
+    public bool IsListedAs(HostCopyFound copy)
+    {
+        ArgumentNullException.ThrowIfNull(copy);
+
+        return string.Equals(Path.TrimEnd('/', '\\'), copy.Path.TrimEnd('/', '\\'), StringComparison.Ordinal);
+    }
 }
+
+/// <summary>Whether a tree this machine's record names is on this machine.</summary>
+public enum TreePresence
+{
+    /// <summary>The tree is there.</summary>
+    There,
+
+    /// <summary>The tree is seen to be gone: the directory it was in can be looked in, and holds nothing where it was.</summary>
+    Gone,
+
+    /// <summary>Whether it is there or gone cannot be told, which is never read as gone.</summary>
+    Untold,
+}
+
+/// <summary>What looking for a tree on this machine found, and, where it could not tell, why.</summary>
+/// <param name="Presence">Whether it is there, gone, or neither told.</param>
+/// <param name="Why">Why it could not be told, as a line says it after "cannot be told: "; empty where it was told.</param>
+public sealed record TreeLook(TreePresence Presence, string Why)
+{
+    /// <summary>The tree is there.</summary>
+    public static TreeLook There { get; } = new(TreePresence.There, string.Empty);
+
+    /// <summary>The tree is seen to be gone.</summary>
+    public static TreeLook Gone { get; } = new(TreePresence.Gone, string.Empty);
+
+    /// <summary>Whether the tree is there cannot be told, for <paramref name="why"/>.</summary>
+    /// <param name="why">Why, as a line says it after "cannot be told: ".</param>
+    public static TreeLook Untold(string why)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+
+        return new TreeLook(TreePresence.Untold, why);
+    }
+
+    /// <summary>
+    /// Whether it could not be told because the record spells the tree as another system does - written by a sync run
+    /// there, which recorded the copy last - so the tree it names may be the very tree asking, as that system spells it:
+    /// one checkout used from Windows and from WSL. False for a tree spelt for this machine, absent or unreadable here.
+    /// </summary>
+    public bool SpeltForAnotherSystem { get; init; }
+}
+
+/// <summary>Another tree's entry that holds a copy a sync would claim, and what looking for that tree found.</summary>
+/// <param name="Tree">The tree holding it, as the record names it.</param>
+/// <param name="Look">Whether that tree is there, or cannot be told to be gone.</param>
+public sealed record RecordedHolder(string Tree, TreeLook Look);
 
 /// <summary>
 /// Which hosts hold a copy of which worktree, and of which tree on this machine, so that deleting a worktree removes
@@ -259,12 +436,12 @@ public sealed record HostCopyEntry(string Worktree, string Host, string Path, st
 /// <para>
 /// A copy is named for its worktree's directory, and a worktree made by hand, or by another tool, outside the
 /// worktrees root can be named as one inside it is. So each entry names the tree it is of: a copy is claimed for a
-/// tree before a sync writes into it, and refused while another worktree that still exists holds it; and deleting a
-/// worktree removes the copies of that tree, and of any tree of its name that no longer exists, never those of one
-/// that does.
+/// tree before a sync writes into it, and refused while another worktree holds it that is not seen to be gone; and
+/// deleting a worktree removes the copies of that tree, and of any tree of its name seen to be gone, never those of one
+/// that is there or that cannot be looked at (<see cref="Look(string, string)"/>).
 /// </para>
 /// </remarks>
-/// <param name="fileSystem">Reads and writes the record, and tells a tree that exists from one that is gone.</param>
+/// <param name="fileSystem">Reads and writes the record, and looks for the trees it names.</param>
 /// <param name="pathComparison">How this machine compares paths, for telling one tree from another.</param>
 public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison pathComparison)
 {
@@ -288,9 +465,89 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
         return System.IO.Path.Combine(layout.HostCopiesDirectory, FileName);
     }
 
-    /// <summary>Whether <paramref name="tree"/> still exists on this machine.</summary>
-    /// <param name="tree">A tree an entry names.</param>
-    public bool Exists(string tree) => _fileSystem.DirectoryExists(tree);
+    /// <summary>Whether the tree <paramref name="entry"/> is recorded of is on this machine (<see cref="Look(string, string)"/>).</summary>
+    /// <param name="entry">An entry of the record.</param>
+    public TreeLook Look(HostCopyEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        return Look(entry.Tree, entry.Worktree);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="tree"/>, a tree whose copies are kept under <paramref name="name"/>, is on this machine: the
+    /// one answer every decision of what a copy is - removed, measured, listed, claimed - is made by. Gone only where that is
+    /// seen: its path is whole on this machine, nothing is at it, and the directory it was made in is there to look in - its
+    /// parent, or, for an orchestrator's agent's tree (a name of two joined by <see cref="WorktreeAddress.CopySeparator"/>),
+    /// its parent's parent where its orchestrator's directory, which goes once its agents are gone, is gone too. Anything
+    /// else that is no tree there cannot be told - a path spelt for another system, a directory it was in that is not there
+    /// (a volume or a share that is not mounted), one this process may not look in, a file at it, a link at it leading
+    /// nowhere that can be looked at - and is never read as gone: a copy is removed for a tree that is gone, and a tree that
+    /// only cannot be seen may still be there, using it.
+    /// </summary>
+    /// <param name="tree">A tree an entry names, as the record spells it.</param>
+    /// <param name="name">The name its copies are kept under.</param>
+    public TreeLook Look(string tree, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        if (!System.IO.Path.IsPathFullyQualified(tree))
+        {
+            return TreeLook.Untold($"'{tree}' is no whole path on this machine, so it may be another system's spelling of a tree") with { SpeltForAnotherSystem = true };
+        }
+
+        var at = System.IO.Path.TrimEndingDirectorySeparator(tree);
+
+        try
+        {
+            switch (_fileSystem.KindOf(at))
+            {
+                case PathKind.Directory:
+                    return TreeLook.There;
+
+                case PathKind.Link:
+                    return _fileSystem.DirectoryExists(at)
+                        ? TreeLook.There
+                        : TreeLook.Untold($"'{at}' is a link that leads nowhere this machine can look");
+
+                case PathKind.File:
+                    return TreeLook.Untold($"a file stands at '{at}', where the tree was");
+            }
+
+            // The directories it may have been made in, nearest first: its own parent, then an agent's orchestrator's parent.
+            var levels = name.Contains(WorktreeAddress.CopySeparator, StringComparison.Ordinal) ? 2 : 1;
+            var holder = at;
+
+            for (var level = 1; level <= levels; level++)
+            {
+                if (System.IO.Path.GetDirectoryName(holder) is not { Length: > 0 } above)
+                {
+                    return TreeLook.Untold($"nothing is at '{holder}', and no directory above it can be looked in");
+                }
+
+                holder = above;
+
+                var kind = _fileSystem.KindOf(holder);
+
+                if (kind == PathKind.Directory || (kind == PathKind.Link && _fileSystem.DirectoryExists(holder)))
+                {
+                    return TreeLook.Gone;
+                }
+
+                if (kind != PathKind.None)
+                {
+                    return TreeLook.Untold($"'{holder}', which it was in, is no directory this machine can look in");
+                }
+            }
+
+            return TreeLook.Untold($"'{holder}', which it was in, is not there either: a volume or a share it was on may not be mounted");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return TreeLook.Untold($"'{at}' cannot be looked at: {ex.Message.TrimEnd('.')}");
+        }
+    }
 
     /// <summary>Whether two entries' trees are one tree.</summary>
     /// <param name="first">One tree.</param>
@@ -300,18 +557,18 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
 
     /// <summary>
     /// Records <paramref name="entry"/>'s copy as its tree's, before a sync writes into it - unless another worktree
-    /// that still exists holds it, which is said instead, and nothing recorded. An entry of a tree that is gone is
-    /// taken over.
+    /// that still exists holds it, or one that cannot be told to be gone (<see cref="Look(string, string)"/>), which is said
+    /// instead, and nothing recorded. An entry of a tree that is seen to be gone is taken over.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="entry">The copy a sync is about to make, or bring in step.</param>
-    /// <returns>The tree of the worktree that holds the copy, or <see langword="null"/> once it is recorded.</returns>
+    /// <returns>The worktree that holds the copy, and what looking for it found; or <see langword="null"/> once it is recorded.</returns>
     /// <exception cref="HarnessException">The record cannot be read or written: refused.</exception>
-    public string? Claim(HarnessLayout layout, HostCopyEntry entry)
+    public RecordedHolder? Claim(HarnessLayout layout, HostCopyEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        string? holder = null;
+        RecordedHolder? holder = null;
 
         Change(layout, entries =>
         {
@@ -329,14 +586,14 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
     }
 
     /// <summary>
-    /// The tree of the worktree that holds <paramref name="entry"/>'s copy, which <see cref="Claim"/> would refuse it
-    /// for, or <see langword="null"/> where it would record it - read, and nothing recorded: what a dry run of a sync
-    /// asks, so it is refused where the sync would be.
+    /// The worktree that holds <paramref name="entry"/>'s copy, which <see cref="Claim"/> would refuse it for, or
+    /// <see langword="null"/> where it would record it - read, and nothing recorded: what a dry run of a sync asks, so it is
+    /// refused where the sync would be.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="entry">The copy a sync would make, or bring in step.</param>
     /// <exception cref="HarnessException">The record cannot be read: refused.</exception>
-    public string? Holder(HarnessLayout layout, HostCopyEntry entry)
+    public RecordedHolder? Holder(HarnessLayout layout, HostCopyEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
@@ -344,11 +601,22 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
     }
 
     /// <summary>
-    /// Of <paramref name="entries"/>, the tree of another worktree that still exists and holds <paramref name="entry"/>'s
-    /// copy: the one rule <see cref="Claim"/> records by and <see cref="Holder"/> reads by.
+    /// Of <paramref name="entries"/>, another worktree that holds <paramref name="entry"/>'s copy and is not seen to be gone -
+    /// there still, or not to be told - with what looking for it found: the one rule <see cref="Claim"/> records by and
+    /// <see cref="Holder"/> reads by.
     /// </summary>
-    private string? HolderAmong(IReadOnlyList<HostCopyEntry> entries, HostCopyEntry entry)
-        => entries.FirstOrDefault(kept => kept.SameCopy(entry) && !SameTree(kept.Tree, entry.Tree) && Exists(kept.Tree))?.Tree;
+    private RecordedHolder? HolderAmong(IReadOnlyList<HostCopyEntry> entries, HostCopyEntry entry)
+    {
+        foreach (var kept in entries.Where(kept => kept.SameCopy(entry) && !SameTree(kept.Tree, entry.Tree)))
+        {
+            if (Look(kept) is { Presence: not TreePresence.Gone } look)
+            {
+                return new RecordedHolder(kept.Tree, look);
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>Stops recording <paramref name="entry"/>, once its copy is gone or is not the harness's to remove.</summary>
     /// <param name="layout">The repository.</param>

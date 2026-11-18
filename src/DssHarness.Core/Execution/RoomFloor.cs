@@ -39,6 +39,22 @@ public sealed record RoomFloor
     /// </summary>
     public string? Unwatched { get; }
 
+    /// <summary>
+    /// Makes room for the build, where its machine says so (<see cref="Configuration.AdmissionSettings.ReclaimIdleBuilds"/>),
+    /// from other trees' idle builds on a filesystem it fills that is under the floor - given the room read there, the least
+    /// to make, which brings it back to the floor, and the most, which adds the build's need beyond it - before the build is
+    /// stopped for it: what was made, or <see langword="null"/> where nothing was to be removed. <see langword="null"/> where
+    /// nothing is made for it.
+    /// </summary>
+    public Func<FileSystem.DiskSpace, long, long, MadeRoom?>? MakeRoom { get; init; }
+
+    /// <summary>
+    /// What the leg's build still needed as it was admitted, where something said (<see cref="Legs.RoomNeed"/>): the room
+    /// made beyond the floor where the build falls under it, so a build that falls under it again a moment later is not
+    /// made room for one directory at a time. Nothing where nothing said.
+    /// </summary>
+    public long Need { get; init; }
+
     /// <summary>A floor on the filesystem of the build directory alone, which is all the build fills.</summary>
     /// <param name="leg">The leg whose builds it holds.</param>
     /// <param name="bytes">The least room left free.</param>

@@ -20,10 +20,16 @@ issue that was there before the run. What the diagnosis found:
 - The paths near your work that you must not touch: {input.item.forbiddenPaths}
 - What must hold when your work is finished, your item's definition of done, checked statement by statement before
   you report: {input.item.done}
-- The filter that names the tests your change affects: `{input.item.testFilter}`. The tests it names are yours to write
-  where they are not there yet. The engine runs only those for this item where the run's input affectedTests is on
-  (it is `{input.affectedTests}`), and every test where it is off or the filter is empty; every test runs once every
-  item of the round is built, either way.
+- The tests your change affects, one unit to an entry: {input.item.tests}. The tests they name are yours to write
+  where they are not there yet. The engine tests this item on them alone, with the units your answer's tests add - a
+  test you write under a name they do not hold, or one you find reads what you change - and the round's gate on the
+  units of every item built in the run.
+- Where the item names no test, why its change affects none: {input.item.noTests}. The engine then tests it on none,
+  and its review judges the reason; a test you find your change reaches goes in your answer's tests all the same.
+- The classes of the decisions your item changes, each with its invariant, its one home and its sites:
+  {input.item.classes}
+- Where the item decides nothing of the kind, its reason: {input.item.noClass}
+- The universe this repository declares, and what else judges its decisions: {text.closure}
 
 What exists and what is new:
 
@@ -40,6 +46,34 @@ turned off.
 
 Your worktree is `{worktree}`. It is a copy of the tree made for you. Nothing you do is committed by you: the engine
 folds your changes into the main tree when you report.
+
+## How you measure
+
+You cannot run `build`, `test` or `check-mutations` yourself: the engine runs them. Measure with the `measure`
+tool: it takes the leg, its variant, the filter and the cell you are measuring, runs those tests of that leg in the
+tree you work in, and answers what they showed. Your record's `measuredBy` cites the id of the call that measured,
+and its `result` is what that call answered for that cell: `passed` where it passed, `failed-fixed` where it failed
+and you fixed it in this item. A fix is shown, never said: after you fix a failed cell, measure it again - the same
+leg, variant, filter and cell - and the check holds the cell to the newest call of that measurement, which must
+answer passed, for `passed` and `failed-fixed` alike; your record may still cite the call that failed.
+Only a leg this run's configuration declares is measured; a reference that is no declared leg - a tool, a service,
+another implementation - is named unmeasured, with the reason, and so is a cell the tool answers unmeasured.
+
+## The class you close
+
+For every class of your item, before you edit: read its invariant, its one home and its site list below, and check
+them in the code; a site the list missed is yours to add, searched by the data (the kind, the key, the diagnostic,
+the literal) across every tier, format and file kind, not the file you saw it in. More than one site means you
+consolidate: the home decides, every other site reads it, the duplicates are deleted in this item. Patching one site
+of several is never done. Your test is table-driven over the universe the class names - each axis's values, both
+directions, every form - not over the reported case, so a value added to the vocabulary later is covered the day it
+lands; where this repository keeps mutation arms, your arm mutates the home. Before you report, sweep the
+neighbours: the same invariant at the other cells, the opposite direction, and the optimised form of the same
+source as `closure.md` names it, on each leg and on each reference separately; fix every failure in this item. A
+cell you cannot measure is named unmeasured, with the reason. Your report carries the record of each class:
+invariant, home, sites before and after, the searches, the universe covered, the pin, the arm, each neighbour and
+its measurement, and the closing claim, which names the universe and never the case. Nothing is folded without
+the record.
 
 ## What to do
 

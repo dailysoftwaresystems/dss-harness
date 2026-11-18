@@ -24,8 +24,11 @@ public interface ITestLegs : IUseCase
 /// <summary>What a test run was asked: the legs, and which of their tests.</summary>
 public sealed record TestLegsRequest : LegWorkWithSetUpsRequest
 {
-    /// <summary>The tests to run, as the runner's own filter takes it; <see langword="null"/> for all of them.</summary>
-    public string? Filter { get; init; }
+    /// <summary>
+    /// The filter units of the tests to run, each as the runner's own filter takes it - the tests any of them names run;
+    /// none for all of them.
+    /// </summary>
+    public IReadOnlyList<string> Filters { get; init; } = [];
 
     /// <summary>The tests to leave out, by name.</summary>
     public IReadOnlyList<string> Excludes { get; init; } = [];
@@ -56,7 +59,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
 
         // Read once, for the legs run here and the hosts given theirs alike: which tests run is one
         // choice, and a host told something else would report another suite under the same leg.
-        var filter = request.Filter;
+        var filters = request.Filters;
 
         return await _runs.ExecuteAsync(
             TestService.CommandName,
@@ -69,7 +72,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
                 request.UseStaged,
                 request.Time,
                 request.Here,
-                TestService.RemoteArguments(filter, request.Excludes, request.Labels, request.SkipBuild, request.Time))
+                TestService.RemoteArguments(filters, request.Excludes, request.Labels, request.SkipBuild, request.Time))
             {
                 // Built first unless told not to, and tested either way.
                 Workload = new LegWorkload(Build: !request.SkipBuild, Test: true, []) { SetUp = request.SetUp },
@@ -78,7 +81,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
                 Isolation = request.Isolation,
                 KeepGoing = request.KeepGoing,
             },
-            (work, token) => RunLegAsync(_builds, _tests, _toolchains, work, filter, request.Excludes, request.Labels, request.SkipBuild, token),
+            (work, token) => RunLegAsync(_builds, _tests, _toolchains, work, filters, request.Excludes, request.Labels, request.SkipBuild, token),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -92,7 +95,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
         ITestService tests,
         CMakeToolchainReader toolchains,
         LegWork work,
-        string? filter,
+        IReadOnlyList<string> filters,
         IReadOnlyList<string> excludes,
         IReadOnlyList<string> labels,
         bool skipBuild,
@@ -125,7 +128,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
             Compilers = toolchains.NamedFor(leg.Project, leg.BuildDirectory),
             HostTestCores = leg.HostSettings.TestCores,
             HostEnvironment = leg.Environment,
-            Filter = filter,
+            Filters = filters,
             Excludes = excludes,
 
             // By the host the dispatching machine named, where this machine runs a leg for another: a host

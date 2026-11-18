@@ -500,12 +500,12 @@ public sealed class CheckMutationsEndToEndTests
                 Assert.True(swept.ExitCode == HarnessExit.Success, said);
                 Assert.Equal("#pragma once\n", File.ReadAllText(Path.Combine(kept, "include", "plumb.hpp")));
 
-                var cache = File.ReadAllLines(Path.Combine(variant.DirectoryUnder(worker), BuildDirectoryGuard.CMakeCacheFileName));
+                var cache = File.ReadAllLines(Path.Combine(MutationWorkers.BuildDirectoryOf(worker), BuildDirectoryGuard.CMakeCacheFileName));
                 var pointed = Assert.Single(cache, line => line.StartsWith("FETCHCONTENT_SOURCE_DIR_PLUMB:", StringComparison.Ordinal));
 
                 Assert.EndsWith("/.harness-config/deps/plumb", pointed, StringComparison.Ordinal);
                 Assert.Contains(cache, line => line.StartsWith("FETCHCONTENT_FULLY_DISCONNECTED:", StringComparison.Ordinal) && line.EndsWith("=ON", StringComparison.Ordinal));
-                Assert.False(Directory.Exists(Path.Combine(variant.DirectoryUnder(worker), "_deps", "plumb-src")), "The worker fetched what it was given.");
+                Assert.False(Directory.Exists(Path.Combine(MutationWorkers.BuildDirectoryOf(worker), "_deps", "plumb-src")), "The worker fetched what it was given.");
 
                 // The leg's build directory gone, as a clean of the leg leaves it: nothing says what its build fetched, so the
                 // worker is given nothing, keeps nothing, and fetches as the leg would.
@@ -515,7 +515,7 @@ public sealed class CheckMutationsEndToEndTests
 
                 Assert.True(again.ExitCode == HarnessExit.Success, again.StandardError + again.StandardOutput);
                 Assert.False(Directory.Exists(FetchedSources.KeptIn(worker)), "The worker kept dependency sources it was no longer given.");
-                Assert.True(File.Exists(Path.Combine(variant.DirectoryUnder(worker), "_deps", "plumb-src", "CMakeLists.txt")), "The worker did not fetch as the leg would.");
+                Assert.True(File.Exists(Path.Combine(MutationWorkers.BuildDirectoryOf(worker), "_deps", "plumb-src", "CMakeLists.txt")), "The worker did not fetch as the leg would.");
             }
             catch (Exception ex) when (clock.Explains(ex))
             {

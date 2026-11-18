@@ -1,5 +1,6 @@
 using NSubstitute;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Secrets;
@@ -332,6 +333,109 @@ public sealed class HostSecretsStoreTests
         Assert.Equal(string.Empty, read.Problem);
         Assert.NotNull(read.Item);
         Assert.Null(read.Item.Superuser);
+    }
+
+    /// <summary>
+    /// An item may set where its host keeps this machine's copies, REPOSITORY_PATH, over config.json's repositoryPath: read
+    /// as written, for an ssh host and a WSL distribution alike, and told with the distribution a WSL item names - never
+    /// its credential - by the one reading every reader of a host's copies asks.
+    /// </summary>
+    [Theory]
+    [InlineData("ssh")]
+    [InlineData("wsl")]
+    public void AnItemsRepositoryPath_IsReadAsWritten_AndToldWithItsDistribution(string kind)
+    {
+        using var repository = new TempDirectory();
+        var fixture = new Fixture(repository);
+        var host = kind == "ssh" ? HostId.Ssh(Item) : HostId.Wsl(Item);
+
+        if (kind == "ssh")
+        {
+            fixture.WriteSshItem(Item, "ADDRESS=host.invalid\nUSER=harness\nREPOSITORY_PATH=~/mine/app\n");
+        }
+        else
+        {
+            repository.WriteFile(
+                Path.Combine(".harness-config", "wslDistros", Item, ".env"),
+                "DISTRO=Example-Linux\nSUDO_PASSWORD=not-a-real-password\nREPOSITORY_PATH=~/mine/app\n");
+        }
+
+        var facts = fixture.Store.ReadFacts(fixture.Layout, host);
+
+        Assert.Equal(
+            new ItemFacts
+            {
+                File = $".harness-config/{(kind == "ssh" ? "sshItems" : "wslDistros")}/{Item}/.env",
+                Present = true,
+                RepositoryPath = "~/mine/app",
+                Distribution = kind == "ssh" ? null : "Example-Linux",
+            },
+            facts);
+        Assert.Equal("~/mine/app", kind == "ssh"
+            ? fixture.Store.ReadSshItem(fixture.Layout, Item).Item!.RepositoryPath
+            : fixture.Store.ReadWslItem(fixture.Layout, Item).Item!.RepositoryPath);
+    }
+
+    /// <summary>
+    /// An item's REPOSITORY_PATH is held to the rule config.json's repositoryPath is, by the one owner of it, and refused
+    /// naming the file to fix - a WSL distribution's without a drive or a share, which names nothing inside it.
+    /// </summary>
+    [Theory]
+    [InlineData("ssh", "src/app", "must be absolute, or start with ~/ for the home directory")]
+    [InlineData("wsl", "C:/src/app", "must be absolute, or start with ~/ for the home directory inside the distribution")]
+    [InlineData("ssh", "~/src/..", "has a '.' or '..' segment; name the directory directly")]
+    [InlineData("wsl", "~/", "is a home or root directory; name a directory of its own for the copy")]
+    public void AnItemsRepositoryPathBreakingTheRule_IsRefused_NamingTheFile(string kind, string path, string problem)
+    {
+        using var repository = new TempDirectory();
+        var fixture = new Fixture(repository);
+        var slot = kind == "ssh" ? "sshItems" : "wslDistros";
+
+        if (kind == "ssh")
+        {
+            fixture.WriteSshItem(Item, $"ADDRESS=host.invalid\nUSER=harness\nREPOSITORY_PATH={path}\n");
+        }
+        else
+        {
+            repository.WriteFile(Path.Combine(".harness-config", slot, Item, ".env"), $"DISTRO=Example-Linux\nREPOSITORY_PATH={path}\n");
+        }
+
+        var expected = $"REPOSITORY_PATH '{path}' in '.harness-config/{slot}/{Item}/.env' {problem}";
+
+        Assert.Equal(expected, kind == "ssh" ? fixture.Store.ReadSshItem(fixture.Layout, Item).Problem : fixture.Store.ReadWslItem(fixture.Layout, Item).Problem);
+        Assert.Equal(
+            new ItemFacts { File = $".harness-config/{slot}/{Item}/.env", Present = true, Problem = expected },
+            fixture.Store.ReadFacts(fixture.Layout, kind == "ssh" ? HostId.Ssh(Item) : HostId.Wsl(Item)));
+    }
+
+    /// <summary>
+    /// A key the item is not read for is refused, naming the keys it is, never passed over: a misspelt REPOSITORY_PATH
+    /// would leave the copies where they were while whoever wrote it believed them moved.
+    /// </summary>
+    [Fact]
+    public void AKeyTheItemIsNotReadFor_IsRefused_NamingTheKeysItIs()
+    {
+        using var repository = new TempDirectory();
+        var fixture = new Fixture(repository);
+        fixture.WriteSshItem(Item, "ADDRESS=host.invalid\nUSER=harness\nREPOSTORY_PATH=~/mine/app\n");
+
+        var read = fixture.Store.ReadSshItem(fixture.Layout, Item);
+
+        Assert.Null(read.Item);
+        Assert.Equal(
+            $"'.harness-config/sshItems/{Item}/.env' declares 'REPOSTORY_PATH', which is no key it is read for; "
+                + "the keys are ADDRESS, USER, PORT, SUDO_PASSWORD, REPOSITORY_PATH",
+            read.Problem);
+    }
+
+    /// <summary>An item this machine does not hold declares nothing, and is no problem: its host's copies are where config.json says.</summary>
+    [Fact]
+    public void AnItemThisMachineDoesNotHold_DeclaresNothing()
+    {
+        using var repository = new TempDirectory();
+        var fixture = new Fixture(repository);
+
+        Assert.Equal(new ItemFacts { File = $".harness-config/wslDistros/{Item}/.env" }, fixture.Store.ReadFacts(fixture.Layout, HostId.Wsl(Item)));
     }
 
     private sealed class Fixture

@@ -33,6 +33,10 @@ namespace DssHarness.Core.Execution;
 /// start for want of room, the room it last read. Absent where its build needs nothing anyone said, and for a leg not let
 /// start for any other reason.
 /// </param>
+/// <param name="Reclaimed">
+/// What it removed of other trees' idle builds to make room as it waited for it, each time as its line said it
+/// (<see cref="AdmissionRequest.MakeRoom"/>); absent where it removed nothing.
+/// </param>
 public sealed record AdmissionFact(
     bool Admitted,
     double WaitedSeconds,
@@ -41,7 +45,8 @@ public sealed record AdmissionFact(
     string? Unmeasured = null,
     IReadOnlyList<string>? Holders = null,
     string? Record = null,
-    string? Room = null)
+    string? Room = null,
+    IReadOnlyList<string>? Reclaimed = null)
 {
     /// <summary>
     /// The fact as an admitted leg's line says it, beside its detail: <c>admitted after 3m12s, memory 71.2% in use
@@ -59,11 +64,24 @@ public sealed record AdmissionFact(
             : $"after {LedgerReport.FormatDuration(TimeSpan.FromSeconds(WaitedSeconds))}";
 
         var room = Room is null ? string.Empty : $", and {Room}";
+        var reclaimed = Reclaimed is null ? string.Empty : string.Concat(Reclaimed.Select(said => $"; it {said}"));
 
         return Memory is not null
-            ? $"admitted {waited}, memory {Memory}{room}"
-            : $"admitted {waited} without the memory in use, which could not be read: {Unmeasured}{room}";
+            ? $"admitted {waited}, memory {Memory}{room}{reclaimed}"
+            : $"admitted {waited} without the memory in use, which could not be read: {Unmeasured}{room}{reclaimed}";
     }
+}
+
+/// <summary>What a heavy leg short of room made of it from other trees' idle builds on its machine.</summary>
+/// <param name="Bytes">What was removed; nothing where no idle build could be.</param>
+/// <param name="Said">What was done, or why nothing was, as the leg's line says it.</param>
+public sealed record MadeRoom(long Bytes, string Said)
+{
+    /// <summary>
+    /// Whether another leg was making room on that filesystem already, so this one removed nothing beside it: the room is to
+    /// be read again once that one has made it, and nothing decided on the reading before.
+    /// </summary>
+    public bool Behind { get; init; }
 }
 
 /// <summary>What asking a machine to take a heavy leg came to: its place there, held until disposed, or why it was not taken.</summary>
@@ -133,12 +151,31 @@ public sealed record AdmissionRequest(
     public bool Settle { get; init; } = true;
 
     /// <summary>
+    /// The reading of its machine's rule the leg's work began by (<see cref="Runs.PlacedLeg.AdmittedBy"/>), where what asks
+    /// is a unit of that work - an arm of a sweep: a look at the slots that cannot read the machine's settings file weighs
+    /// the unit by the count that reading's file declared, rather than end a leg that has run with a configuration's error
+    /// (<see cref="SlotPlace.WorkBegunBy"/>). <see langword="null"/> for a leg's own admission, before its work, which such a
+    /// file refuses.
+    /// </summary>
+    public AdmissionReading? WorkBegunBy { get; init; }
+
+    /// <summary>
     /// Drops what this machine counts as in use and could have back at once - the page cache of WSL's virtual machine - as
     /// the leg is about to wait on the memory: at most once a minute in the process, whichever leg is about to wait, the
     /// memory then read again once what the drop gives back has reached this machine's count. <see langword="null"/> where
     /// nothing is dropped for it.
     /// </summary>
     public Func<CancellationToken, Task<PageCacheDrop?>>? DropPageCache { get; init; }
+
+    /// <summary>
+    /// Makes room for the leg, where its machine says so (<see cref="Configuration.AdmissionSettings.ReclaimIdleBuilds"/>),
+    /// from other trees' idle builds on the filesystem whose room it read short - given what that filesystem lacks of its
+    /// need and that room - before it waits for room, at each look that finds the disk itself short: what was made, or
+    /// <see langword="null"/> where no tree keeps a build there. Never for the room the other admitted legs claim: what their
+    /// builds have still to write is not known, and their claims end with their work, so removing for them would remove
+    /// what their builds already fill a second time. <see langword="null"/> where nothing is made for it.
+    /// </summary>
+    public Func<long, DiskSpace, CancellationToken, Task<MadeRoom?>>? MakeRoom { get; init; }
 }
 
 /// <summary>
@@ -191,6 +228,9 @@ public sealed class LegAdmission(
 
     private readonly HeavyLegSlots _slots = slots;
     private readonly IMemoryGauge _gauge = gauge;
+
+    /// <summary>The machine's heavy-leg records it admits by: what a leg making room on the machine is held to one at a time by.</summary>
+    internal HeavyLegSlots Records => _slots;
     private readonly TimeProvider _clock = clock;
     private readonly Func<TimeSpan, CancellationToken, Task> _wait = wait;
     private readonly Func<TimeSpan, TimeSpan, TimeSpan> _settle = settle;
@@ -221,7 +261,8 @@ public sealed class LegAdmission(
     /// <param name="request">The leg, and what its machine admits by.</param>
     /// <param name="cancellationToken">Stops the wait, giving the leg's place back.</param>
     /// <exception cref="Results.HarnessException">
-    /// The machine's record of its slots, or of the room its heavy legs claim, could not be named, read or written.
+    /// The machine's record of its slots, or of the room its heavy legs claim, could not be named, read or written; or, for a
+    /// leg's own admission, its settings file could not be read (<see cref="AdmissionRequest.WorkBegunBy"/>).
     /// </exception>
     public async Task<Admission> AdmitAsync(AdmissionRequest request, CancellationToken cancellationToken)
     {
@@ -229,13 +270,18 @@ public sealed class LegAdmission(
 
         var rule = request.Rule;
         var started = _clock.GetTimestamp();
-        var place = _slots.Ask(request.RunId, request.Command, request.Leg, request.Host, request.Tree, request.Variant, rule.HeavyLegs);
+        var place = _slots.Ask(request.RunId, request.Command, request.Leg, request.Host, request.Tree, request.Variant, rule.HeavyLegs, request.WorkBegunBy);
 
         // The room as this wait last read it, the legs claiming it as a line last named them, and whether it stopped being
         // readable since.
         RoomStanding? lastRoom = null;
         IReadOnlyList<SlotEntry>? roomSaid = null;
         var roomLost = false;
+
+        // What the wait removed of other trees' idle builds, each time as its line said it, and what making room last said:
+        // the same each look would say nothing new.
+        var reclaimed = new List<string>();
+        string? madeSaid = null;
 
         // When the wait last said where it stands: once SaidAgainEvery has passed since, it says so again, as it reads now.
         var saidAt = started;
@@ -297,6 +343,7 @@ public sealed class LegAdmission(
                     {
                         return Refuse(
                             place,
+                            reclaimed,
                             started,
                             null,
                             standing,
@@ -322,7 +369,7 @@ public sealed class LegAdmission(
                         // is known, for which it may still wait - and said on its line, as a leg placed where its room could
                         // not be measured is. Refused instead, a machine whose count cannot be read would never take a heavy
                         // leg.
-                        if (TakeWithRoom(new AdmissionFact(true, Seconds(started), Unmeasured: why, Record: _slots.Location), null) is { } taken)
+                        if (await TakeWithRoomAsync(new AdmissionFact(true, Seconds(started), Unmeasured: why, Record: _slots.Location), null).ConfigureAwait(false) is { } taken)
                         {
                             return taken;
                         }
@@ -349,6 +396,7 @@ public sealed class LegAdmission(
                     {
                         return Refuse(
                             place,
+                            reclaimed,
                             started,
                             last,
                             null,
@@ -380,7 +428,7 @@ public sealed class LegAdmission(
                     // starts on this one.
                     if (settled || !request.Settle || rule.SettleMost <= TimeSpan.Zero || !standing.Holders.Any(holder => holder != place.Entry))
                     {
-                        if (TakeWithRoom(new AdmissionFact(true, Seconds(started), reading.Rounded, reading.Describe(), Record: _slots.Location), reading) is { } taken)
+                        if (await TakeWithRoomAsync(new AdmissionFact(true, Seconds(started), reading.Rounded, reading.Describe(), Record: _slots.Location), reading).ConfigureAwait(false) is { } taken)
                         {
                             return taken;
                         }
@@ -434,6 +482,7 @@ public sealed class LegAdmission(
                 {
                     return Refuse(
                         place,
+                        reclaimed,
                         started,
                         reading,
                         null,
@@ -478,8 +527,9 @@ public sealed class LegAdmission(
         // that filesystem - claimed as it is taken, so two legs let start together never both take the one room left - or
         // not taken: null where it waits for room and looks again, or the leg refused once it has waited as long as the
         // machine allows. A room never read in this wait lets the leg start, claimed against every filesystem; one read
-        // before and not now decides nothing, as a memory reading lost does not.
-        Admission? TakeWithRoom(AdmissionFact fact, MemoryReading? reading)
+        // before and not now decides nothing, as a memory reading lost does not. A room read short is made, where the
+        // machine says so, from other trees' idle builds there first, and claimed again.
+        async Task<Admission?> TakeWithRoomAsync(AdmissionFact fact, MemoryReading? reading)
         {
             if (request.Room is not { } room)
             {
@@ -487,6 +537,35 @@ public sealed class LegAdmission(
             }
 
             var claim = _slots.Claim(place, room, takeUnread: lastRoom is null);
+
+            // Made only for what the disk itself lacks of the leg's need: the other legs' claims count what their builds have
+            // written already as well as what they have still to write, and end with their work, leaving their builds behind.
+            if (!claim.Fits
+                && claim.Disk is { } lacking
+                && room.Bytes - lacking.FreeBytes is > 0 and var lacks
+                && request.MakeRoom is { } makeRoom
+                && await makeRoom(lacks, lacking, cancellationToken).ConfigureAwait(false) is { } made)
+            {
+                // Said whenever it removed something, and otherwise only where it says something new: why nothing could be,
+                // or the leg making room there already.
+                if (made.Bytes > 0 || made.Said != madeSaid)
+                {
+                    Say(made.Said);
+                    madeSaid = made.Said;
+                }
+
+                if (made.Bytes > 0)
+                {
+                    reclaimed.Add(made.Said);
+                }
+
+                // Claimed again on the room as it is now - what another leg made before this one held the making counts -
+                // where it was not made behind another, which this look decides nothing on.
+                if (!made.Behind)
+                {
+                    claim = _slots.Claim(place, room, takeUnread: false);
+                }
+            }
 
             if (claim.Fits)
             {
@@ -498,6 +577,7 @@ public sealed class LegAdmission(
                         Room = claim.Disk is null
                             ? $"its room is unread, so ~{DiskSpace.Size(room.Bytes)} is claimed against every filesystem here: {claim.Unmeasured}"
                             : Claimed(room, claim),
+                        Reclaimed = Reclaimed(),
                     });
             }
 
@@ -519,6 +599,7 @@ public sealed class LegAdmission(
                     ? null
                     : Refuse(
                         place,
+                        reclaimed,
                         started,
                         reading,
                         null,
@@ -546,6 +627,7 @@ public sealed class LegAdmission(
                 ? null
                 : Refuse(
                     place,
+                    reclaimed,
                     started,
                     reading,
                     null,
@@ -555,6 +637,9 @@ public sealed class LegAdmission(
                     record: _slots.RoomLocation,
                     room: claim.Describe(room));
         }
+
+        // What the wait removed of other trees' idle builds, as an admitted leg's fact keeps it; nothing where it removed none.
+        IReadOnlyList<string>? Reclaimed() => reclaimed.Count == 0 ? null : [.. reclaimed];
 
         // Says where the wait stands, and when it did.
         void Say(string line)
@@ -636,10 +721,12 @@ public sealed class LegAdmission(
 
     /// <summary>
     /// A leg not let start, its place given back, its line naming what held it: the slots' holders and their record, or the
-    /// room, the legs claiming it and the room's record.
+    /// room, the legs claiming it and the room's record - and what it removed of other trees' idle builds as it waited,
+    /// which stays removed.
     /// </summary>
     private Admission Refuse(
         SlotPlace place,
+        IReadOnlyList<string> reclaimed,
         long started,
         MemoryReading? reading,
         SlotStanding? standing,
@@ -662,7 +749,8 @@ public sealed class LegAdmission(
                 unmeasured,
                 holders is null ? null : [.. holders.Select(holder => holder.Describe())],
                 record ?? _slots.Location,
-                room),
+                room,
+                reclaimed.Count == 0 ? null : [.. reclaimed]),
             refusal);
     }
 

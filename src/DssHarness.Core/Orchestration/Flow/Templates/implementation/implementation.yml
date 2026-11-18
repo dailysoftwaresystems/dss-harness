@@ -102,10 +102,10 @@ inputs:
   - name: backlog
     description: A tracked file of work to choose from, and where what the reviews and the audit left is written; empty, there is none.
     default: ''
-  - name: affectedTests
-    description: 'on: each work item is tested on the tests its change affects, the filter its plan names, and every test runs once every item of the round is built. off: every test runs for each item.'
-    options: ['on', 'off']
-    default: 'off'
+  - name: finalTests
+    description: 'What the gate of each round tests once every work item of the round is built. affected: the tests the run''s work affects - the units every item built in this run ran, its plan''s and those its builder added, each once - and none where no item names one. all: every test of every leg. Each item is tested on its own units alone either way.'
+    options: [affected, all]
+    default: affected
 steps:
   - name: orient
     type: orient
@@ -251,6 +251,9 @@ steps:
         onPreExisting: triage-pre-existing-issue
         prompt: prompts/plan-update.md
         outputs: schemas/plan.schema.json
+  # A round is judged by its self-audit, which reads every check of it - the item audit's
+  # findings among them, made before the round's items were built - and turns each it finds
+  # unsettled into a work item of the next round; the machine's own checks hold it as well.
   - name: rounds
     dependsOn: [planning]
     repeat:
@@ -278,8 +281,26 @@ steps:
           This round's work items still do not pass the plan check, after the planner was given the problems to settle and its plan was audited and approved: {item-check.problems}
           Answer continue to build them as they are, or abort.
         options: [continue]
-      - name: items
+      # A later round's items come from the last self-audit, and are audited before any is
+      # built: the build waits for the audit, so the audit reads the tree they are built on
+      # and the self-audit after the build reads what it found.
+      - name: item-audit
+        type: reason
+        graph: off
+        agent: plan-auditor
+        tier: high
+        effort: xhigh
+        independent: true
         dependsOn: [item-problems]
+        when: 'iteration != 1'
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
+        onPreExisting: triage-pre-existing-issue
+        prompt: prompts/item-audit.md
+        outputs: schemas/plan-audit.schema.json
+      - name: items
+        dependsOn: [item-problems, item-audit]
         forEach: 'item-check.items'
         onFailure: recover
         # The item pipeline, written once in item-pipeline/item-pipeline.yml and used here and by the
@@ -295,7 +316,7 @@ steps:
           failTo: recover
           orient: 'orient'
           planSummary: 'planning.plan.latest.summary'
-          affectedTests: 'input.affectedTests'
+          testsKey: '{item.name}'
       - name: round-checks
         dependsOn: [items]
         when: 'orient.anchors'
@@ -309,17 +330,23 @@ steps:
           - name: citations
             type: anchor-citations
             failOn: never
+      # The round's gate tests what the run's work affects: the units every work item built in this run kept in the
+      # run's record of affected tests (run.affectedTests) - the input finalTests set to all tests every test instead.
+      # Where no item names a unit, it runs no test and ends skipped, saying so.
       - name: gate
         type: test
         dependsOn: [items, round-checks]
         when: 'orient.hasLegs'
+        filter: 'run.affectedTests'
+        filterWhen: "input.finalTests == 'affected'"
+        noTests: 'no work item built in this run names a test its change affects'
         alone: true
         failOn: never
         onFailure: recover
       - name: mutations
         type: check-mutations
         dependsOn: [gate]
-        when: 'orient.hasLegs && orient.hasMutations && gate.passed'
+        when: 'orient.hasLegs && orient.hasMutations && (gate.passed ?? true)'
         pending: true
         alone: true
         failOn: never
@@ -474,7 +501,12 @@ recover:
   # Reached by a failure of a step that says onFailure: recover - a test, a fold, a commit,
   # a push, the wait for the checks - and by an issue triage-pre-existing-issue sends to be
   # fixed; never by a reasoning step's own failure, which is tried again,
-  # on its fallback, and then asked. Once its steps are done, the step that gave it its
+  # on its fallback, and then asked. The remedy items built are the ones the plan's own check
+  # read, after the last word on them: the diagnosis's, or the one it gives again on a
+  # person's answer (redirect), is checked (remedy-check); where the check finds problems, they
+  # go back to the diagnostician within the visit (remedy-revise), and what it gives again is
+  # checked again (remedy-recheck) - once, as a plan's problems go back to its planner once - and
+  # built as it stands. Once its steps are done, the step that gave it its
   # failure runs again from where it stopped (onSuccess: failed-step), now that what stood
   # in its way was put right. Should that step fail again, its own onFailure: recover brings
   # it back here, to the diagnostician who saw the last attempt - until the step passes or
@@ -524,10 +556,37 @@ recover:
       graphFrom: changes
       prompt: prompts/redirect.md
       outputs: schemas/diagnosis.schema.json
-    - name: remedies
+    # The diagnosis's last word on its remedy items is what the check reads, and what the
+    # remedies build is what a check read: its own items, or - where it refused them and the
+    # diagnostician said them again on its problems - the revised ones, checked again.
+    - name: remedy-check
+      type: validate-plan
       dependsOn: [redirect]
       when: "diagnose.latest.course == 'fix'"
-      forEach: 'diagnose.latest.items'
+      items: 'diagnose.latest.items'
+      onFailure: pause
+    - name: remedy-revise
+      type: reason
+      resume: diagnose
+      dependsOn: [remedy-check]
+      when: '!(remedy-check.ok ?? true)'
+      retries: 3
+      backoffSeconds: 30
+      onFailure: pause
+      onPreExisting: triage-pre-existing-issue
+      graphFrom: changes
+      prompt: prompts/remedy-revise.md
+      outputs: schemas/diagnosis.schema.json
+    - name: remedy-recheck
+      type: validate-plan
+      dependsOn: [remedy-revise]
+      when: "!(remedy-check.ok ?? true) && diagnose.latest.course == 'fix'"
+      items: 'diagnose.latest.items'
+      onFailure: pause
+    - name: remedies
+      dependsOn: [remedy-recheck]
+      when: "diagnose.latest.course == 'fix'"
+      forEach: 'remedy-recheck.items ?? remedy-check.items'
       # The item pipeline again, used by the recovery as the rounds use it: each remedy is built in
       # an agent of its own, tested, reviewed, folded and checkpointed. This use builds one with the
       # remedy prompt, reading the diagnosis this step of the recovery hands it, and hands it no plan:
@@ -543,9 +602,9 @@ recover:
         alternatives: 'false'
         failTo: pause
         orient: 'orient'
-        affectedTests: 'input.affectedTests'
         diagnose: 'diagnose.latest'
         failed: 'source.step'
+        testsKey: 'remedy {item.name} for {source.step}, visit {visit}'
     - name: publish
       type: push
       dependsOn: [remedies]

@@ -42,6 +42,13 @@ public interface IFlowRecords
     void Updates(FlowUpdatesFile updates);
 
     /// <summary>
+    /// Records the run's affected tests, whole, in the run's own file - written before the legs of the step whose units
+    /// changed it run, so a pause, a stop or a crash after it loses no unit the run found.
+    /// </summary>
+    /// <param name="entries">Each key's units, in the order each key was first written.</param>
+    void AffectedTests(IReadOnlyList<FlowAffectedTests> entries);
+
+    /// <summary>
     /// The name the run gives the next agent it makes (<see cref="OrchestrationRules.NextAgentName"/>), over
     /// <paramref name="recorded"/> - every name its steps' records hold or the session gave - and every agent directory
     /// the run has, read under the orchestrator's own lock. A run held in memory alone has no directory, and reckons by
@@ -475,6 +482,19 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         {
             _store.WriteFlowUpdates(_layout, new FlowUpdatesFile(1, _context.Run, _clock.GetUtcNow(), []));
         }
+
+        // And its record of affected tests: a resume reads it back whole, and never takes an empty one in its place.
+        if (_store.ReadAffectedTests(_layout) is null)
+        {
+            _store.WriteAffectedTests(_layout, new FlowAffectedTestsFile(1, _context.Run, _clock.GetUtcNow(), []));
+        }
+    }
+
+    /// <inheritdoc/>
+    void IFlowRecords.AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        _store.WriteAffectedTests(_layout, new FlowAffectedTestsFile(1, _context.Run, _clock.GetUtcNow(), entries));
     }
 
     /// <inheritdoc/>

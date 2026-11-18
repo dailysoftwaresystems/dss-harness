@@ -38,7 +38,7 @@ public static class HostAgentProtocol
     /// and its own version. With the number left as it was, the same host refuses the request over
     /// whichever field it happens not to know, which says nothing about why.
     /// </remarks>
-    public const int Version = 12;
+    public const int Version = 14;
 
     /// <summary>
     /// How often, in seconds, the machine that asked writes <see cref="BeatLine"/> on the input it holds open while a run
@@ -515,6 +515,21 @@ public sealed class HostAgentRequest
     public string? DiskImageDrive { get; init; }
 
     /// <summary>
+    /// For a leg of a WSL distribution, the <c>admission</c> the settings file of the machine that asked declares - the
+    /// machine the distribution runs on, which admits its legs - which the leg's build is held to the floor by, as that
+    /// machine's legs are: the distribution's own settings file is another machine's to it. Run only;
+    /// <see langword="null"/> for any other leg, or where that machine's file declares none.
+    /// </summary>
+    public Configuration.AdmissionSettings? MachineAdmission { get; init; }
+
+    /// <summary>
+    /// The distribution each WSL item the machine that asked declares and could read names, by the item's name: what a run
+    /// line of the leg there fills <c>{distribution}</c> and <c>{distribution.&lt;item&gt;}</c> with, which a host's copy
+    /// holds no item to read for itself. Never the item's credential. Run only; empty where that machine read none.
+    /// </summary>
+    public Dictionary<string, string> Distributions { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// How often, in seconds, the machine that asked writes a beat on the input it holds open while the request is
     /// served; zero where it writes none. Run only: a host that hears nothing for
     /// <see cref="HostAgentProtocol.BeatsMissed"/> beats takes that machine to have gone, as it does when the input ends,
@@ -604,6 +619,12 @@ public sealed record HostAgentInfo
     /// compares exactly on Linux, and a map in this protocol is read back ignoring case.
     /// </summary>
     public List<BuildDirectoryRoom> Builds { get; init; } = [];
+
+    /// <summary>
+    /// What the host's own settings file says (<see cref="Configuration.MachineSettingsFile"/>): where it is, its admission,
+    /// or why it could not be read - answered by the host, which is the one that reads it as it admits its legs.
+    /// </summary>
+    public Configuration.MachineSettingsAnswer? MachineSettings { get; init; }
 }
 
 /// <summary>
@@ -612,12 +633,25 @@ public sealed record HostAgentInfo
 /// </summary>
 public sealed record Dispatch
 {
-    private Dispatch(RunId? runId, string? diskImageDrive, string? nonce)
+    private Dispatch(
+        RunId? runId,
+        string? diskImageDrive,
+        string? nonce,
+        Configuration.AdmissionSettings? machineAdmission,
+        IReadOnlyDictionary<string, string> distributions)
     {
         RunId = runId;
         DiskImageDrive = diskImageDrive;
         Nonce = nonce;
+        MachineAdmission = machineAdmission;
+        Distributions = distributions;
     }
+
+    /// <summary>
+    /// The distribution each WSL item that machine read names, by the item's name - see
+    /// <see cref="HostAgentRequest.Distributions"/>; empty where it told none.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Distributions { get; }
 
     /// <summary>The run of that machine the command runs a leg of; <see langword="null"/> where it runs none.</summary>
     public RunId? RunId { get; }
@@ -627,6 +661,12 @@ public sealed record Dispatch
     /// <see cref="HostAgentRequest.DiskImageDrive"/> - and never a blank one; <see langword="null"/> where none was named.
     /// </summary>
     public string? DiskImageDrive { get; }
+
+    /// <summary>
+    /// For a leg of a WSL distribution, the admission the settings file of that machine declares - see
+    /// <see cref="HostAgentRequest.MachineAdmission"/>; <see langword="null"/> where none was carried.
+    /// </summary>
+    public Configuration.AdmissionSettings? MachineAdmission { get; }
 
     /// <summary>
     /// The request's nonce, which the command it asked for needs to write a note that machine reads while it runs: what
@@ -656,9 +696,23 @@ public sealed record Dispatch
                 : throw new HarnessException(HarnessExit.UsageError, $"the request names its run as '{named}', which is not a run id");
         }
 
-        return request.DiskImageDrive is { } drive && string.IsNullOrWhiteSpace(drive)
-            ? throw new HarnessException(HarnessExit.UsageError, "the request names a blank drive as where WSL keeps the distribution's disk")
-            : new Dispatch(run, request.DiskImageDrive, request.Nonce);
+        if (request.DiskImageDrive is { } drive && string.IsNullOrWhiteSpace(drive))
+        {
+            throw new HarnessException(HarnessExit.UsageError, "the request names a blank drive as where WSL keeps the distribution's disk");
+        }
+
+        // A distribution told blank would fill a run line with nothing, which the line's program reads as no argument at all.
+        if (request.Distributions.FirstOrDefault(told => string.IsNullOrWhiteSpace(told.Key) || string.IsNullOrWhiteSpace(told.Value)) is { Key: { } item })
+        {
+            throw new HarnessException(HarnessExit.UsageError, $"the request tells a blank distribution, or one of a blank item: '{item}'");
+        }
+
+        return new Dispatch(
+            run,
+            request.DiskImageDrive,
+            request.Nonce,
+            request.MachineAdmission,
+            new Dictionary<string, string>(request.Distributions, StringComparer.OrdinalIgnoreCase));
     }
 }
 

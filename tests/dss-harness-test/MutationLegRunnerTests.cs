@@ -212,7 +212,7 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(PristineJudge.Bound(Tests.Took, 10), mutated.Bound);
         Assert.Equal("charge exceeded", mutated.Diagnostic);
         Assert.Equal(sweep.Records("charge-bound"), mutated.RecordDirectory);
-        Assert.Equal(Path.Combine(Variant.DirectoryUnder(sweep.Worker(charge.Worker!.Value)), Program), mutated.Program);
+        Assert.Equal(Path.Combine(sweep.WorkerBuild(charge.Worker!.Value), Program), mutated.Program);
         Assert.Equal(["--gtest_output=xml:{report}"], mutated.ReportArgs);
         Assert.Equal(sweep.Worker(charge.Worker!.Value), mutated.WorkingDirectory);
 
@@ -233,21 +233,27 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
-    /// Each worker is synced for the leg's own variant, its sanitizer included: the sync withholds the build directory that
-    /// variant names in the worker as the sweep's own, and a variant without the sanitizer names another directory, so the
-    /// build the sweep keeps warm there would be judged as what mirrors the tree.
+    /// Each worker is synced and built for the leg's own variant, its sanitizer included: kept under that variant's key, it
+    /// builds in its own build/&lt;key&gt; - the directory its sync withholds as the sweep's own - never in the directory the
+    /// variant's name gives the tree's own build, which spelt that name out a second time in a worker's every path. What
+    /// the sweep says as it makes and builds each names the variant, which the key in its paths does not.
     /// </summary>
     [Fact]
-    public async Task EachWorker_IsSyncedForTheLegsOwnVariant_ItsSanitizerIncluded()
+    public async Task EachWorker_IsSyncedAndBuiltForTheLegsOwnVariant_InABuildDirectoryNamedByItsKey()
     {
         var sanitized = Variant with { Sanitizer = "asan" };
         using var sweep = new Sweep { LegVariant = sanitized };
+        var family = MutationWorkers.Of(sweep.Tree, sanitized);
 
         await sweep.RunAsync([ChargeBound, DepthType]);
 
+        Assert.Equal([family.PathOf(1), family.PathOf(2)], sweep.Copies.Synced.Select(sync => sync.Worker).Order(StringComparer.Ordinal));
         Assert.Equal(
-            [(sweep.Worker(1), sanitized), (sweep.Worker(2), sanitized)],
-            sweep.Copies.Synced.Select(sync => (sync.Worker, sync.Variant)).OrderBy(sync => sync.Worker, StringComparer.Ordinal));
+            [Path.Combine(family.PathOf(1), "build", sanitized.CopyKey), Path.Combine(family.PathOf(2), "build", sanitized.CopyKey)],
+            sweep.Builder.Builds.Select(build => build.BuildDirectory).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        Assert.All(sweep.Builder.Builds, build => Assert.Equal(sanitized, build.Variant));
+        Assert.Contains($"worker 1: making '{family.PathOf(1)}' the tree as it was read, for {sanitized.DirectoryName}", sweep.Said);
+        Assert.Contains($"worker 1: building {sanitized.DirectoryName} whole, in '{family.BuildDirectoryOf(1)}'", sweep.Said);
     }
 
     /// <summary>
@@ -1748,7 +1754,7 @@ public sealed class MutationLegRunnerTests
         var unmeasured = await unlogged.RunAsync([ChargeBound]);
 
         Assert.Equal(
-            (LegVerdict.Unmeasured, $"the mutated build: ninja's log in '{Variant.DirectoryUnder(unlogged.Worker(1))}' could not be read before the build, so nothing witnessed that each object depending on the site was rebuilt"),
+            (LegVerdict.Unmeasured, $"the mutated build: ninja's log in '{unlogged.WorkerBuild(1)}', the worker's build of {Variant.DirectoryName}, could not be read before the build, so nothing witnessed that each object depending on the site was rebuilt"),
             (unmeasured.Arms[0].Verdict, unmeasured.Arms[0].Detail));
     }
 
@@ -1798,7 +1804,7 @@ public sealed class MutationLegRunnerTests
 
         var run = sweep.Tests.Runs.Single(request => request.Bound is not null);
 
-        Assert.Equal(Path.GetFullPath(Path.Combine(Variant.DirectoryUnder(sweep.Worker(1)), "tests")), Path.GetFullPath(run.WorkingDirectory));
+        Assert.Equal(Path.GetFullPath(Path.Combine(sweep.WorkerBuild(1), "tests")), Path.GetFullPath(run.WorkingDirectory));
         Assert.Equal("strict", run.Environment["FIXTURE_MODE"]);
         Assert.Equal("1", run.Environment["HOST_SETTING"]);
 
@@ -1866,7 +1872,7 @@ public sealed class MutationLegRunnerTests
         // As a configure leaves it: an answer naming the CMake that gave it, and that CMake's record of the compiler.
         sweep.Builder.Before = (request, _) =>
         {
-            var build = request.Variant.DirectoryUnder(request.TreeRoot);
+            var build = request.BuildDirectory;
             var record = Path.Combine(build, "CMakeFiles", "4.3.2", "CMakeCXXCompiler.cmake");
 
             Directory.CreateDirectory(Path.Combine(build, ".cmake", "api", "v1", "reply"));
@@ -1999,7 +2005,11 @@ public sealed class MutationLegRunnerTests
         var turned = await deep.RunAsync([DepthType]);
 
         Assert.Equal(LegVerdict.SkippedUnavailable, turned.Verdict);
-        Assert.StartsWith($"worker 1 would be kept at '{deep.Worker(1)}', in the tree's .mutations, where its build needs paths of ", turned.Detail, StringComparison.Ordinal);
+        Assert.StartsWith(
+            $"worker 1 would be kept at '{deep.Worker(1)}', in the tree's .m, and build {Variant.DirectoryName} in '{deep.WorkerBuild(1)}', "
+            + "where its build needs paths of ",
+            turned.Detail,
+            StringComparison.Ordinal);
         Assert.Contains(
             " characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under 40: keep the tree at a "
             + "shorter path, or set worktrees.pathLimit where every tool its build runs takes longer ones; 1 arm(s): 1 skipped-unavailable",
@@ -2015,37 +2025,11 @@ public sealed class MutationLegRunnerTests
 
         Assert.Equal(
             $"2 arm(s): 2 passed; 1 of 2 workers: worker 2 would be kept at '{second.Worker(2)}', "
-            + "in the tree's .mutations, where its build needs paths of 300 characters, "
+            + $"in the tree's .m, and build {Variant.DirectoryName} in '{second.WorkerBuild(2)}', where its build needs paths of 300 characters, "
             + "as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under 260: keep the tree at a shorter "
             + "path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
             fewer.Detail);
         Assert.Equal([second.Worker(1)], second.Copies.Synced.Select(sync => sync.Worker));
-    }
-
-    /// <summary>
-    /// A worker past the path limit by no more than a worker kept in the tree adds over one an earlier version of this tool
-    /// kept beside it says so - the tree fitted that one - and one past it by more says nothing of it: the characters are
-    /// why only where without them it would fit.
-    /// </summary>
-    [Theory]
-    [InlineData(261, true)]
-    [InlineData(262, false)]
-    public async Task AWorkerPastThePathLimit_SaysTheCharactersItIsDeeper_OnlyWhereWithoutThemItWouldFit(int required, bool said)
-    {
-        using var sweep = new Sweep();
-        sweep.Budget.Check(Arg.Is<string>(path => path.EndsWith("-2", StringComparison.Ordinal)), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int?>())
-            .Returns(PathBudgetResult.Exceeded(required, 260, -1));
-
-        var fewer = await sweep.RunAsync([ChargeBound, DepthType]);
-
-        Assert.Equal(2, WorkerFamily.DeeperThanBeside);
-        Assert.Equal(
-            $"2 arm(s): 2 passed; 1 of 2 workers: worker 2 would be kept at '{sweep.Worker(2)}', in the tree's .mutations"
-            + (said ? ", 2 character(s) deeper than a worker an earlier version of this tool kept beside the tree" : string.Empty)
-            + $", where its build needs paths of {required} characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, "
-            + "and every path must stay under 260: keep the tree at a shorter path, or set worktrees.pathLimit where every tool its build "
-            + "runs takes longer ones",
-            fewer.Detail);
     }
 
     /// <summary>
@@ -2067,7 +2051,7 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(
             $"3 arm(s): 3 passed; 1 of 3 workers: running 2 needs ~{DiskSpace.Size(2 * ((1L << 30) + copy))}, each worker's build as declared; "
             + $"{DiskSpace.Size((1L << 30) + copy + 100)} free on '/data'; and worker 3 would be kept at '{tight.Worker(3)}', "
-            + "in the tree's .mutations, where its "
+            + $"in the tree's .m, and build {Variant.DirectoryName} in '{tight.WorkerBuild(3)}', where its "
             + "build needs paths of 300 characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under "
             + "260: keep the tree at a shorter path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
             fewer.Detail);
@@ -2085,7 +2069,7 @@ public sealed class MutationLegRunnerTests
 
         await sweep.RunAsync([DepthType]);
 
-        var below = Variant.DirectoryUnder(sweep.Worker(1)).Length - sweep.Worker(1).Length;
+        var below = sweep.WorkerBuild(1).Length - sweep.Worker(1).Length;
 
         sweep.Budget.Received().Check(sweep.Worker(1), below + 100, 7, 400);
     }
@@ -2106,7 +2090,7 @@ public sealed class MutationLegRunnerTests
         await shallow.RunAsync([DepthType]);
 
         // Shorter than its build's longest: reckoned as it always was.
-        shallow.Budget.Received().Check(shallow.Worker(1), Variant.DirectoryUnder(shallow.Worker(1)).Length - shallow.Worker(1).Length + 100, 7, 4000);
+        shallow.Budget.Received().Check(shallow.Worker(1), shallow.WorkerBuild(1).Length - shallow.Worker(1).Length + 100, 7, 4000);
 
         using var sweep = new Sweep { Worktrees = settings };
         sweep.Fetched = shallow.Fetched;
@@ -2144,7 +2128,7 @@ public sealed class MutationLegRunnerTests
 
         await sweep.RunAsync([DepthType]);
 
-        var below = Variant.DirectoryUnder(sweep.Worker(1)).Length - sweep.Worker(1).Length;
+        var below = sweep.WorkerBuild(1).Length - sweep.Worker(1).Length;
 
         sweep.Budget.Received().Check(sweep.Worker(1), below + 30, 7, 400);
 
@@ -2313,7 +2297,7 @@ public sealed class MutationLegRunnerTests
             // As a configure leaves it: an answer naming the CMake that gave it, and that CMake's record of the compiler.
             sweep.Builder.Before = (request, _) =>
             {
-                var build = request.Variant.DirectoryUnder(request.TreeRoot);
+                var build = request.BuildDirectory;
                 var record = Path.Combine(build, "CMakeFiles", "4.3.2", "CMakeCXXCompiler.cmake");
 
                 Directory.CreateDirectory(Path.Combine(build, ".cmake", "api", "v1", "reply"));
@@ -2952,7 +2936,7 @@ public sealed class MutationLegRunnerTests
         sweep.DeveloperEnvironment = new DeveloperEnvironmentFact("vs", "C:/vs", "17.14", "14.44", "x64");
         sweep.Builder.Before = (request, _) =>
         {
-            var build = request.Variant.DirectoryUnder(request.TreeRoot);
+            var build = request.BuildDirectory;
             var compiler = Path.Combine(build, "CMakeFiles", "4.3.2", "CMakeCXXCompiler.cmake");
 
             Directory.CreateDirectory(Path.Combine(build, ".cmake", "api", "v1", "reply"));
@@ -2970,7 +2954,7 @@ public sealed class MutationLegRunnerTests
         sweep.Builder.Graph.Reads = (worker, target) =>
         {
             var fixture = sweep.Builder.Graph.Fixture(worker, target);
-            var build = Variant.DirectoryUnder(worker);
+            var build = MutationWorkers.BuildDirectoryOf(worker);
 
             if (target != "fixture_tests")
             {
@@ -3943,6 +3927,9 @@ public sealed class MutationLegRunnerTests
 
         public string Worker(int number) => Family.PathOf(number);
 
+        /// <summary>The directory worker <paramref name="number"/> builds in.</summary>
+        public string WorkerBuild(int number) => Family.BuildDirectoryOf(number);
+
         public string Records(string arm) => Path.Combine(RunDirectory, LegName, MutationRecords.ArmsDirectory, arm);
 
         /// <summary>Where the run keeps the control of <paramref name="runner"/>'s records.</summary>
@@ -4116,7 +4103,7 @@ public sealed class MutationLegRunnerTests
         public List<WorkerCopy> Listed { get; } = [];
 
         /// <summary>Each worker synced, with the reading it was made from and the variant it was synced for, in the order synced.</summary>
-        public ConcurrentQueue<(SyncSource Reading, string Worker, VariantKey Variant)> Synced { get; } = new();
+        public ConcurrentQueue<(SyncSource Reading, string Worker)> Synced { get; } = new();
 
         public ConcurrentQueue<(string Worker, bool Force)> Claimed { get; } = new();
 
@@ -4181,7 +4168,7 @@ public sealed class MutationLegRunnerTests
             return Task.FromResult(History);
         }
 
-        public Task SyncAsync(SyncSource source, string worker, VariantKey variant, CancellationToken cancellationToken)
+        public Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken)
         {
             if (SyncFails(worker) is { } failure)
             {
@@ -4200,7 +4187,7 @@ public sealed class MutationLegRunnerTests
                 File.Copy(Path.Combine(tree, file), copied, overwrite: true);
             }
 
-            Synced.Enqueue((source, worker, variant));
+            Synced.Enqueue((source, worker));
             AfterSync(worker);
 
             return Task.CompletedTask;
@@ -4337,7 +4324,7 @@ public sealed class MutationLegRunnerTests
                 throw failure;
             }
 
-            var directory = request.Variant.DirectoryUnder(request.TreeRoot);
+            var directory = request.BuildDirectory;
             var broken = File.ReadAllText(Path.Combine(request.TreeRoot, "src", "budget.hpp")).Contains("three", StringComparison.Ordinal);
             var verdict = Answer(request) ?? (broken ? ReachedVerdict.Of(LegVerdict.Failed, "build exited 1") : ReachedVerdict.Of(LegVerdict.Passed, "built"));
 
@@ -4412,7 +4399,7 @@ public sealed class MutationLegRunnerTests
         public BuiltFromSource Fixture(string worker, string target)
         {
             var source = Path.Combine(worker, "src", "fixture.cpp");
-            var objectFile = Path.Combine(Variant.DirectoryUnder(worker), SiteObject);
+            var objectFile = Path.Combine(MutationWorkers.BuildDirectoryOf(worker), SiteObject);
             var compile = new NinjaEdge("CXX_COMPILER__fixture_", [SiteObject], [source], source, "gcc", $"g++ -I{worker}/src -c {source} -o {SiteObject}");
             var made = new NinjaEdge("CXX_LINKER__" + target + "_", [.. OutputsOf(target)], [SiteObject], SiteObject, null, $"g++ {SiteObject} -o {OutputsOf(target).FirstOrDefault()}");
 

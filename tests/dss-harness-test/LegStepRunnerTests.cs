@@ -428,7 +428,7 @@ public sealed class LegStepRunnerTests : IDisposable
         WorkflowStep[] steps =
         [
             new() { Name = "build", Type = "build" },
-            new() { Name = "test", Type = "test", Legs = ["native"], Filter = "fast", Exclude = ["slow"], Labels = ["unit"], SkipBuild = true },
+            new() { Name = "test", Type = "test", Legs = ["native"], Filter = new FlowList(["fast", "smoke"], Expression: null), Exclude = ["slow"], Labels = ["unit"], SkipBuild = true },
             new() { Name = "run", Type = "run", Runner = "probe", Inputs = new Dictionary<string, string> { ["target"] = "all" }, KeepGoing = true },
             new() { Name = "tidy", Type = "run", Runner = "TIDY" },
             new() { Name = "build past", Type = "build", KeepGoing = true },
@@ -447,7 +447,7 @@ public sealed class LegStepRunnerTests : IDisposable
             legs.Asked,
             asked => Assert.Equal(new BuildLegsRequest { Directory = repository.Path, Watch = asked.Watch, Isolation = asked.Isolation }, asked),
             asked => Assert.Equivalent(
-                new TestLegsRequest { Directory = repository.Path, LegNames = ["native"], Filter = "fast", Excludes = ["slow"], Labels = ["unit"], SkipBuild = true, Watch = asked.Watch, Isolation = asked.Isolation },
+                new TestLegsRequest { Directory = repository.Path, LegNames = ["native"], Filters = ["fast", "smoke"], Excludes = ["slow"], Labels = ["unit"], SkipBuild = true, Watch = asked.Watch, Isolation = asked.Isolation },
                 asked,
                 strict: true),
             asked => Assert.Equivalent(
@@ -644,6 +644,9 @@ public sealed class LegStepRunnerTests : IDisposable
 
         public Task<UseCaseResult<ArmListing>> ListAsync(MutationLegsRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException("a step never lists arms");
+
+        public Task<LegRunResult> CheckBeforeAdmissionAsync(RunnerLegsRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("a step never checks a run's legs alone: only a WSL distribution is asked to");
 
         private Task<LegRunResult> Answered(LegCommandRequest request)
         {

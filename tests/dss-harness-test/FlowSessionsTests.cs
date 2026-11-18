@@ -364,13 +364,15 @@ public sealed class FlowSessionsTests
         var copy = DssHarness.Core.Legs.LegCopies.PathOf(tree, plain);
 
         Assert.True(copied.IsWithinBudget);
-        Assert.Equal(DssHarness.Core.Legs.CopyPathBudget.Check(budget, settings, copy, plain, settings.PathBudgetReserve).RequiredLength, copied.RequiredLength);
+        Assert.Equal(DssHarness.Core.Legs.CopyPathBudget.Check(budget, settings, copy, plain.DirectoryUnder(copy), settings.PathBudgetReserve).RequiredLength, copied.RequiredLength);
 
         // A worker is reckoned beside the copy, and the longest variant is what the run is held to.
         var swept = FlowRunPaths.Check(budget, settings, root, "a99", [plain], [plain]);
-        var worker = DssHarness.Core.Mutations.MutationWorkers.PathOf(tree, plain, 1);
+        var workers = DssHarness.Core.Mutations.MutationWorkers.Of(tree, plain);
 
-        Assert.Equal(Math.Max(copied.RequiredLength, DssHarness.Core.Legs.CopyPathBudget.Check(budget, settings, worker, plain, settings.PathBudgetReserve).RequiredLength), swept.RequiredLength);
+        Assert.Equal(
+            Math.Max(copied.RequiredLength, DssHarness.Core.Legs.CopyPathBudget.Check(budget, settings, workers.PathOf(1), workers.BuildDirectoryOf(1), settings.PathBudgetReserve).RequiredLength),
+            swept.RequiredLength);
         Assert.True(FlowRunPaths.Check(budget, settings, root, "a99", [plain, longer], []).RequiredLength > copied.RequiredLength, "the longer variant is the one reckoned");
 
         var over = FlowRunPaths.Check(budget, new WorktreeSettings { PathLimit = copied.RequiredLength }, root, "a99", [plain], []);

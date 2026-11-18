@@ -6,6 +6,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Secrets;
 
 namespace DssHarness.Tests;
 
@@ -203,13 +204,83 @@ public sealed class HarnessContextLoaderTests
         Assert.Equal(hostMain, await RepositoryOf(new HarnessContext(new HarnessLayout(hostLegCopy, hostLegCopy), config) { IsSyncedCopy = true }));
     }
 
+    /// <summary>
+    /// The repository a host's tree is of is the main copy the host finds beside it, by the one rule both answers are
+    /// given by (<see cref="DssHarness.Core.Sync.HostCopies.MainCopyOfTree"/>), compared as the machine compares paths: a
+    /// leg's copy in a '.LEGS' its holder's on a machine that folds case, and a copy of its own on one that does not -
+    /// the set-ups a machine shares are shared by the repository this answers, and a host's legs are measured beside the
+    /// main copy the other answers, so the two never disagree.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TheRepositoryOfAHostsTree_IsTheMainCopyTheHostFindsBesideIt_ComparedAsTheMachineComparesPaths(bool foldsCase)
+    {
+        var platform = HostDoubles.Platform(foldsCase ? PlatformId.Windows : PlatformId.Linux);
+        var comparison = foldsCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var hostMain = Path.Combine(TestHost.TemporaryRoot, "loader", "host", "repo");
+        var hostWorktree = hostMain + ".worktree-o1--xa";
+        var held = new HarnessLayout(hostWorktree, hostWorktree);
+
+        _locator.LocateAsync(hostWorktree, Arg.Any<CancellationToken>()).Returns(Task.FromResult<HarnessLayout?>(held));
+        _fileSystem.FileExists(held.SyncedCopyMarkerFile).Returns(true);
+
+        foreach (var tree in new[] { hostMain, hostWorktree, Path.Combine(hostWorktree, HarnessLayout.LegsDirectoryName, "abc1234"), Path.Combine(hostWorktree, ".LEGS", "abc1234") })
+        {
+            var context = new HarnessContext(new HarnessLayout(tree, tree), new HarnessConfig()) { IsSyncedCopy = true };
+            var expected = tree.Contains(".LEGS", StringComparison.Ordinal) && !foldsCase ? tree : hostMain;
+
+            Assert.Equal(expected, await Loader(platform).RepositoryOfAsync(context, TestContext.Current.CancellationToken));
+            Assert.Equal(expected, DssHarness.Core.Worktrees.RepositoryTree.MainCheckoutOf(context, DssHarness.Core.Hosts.HostId.Ssh("pi"), comparison));
+        }
+    }
+
+    /// <summary>
+    /// What the hosts' items declare is read from this machine's own items for a command typed here, and taken from what
+    /// the machine that sent the legs told for one it asked a host to run: a host's copy holds no item, so read there,
+    /// every WSL item's distribution was not known and a leg's run line naming one was refused as an item not read.
+    /// </summary>
+    [Fact]
+    public async Task TheHostsItems_AreReadHereForATypedCommand_AndToldForOneAnotherMachineAsked()
+    {
+        var layout = new HarnessLayout(Main, Main);
+        var configFile = Path.Combine(Main, HarnessLayout.DirectoryName, HarnessLayout.ConfigFileName);
+        var ubuntu = DssHarness.Core.Hosts.HostId.Wsl("ubuntu");
+        var secrets = Substitute.For<IHostSecretsStore>();
+
+        _locator.LocateAsync(Main, Arg.Any<CancellationToken>()).Returns(Task.FromResult<HarnessLayout?>(layout));
+        _fileSystem.FileExists(configFile).Returns(true);
+        _configStore.Load(configFile).Returns(new HarnessConfig());
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), ubuntu).Returns(new ItemFacts { File = ".harness-config/wslDistros/ubuntu/.env", Present = true, Distribution = "Read-Here" });
+
+        var told = DssHarness.Core.Hosts.Dispatch.Of(new DssHarness.Core.Hosts.HostAgentRequest
+        {
+            Kind = DssHarness.Core.Hosts.HostAgentRequestKind.Run,
+            Distributions = { ["Ubuntu"] = "Told-There" },
+        });
+
+        var served = await Loader(secrets: secrets, origin: CommandOrigin.Served(told)).LoadAsync(Main, TestContext.Current.CancellationToken);
+
+        Assert.Equal("Told-There", served.HostItems.Of(ubuntu).Distribution);
+        secrets.DidNotReceiveWithAnyArgs().ReadFacts(default!, default!);
+
+        var typed = await Loader(secrets: secrets).LoadAsync(Main, TestContext.Current.CancellationToken);
+
+        Assert.Equal("Read-Here", typed.HostItems.Of(ubuntu).Distribution);
+        secrets.Received(1).ReadFacts(Arg.Any<HarnessLayout>(), ubuntu);
+    }
+
     private readonly StringWriter _errors = new();
 
     private Task<HarnessContext> Load(string directory) => Loader().LoadAsync(directory, TestContext.Current.CancellationToken);
 
     private Task<string> RepositoryOf(HarnessContext context) => Loader().RepositoryOfAsync(context, TestContext.Current.CancellationToken);
 
-    private HarnessContextLoader Loader()
+    /// <summary>
+    /// The loader over this test's locator, configuration and files, on <paramref name="platform"/> - this machine, where
+    /// none is given - reading the hosts' items from <paramref name="secrets"/>, for a command of <paramref name="origin"/>.
+    /// </summary>
+    private HarnessContextLoader Loader(IHostPlatform? platform = null, IHostSecretsStore? secrets = null, CommandOrigin? origin = null)
     {
         var output = new ConsoleHarnessOutput(new StringWriter(), _errors, verbose: false);
 
@@ -218,8 +289,10 @@ public sealed class HarnessContextLoaderTests
             _configStore,
             _git,
             _fileSystem,
-            new HostPlatform(),
+            platform ?? new HostPlatform(),
             output,
-            new SyncedCopyToolCheck(new PublishedVersionsDouble(), new RunningToolDouble(), CommandOrigin.Typed, output));
+            new SyncedCopyToolCheck(new PublishedVersionsDouble(), new RunningToolDouble(), origin ?? CommandOrigin.Typed, output),
+            secrets ?? Substitute.For<IHostSecretsStore>(),
+            origin ?? CommandOrigin.Typed);
     }
 }

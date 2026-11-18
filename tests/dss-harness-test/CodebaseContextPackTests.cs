@@ -82,6 +82,80 @@ public sealed class CodebaseContextPackTests
         Assert.Equal(filed.Seeds.Count, filed.Seeds.Select(seed => seed.Id).Distinct().Count());
     }
 
+    /// <summary>
+    /// The classes of the work item a step goes on with seed its pack (<see cref="ContextPackRequest.Closure"/>):
+    /// every site's and the home's declaration is a seed of the weight of a named symbol - so a fresh agent's pack
+    /// holds every site's declaration, not only those near the defect - a site whose symbol its file does not carry,
+    /// or that names none, seeding the file's declarations as a file the prompt names, and a site whose file the view
+    /// does not hold seeding nothing. The first line says the sites and homes among what the pack was seeded from.
+    /// </summary>
+    [Fact]
+    public async Task EverySiteAndHomeOfTheItemsClasses_SeedsThePackAtTheWeightOfANamedSymbol()
+    {
+        using var tree = await ShopAsync();
+        var queries = await QueriesAsync(tree);
+        var store = queries.OutlineFile("src/Storage/MemoryOrderStore.cs")!.Count(card => CodeNodeKinds.Declarations.Contains(card.Kind));
+        var receipts = queries.OutlineFile("src/Checkout/Receipt.cs")!.Count(card => CodeNodeKinds.Declarations.Contains(card.Kind));
+
+        var pack = CodebaseContextPack.Make(
+            queries,
+            new ContextPackRequest("Close the class of the checkout's reference.", All)
+            {
+                Closure =
+                [
+                    new ContextPackClosure("src/Checkout/CheckoutService.cs", "Checkout", Home: true),
+                    new ContextPackClosure("src/Storage/MemoryOrderStore.cs", "Save", Home: false),
+                    new ContextPackClosure("src/Storage/MemoryOrderStore.cs", "NotThere", Home: false),
+                    new ContextPackClosure("src/Checkout/Receipt.cs", null, Home: false),
+                    new ContextPackClosure("src/Nope.cs", "Whatever", Home: false),
+                ],
+            });
+
+        // Every site's declaration and the home's, each named by why it is a seed.
+        Assert.EndsWith(" | the home of a class the item closes", Line(pack, queries, "Shop.Checkout.CheckoutService.Checkout"), StringComparison.Ordinal);
+        Assert.EndsWith(" | a site of a class the item closes", Line(pack, queries, "Shop.Storage.MemoryOrderStore.Save"), StringComparison.Ordinal);
+        Assert.EndsWith(" | in a file a class of the item names", Line(pack, queries, "Shop.Storage.MemoryOrderStore.Find"), StringComparison.Ordinal);
+        Assert.EndsWith(" | in a file a class of the item names", Line(pack, queries, "Shop.Checkout.Receipt"), StringComparison.Ordinal);
+
+        Assert.Equal("the home of a class the item closes", Assert.Single(pack.Seeds, seed => seed.Id == Id(queries, "Shop.Checkout.CheckoutService.Checkout")).Why);
+        Assert.Equal("a site of a class the item closes", Assert.Single(pack.Seeds, seed => seed.Id == Id(queries, "Shop.Storage.MemoryOrderStore.Save")).Why);
+
+        // The declarations the home and the sites seeded, with the fallbacks their symbols leave, counted as declarations
+        // among the first line's seeds; the file the view does not hold seeds nothing.
+        Assert.True(pack.Text.Split('\n')[0].Contains($"; packed from the task: {1 + store + receipts} declaration(s) at the sites and homes of the classes it is to close", StringComparison.Ordinal), $"store={store}, receipts={receipts}; first line: {pack.Text.Split('\n')[0]}");
+    }
+
+    /// <summary>
+    /// A class's site is read by the pack's own rules of what a prompt names, as the plan check reads it: a path written
+    /// with backslashes or a leading <c>./</c> is the path the view holds, and a symbol written with its parameters names
+    /// the symbol - so a site the plan check accepts seeds its declaration at the weight of a named symbol, never its file
+    /// alone or nothing.
+    /// </summary>
+    [Fact]
+    public async Task ASitesPathAndSymbol_AreReadAsAPromptsNamesAre_SoASiteThePlanCheckAcceptsSeedsItsDeclaration()
+    {
+        using var tree = await ShopAsync();
+        var queries = await QueriesAsync(tree);
+
+        var pack = CodebaseContextPack.Make(
+            queries,
+            new ContextPackRequest("Close the class of the checkout's reference.", All)
+            {
+                Closure =
+                [
+                    new ContextPackClosure("./src/Checkout/CheckoutService.cs", "Checkout(Order order)", Home: true),
+                    new ContextPackClosure("src\\Storage\\MemoryOrderStore.cs", " Save ", Home: false),
+                ],
+            });
+
+        Assert.EndsWith(" | the home of a class the item closes", Line(pack, queries, "Shop.Checkout.CheckoutService.Checkout"), StringComparison.Ordinal);
+        Assert.EndsWith(" | a site of a class the item closes", Line(pack, queries, "Shop.Storage.MemoryOrderStore.Save"), StringComparison.Ordinal);
+        Assert.Equal(
+            ["a site of a class the item closes", "the home of a class the item closes"],
+            pack.Seeds.Where(seed => seed.Why.EndsWith("a class the item closes", StringComparison.Ordinal)).Select(seed => seed.Why).Order(StringComparer.Ordinal));
+        Assert.Contains("; packed from the task: 2 declaration(s) at the sites and homes of the classes it is to close", pack.Text.Split('\n')[0], StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task TheSeeds_AreWhatThePromptNamesExactly_InBackquotesOrAsAQualifiedNameAHandleOrAPathAndLine()
     {

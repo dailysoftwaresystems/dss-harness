@@ -14,12 +14,26 @@ Every red result the run knows of, those from before its changes among them:
 
 {run.red}
 
+## The class you are closing
+
+The classes of the decisions this item changes, each with its invariant, its one home and its sites:
+
+{input.item.classes}
+
+The record of each class so far, as the last report gave it:
+
+{implement.latest.closure}
+
+Act by them: a site the list missed is yours to add and to close with the rest, and nothing of the class is done
+while one of its sites is left.
+
 ## What to do
 
 1. Read the output and find the first thing that went wrong.
 2. Find the cause in your change. Put the cause right; do not make the test pass by weakening it.
-3. Where a leg says it found no test to run, the filter your task gave names tests that are not there: where your
-   work was to write them, write them.
+3. Where a leg says it found no test to run, a unit your task gave or your answer added names tests that are not
+   there: where your work was to write them, write them; a unit your answer added that names none, leave out of your
+   answer's tests.
 4. Build and run the tests again as the engine runs them. Where you cannot, say why in what you ran.
 
 Keep to the paths your task allows. A red result that was there before this run - a test red before its changes, a

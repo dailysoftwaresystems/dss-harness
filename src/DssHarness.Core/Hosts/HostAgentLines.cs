@@ -37,6 +37,12 @@ public sealed class HostAgentLines(string nonce, Action<string, string>? onNote 
     /// </summary>
     public int? Finished { get; private set; }
 
+    /// <summary>
+    /// Whether a line of a note of this request has arrived, read whole or not, and handed on or dropped: the command the
+    /// request ran had begun its work by then, since a note says what that work did.
+    /// </summary>
+    public bool Noted { get; private set; }
+
     /// <summary>Whether <paramref name="line"/>, from standard output, is the agent's.</summary>
     /// <param name="line">A line the host wrote to standard output.</param>
     public bool Output(string line)
@@ -86,6 +92,8 @@ public sealed class HostAgentLines(string nonce, Action<string, string>? onNote 
         {
             return false;
         }
+
+        Noted = true;
 
         // A machine that reads no notes - a sweep typed by hand in a synced copy, which records nothing - still asked a
         // command that writes them: each is this request's, so it is dropped here, never relayed as a line of its own.

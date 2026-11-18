@@ -1071,6 +1071,86 @@ public sealed partial class GitClient(
         return ReadCount(result);
     }
 
+    public async Task<IReadOnlyList<GitTouch>> CountTouchesAsync(
+        string directory,
+        string from,
+        string to,
+        IReadOnlyList<string> paths,
+        StringComparison comparison,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(from);
+        ArgumentException.ThrowIfNullOrWhiteSpace(to);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        if (paths.Count == 0)
+        {
+            return [];
+        }
+
+        // The whole range is walked once with no pathspec, for rename following is the point: with paths limiting the
+        // walk, a rename into a watched path from outside it is not found. One run is one pull request, so the range a
+        // run names is its own commits. Each commit begins with a record starting '@', which no status or path can
+        // begin with, so the blocks are never ambiguous; renames are named by the path they moved to.
+        var result = await RunForBytesAsync(
+                directory,
+                [
+                    "--literal-pathspecs", "log", "--name-status", "--find-renames", "-z",
+                    "--no-color", "--no-show-signature", "--no-relative", "--format=@%H", $"{from}..{to}",
+                ],
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        Ensure(result, $"count the commits between {from} and {to} that touched {ReportText.Counted(paths.Count, "path")}");
+
+        var watched = paths.ToHashSet(StringComparer.FromComparison(comparison));
+        var touches = new List<GitTouch>();
+        var records = Records(result.StandardOutput);
+        string? commit = null;
+
+        for (var at = 0; at < records.Length;)
+        {
+            var record = records[at++];
+
+            if (record.StartsWith('@'))
+            {
+                commit = record[1..];
+                continue;
+            }
+
+            if (commit is null)
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"git answered the commits between {from} and {to} in a shape this build cannot read.");
+            }
+
+            // A status names one path, a rename or a copy two - the path it came from and the path it moved to, which
+            // is the one the count follows. A path that is not UTF-8 cannot be one of the paths asked for by name.
+            var status = record.Trim();
+            var takes = status.StartsWith('R') || status.StartsWith('C') ? 2 : 1;
+            var named = records[Math.Min(at, records.Length - 1)..Math.Min(at + takes, records.Length)];
+
+            if (named.Length < takes)
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"git answered the commits between {from} and {to} in a shape this build cannot read.");
+            }
+
+            at += takes;
+
+            var followed = GitName.FromBytes(named[^1]);
+
+            if (followed.IsUtf8 && watched.Contains(followed.Text))
+            {
+                touches.Add(new GitTouch(commit, followed.Text));
+            }
+        }
+
+        return touches;
+    }
+
     public async Task<bool> HasStashAsync(string gitDirectory, CancellationToken cancellationToken = default)
     {
         var result = await RunAsync(

@@ -205,14 +205,30 @@ public static class SyncServe
 
     /// <summary>
     /// What a <see cref="Create"/> request says, after the mark, of the reading a finished copy holds: the run that read
-    /// it, the commit, each <see cref="Nothing"/> where there is none, then the count of uncommitted changes.
+    /// it, the commit, each <see cref="Nothing"/> where there is none, then the count of uncommitted changes, and last the
+    /// tree it was read from, where one is named.
     /// </summary>
     /// <param name="reading">The reading.</param>
-    public static IReadOnlyList<string> Recording(CopyReading reading)
+    /// <param name="tree">The tree it was read from, as the machine asking spells it; none leaves it out.</param>
+    public static IReadOnlyList<string> Recording(CopyReading reading, string? tree)
     {
         ArgumentNullException.ThrowIfNull(reading);
 
-        return [reading.ReadBy ?? Nothing, reading.Commit ?? Nothing, reading.UncommittedChanges.ToString(CultureInfo.InvariantCulture)];
+        IReadOnlyList<string> recorded = [reading.ReadBy ?? Nothing, reading.Commit ?? Nothing, reading.UncommittedChanges.ToString(CultureInfo.InvariantCulture)];
+
+        return tree is { Length: > 0 } ? [.. recorded, tree] : recorded;
+    }
+
+    /// <summary>
+    /// The tree a <see cref="Create"/> request that records a reading names, as <see cref="Recording"/> spelled it last;
+    /// none where it names none, as a build from before the tree was carried sends it.
+    /// </summary>
+    /// <param name="arguments">The request's arguments, the copy's root first, then the mark.</param>
+    public static string? TreeIn(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        return arguments.Count == 6 && arguments[5].Length > 0 ? arguments[5] : null;
     }
 
     /// <summary>
@@ -237,14 +253,16 @@ public static class SyncServe
             return null;
         }
 
-        if (arguments.Count != 5
+        // Five where the build asking sends no tree - one from before it was carried - and six where it does.
+        if (arguments.Count is not (5 or 6)
             || MarkIn(arguments) != CopyMark.Complete
             || !int.TryParse(arguments[4], NumberStyles.None, CultureInfo.InvariantCulture, out var changes))
         {
             throw new HarnessException(
                 HarnessExit.UsageError,
                 $"The reading '{arguments[0]}' was to be marked as holding arrived in a shape this build cannot read: a "
-                + "complete mark, then the run, the commit and a count of uncommitted changes. The two ends are different builds.");
+                + "complete mark, then the run, the commit, a count of uncommitted changes and the tree it was read from. The "
+                + "two ends are different builds.");
         }
 
         return new CopyReading(Given(arguments, 2, Create), Given(arguments, 3, Create), changes);
@@ -335,7 +353,7 @@ public static class SyncServe
 
     /// <summary>
     /// Removes the workers an earlier version kept beside the copies of a repository kept together, there still or
-    /// removed since, the main checkout's copy its root names: <c>remove-former-workers &lt;repositoryPath&gt;</c>, and
+    /// removed since, or in those there still, the main checkout's copy its root names: <c>remove-former-workers &lt;repositoryPath&gt;</c>, and
     /// <see cref="MeasureOnly"/> after it to say what would go and remove nothing.
     /// </summary>
     public const string RemoveFormerWorkers = "remove-former-workers";
@@ -824,6 +842,12 @@ public sealed record HostCopyFound(string Name, string Path, CopyOrigin Origin, 
 
     /// <summary>Why its marker could not be read, where it could not.</summary>
     public string? Problem { get; init; }
+
+    /// <summary>
+    /// The tree its marker says it was last made from, as the machine whose sync finished it spells it; none where the
+    /// marker names none - one finished by a build from before it was recorded, or one never finished.
+    /// </summary>
+    public string? Tree { get; init; }
 }
 
 /// <summary>How a copy came to be, as its marker says: what decides whether removing it takes it.</summary>

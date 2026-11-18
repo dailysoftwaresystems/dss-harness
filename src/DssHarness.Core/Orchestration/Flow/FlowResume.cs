@@ -19,6 +19,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Questions">Every question the run raised and every answer it was given, the open ones among them, as the run's one file of them holds it.</param>
 /// <param name="Issues">Every pre-existing issue the run listed, proven, as the run's own file of them holds it.</param>
 /// <param name="Refused">Every answer handed over through the inbox that the run refused, as its file of questions holds them; null where none was.</param>
+/// <param name="AffectedTests">Each key's test units the run kept, as its own record of them holds them; null where the state was read from no record.</param>
 public sealed record FlowResumeState(
     FlowFile File,
     IReadOnlyList<string> Differing,
@@ -26,7 +27,8 @@ public sealed record FlowResumeState(
     IReadOnlyDictionary<string, string> Handoffs,
     IReadOnlyList<FlowQuestionEntry>? Questions = null,
     IReadOnlyList<PreExistingIssue>? Issues = null,
-    IReadOnlyList<FlowRefusedAnswer>? Refused = null);
+    IReadOnlyList<FlowRefusedAnswer>? Refused = null,
+    IReadOnlyList<FlowAffectedTests>? AffectedTests = null);
 
 /// <summary>
 /// Reads what a killed or stopped run left and hands it to a resume: the run's state in one file checked against the
@@ -74,7 +76,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
     /// </summary>
     /// <param name="definitionDigest">The digest of the repository's entry as the caller reads it now; where the run's own digest differs, the resume is refused with a pointer to a new run (<see cref="RefuseAChangedDefinition"/>).</param>
     /// <exception cref="HarnessException">
-    /// The run holds no state, its questions or its issues; a record does not read; a record names a handoff its
+    /// The run holds no state, its questions, its issues or its affected tests; a record does not read; a record names a handoff its
     /// directory does not hold; or the definition differs (<see cref="HarnessExit.Refused"/>).
     /// </exception>
     public FlowResumeState Load(string definitionDigest)
@@ -86,12 +88,15 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
 
         RefuseAChangedDefinition(file, _layout, definitionDigest);
 
-        // The run's questions and its issues are made with it and never removed: one missing is something that removed
-        // it, and an empty one in its place would leave a step waiting on a question nobody can answer.
+        // The run's questions, its issues and its affected tests are made with it and never removed: one missing is
+        // something that removed it, and an empty one in its place would leave a step waiting on a question nobody can
+        // answer, or a gate running none of the tests the run's work affects.
         var questions = _store.ReadFlowQuestions(_layout)
             ?? throw Missing(_layout.QuestionsFile, "its questions and answers", "a step waiting on a question would wait for ever, and answer-orchestrator could not answer it");
         var issues = _store.ReadPreExistingIssues(_layout)
             ?? throw Missing(_layout.PreExistingIssuesFile, "its pre-existing issues", "the issues it listed would be lost from its report");
+        var affected = _store.ReadAffectedTests(_layout)
+            ?? throw Missing(_layout.AffectedTestsFile, "its affected tests", "the tests its finished work affects would be lost from every step that reads run.affectedTests");
 
         var records = StepRecords();
         var steps = new List<FlowStepRecord>();
@@ -132,7 +137,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
 
         _store.WriteFlow(_layout, reconciled);
 
-        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues, questions.Refused);
+        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues, questions.Refused, affected.Entries);
     }
 
     /// <summary>Every step record the run's directories hold - the run's, then each agent's - by instance id, each with any handoff its record does not name yet taken back.</summary>

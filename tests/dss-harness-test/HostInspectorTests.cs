@@ -897,6 +897,35 @@ public sealed class HostInspectorTests
     }
 
     /// <summary>
+    /// An ssh host answers its own settings file, which admits the legs sent to it; a WSL distribution runs on this machine,
+    /// whose settings file admits its legs, so what the distribution answers of its own is never taken for it.
+    /// </summary>
+    [Fact]
+    public async Task AnSshHostAnswersItsOwnSettingsFile_AndAWslDistributionIsGivenThisMachines()
+    {
+        using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(agent: _ => HostResults.Ok(JsonSerializer.Serialize(
+            new HostAgentInfo
+            {
+                Version = Root.Version,
+                AssemblySha256 = "roothash",
+                Os = "linux",
+                Processor = "x86_64",
+                MachineSettings = new MachineSettingsAnswer("~/.local/share/dssharness/settings-host.json", new AdmissionSettings { HeavyLegs = 9 }),
+            },
+            HostAgentProtocol.JsonOptions))));
+
+        var ssh = await fixture.InspectAsync(HostId.Ssh(SshName));
+        var wsl = await fixture.InspectAsync(HostId.Wsl(Distro));
+
+        Assert.True(ssh.Available, ssh.Reason);
+        Assert.True(wsl.Available, wsl.Reason);
+        Assert.Equal(("~/.local/share/dssharness/settings-host.json", 9), (ssh.MachineSettings?.Path, ssh.MachineSettings?.Admission?.HeavyLegs));
+        Assert.EndsWith(MachineSettingsFile.FileNameFor("tests"), wsl.MachineSettings?.Path, StringComparison.Ordinal);
+        Assert.Null(wsl.MachineSettings?.Admission);
+        Assert.Null(wsl.MachineSettings?.Problem);
+    }
+
+    /// <summary>
     /// The developer environments a host is asked about travel to it - the toolset one names with it, for the host's own
     /// survey to look for - what it found comes back under the names they were asked by, with the toolset it found, and
     /// each one gives the host the time vswhere may take to answer.
@@ -1593,7 +1622,7 @@ public sealed class HostInspectorTests
                 new KeepAwake(processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
                 new RecordingLauncher(),
-                HomeShorthand.Of(platform, fileSystem), new RecordingLastResort());
+                HomeShorthand.Of(platform, fileSystem), new RecordingLastResort(), HostDoubles.MachineSettings(fileSystem));
             var secrets = new HostSecretsStore(fileSystem, Permissions, platform);
             _lookup = new FixedLookup(resolves ? resolvesTo ?? ["192.0.2.10"] : []);
             var addresses = new HostAddressResolver(_lookup, TimeProvider.System, TimeSpan.Zero);

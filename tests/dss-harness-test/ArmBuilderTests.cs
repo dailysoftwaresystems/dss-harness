@@ -142,7 +142,8 @@ public sealed class ArmBuilderTests
     }
 
     /// <summary>
-    /// A worker's graph is read from its build directory: the records ninja answers for, asked with the ninja its CMake
+    /// A worker's graph is read from the build directory its build was given - its own build/&lt;key&gt;, never the
+    /// directory the variant's name gives a tree's build: the records ninja answers for, asked with the ninja its CMake
     /// recorded, and the manifest beside them.
     /// </summary>
     [Fact]
@@ -150,8 +151,8 @@ public sealed class ArmBuilderTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var worker = temp.Combine("tree", ".mutations", "357e24cw-1");
-        var build = Variant.DirectoryUnder(worker);
+        var worker = MutationWorkers.PathOf(temp.Combine("tree"), Variant, 1);
+        var build = MutationWorkers.BuildDirectoryOf(worker);
         var ninja = temp.Combine("tools", "ninja");
 
         WriteBuild(temp, build);
@@ -163,7 +164,10 @@ public sealed class ArmBuilderTests
             asked,
             new BuildDirectoryGuard(harness.FileSystem, harness.Platform, harness.FilePermissions),
             harness.FileSystem);
-        var request = new BuildRequest("native/workers/1", worker, new ProjectConfig { Name = "app", Type = "cmake" }, Variant, harness.Platform.PlatformKey, 2, temp.Combine("runs"));
+        var request = new BuildRequest("native/workers/1", worker, new ProjectConfig { Name = "app", Type = "cmake" }, Variant, harness.Platform.PlatformKey, 2, temp.Combine("runs"))
+        {
+            BuildDirectory = build,
+        };
 
         var graph = await builder.ReadGraphAsync(new HarnessConfig(), request, TestContext.Current.CancellationToken);
 
@@ -190,8 +194,8 @@ public sealed class ArmBuilderTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var worker = temp.Combine("tree", ".mutations", "357e24cw-1");
-        var build = Variant.DirectoryUnder(worker);
+        var worker = MutationWorkers.PathOf(temp.Combine("tree"), Variant, 1);
+        var build = MutationWorkers.BuildDirectoryOf(worker);
         var path = Path.Combine(build, file.Replace('/', Path.DirectorySeparatorChar));
 
         WriteBuild(temp, build);
@@ -211,7 +215,10 @@ public sealed class ArmBuilderTests
             new Answering($"{FixtureObject}: #deps 1, deps mtime 1 (VALID)\n    {temp.Combine("src", "fixture.cpp").Replace('\\', '/')}\n"),
             new BuildDirectoryGuard(harness.FileSystem, harness.Platform, harness.FilePermissions),
             files);
-        var request = new BuildRequest("native/workers/1", worker, new ProjectConfig { Name = "app", Type = "cmake" }, Variant, harness.Platform.PlatformKey, 2, temp.Combine("runs"));
+        var request = new BuildRequest("native/workers/1", worker, new ProjectConfig { Name = "app", Type = "cmake" }, Variant, harness.Platform.PlatformKey, 2, temp.Combine("runs"))
+        {
+            BuildDirectory = build,
+        };
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => builder.ReadGraphAsync(new HarnessConfig(), request, TestContext.Current.CancellationToken));
 

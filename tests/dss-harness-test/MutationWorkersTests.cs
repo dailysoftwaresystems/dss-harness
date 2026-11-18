@@ -29,12 +29,12 @@ public sealed class MutationWorkersTests
     /// that slot, which no worker is named.
     /// </summary>
     [Theory]
-    [InlineData("/home/pi/repo", "/home/pi/repo/.mutations/357e24c")]
-    [InlineData("/home/pi/repo/", "/home/pi/repo/.mutations/357e24c")]
-    [InlineData("~/repo", "~/repo/.mutations/357e24c")]
-    [InlineData("C:/src/repo", "C:/src/repo/.mutations/357e24c")]
-    [InlineData(@"C:\src\repo", @"C:\src\repo\.mutations\357e24c")]
-    [InlineData(@"C:\src\repo\", @"C:\src\repo\.mutations\357e24c")]
+    [InlineData("/home/pi/repo", "/home/pi/repo/.m/357e24c")]
+    [InlineData("/home/pi/repo/", "/home/pi/repo/.m/357e24c")]
+    [InlineData("~/repo", "~/repo/.m/357e24c")]
+    [InlineData("C:/src/repo", "C:/src/repo/.m/357e24c")]
+    [InlineData(@"C:\src\repo", @"C:\src\repo\.m\357e24c")]
+    [InlineData(@"C:\src\repo\", @"C:\src\repo\.m\357e24c")]
     public void AWorker_IsACopyKeptInItsTreesSlot_NamedByItsVariantsKeyAndItsNumber(string tree, string keyed)
     {
         Assert.Equal(keyed + "w", MutationWorkers.Of(tree, Variant).Root);
@@ -63,32 +63,87 @@ public sealed class MutationWorkersTests
     }
 
     /// <summary>
-    /// A worker adds twenty-two characters to its tree's path whatever its variant is called, a self-test's as its own -
-    /// two more than one kept beside its tree did, the slot's separators - so a repository whose path budget is reckoned
-    /// to the character, leaving twenty-two beside its tree, holds a worker of each of its variants, where a name
-    /// spelling the variant out left none. Help says the number from the code.
+    /// A worker adds fourteen characters to its tree's path whatever its variant is called, a self-test's as its own, and
+    /// builds in its own build/&lt;key&gt;, fourteen more: the key, never the variant's name, in its name and in its build
+    /// directory alike - so a repository whose path budget is reckoned to the character holds a worker of each of its
+    /// variants at one length. Help reads both numbers from the family (<see cref="WorkerFamily.AddedToItsTreesPath"/>,
+    /// <see cref="WorkerFamily.BuildBelowItsWorker"/>), each held here to the paths the family spells, so a layout changed
+    /// under them is never said by the old numbers.
     /// </summary>
     [Theory]
-    [InlineData("mingw-gcc", "debug", 259)]
-    [InlineData("msvc", "release", 256)]
-    public void AWorker_AddsTwentyTwoCharactersToItsTreesPath_WhateverItsVariantIsCalled(string toolchain, string config, int needed)
+    [InlineData("mingw-gcc", "debug")]
+    [InlineData("msvc", "release")]
+    [InlineData("gcc-with-a-much-longer-toolchain-name", "relwithdebinfo")]
+    public void AWorker_AddsFourteenCharactersToItsTreesPath_AndBuildsFourteenBelow_WhateverItsVariantIsCalled(string toolchain, string config)
     {
         // A tree of 38 characters, a build whose longest path below its build directory is 168, a margin of 1, under 260.
         const string tree = "C:/Source/SomeCompany/consumer-project";
         var variant = new VariantKey("x86_64", toolchain, config, null);
-        var worker = MutationWorkers.PathOf(tree, variant, 1);
+        var workers = MutationWorkers.Of(tree, variant);
+        var selfTest = MutationWorkers.Of(tree, variant, selfTest: true);
+        var worker = workers.PathOf(1);
 
         Assert.Equal(38, tree.Length);
-        Assert.Equal(22, WorkerFamily.AddedToItsTreesPath);
-        Assert.Equal(tree.Length + 22, worker.Length);
-        Assert.Equal(tree.Length + 22, MutationWorkers.Of(tree, variant, selfTest: true).PathOf(9).Length);
+        Assert.Equal(14, WorkerFamily.AddedToItsTreesPath);
+        Assert.Equal(14, WorkerFamily.BuildBelowItsWorker);
+        Assert.Equal(tree.Length + WorkerFamily.AddedToItsTreesPath, worker.Length);
+        Assert.Equal(tree.Length + WorkerFamily.AddedToItsTreesPath, selfTest.PathOf(9).Length);
+        Assert.Equal($"{worker}/build/{variant.CopyKey}", workers.BuildDirectoryOf(1));
+        Assert.Equal(WorkerFamily.BuildBelowItsWorker, workers.BuildDirectoryOf(1).Length - workers.PathOf(1).Length);
+        Assert.Equal(WorkerFamily.BuildBelowItsWorker, selfTest.BuildDirectoryOf(9).Length - selfTest.PathOf(9).Length);
 
         // What a sweep reckons a worker by: its build directory below it, the separator before it counted, and the reserve.
-        var below = $"/build/{variant.DirectoryName}".Length + 168;
+        var below = workers.BuildDirectoryOf(1).Length - worker.Length + 168;
         var budget = new PathBudget(new HostPlatform()).Check(worker, below, 1, 260);
 
+        Assert.Equal(WorkerFamily.BuildBelowItsWorker + 168, below);
         Assert.True(budget.IsWithinBudget);
-        Assert.Equal(needed, budget.RequiredLength);
+        Assert.Equal(tree.Length + WorkerFamily.AddedToItsTreesPath + WorkerFamily.BuildBelowItsWorker + 168 + 1 + 1, budget.RequiredLength);
+    }
+
+    /// <summary>
+    /// A worker's build directory, reckoned from the layout's names, is shallower than one either earlier layout kept -
+    /// beside the tree, <c>&lt;tree&gt;.mutation-&lt;key&gt;&lt;mark&gt;-1/build/&lt;variant&gt;</c>, or in its former slot,
+    /// <c>&lt;tree&gt;/.mutations/&lt;key&gt;&lt;mark&gt;-1/build/&lt;variant&gt;</c> - whatever the variant is called, the
+    /// shortest name a variant can have among them: a tree that fitted such a worker within the path limit fits one now. A
+    /// consumer's mutant path, in the in-tree layout, came to 277 characters.
+    /// </summary>
+    [Theory]
+    [InlineData("a", "b", "c", null)]
+    [InlineData("x86_64", "gcc", "debug", null)]
+    [InlineData("x86_64", "msvc", "RelWithDebInfo", "address")]
+    public void AWorkersBuildDirectory_IsShallowerThanEitherEarlierLayouts(string processor, string toolchain, string config, string? sanitizer)
+    {
+        const string tree = "/home/pi/repo";
+        var variant = new VariantKey(processor, toolchain, config, sanitizer);
+        var worker = $"{variant.CopyKey}{WorkerFamily.OwnMark}-1";
+        var build = $"{VariantKey.BuildRootName}/{variant.DirectoryName}";
+        var beside = $"{tree}{MutationWorkers.FormerFamily}{worker}/{build}";
+        var inTheFormerSlot = $"{tree}/{HarnessLayout.FormerMutationsDirectoryName}/{worker}/{build}";
+        var now = MutationWorkers.Of(tree, variant).BuildDirectoryOf(1);
+
+        Assert.Equal($"{tree}/{HarnessLayout.MutationsDirectoryName}/{worker}/{VariantKey.BuildRootName}/{variant.CopyKey}", now);
+        Assert.True(now.Length < beside.Length, $"'{now}' is no shallower than '{beside}'");
+        Assert.True(now.Length < inTheFormerSlot.Length, $"'{now}' is no shallower than '{inTheFormerSlot}'");
+        Assert.Equal(inTheFormerSlot.Length - now.Length, HarnessLayout.FormerMutationsDirectoryName.Length - HarnessLayout.MutationsDirectoryName.Length + variant.DirectoryName.Length - VariantKey.CopyKeyLength);
+        Assert.Equal(".m", HarnessLayout.MutationsDirectoryName);
+    }
+
+    /// <summary>
+    /// A worker's build directory is read from its own name where only its copy is in hand, as its family spells it:
+    /// <c>build/&lt;key&gt;</c> within it, joined as the worker's path is spelt; a path named as no worker is refused.
+    /// </summary>
+    [Fact]
+    public void AWorkersBuildDirectory_IsReadFromItsName_AsItsFamilySpellsIt()
+    {
+        var own = MutationWorkers.Of("/home/pi/repo", Variant);
+        var selfTest = MutationWorkers.Of(@"C:\src\repo", Variant, selfTest: true);
+
+        Assert.Equal("/home/pi/repo/.m/357e24cw-2/build/357e24c", MutationWorkers.BuildDirectoryOf(own.PathOf(2)));
+        Assert.Equal(own.BuildDirectoryOf(2), MutationWorkers.BuildDirectoryOf(own.PathOf(2) + "/"));
+        Assert.Equal(@"C:\src\repo\.m\357e24cs-1\build\357e24c", MutationWorkers.BuildDirectoryOf(selfTest.PathOf(1)));
+        Assert.Equal(selfTest.BuildDirectoryOf(1), MutationWorkers.BuildDirectoryOf(selfTest.PathOf(1)));
+        Assert.Throws<ArgumentException>(() => MutationWorkers.BuildDirectoryOf("/home/pi/repo/.m/not-a-worker"));
     }
 
     /// <summary>
@@ -105,10 +160,10 @@ public sealed class MutationWorkersTests
         var selfTest = MutationWorkers.Of(tree, Variant, selfTest: true);
 
         Assert.Equal(('w', 's'), (WorkerFamily.OwnMark, WorkerFamily.SelfTestMark));
-        Assert.Equal("/home/pi/repo/.mutations/357e24cs-2", selfTest.PathOf(2));
+        Assert.Equal("/home/pi/repo/.m/357e24cs-2", selfTest.PathOf(2));
         Assert.Equal(("357e24cs", "357e24cw"), (selfTest.Name, own.Name));
-        Assert.Equal("/home/pi/repo/.mutations/357e24cs", selfTest.Root);
-        Assert.Equal(("/home/pi/repo/.mutations/357e24c", "/home/pi/repo/.mutations/357e24c"), (own.SweepKey, selfTest.SweepKey));
+        Assert.Equal("/home/pi/repo/.m/357e24cs", selfTest.Root);
+        Assert.Equal(("/home/pi/repo/.m/357e24c", "/home/pi/repo/.m/357e24c"), (own.SweepKey, selfTest.SweepKey));
         Assert.Equal(selfTest, WorkerFamily.Named(tree, selfTest.Name));
         Assert.Equal(own, WorkerFamily.Named(tree, own.Name));
         Assert.Equal(

@@ -10,7 +10,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// answer is an output - <c>ok</c>, each problem as a line, and the items it checked - never a failure. The pieces of a
 /// plan update its <c>scope</c> yields are checked with them, and with the items of the round they join; where it opens
 /// a round, it checks one list - its own items and every work item plan updates owe it - and its output <c>items</c> is
-/// that list, so nothing joins a round unchecked.
+/// that list, so nothing joins a round unchecked. A work item is known by its name across the run, so no item a round
+/// builds but an owed one, and no added piece, takes a name an instance of the work-item group carries already: a round
+/// added to a work-item group with no loop around it builds the owed work alone, and its own items, which the group's
+/// round before built under those names, are held to none.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -35,6 +38,11 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         var problems = new List<string>();
         var checkedItems = items;
 
+        // The names every instance of the work-item group carries, over every round: the run knows a work item by its name
+        // alone - its tests, its updates and its account are kept under it - so no round opens with one of them, and no
+        // added piece takes one.
+        var carried = Names(read, "carried");
+
         // The items plan updates owe the round this check opens, where it opens one: they join its own as one list,
         // checked together, and the group expands from what was checked. An owed work item replaces the one of its
         // name the round's own list holds - that list was written before the update that owes this one, and what the
@@ -42,6 +50,10 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         // may have is the round's own list's alone, never the two together.
         List<JsonNode?>? owed = null;
         var opening = false;
+
+        // Whether the round this check opens carries the owed work alone: one added to a work-item group with no loop
+        // around it, whose own items the group's round before built, so it builds none of them again.
+        var owedAlone = read.TryGetValue("owedAlone", out var alone) && alone.ToNode() is JsonValue flag && flag.TryGetValue<bool>(out var only) && only;
 
         if (read.TryGetValue("owed", out var owing) && !owing.IsMissing && owing.ToNode() is JsonArray owingList)
         {
@@ -63,7 +75,17 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
                     .Where(item => FlowWorkItems.NameOf(item) is not { } named || !owedNames.Contains(named, StringComparer.Ordinal))
                     .Select(item => item?.DeepClone()),
                  .. owed!.Select(item => item?.DeepClone())]);
-            problems.AddRange(validator.Check([.. checkedItems], context, place.Run, place.Definition, mostItems: false));
+
+            // An owed item may bear the name of one an earlier round carries: a changed or a removed piece names the item
+            // it changes or takes back. The round's own items may not, where the round builds them: a round that carries
+            // the owed work alone builds none of them, for the round before built them under those very names.
+            problems.AddRange(validator.Check(
+                [.. checkedItems],
+                context,
+                place.Run,
+                place.Definition,
+                mostItems: false,
+                carried: owedAlone ? [] : [.. carried.Where(name => !owedNames.Contains(name, StringComparer.Ordinal))]));
         }
         else
         {
@@ -82,11 +104,8 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
             if (pieces.Count > 0)
             {
                 IReadOnlyList<JsonNode?>? round = read.TryGetValue("round", out var joining) && !joining.IsMissing && joining.ToNode() is JsonArray joiningList ? [.. joiningList] : null;
-                var known = read.TryGetValue("known", out var had) && !had.IsMissing && had.ToNode() is JsonArray hadList
-                    ? (IReadOnlyList<string>)[.. hadList.Select(name => name is JsonValue value && value.TryGetValue<string>(out var text) ? text : null).OfType<string>()]
-                    : [];
 
-                problems.AddRange(validator.CheckPieces([.. pieces], [.. items], round, known, context, place.Run, place.Definition));
+                problems.AddRange(validator.CheckPieces([.. pieces], [.. items], round, Names(read, "known"), context, place.Run, place.Definition, carried));
             }
         }
 
@@ -100,4 +119,10 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
                 ["items"] = checkedItems.DeepClone(),
             });
     }
+
+    /// <summary>The names the engine hands the step under <paramref name="key"/>, each a text; none where it hands none.</summary>
+    private static IReadOnlyList<string> Names(IReadOnlyDictionary<string, FlowValue> read, string key)
+        => read.TryGetValue(key, out var given) && !given.IsMissing && given.ToNode() is JsonArray list
+            ? [.. list.Select(name => name is JsonValue value && value.TryGetValue<string>(out var text) ? text : null).OfType<string>()]
+            : [];
 }

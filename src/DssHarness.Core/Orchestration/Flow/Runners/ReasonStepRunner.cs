@@ -4,13 +4,16 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Runs;
 using DssHarness.Core.Secrets;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -40,6 +43,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
+/// <param name="tests">Tests the legs, for the measure tool the step's agent is given where the repository declares legs and the agent runs commands.</param>
+/// <param name="children">Records in the step's directory the group of what a measure call's legs start bound, while anything is in it.</param>
 public sealed class ReasonStepRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -52,6 +57,8 @@ public sealed class ReasonStepRunner(
     Output.IHarnessOutput harnessOutput,
     TimeProvider clock,
     Agents.Isolation.IAgentIsolation isolation,
+    Application.Legs.ITestLegs tests,
+    ChildSessions children,
     Git.IGitClient? gitClient = null,
     Configuration.IConfigStore? configStore = null,
     ClaudeCodeUpdateService? updates = null,
@@ -361,6 +368,10 @@ public sealed class ReasonStepRunner(
             Graph = stepGraph?.Support,
             CodebaseGiven = stepGraph is null ? null : stepGraph.Given,
 
+            // The measure tool, where the repository declares legs and the step's agent runs commands: what it measures a
+            // neighbour of a class with, served on every client and answered by the test service as a leg step's legs are.
+            Measure = Measured(context, place, workspace, ground, run.Instance, StepDirectoryOf(layout, run.Instance, agent)),
+
             // What the engine tells the attempt's agent while it works - a plan update's message into the
             // conversation, its handoff where one ends the step in order - and what a plan update that told this
             // work said, in the part of its own the attempt's first message holds.
@@ -402,6 +413,115 @@ public sealed class ReasonStepRunner(
         {
             return FlowStepResult.Ended(passed: false, refused.ExitCode, refused.Message);
         }
+    }
+
+    /// <summary>
+    /// The step's measure tool, where the repository declares legs and the step's agent runs commands
+    /// (<see cref="AgentMeasureSupport.OfferedOn"/>, the one rule the tool runtime and the Claude Code client serve it by
+    /// too): each call answered through the test service, as a leg step's legs are run (<see cref="MeasuredAsync"/>).
+    /// Null where the repository declares no leg - there is nothing to measure on - where the agent may run no command,
+    /// and for a run held in memory alone.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="place">The run's place; null for a run held in memory alone.</param>
+    /// <param name="workspace">Where the step's agent works.</param>
+    /// <param name="ground">What the step's agent is decided against, whose capabilities say whether it runs commands.</param>
+    /// <param name="instance">The step's instance, as a refusal of a call names it.</param>
+    /// <param name="stepDirectory">The step's own directory, where what a call's legs start bound is recorded.</param>
+    private AgentMeasureSupport? Measured(HarnessContext context, FlowRunPlace? place, AgentWorkspace workspace, Agents.Policy.AgentPolicyGround ground, string instance, string stepDirectory)
+        => place is null || context.Config.Legs.Count == 0 || !AgentMeasureSupport.OfferedOn(ground)
+            ? null
+            : new((call, token) => MeasuredAsync(context, place, workspace, instance, stepDirectory, call, token));
+
+    /// <summary>
+    /// One measure call answered: the leg it names, built as the variant it names - the build configuration the leg's
+    /// own configuration declares, the only one a measurement of the leg runs - tested with the filter it names through
+    /// the test service, in the tree the agent works in where it has a worktree of its own, else in a local copy of the
+    /// main tree the leg makes as a leg's local copy is, so no fold in flight changes what it measures; run as every step
+    /// of the engine runs legs (<see cref="FlowStepLegs"/>) - the isolation decided first, under the step's process scope,
+    /// the ledger kept in the call's own records. What it showed is read by the one owner of what a leg's verdict means
+    /// (<see cref="FlowLegVerdicts.ClassOf"/>): a red leg - its build or its tests failed - is measured and failed, a leg
+    /// that passed is measured and passed, and every other verdict - a leg that reached none of its own (refused by a
+    /// lock, skipped, not admitted, stopped, its inputs moved) or a failure that is no finding about the code (a filter
+    /// that matched no test, a log another run's, no verdict reached) - measured nothing of the cell, and is answered
+    /// unmeasured with the leg's own words as why. A leg that is not declared, a configuration the leg does not build, a
+    /// run its isolation or its use case refused, or one that ended before its leg said anything, is answered unmeasured
+    /// too, with the reason.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="place">The run's place.</param>
+    /// <param name="workspace">Where the step's agent works.</param>
+    /// <param name="instance">The step's instance, as a refusal of the call names it.</param>
+    /// <param name="stepDirectory">The step's own directory, where what the call's legs start bound is recorded.</param>
+    /// <param name="call">The call: its id, leg, variant, filter and cell, and where it keeps its records.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    private async Task<AgentMeasureAnswer> MeasuredAsync(HarnessContext context, FlowRunPlace place, AgentWorkspace workspace, string instance, string stepDirectory, AgentMeasureCall call, CancellationToken cancellationToken)
+    {
+        if (!context.Config.Legs.TryGetValue(call.Leg, out var leg))
+        {
+            return Unmeasured(context.Config.Legs.Count == 0
+                ? "this repository declares no leg"
+                : $"no leg '{call.Leg}' is declared: the run's legs are {string.Join(", ", context.Config.Legs.Keys.Order(StringComparer.Ordinal))}");
+        }
+
+        if (!string.Equals(call.Variant, leg.Config, StringComparison.Ordinal))
+        {
+            return Unmeasured($"the leg '{call.Leg}' builds the configuration '{leg.Config}'");
+        }
+
+        var tree = workspace.Worktree ?? place.Repository;
+        FlowStepLegsRan ran;
+
+        try
+        {
+            ran = await new FlowStepLegs(fileSystem, children, isolation).RunAsync(
+                new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, stepDirectory, call.Records, RedLogs: workspace.Worktree is not null, $"the measure call '{call.Id}' of '{instance}'"),
+                legIsolation => tests.RunAsync(
+                    new TestLegsRequest
+                    {
+                        Directory = tree,
+                        LegNames = [call.Leg],
+                        Filters = call.Filter.Length > 0 ? [call.Filter] : [],
+                        LocalCopy = workspace.Worktree is null,
+                        Isolation = legIsolation,
+                    },
+                    RunId.New(),
+                    cancellationToken),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException refused)
+        {
+            return Unmeasured(refused.Message);
+        }
+
+        if (ran.Result is not { } result)
+        {
+            return Unmeasured(ran.Refusal!);
+        }
+
+        var line = result.Report.Lines.FirstOrDefault(one => one.Leg == call.Leg);
+
+        if (FlowStepLegs.EndedOutsideItsLegs(result, [call.Leg]) || line is null)
+        {
+            return Unmeasured(result.Message) with { RunDirectory = result.RunDirectory };
+        }
+
+        var verdict = Verdicts.Display(line.Verdict);
+        var detail = line.LogTail is { Count: > 0 } tail ? $"{line.Detail}\n{string.Join("\n", tail)}" : line.Detail;
+
+        return (FlowLegVerdicts.ClassOf(line.Verdict) switch
+        {
+            FlowLegClass.Red => new AgentMeasureAnswer(Measured: true, Passed: false, verdict, detail, Reason: null),
+            FlowLegClass.None when line.Verdict == LegVerdict.Passed => new AgentMeasureAnswer(Measured: true, Passed: true, verdict, detail, Reason: null),
+            _ => new AgentMeasureAnswer(
+                Measured: false,
+                Passed: false,
+                verdict,
+                detail,
+                $"the leg '{call.Leg}' came to {verdict}, which measures nothing of the cell{(line.Detail is { Length: > 0 } said ? $": {said}" : string.Empty)}"),
+        }) with { RunDirectory = result.RunDirectory };
+
+        static AgentMeasureAnswer Unmeasured(string why) => new(Measured: false, Passed: false, Verdict: string.Empty, Detail: null, Reason: why);
     }
 
     /// <summary>
@@ -659,9 +779,13 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The output the step's answer is held to, where it names one: its schema file read whole, the step's own name the
+    /// The output the step's answer is held to, where it names one: its schema file read whole - the definitions its
+    /// references share with the schema files beside it taken in (<see cref="Schemas.JsonSchemaSubset.Shared"/>), so
+    /// the schema the client is sent and the schema the answer is held to are one and hold - the step's own name the
     /// name its output is read by, and - where the step may ask - the rounds it may ask in one attempt, less what its
-    /// answers already spent: after the last the agent is offered no questions and told so.
+    /// answers already spent: after the last the agent is offered no questions and told so. A schema no answer could
+    /// be held to is refused (13) naming why: the definition's check said its problems when the run began, and this
+    /// says where they are again.
     /// </summary>
     /// <param name="files">Reads the files the workflow names.</param>
     /// <param name="layout">The repository's layout.</param>
@@ -672,10 +796,41 @@ public sealed class ReasonStepRunner(
         => step.Outputs is { } named
             ? new AgentOutput(
                 step.Name,
-                files.ReadText(layout, workflow, named, "a schema"),
+                SchemaWholeOf(files, layout, workflow, step, named),
                 MaxRepairs: 2,
                 AskRounds: step.Ask == true ? Math.Max(0, (step.AskRounds ?? 2) - run.Answers.Count(given => given.Kind == "ask" && given.Attempt == run.Attempt)) : null)
             : null;
+
+    /// <summary>
+    /// The step's output schema read whole, by the one reading of a schema's text
+    /// (<see cref="Schemas.JsonSchemaSubset.Whole"/>): where its references name definitions the schema files beside it
+    /// share, they are taken in - so the schema the client is sent and the schema the answer is held to are one, and
+    /// hold - and where nothing is taken in, the schema stands as its file wrote it, judged by the check every client is
+    /// held to before it is taken (<see cref="AgentOutput.SchemaProblems"/>), not here. Text that is no schema at all, and
+    /// a whole made here that the subset does not read, are refused (13) naming why: the definition's check said it when
+    /// the run began, and this says where it is again.
+    /// </summary>
+    /// <param name="files">Reads the files the workflow names, beside the schema among them.</param>
+    /// <param name="layout">The repository's layout.</param>
+    /// <param name="workflow">The workflow's name.</param>
+    /// <param name="step">The step the schema is the output of.</param>
+    /// <param name="named">The schema, as the step names it.</param>
+    private static string SchemaWholeOf(WorkflowNamedFiles files, HarnessLayout layout, string workflow, WorkflowStep step, string named)
+    {
+        var text = files.ReadText(layout, workflow, named, "a schema");
+        var read = Schemas.JsonSchemaSubset.Whole(
+            text,
+            beside => WorkflowFiles.RootOf(files.ReadTextIfThere(layout, workflow, WorkflowFiles.Beside(named, beside), "a schema beside it")));
+
+        if (read.Schema is not null && !read.TookIn)
+        {
+            return text;
+        }
+
+        return read.Schema is not { } whole || read.Problems.Count > 0
+            ? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', the output schema of step '{step.Name}', is not a schema the engine reads: {string.Join("; ", read.Problems)}")
+            : whole.ToJsonString();
+    }
 
     /// <summary>
     /// The web search the step's agent is given, where its configuration names sources and the slot answers their keys;

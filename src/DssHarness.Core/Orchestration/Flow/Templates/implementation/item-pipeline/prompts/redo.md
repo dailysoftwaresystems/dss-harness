@@ -22,9 +22,9 @@ An empty line means the change names nothing there.
 - The paths near your work that you must not touch: {input.item.forbiddenPaths}
 - What must hold when your work is finished, the item's definition of done as it now is, checked statement by
   statement before you report: {input.item.done}
-- The filter that names the tests your change affects: `{input.item.testFilter}`; the engine runs only those for this item
-  where the run's input affectedTests is on (`{input.affectedTests}`), and every test where it is off or the filter is
-  empty
+- The tests your change affects, one unit to an entry: {input.item.tests}; the engine tests this item on them alone,
+  with the units your answer's tests add
+- Where the item names no test, why its change affects none: {input.item.noTests}; the engine then tests it on none
 - How the engine runs the tests, leg by leg: {input.orient.tests}
 - The existing code this item reuses or extends, and for what: {input.item.reuses}
 - What this item creates from nothing, with why nothing that exists serves: {input.item.creates}
@@ -40,6 +40,19 @@ The plan this item is part of, as it now is: {input.planSummary}
 That account is the engine's, from its records. It says where the earlier work is: in the worktree you are in, as
 the agent before you left it, or in the tree you were given, in the commits it names. Read what is there before you
 change anything, and trust the files over the account where they differ.
+
+## The class you are closing
+
+The classes of the decisions this item changes, each with its invariant, its one home and its sites:
+
+{input.item.classes}
+
+The record of each class so far, as the last report gave it:
+
+{implement.latest.closure}
+
+Act by them: a site the list missed is yours to add and to close with the rest, and nothing of the class is done
+while one of its sites is left.
 
 ## Where you work
 

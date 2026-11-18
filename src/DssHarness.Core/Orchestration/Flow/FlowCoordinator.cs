@@ -603,6 +603,13 @@ public sealed class FlowCoordinator
     private readonly List<(FlowInstance Waiting, FlowQuestion Asked)> _carryAtStart = [];
 
     private readonly List<PreExistingIssue> _issues = [];
+
+    /// <summary>
+    /// The run's record of affected tests as it stands: each key a test step kept its units under, in the order each key
+    /// was first written, the one owner of what <c>run.affectedTests</c> reads (<see cref="KeepUnits"/>).
+    /// </summary>
+    private readonly List<FlowAffectedTests> _affected = [];
+
     private readonly List<PreExistingTally> _tally = [];
     private readonly List<FlowInstance> _pendingFixes = [];
     /// <summary>The redirects the run owes, in the order they were decided: each is made in its turn, once nothing it resets is running.</summary>
@@ -3425,6 +3432,7 @@ public sealed class FlowCoordinator
                 else if (!holds)
                 {
                     instance.SkippedBecause = "its when read false";
+                    ForgetUnitsOf(instance);
                     End(instance, FlowInstanceState.Skipped, null, null);
                 }
             }
@@ -4950,7 +4958,13 @@ public sealed class FlowCoordinator
 
                 if (!holds)
                 {
-                    var skipped = Create(scope, declaration, FlowInstanceState.Skipped, made: skipped => skipped.SkippedBecause = "its when read false");
+                    // The units it keeps are taken out before the skip is recorded, as a retry's are before its end: a crash
+                    // between the two then leaves no entry a step that never runs again would hold for ever.
+                    var skipped = Create(scope, declaration, FlowInstanceState.Skipped, made: skipped =>
+                    {
+                        skipped.SkippedBecause = "its when read false";
+                        ForgetUnitsOf(skipped);
+                    });
                     HandlersFollow(skipped, FlowInstanceState.Skipped);
                     changed = true;
                     continue;
@@ -6791,6 +6805,17 @@ public sealed class FlowCoordinator
 
         Record(FlowChangeKind.Step, instance, from: was, to: FlowInstanceState.Running, attempt: instance.Attempt);
 
+        // A test step's units are read where it starts and kept, where it keeps them, in the run's record of affected
+        // tests before anything of it runs; one whose filter reads none runs no test and ends skipped, saying why, and
+        // one whose filter cannot be read fails. Either way the graph changed where the loop was admitting.
+        IReadOnlyList<string>? units = null;
+
+        if (instance.Step.Type == "test" && !UnitsAtStart(instance, out units))
+        {
+            _answeredAtOnce = true;
+            return false;
+        }
+
         if (instance.Step.Type == "pause")
         {
             // A pause step asks and asks only: the engine fills its question from the same names an expression reads,
@@ -6882,14 +6907,14 @@ public sealed class FlowCoordinator
                     _reasonStarted[instance.Id] = _clock.GetUtcNow();
                 }
 
-                // What the step reads where it starts, as when is read where it is admitted (ReadAtStart): a test
-                // step's filterWhen - false gives the runner no filter and fills no template, so every test of the
-                // step's legs runs - a validate-plan's items and scope, the pull request's base orient says, an anchor
-                // check's rows or paths, a fold family step's lists of names - a fold's and a deletion's within,
-                // allow.new and allow.merge, a refresh's paths, except, stale and merge, a rebase's merge - the commit
-                // the run last pushed for a ci-wait that names none, and a commit's folds upstream of it. One that cannot
-                // be read - a filterWhen that
-                // is neither true nor false among them - fails the step 12, as an unreadable when does.
+                // What the step reads where it starts, as when is read where it is admitted (ReadAtStart): a
+                // validate-plan's items and scope, the pull request's base orient says, an anchor check's rows or paths,
+                // a fold family step's lists of names - a fold's and a deletion's within, allow.new and allow.merge, a
+                // refresh's paths, except, stale and merge, a rebase's merge - the commit the run last pushed for a
+                // ci-wait that names none, and a commit's folds upstream of it. One that cannot be read fails the step 12,
+                // as an unreadable when does. A test step's units were read as it started (UnitsAtStart), and are handed
+                // its runner in the place of its filter as written: none given where its filterWhen read false, so every
+                // test of its legs runs.
                 var step = instance.Step;
                 var read = new Dictionary<string, FlowValue>(StringComparer.Ordinal);
 
@@ -6899,9 +6924,9 @@ public sealed class FlowCoordinator
                     return;
                 }
 
-                if (read.Remove("filterWhen", out var filterWhen) && !filterWhen.AsBoolean(step.FilterWhen!))
+                if (step.Type == "test")
                 {
-                    step = step with { Filter = null };
+                    step = step with { Filter = units is null ? null : new FlowList(units, Expression: null) };
                 }
 
                 // A reason step's `writes` given as an expression is read where the step starts, and the names it
@@ -6960,7 +6985,21 @@ public sealed class FlowCoordinator
                             promptFile = filledFile;
                         }
 
-                        if (FlowTemplate.FillAroundSkills(readFile(step.WorkflowOf, promptFile), path => Read(path, instance.DeclaredScope!, reader: instance), name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
+                        var raw = readFile(step.WorkflowOf, promptFile);
+
+                        // A reason step whose prompt reads the classes of the work item it is an instance of
+                        // ({input.item.classes}, as the item pipeline's prompts spell it) is served them in its pack:
+                        // read here, once, from the raw template's own read of them by the reader its fill reads by - so
+                        // the pack is seeded from the very classes the prompt shows, whatever a use binds its item to -
+                        // and handed its runner under 'classes' (FlowStepGraph seeds the pack from them).
+                        Func<FlowExpression.Path, FlowExpression.PathRead> promptReader = path => Read(path, instance.DeclaredScope!, reader: instance);
+
+                        if (promptKey == "prompt" && FlowStepTemplates.ClassesOf(raw, promptReader) is { } declared)
+                        {
+                            read["classes"] = FlowValue.Of(declared);
+                        }
+
+                        if (FlowTemplate.FillAroundSkills(raw, promptReader, name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
                         {
                             _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
                             return;
@@ -10862,24 +10901,27 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The visit that ended done last among <paramref name="instance"/> itself and the visits in its scope of the
-    /// steps that go on with its work (<c>resume</c>): whose output the work's <c>latest</c> reads. Where two ended
-    /// at one time, the newer-drawn visit is the one that spoke last. Where none of them ended done, the visit
-    /// itself, whatever its state.
+    /// The visit that ended done last among <paramref name="instance"/> itself and the visits of the steps that go on
+    /// with its work (<c>resume</c>), directly or through another that does, wherever they are declared: whose output
+    /// the work's <c>latest</c> reads. Where two ended at one time, the newer-drawn visit is the one that spoke last.
+    /// Where none of them ended done, the visit itself, whatever its state.
     /// </summary>
+    /// <remarks>
+    /// A visit goes on with this one's work where its resume, resolved as the engine resolves whose conversation it takes
+    /// on (<see cref="DeclaredOf"/>, in its own scope or one around it), reaches this visit - so a step inside a group, or
+    /// inside a loop's iteration, that resumes a step around it is one of them. Counting only the steps declared beside
+    /// this one left out a builder's rework and mend inside a review loop, and every read of the builder's latest answer
+    /// after them - the tests its reverify ran, the closing record its class-closure judged, the rows its refold let in -
+    /// read the answer given before them.
+    /// </remarks>
     private FlowInstance EndedDoneLastOf(FlowInstance instance)
     {
-        if (instance.DeclaredScope is not { } scope)
+        if (instance.DeclaredScope is null)
         {
             return instance;
         }
 
-        var chain = new List<FlowInstance> { instance };
-
-        foreach (var goesOnWith in DeclarationsOf(scope).Where(declared => declared.Resume is { } resumed && string.Equals(resumed, instance.Step.Name, StringComparison.Ordinal)))
-        {
-            chain.AddRange(_created.Where(visit => ReferenceEquals(visit.Step, goesOnWith) && ReferenceEquals(visit.DeclaredScope, scope)));
-        }
+        var chain = _created.Where(visit => ReferenceEquals(visit, instance) || GoesOnWith(visit, instance)).ToList();
 
         return chain
             .Where(visit => visit.State == FlowInstanceState.Done && visit.FinishedAt is not null)
@@ -10889,6 +10931,42 @@ public sealed class FlowCoordinator
                     ? other
                     : newest)
             ?? instance;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="visit"/> goes on with <paramref name="instance"/>'s work: a visit of a step that resumes
+    /// itself, of the same declaration in the same scope - its earlier and later visits - or one whose resume, followed
+    /// through each step it names in turn as <see cref="WorkingOf"/> follows it, reaches <paramref name="instance"/>.
+    /// </summary>
+    private static bool GoesOnWith(FlowInstance visit, FlowInstance instance)
+    {
+        if (visit.Step is not { Type: "reason", Resume: { } } step)
+        {
+            return false;
+        }
+
+        if (string.Equals(step.Resume, step.Name, StringComparison.Ordinal))
+        {
+            return ReferenceEquals(step, instance.Step) && ReferenceEquals(visit.DeclaredScope, instance.DeclaredScope);
+        }
+
+        var at = visit;
+        var seen = new HashSet<FlowInstance>(ReferenceEqualityComparer.Instance);
+
+        while (at.Step is { Type: "reason", Resume: { } resumed } resuming
+            && !string.Equals(resumed, resuming.Name, StringComparison.Ordinal)
+            && seen.Add(at)
+            && DeclaredOf(at, resumed, "reason") is { } found)
+        {
+            if (ReferenceEquals(found, instance))
+            {
+                return true;
+            }
+
+            at = found;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -10943,7 +11021,8 @@ public sealed class FlowCoordinator
     /// The run's own values, as <c>run</c> reads them, said without its always steps: only they read these, so none
     /// reads its own effect. The run is failed where a failure ended it - one its policy stopped the run on - and done
     /// where every step that failed was passed over or handled. Its texts of what it checked (<see cref="FlowChecks"/>)
-    /// are of every check of the run so far, its always steps among them.
+    /// are of every check of the run so far, its always steps among them; its affected tests every unit its record of
+    /// them holds, each once (<see cref="KeepUnits"/>).
     /// </summary>
     private JsonObject RunValues()
     {
@@ -10971,6 +11050,7 @@ public sealed class FlowCoordinator
             ["paused"] = paused,
             ["stopped"] = _stopping,
             ["passedOver"] = main.Count(instance => instance.PassedOver),
+            [WorkflowExpressions.AffectedTests] = new JsonArray([.. FlowAffectedTestsFile.UnitsOf(_affected).Select(unit => (JsonNode?)unit)]),
             ["leftover"] = leftover.Count > 0 ? string.Join("; ", leftover) : FlowChecks.None,
             ["preExisting"] = preExisting.Count > 0 ? string.Join("; ", preExisting) : FlowChecks.None,
             // What the run's agents assumed without asking, of every step that did: a person reads it and corrects it.
@@ -11512,6 +11592,198 @@ public sealed class FlowCoordinator
         }
     }
 
+    /// <summary>
+    /// A test step's units, read where it starts: its <c>filterWhen</c>, true or false, and where it reads true or the step
+    /// says none, its <c>filter</c> - the list written out, or the names its expression yields - each unit once, in the
+    /// order read; null where the step gives no filter, or its filterWhen read false, and every test of its legs runs.
+    /// Where the step keeps its units (<c>affected</c>), they are kept in the run's record of affected tests under the
+    /// key it fills to, before anything of the step runs (<see cref="KeepUnits"/>) - and the key's entry removed instead
+    /// where the step runs for a work item a plan update takes back. A filter that reads no unit ends the step skipped,
+    /// saying why: its <c>noTests</c>, where it gives one. What cannot be read - a filterWhen neither true nor false, a
+    /// filter that yields no list of names or a unit that is empty, a key or a reason that cannot be filled - fails the
+    /// step 12, as an unreadable when does. False where the step ended here, skipped or failed.
+    /// </summary>
+    /// <param name="instance">The test step's instance, running.</param>
+    /// <param name="units">The units it runs; null for every test of its legs.</param>
+    private bool UnitsAtStart(FlowInstance instance, out IReadOnlyList<string>? units)
+    {
+        var step = instance.Step;
+        var scope = instance.DeclaredScope!;
+        units = null;
+
+        bool Unread(string key, string problem)
+        {
+            End(instance, FlowInstanceState.Failed, HarnessExit.ConfigInvalid, Unreadable(key, instance.Id, problem));
+            HandleFailure(instance);
+            return false;
+        }
+
+        var given = step.Filter is not null;
+
+        if (given && step.FilterWhen is { } filterWhen)
+        {
+            given = Holds(filterWhen, scope, out var untrue, reader: instance);
+
+            if (untrue is not null)
+            {
+                return Unread("filterWhen", untrue);
+            }
+        }
+
+        if (given)
+        {
+            IReadOnlyList<string> read = step.Filter!.Written;
+
+            if (step.Filter.Expression is { } expression)
+            {
+                var value = Evaluate(expression, scope, out var problem, reader: instance);
+
+                if (problem is not null)
+                {
+                    return Unread("filter", problem);
+                }
+
+                if (Names(value, expression, out var names) is { } unnamed)
+                {
+                    return Unread("filter", unnamed);
+                }
+
+                read = names;
+            }
+
+            if (read.Any(string.IsNullOrWhiteSpace))
+            {
+                // A blank unit is a value lost on the way: kept, it would stand in the run's record, and given, every
+                // runner reads it as no filter at all, or as one that matches everything.
+                return Unread("filter", $"'{step.Filter.Expression ?? string.Join(", ", step.Filter.Written)}' holds a unit that is empty, or spaces alone");
+            }
+
+            units = [.. read.Distinct(StringComparer.Ordinal)];
+        }
+
+        if (step.Affected is { } affected)
+        {
+            if (Filled(instance, affected, out var unfilled) is not { } key)
+            {
+                return Unread("affected", unfilled!);
+            }
+
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return Unread("affected", $"'{affected}' fills to nothing, and an entry of the run's affected tests is kept under a key");
+            }
+
+            if (TakenBack(scope))
+            {
+                ForgetUnits(key);
+            }
+            else
+            {
+                KeepUnits(key, units ?? [], instance);
+            }
+        }
+
+        if (units is [])
+        {
+            var reason = "its filter names no test, so none of its legs' tests ran";
+
+            if (step.NoTests is { } noTests)
+            {
+                if (Filled(instance, noTests, out var unfilled) is not { } filled)
+                {
+                    return Unread("noTests", unfilled!);
+                }
+
+                reason = filled.Length > 0 ? $"its filter names no test: {filled}" : reason;
+            }
+
+            instance.SkippedBecause = reason;
+            End(instance, FlowInstanceState.Skipped, null, null);
+            HandlersFollow(instance, FlowInstanceState.Skipped);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="scope"/> is, or lies inside, a work item a plan update takes back (its kind
+    /// <c>removed</c>): a test step that keeps its units keeps none there, for the item's work is undone.
+    /// </summary>
+    private static bool TakenBack(Scope scope)
+    {
+        for (var at = scope; at is not null; at = at.World)
+        {
+            if (at.WorkItemKind is { } kind)
+            {
+                return kind == FlowUpdatePieceKinds.Removed;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Keeps <paramref name="units"/> under <paramref name="key"/> in the run's record of affected tests, the key's entry
+    /// replaced where it has one and added after the others where it does not, and writes the record whole: the one owner
+    /// of what <c>run.affectedTests</c> reads, written before anything of <paramref name="by"/> runs.
+    /// </summary>
+    /// <param name="key">The key the step filled.</param>
+    /// <param name="units">The units the step runs, each once.</param>
+    /// <param name="by">The step that keeps them.</param>
+    private void KeepUnits(string key, IReadOnlyList<string> units, FlowInstance by)
+    {
+        var entry = new FlowAffectedTests(key, units, by.Id, _clock.GetUtcNow());
+        var at = _affected.FindIndex(held => string.Equals(held.Key, key, StringComparison.Ordinal));
+
+        if (at >= 0)
+        {
+            _affected[at] = entry;
+        }
+        else
+        {
+            _affected.Add(entry);
+        }
+
+        WriteAffected();
+    }
+
+    /// <summary>Removes <paramref name="key"/>'s entry from the run's record of affected tests, where it holds one, and writes the record whole.</summary>
+    /// <param name="key">The key a step filled.</param>
+    private void ForgetUnits(string key)
+    {
+        if (_affected.RemoveAll(held => string.Equals(held.Key, key, StringComparison.Ordinal)) > 0)
+        {
+            WriteAffected();
+        }
+    }
+
+    /// <summary>
+    /// Removes the entry <paramref name="skipped"/> - a test step skipped by its <c>when</c> - keeps its units under, where
+    /// it keeps them: a step that does not run keeps none, so a work item a person leaves out of the run takes its units
+    /// out of the run's affected tests with it. A key that cannot be filled where the step was skipped leaves the record
+    /// as it is, for no entry can be named.
+    /// </summary>
+    private void ForgetUnitsOf(FlowInstance skipped)
+    {
+        if (skipped.Step.Type == "test" && skipped.Step.Affected is { } affected && Filled(skipped, affected, out _) is { Length: > 0 } key)
+        {
+            ForgetUnits(key);
+        }
+    }
+
+    /// <summary>Writes the run's record of affected tests as it stands, whole, where the run keeps records; nothing while a resume replays what was.</summary>
+    private void WriteAffected()
+    {
+        if (_records is null || _replaying)
+        {
+            return;
+        }
+
+        IReadOnlyList<FlowAffectedTests> entries = [.. _affected];
+        Put(records => records.AffectedTests(entries));
+    }
+
     /// <summary>What an expression a step reads where it starts yields, as its runner is handed it.</summary>
     private enum StartRead
     {
@@ -11520,14 +11792,11 @@ public sealed class FlowCoordinator
 
         /// <summary>A list of names: none where it read nothing or null, and anything else cannot be read.</summary>
         Names,
-
-        /// <summary>True or false, and anything else cannot be read.</summary>
-        Truth,
     }
 
     /// <summary>
-    /// What <paramref name="instance"/>'s step reads where it starts, into <paramref name="read"/> by key: a test step's
-    /// <c>filterWhen</c>, true or false - anything else cannot be read; a <c>validate-plan</c> step's <c>items</c> and
+    /// What <paramref name="instance"/>'s step reads where it starts, into <paramref name="read"/> by key - a test step's
+    /// units are <see cref="UnitsAtStart"/>'s, read before its runner is asked: a <c>validate-plan</c> step's <c>items</c> and
     /// <c>scope</c>, each where it gives it - a scope that reads nothing is no update, and is handed on as read; an anchor
     /// balance's <c>rows</c> and an anchor citations check's <c>paths</c>, a fold's and a deletion's <c>within</c>,
     /// <c>allow.new</c> and <c>allow.merge</c>, a refresh's <c>paths</c>, <c>except</c>, <c>stale</c> and <c>merge</c> and
@@ -11544,15 +11813,14 @@ public sealed class FlowCoordinator
         var step = instance.Step;
 
         // Each expression the step reads where it starts, under the key its runner reads it by: whether it may read nothing
-        // (which reads as none), and what it yields - a list of names or a truth is read as one here, so the runner is
-        // handed names, or true or false.
+        // (which reads as none), and what it yields - a list of names is read as one here, so the runner is handed names.
         IEnumerable<(string Key, string? Expression, bool MayReadNothing, StartRead Yields)> expressions = step.Type switch
         {
-            "test" => [("filterWhen", step.FilterWhen, false, StartRead.Truth)],
             "validate-plan" => [("items", step.Items, false, StartRead.Value), ("scope", step.Scope, true, StartRead.Value)],
             "reason" => [("writes", step.Writes?.Expression, false, StartRead.Names)],
             "anchor-balance" => [("rows", step.Rows?.Expression, true, StartRead.Names)],
             "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true, StartRead.Names)],
+            "class-closure" => [("classes", step.Classes, false, StartRead.Value), ("record", step.Record, true, StartRead.Value)],
             "fold" or "delete-agent" =>
             [
                 ("within", step.Within?.Expression, false, StartRead.Names),
@@ -11582,18 +11850,6 @@ public sealed class FlowCoordinator
             if (problem is not null)
             {
                 return Unreadable(key, instance.Id, problem);
-            }
-
-            if (yields == StartRead.Truth)
-            {
-                var truth = TruthOf(value, expression, out var untrue);
-
-                if (untrue is not null)
-                {
-                    return Unreadable(key, instance.Id, untrue);
-                }
-
-                value = FlowValue.Of(truth);
             }
 
             if (yields == StartRead.Names)
@@ -11626,32 +11882,35 @@ public sealed class FlowCoordinator
         {
             // What the pieces of a plan update are checked with, and what they owe: the items of the round they join,
             // where the run has one - and the names of the work items the plan had, which a piece that changes or
-            // withdraws one names; and, where this check opens the round, the items updates owe it, which join its
-            // own as one list.
+            // withdraws one names; the names every instance of the work-item group carries, over every round, which no
+            // work item a round builds or an added piece makes may take, for the run knows a work item by its name
+            // alone; and, where this check opens the round, the items updates owe it, which join its own as one list,
+            // and whether the round carries them alone.
             if (CurrentRound() is { } round)
             {
                 read["round"] = FlowValue.Of(new JsonArray([.. LiveItemsOf(round).Select(item => item.Item.ToNode()?.DeepClone())]));
             }
 
-            var known = new List<string>();
-
-            foreach (var name in _created.Where(group => group.Step.IsGroup && group.Path == groupPath)
+            var carried = _created.Where(group => group.Step.IsGroup && group.Path == groupPath)
                 .SelectMany(group => group.Children)
                 .Select(ItemNameOf)
                 .OfType<string>()
-                .Concat(ItemsCheckedBefore(instance)))
-            {
-                if (!known.Contains(name, StringComparer.Ordinal))
-                {
-                    known.Add(name);
-                }
-            }
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            var known = carried.Concat(ItemsCheckedBefore(instance)).Distinct(StringComparer.Ordinal).ToList();
 
             read["known"] = FlowValue.Of(new JsonArray([.. known.Select(name => (JsonNode?)name)]));
+            read["carried"] = FlowValue.Of(new JsonArray([.. carried.Select(name => (JsonNode?)name)]));
 
             if (OpensTheRound(instance, groupPath) is not null)
             {
                 read["owed"] = FlowValue.Of(new JsonArray([.. OwedItems()]));
+
+                // A round an update added to the group with no loop around it carries the owed work alone (OpenGroup):
+                // its own items, the plan's the check reads again, are those the group's round before built, under the
+                // very names it carries, and are not built again. A loop's later round is a visit of its own, and
+                // builds every item it opens with.
+                read["owedAlone"] = FlowValue.Of(PendingAddedRound() is not null);
             }
         }
 
@@ -12803,6 +13062,13 @@ public sealed class FlowCoordinator
             if (resume.Issues is { } listed)
             {
                 _issues.AddRange(listed);
+            }
+
+            // The tests the run's work affects are its record's, restored whole: a step that reads run.affectedTests after
+            // the resume reads every unit kept before it.
+            if (resume.AffectedTests is { } kept)
+            {
+                _affected.AddRange(kept);
             }
 
             foreach (var listedIssue in _issues)

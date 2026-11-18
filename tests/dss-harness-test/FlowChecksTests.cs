@@ -22,7 +22,7 @@ public sealed class FlowChecksTests
     public void AChecksStep_IsOneOfACheckingTypeOrAnIndependentReasonStep_WhateverItsName()
     {
         Assert.Equal(
-            ["build", "test", "run", "check-mutations", "validate-plan", "anchor-balance", "anchor-citations", "ci-read", "ci-wait"],
+            ["build", "test", "run", "check-mutations", "validate-plan", "anchor-balance", "anchor-citations", "class-closure", "ci-read", "ci-wait"],
             WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type));
         Assert.True(FlowChecks.IsCheck(new WorkflowStep { Name = "anything", Type = "run" }));
         Assert.True(FlowChecks.IsCheck(new WorkflowStep { Name = "plan", Type = "validate-plan" }));

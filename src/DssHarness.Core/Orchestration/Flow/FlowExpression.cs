@@ -12,8 +12,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <para>
 /// The grammar, tightest-binding last: <c>or = and { "||" and }</c>, <c>and = cmp { "&amp;&amp;" cmp }</c>,
 /// <c>cmp = not [ ("==" | "!=") not ]</c>, <c>not = "!" not | coalesce</c>, <c>coalesce = primary { "??" primary
-/// }</c>, and a primary is a group, <c>empty(...)</c>, <c>any(list, test)</c>, a literal, a <c>{path}</c>
-/// placeholder or a path. A path is a root - a step's name, <c>previous</c> with a step's name, one of the run's
+/// }</c>, and a primary is a group, <c>empty(...)</c>, <c>any(list, test)</c>, <c>union(list, ...)</c>, a literal, a
+/// <c>{path}</c> placeholder or a path. A path is a root - a step's name, <c>previous</c> with a step's name, one of the run's
 /// own names - walked by keys and integer indexes, and written whole: no space stands before its dots or its
 /// brackets, so <c>review .findings</c> is two values side by side and refused, never one path. Identifiers are
 /// letters, underscores, digits and dashes, so a step's name needs no quoting; there is no arithmetic, for
@@ -21,7 +21,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </para>
 /// <para>
 /// Every expression ends: nothing nests more than <see cref="MostNesting"/> deep - a group, a <c>!</c>, an
-/// <c>empty(...)</c> and an <c>any(...)</c> inside another each go one deeper, as does each name of a path after
+/// <c>empty(...)</c>, an <c>any(...)</c> and a <c>union(...)</c> inside another each go one deeper, as does each name of a path after
 /// its first - so no text a file holds can spend the stack of the process that reads it.
 /// </para>
 /// <para>
@@ -583,6 +583,81 @@ public abstract record FlowExpression
         }
     }
 
+    /// <summary>
+    /// <c>union(a, b, ...)</c>: the members of every list it is given, in the order given, each once - two members are
+    /// one where they are the same JSON. A list given as null holds no member; anything else it is given - nothing, a
+    /// text, an object - refuses the read, for union joins lists.
+    /// </summary>
+    public sealed record Union(IReadOnlyList<FlowExpression> Lists) : FlowExpression
+    {
+        /// <inheritdoc/>
+        public override string Written => $"union({string.Join(", ", Lists.Select(list => list.Written))})";
+
+        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
+        {
+            // The scanner reads the word itself, as a root of the run's own: the tree reads it too, so the two agree on
+            // every expression.
+            Add(reads, new WorkflowExpressions.Read("union", "union", Template: false, insideAny));
+
+            foreach (var list in Lists)
+            {
+                list.Collect(reads, insideAny);
+            }
+        }
+
+        /// <remarks>Each part a list, or null: a list whose members are what any of them may hold.</remarks>
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        {
+            JsonSchemaSubset.Reading? items = null;
+
+            foreach (var list in Lists)
+            {
+                var reading = list.Typed(typing);
+
+                if (!reading.MayBe("array") && !reading.MayBe("null"))
+                {
+                    typing.Problem($"joins '{list.Written}', which is {Said(reading)}, with union; union joins lists");
+                    continue;
+                }
+
+                var member = reading.Items ?? JsonSchemaSubset.Reading.Anything;
+                items = items is null ? member : items.Or(member);
+            }
+
+            return JsonSchemaSubset.Reading.ListOf(items ?? JsonSchemaSubset.Reading.Anything);
+        }
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+        {
+            var joined = new System.Text.Json.Nodes.JsonArray();
+
+            foreach (var list in Lists)
+            {
+                var value = list.Yield(evaluating);
+
+                if (value.IsNull)
+                {
+                    continue;
+                }
+
+                if (value.ToNode() is not System.Text.Json.Nodes.JsonArray members)
+                {
+                    throw new UnresolvedReadException($"'{list.Written}' is {value.InWords()}, and union joins lists");
+                }
+
+                foreach (var member in members)
+                {
+                    if (!joined.Any(held => System.Text.Json.Nodes.JsonNode.DeepEquals(held, member)))
+                    {
+                        joined.Add(member?.DeepClone());
+                    }
+                }
+            }
+
+            return FlowValue.Of(joined);
+        }
+    }
+
     /// <summary>A literal as written: <c>true</c>, <c>false</c>, <c>null</c>, a number, or a quoted string.</summary>
     public sealed record Literal(object? Value) : FlowExpression
     {
@@ -807,7 +882,7 @@ public abstract record FlowExpression
             return terms.Count == 1 ? terms[0] : new Coalesce(terms);
         }
 
-        /// <summary>primary = "(" or ")" | empty( or ) | any( or , or ) | literal | placeholder | path</summary>
+        /// <summary>primary = "(" or ")" | empty( or ) | any( or , or ) | union( or { , or } ) | literal | placeholder | path</summary>
         private FlowExpression Primary()
         {
             var at = Skip();
@@ -875,6 +950,22 @@ public abstract record FlowExpression
                     Expect(')');
                     _depth--;
                     return new Any(list, test);
+                }
+
+                if (string.Equals(name, "union", StringComparison.Ordinal))
+                {
+                    Expect('(');
+                    Deeper();
+                    var lists = new List<FlowExpression> { Or() };
+
+                    while (Takes(","))
+                    {
+                        lists.Add(Or());
+                    }
+
+                    Expect(')');
+                    _depth--;
+                    return new Union(lists);
                 }
 
                 if (name is "true" or "false")

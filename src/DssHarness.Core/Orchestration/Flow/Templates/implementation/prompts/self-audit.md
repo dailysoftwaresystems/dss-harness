@@ -29,6 +29,18 @@ audit's after that, with any a change of plan added:
 
 {item-check.items}
 
+Where this is past the first round, the item audit searched the data for what these items' classes decide, before they
+were built. Its findings, with the sites it found that the items' site lists lacked and the cells of their universes
+they left out:
+
+{item-audit.latest.findings}
+
+{item-audit.latest.closure}
+
+Where a line says that the item audit left no output, it was skipped in the first round, whose items were the plan's
+own and were audited with the plan; or it failed, or a person had it passed over, and what it would have found is
+unknown - say so under unverified, never as a pass.
+
 The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` shows all of it.
 
 ## What the engine recorded
@@ -45,7 +57,8 @@ The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` sh
 
 {run.red}
 
-- The gate, the whole of the repository's tests on the main tree. Passed: {gate.passed}. Red legs:
+- The gate on the main tree: the tests the run's work affects, or every test where the run's input finalTests says
+  all (it is `{input.finalTests}`). Passed: {gate.passed}. Red legs:
 
 {gate.red}
 
@@ -67,26 +80,34 @@ Name it under unverified; it is a finding only where the line says the step fail
    skipped.
 2. Look for what was left out without being said. An item a person chose to skip shows above among what was not
    checked: it is not a finding and gets no work item.
-3. A red gate, an arm of the sweep that is not as it should be and a finding of the registry's checks are findings.
-   Give every finding a work item that repairs it, unless only a person can: say so in the finding, and give it no
-   item.
+3. A red gate, an arm of the sweep that is not as it should be and a finding of the registry's checks are findings,
+   and so is each finding of the item audit above that the tree does not settle: a site it found that still decides on
+   its own, a cell of the universe still left out. Give every finding a work item that repairs it, unless only a
+   person can: say so in the finding, and give it no item.
 4. Say unverified of what you could not verify.
 
 ## The tests a work item names
 
-Each item names the filter that selects the tests its change affects - the test classes that test what it changes,
-the tests it writes among them - written in what each leg's test runner takes after its filter option. The engine
-tests an item on it alone where the run's input affectedTests is on, and on every test where it is off. The legs this run tests on, each with its runner, the option a filter is given through, and what the leg
-leaves out:
+Each item names the tests its change affects in tests, one unit to an entry - the test classes that test what it
+changes, the tests it writes among them - each written in what every leg's test runner takes after its filter option;
+or, where its change affects no test, leaves tests empty and says why in noTests. The engine tests an item on its
+units alone, with any its builder adds, and on none where it names none. The legs this run tests on, each with its
+runner, the option a filter is given through, and what the leg leaves out:
 
 {orient.tests}
 
-A filter may name only tests that are there or that the item writes, and none a leg leaves out. Empty is no filter:
-every test runs.
+A unit may name only tests that are there or that the item writes, and none a leg leaves out. An item whose change
+reaches code a test reads names that test: a noTests whose reason does not hold is a finding, and the work item
+that repairs it names the tests.
 
 ## What to return
 
 Whether the round is clean, which is true exactly when you give no work item; the findings; what you could not
 verify; and the work items of a further round, shaped as the plan's items are and at most 8: each sized to one
-builder's cycle, never more and never a sliver of one, and each with its own definition of done - statements a check
-can answer one by one, the first of them the finding it settles.
+builder's cycle, never more and never a sliver of one, each with its own definition of done - statements a check can
+answer one by one, the first of them the finding it settles - and each that changes a decision with its classes, or
+saying why in noClass where it decides none. Each takes a name no work item of this run has had, in this round or an
+earlier one: the run knows a work item by its name, and keeps its tests and its updates under it, so a further item
+named as one already built would stand in that item's place - a follow-up to an item is a work item of its own, named
+for what it settles. Where the item audit found a site an item's class lacked or a cell its
+universe left out, the item that settles it carries the class whole: its site list extended by what the audit found.

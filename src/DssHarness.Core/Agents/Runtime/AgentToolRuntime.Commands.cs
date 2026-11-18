@@ -27,7 +27,8 @@ public sealed partial class AgentToolRuntime
     /// <c>run_command</c>: a program and its arguments, never a shell string, decided whole by the policy where it starts,
     /// run as a phase is - contained, its log kept whole beside the stream, its silence and its time bounded - with the
     /// environment every child of an agent has, then followed as every write is; the answer how it ended and its output,
-    /// cut as every answer is.
+    /// cut as every answer is. A program that started ran, however it exited - grep, rg and git grep exit 1 finding
+    /// nothing - and one refused, or never started, did not.
     /// </summary>
     private async Task<Answer> RunCommandAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
@@ -39,12 +40,12 @@ public sealed partial class AgentToolRuntime
 
         if (seconds < 1 || seconds > commands.MaxTimeoutSeconds)
         {
-            return Answer.Failed($"timeout_seconds is {seconds}, and is 1 to {commands.MaxTimeoutSeconds.ToString(CultureInfo.InvariantCulture)}");
+            return Answer.NotRun($"timeout_seconds is {seconds}, and is 1 to {commands.MaxTimeoutSeconds.ToString(CultureInfo.InvariantCulture)}");
         }
 
         if (program.Length == 0)
         {
-            return Answer.Failed("program is empty: name the program to run");
+            return Answer.NotRun("program is empty: name the program to run");
         }
 
         // The command line is written to its log, and nothing secret is: one the mask would change is refused before it runs.
@@ -68,7 +69,7 @@ public sealed partial class AgentToolRuntime
 
         if (!_host.FileSystem.DirectoryExists(directory))
         {
-            return Answer.Failed($"there is no directory at '{Said(directory)}' to start in");
+            return Answer.NotRun($"there is no directory at '{Said(directory)}' to start in");
         }
 
         // What the command is written as its input is text the policy does not read: a program that reads its script from
@@ -108,7 +109,7 @@ public sealed partial class AgentToolRuntime
         }
         catch (ProgramStartException ex)
         {
-            return Answer.Failed($"'{program}' could not be started: {ex.Message.TrimEnd('.')}");
+            return Answer.NotRun($"'{program}' could not be started: {ex.Message.TrimEnd('.')}");
         }
         catch (ProcessStoppedException ex) when (ex.Uncontained is { } unreached)
         {

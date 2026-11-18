@@ -2385,6 +2385,461 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A heavy leg this machine runs is checked here before it waits for its slot, where the command asks for a check:
+    /// once its tree is synced and locked, given its work as it would start, before the slot is asked. What the check
+    /// refuses ends the run with its code and words, the leg's work never started and the slot another run holds never
+    /// waited for; what it passes goes on to wait, and is not admitted while that slot is held. A leg that waits for no
+    /// slot is not checked here: its work refuses it as it starts, after no wait.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task ALegsAdmissionCheck_IsAskedHereBeforeItsSlot_AndWhatItRefusesNeverWaits(bool refuses, bool light)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var asked = new List<LegWork>();
+        var ran = false;
+        const string Said = "'actions/corpus.yml' names 1 program that may not run.";
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), local: new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true)
+            {
+                Workload = light ? new LegWorkload(Build: false, Test: false, []) : Heavy,
+                AdmissionCheck = new LegAdmissionCheck(
+                    (work, _) =>
+                    {
+                        asked.Add(work);
+
+                        // Nothing was admitted while the leg was checked: the one slot is still the other run's alone.
+                        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+
+                        return refuses ? throw new HarnessException(HarnessExit.Refused, Said) : Task.CompletedTask;
+                    },
+                    ["--never-sent"]),
+            },
+            ran: _ => ran = true);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var legs = document.RootElement.GetProperty("legs").EnumerateArray().ToList();
+
+        if (light)
+        {
+            Assert.Empty(asked);
+            Assert.True(ran);
+            Assert.Equal("passed", Assert.Single(legs).GetProperty("verdict").GetString());
+        }
+        else
+        {
+            var work = Assert.Single(asked);
+
+            Assert.Equal("native", work.Leg.Name);
+            Assert.False(ran);
+
+            if (refuses)
+            {
+                Assert.Equal((HarnessExit.Refused, Said), (outcome.ExitCode, outcome.Message));
+                Assert.Empty(legs);
+            }
+            else
+            {
+                Assert.Equal("not-admitted", Assert.Single(legs).GetProperty("verdict").GetString());
+            }
+        }
+
+        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A heavy WSL leg this machine takes has the distribution check it first, where the command asks for a check:
+    /// once its copy is synced and before this machine asks for the leg's slot, the distribution is sent the leg's own
+    /// command with what has it check and run nothing, and nothing is checked of it here. What it refuses ends the run with
+    /// its code and words, the leg never waiting for the slot another run holds; what it passes goes on to wait, and is not
+    /// admitted while that slot is held; and one whose DssHarness fails as a defect as it checks, asked once more, is the
+    /// leg's poisoned line, the slot never waited for to learn it again. A consumer's leg waited 49 minutes for its slot
+    /// to be told by its own script that a value it was given was too long.
+    /// </summary>
+    [Theory]
+    [InlineData("refuses")]
+    [InlineData("passes")]
+    [InlineData("fails")]
+    public async Task AWslLegsHostCheck_IsAskedBeforeThisMachineTakesItsSlot_AndWhatItRefusesNeverWaits(string checks)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var sent = new List<IReadOnlyList<string>>();
+        const string Said = "'actions/corpus.yml' declares what its inputs take, and this run's are not that. Nothing was run.";
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } },
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+            },
+            Legs = { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var request = System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
+
+            sent.Add([.. request.Arguments.Select(argument => argument.Text)]);
+
+            // Nothing was admitted while the distribution checked the leg: the one slot is still the other run's alone.
+            Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+
+            if (checks != "passes")
+            {
+                command.OnErrorLine?.Invoke(FailureLine.For("test", Said));
+            }
+
+            return HostResults.Finished(command, checks switch { "refuses" => HarnessExit.UsageError, "fails" => HarnessExit.InternalError, _ => HarnessExit.Success });
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true, RemoteArguments: ["corpus"])
+            {
+                Workload = Heavy,
+                AdmissionCheck = new LegAdmissionCheck((_, _) => throw new InvalidOperationException("A leg a distribution runs is checked there."), ["--check-there"]),
+            },
+            hosts: hosts);
+
+        // The check alone was sent - once, or once more where the distribution's DssHarness failed as it started.
+        Assert.Equal(checks == "fails" ? 1 + RemoteLegRunner.MostRestarts : 1, sent.Count);
+        Assert.All(sent, check => Assert.Equal(["test", "--legs", "remote", RemoteLegRunner.HereOption, "wsl Ubuntu", "corpus", "--check-there"], check));
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+
+        if (checks == "refuses")
+        {
+            Assert.Equal(HarnessExit.UsageError, outcome.ExitCode);
+            Assert.Equal($"wsl Ubuntu refused 'test' for leg 'remote': {Said}", outcome.Message);
+            Assert.Empty(document.RootElement.GetProperty("legs").EnumerateArray());
+        }
+        else
+        {
+            var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+            Assert.Equal(checks == "fails" ? "poisoned" : "not-admitted", leg.GetProperty("verdict").GetString());
+
+            if (checks == "fails")
+            {
+                Assert.Equal(
+                    $"wsl Ubuntu ran 'test' for leg 'remote', and its DssHarness failed as it started, before anything ran there: it exited 70, saying: {Said}",
+                    leg.GetProperty("detail").GetString());
+                Assert.Equal(
+                    [$"wsl Ubuntu's DssHarness exited 70 as it started, before anything ran there, saying: {Said}"],
+                    leg.GetProperty("retried").EnumerateArray().Select(said => said.GetString()));
+            }
+        }
+
+        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// Of a leg another machine's process runs, a check a command asks for is asked only where this machine takes the leg's
+    /// slot - a WSL distribution's heavy leg: never of an ssh host, which takes its legs itself and checks them before it
+    /// does as its own run of them begins, and never of a leg that is not heavy, which waits for nothing and is checked as
+    /// its runner starts. Neither is checked here either.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task AnAdmissionCheck_IsNeverAskedOfAnSshHost_NorOfALegThatWaitsForNoSlot(bool ssh, bool light)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sent = new List<IReadOnlyList<string>>();
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } },
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+                Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree } },
+            },
+            Legs =
+            {
+                ["remote"] = ssh
+                    ? new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = HostName }
+                    : new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" },
+            },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var request = System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
+
+            sent.Add([.. request.Arguments.Select(argument => argument.Text)]);
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = host.Kind == HostKind.Ssh ? "arm64" : "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true, RemoteArguments: ["corpus"])
+            {
+                Workload = light ? new LegWorkload(Build: false, Test: false, []) : Heavy,
+                AdmissionCheck = new LegAdmissionCheck((_, _) => throw new InvalidOperationException("A leg another machine runs is never checked here."), ["--check-there"]),
+            },
+            hosts: hosts);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+
+        Assert.Equal("passed", Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("verdict").GetString());
+        Assert.DoesNotContain("--check-there", Assert.Single(sent));
+        Assert.Contains("--json", sent[0]);
+    }
+
+    /// <summary>
+    /// A heavy leg whose work would never start is never checked before its slot, and ends with its own line, as it did
+    /// once it had waited: one whose isolation cannot be held here, one in a WSL distribution its run's isolation forbids
+    /// it to run in - whose distribution is never asked to run DssHarness for it, not even to check it - and one whose
+    /// developer environment will not set up. Checked first, a refusal of the check ended the whole run in the place of the
+    /// leg's own verdict. None waits for the slot another run holds.
+    /// </summary>
+    [Theory]
+    [InlineData("isolation")]
+    [InlineData("distribution")]
+    [InlineData("environment")]
+    public async Task AHeavyLegWhoseWorkWouldNeverStart_IsNeverCheckedBeforeItsSlot_AndEndsWithItsOwnLine(string never)
+    {
+        using var temp = new TempDirectory();
+        using var visualStudio = new ScriptedVisualStudio { ExitCode = "1" };
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var asked = new List<string>();
+        var sent = new List<IReadOnlyList<string>>();
+        var admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 };
+        const string Refused = "'actions/corpus.yml' names 1 program that may not run.";
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var request = System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
+
+            sent.Add([.. request.Arguments.Select(argument => argument.Text)]);
+            command.OnErrorLine?.Invoke(FailureLine.For("test", Refused));
+
+            return HostResults.Finished(command, HarnessExit.Refused);
+        });
+
+        var (config, inspector, leg, workload) = never switch
+        {
+            "distribution" => (
+                new HarnessConfig
+                {
+                    BuildConfigs = { ["debug"] = new BuildConfiguration() },
+                    Hosts = new HostsConfig
+                    {
+                        Local = new LocalHostConfig { Admission = admission },
+                        Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+                    },
+                    Legs = { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+                },
+                new RecordingInspector(host => new HostReport
+                {
+                    Host = host,
+                    Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+                    Processor = "x86_64",
+                    Session = host.Kind == HostKind.Local ? null : Session(host),
+                }),
+                "remote",
+                Heavy),
+            "environment" => (
+                new HarnessConfig
+                {
+                    BuildConfigs = { ["debug"] = new BuildConfiguration() },
+                    Projects = { new ProjectConfig { Name = "app", Type = "cmake", Path = "." } },
+                    DeveloperEnvironments = { ["vs"] = new DeveloperEnvironmentConfig { Kind = DeveloperEnvironmentKinds.VisualStudio } },
+                    Toolchains = { ["msvc"] = new ToolchainConfig { Platforms = ["windows"], Env = { ["CC"] = "cl" }, DeveloperEnvironment = "vs" } },
+                    Hosts = new HostsConfig { Local = new LocalHostConfig { Admission = admission } },
+                    Legs = { ["native"] = new LegConfig { Os = "windows", Processor = "x86_64", Config = "debug", Toolchain = "msvc" } },
+                },
+                WindowsHere(visualStudio),
+                "native",
+                LegWorkload.BuildOnly),
+            _ => (Admitting(OneLeg(harness), local: admission), SshAndLocal(harness), "native", Heavy),
+        };
+
+        // Refusing under required: the leg's own isolation, or the one a WSL distribution's leg cannot have.
+        var isolation = never == "environment"
+            ? null
+            : new LegIsolationAnswer(new ExecutionIsolation(
+                IsolatedExecution.Legs,
+                AgentIsolationMode.Required,
+                never == "distribution" ? new PassThroughMechanism() : null,
+                never == "distribution" ? IsolationProfile.Nothing : null,
+                never == "distribution" ? null : "git could not say where it keeps its own files",
+                never == "distribution" ? null : "make sure git answers"));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true, RemoteArguments: ["corpus"])
+            {
+                Workload = workload,
+                Isolation = isolation,
+                AdmissionCheck = new LegAdmissionCheck(
+                    (work, _) =>
+                    {
+                        asked.Add(work.Leg.Name);
+                        throw new HarnessException(HarnessExit.Refused, Refused);
+                    },
+                    ["--check-there"]),
+            },
+            hosts: hosts,
+            developerEnvironments: never == "environment" ? visualStudio.Provider() : null);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var line = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        Assert.Empty(asked);
+        Assert.Empty(sent);
+        Assert.Equal(leg, line.GetProperty("leg").GetString());
+        Assert.Equal(
+            never switch
+            {
+                "isolation" => ("skipped-unavailable", "leg 'native' is refused: agentPolicy.isolation is \"required\" and git could not say where it keeps its own files, so nothing the agents wrote is built, tested or run here; make sure git answers"),
+                "distribution" => ("skipped-unavailable", "leg 'remote' is refused: agentPolicy.isolation is \"required\" and the leg runs in the WSL distribution 'Ubuntu', which this machine's isolation does not hold and which reaches this machine's drives under /mnt, so nothing the agents wrote is built, tested or run here; place the leg on this machine, or on another machine reached over ssh"),
+                _ => ("failed", "developer environment 'vs': vcvarsall.bat amd64 exited 1 and printed nothing"),
+            },
+            (line.GetProperty("verdict").GetString(), line.GetProperty("detail").GetString()));
+        // The leg's own code - failed, or a run left incomplete by a skip - never the check's refusal.
+        Assert.Equal(never == "environment" ? HarnessExit.CommandFailed : HarnessExit.Incomplete, outcome.ExitCode);
+        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A heavy WSL leg whose distribution's check failed as it started, and then passed, says so on whatever line the leg
+    /// then reaches - not admitted while another run holds its slot, or what its run there reached once it was - as a leg
+    /// whose run there was started once more does, before anything that run's own starts said: the host's DssHarness that
+    /// failed once is never hidden by the start that then passed.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWslLegWhoseCheckFailedAsItStarted_SaysSoOnTheLineItThenReaches(bool slotHeld)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var sent = new List<IReadOnlyList<string>>();
+        const string CouldNotLoad = "Unexpected FileNotFoundException: Could not load file or assembly 'System.Runtime.Intrinsics'.";
+
+        if (slotHeld)
+        {
+            AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+        }
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } },
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+            },
+            Legs = { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var request = System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
+            IReadOnlyList<string> arguments = [.. request.Arguments.Select(argument => argument.Text)];
+
+            sent.Add(arguments);
+
+            // The leg's run, which alone asks for a ledger, passes; its check fails as it starts the first time only.
+            if (arguments.Contains("--json"))
+            {
+                ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+                return HostResults.Finished(command, HarnessExit.Success);
+            }
+
+            if (sent.Count == 1)
+            {
+                command.OnErrorLine?.Invoke(FailureLine.For("test", CouldNotLoad));
+                return HostResults.Finished(command, HarnessExit.InternalError);
+            }
+
+            return HostResults.Finished(command, HarnessExit.Success);
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true, RemoteArguments: ["corpus"])
+            {
+                Workload = Heavy,
+                AdmissionCheck = new LegAdmissionCheck((_, _) => throw new InvalidOperationException("A leg a distribution runs is checked there."), ["--check-there"]),
+            },
+            hosts: hosts);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        // The check twice, then - once admitted - the leg's run.
+        Assert.Equal(slotHeld ? 2 : 3, sent.Count);
+        Assert.Equal(slotHeld ? "not-admitted" : "passed", leg.GetProperty("verdict").GetString());
+        Assert.Equal(
+            [$"wsl Ubuntu's DssHarness exited 70 as it started, before anything ran there, saying: {CouldNotLoad}"],
+            leg.GetProperty("retried").EnumerateArray().Select(said => said.GetString()));
+    }
+
+    /// <summary>
     /// A host running a leg another machine dispatched to it takes it by its own section, as a machine of its own; a WSL
     /// distribution running one takes nothing, since the machine that dispatched it - the one it runs on - did.
     /// </summary>
@@ -2635,6 +3090,114 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// The machine's own settings file wins over config.json field by field: the floor it declares is the leg's though the
+    /// tree's config.json declares another, and a machine whose config.json declares no admission at all is held to the floor
+    /// its settings file declares. Where it says reclaimIdleBuilds, the floor makes room from other trees' idle builds, with
+    /// the leg's need beyond it; where it does not, it makes none.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task ALegsFloor_IsTheOneItsMachinesSettingsFileDeclares_OverWhatConfigJsonDeclares(bool configAdmits, bool reclaims)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        RoomFloor? held = null;
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var config = configAdmits ? Admitting(OneLeg(harness), local: new AdmissionSettings { MinFreeGiB = 0.5, ReclaimIdleBuilds = !reclaims }) : OneLeg(harness);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(
+            settings.Location!,
+            $$"""{ "admission": { "minFreeGiB": 3, "reclaimIdleBuilds": {{(reclaims ? "true" : "false")}} } }""",
+            TestContext.Current.CancellationToken);
+
+        await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = Heavy },
+            ran: leg => held = leg.BuildRequestFor(config, temp.Path, new ProjectConfig { Name = "app", Type = "cmake" }).Floor,
+            machineSettings: settings);
+
+        Assert.Equal(3L << 30, held?.Bytes);
+        Assert.Equal(reclaims, held?.MakeRoom is not null);
+        Assert.Equal(0, held?.Need);
+    }
+
+    /// <summary>
+    /// A heavy leg short of room as it is admitted, on a machine that says reclaimIdleBuilds, removes another tree's idle
+    /// build there before it waits - never one of its own tree's - for what the disk lacks of its need, beside another
+    /// leg's claim it does not count, and its line and its admission in --json say what it removed, whose tree it was and
+    /// the room before and after, though it then waited out its time for the rest; the note left where the build was is
+    /// that tree's next build's to say.
+    /// </summary>
+    [Fact]
+    public async Task AHeavyLegShortOfRoom_RemovesAnotherTreesIdleBuild_BeforeItWaits_AndSaysSo()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var free = (8 * AdmissionKit.Gibibyte) - 10;
+        var room = new ScriptedRoom(harness.FileSystem, free);
+        var other = temp.Combine("trees", "other");
+        var idle = Path.Combine(other, "build", "x86_64-gcc-debug");
+        var own = Path.Combine(temp.Path, "build", "x86_64-gcc-debug");
+
+        foreach (var build in new[] { idle, own })
+        {
+            Directory.CreateDirectory(build);
+            await File.WriteAllTextAsync(Path.Combine(build, Core.Build.BuildRecord.FileName), "clean\nx86_64-gcc-debug\n", TestContext.Current.CancellationToken);
+            File.SetLastWriteTimeUtc(Path.Combine(build, Core.Build.BuildRecord.FileName), new DateTime(2026, 11, 1, 8, 0, 0, DateTimeKind.Utc));
+        }
+
+        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), 35 * AdmissionKit.Gibibyte, "/data"));
+
+        var config = Admitting(
+            new HarnessConfig
+            {
+                BuildConfigs = { ["debug"] = new BuildConfiguration() },
+                Legs = { ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", BuildSpaceGiB = 8 } },
+            },
+            local: new AdmissionSettings { MaxWaitMinutes = 1, SettleSeconds = [0, 0], ReclaimIdleBuilds = true });
+
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor })
+        {
+            BuildRooms = (_, path) => new BuildDirectoryRoom(path, Exists: false, RecordedBytes: null, new DiskSpace(40L << 30, 100L << 30, "/data"), Unmeasured: null),
+        };
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildAndTest },
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock(), fileSystem: room),
+            fileSystem: room,
+            trees: new KnownTrees { Beside = _ => [new RepositoryTree(other, "worktree o1/other")] });
+
+        Assert.Equal(LegExit.NotAdmitted, outcome.ExitCode);
+        Assert.False(Directory.Exists(idle));
+        Assert.True(Directory.Exists(own));
+        Assert.EndsWith(
+            "to make room for leg 'native' of the main checkout\n",
+            await File.ReadAllTextAsync(Core.Build.ReclaimedBuildNote.PathOf(idle), TestContext.Current.CancellationToken),
+            StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var admission = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("admission");
+        var removed = Assert.Single(admission.GetProperty("reclaimed").EnumerateArray()).GetString();
+
+        Assert.Equal(
+            $"removed ~{DiskSpace.Size(23)} of other trees' idle builds on '/data' to make room: worktree o1/other's at '{idle}', last built "
+            + $"2026-11-01 08:00 UTC; {DiskSpace.Size(free)} free before, {DiskSpace.Size(free)} after",
+            removed);
+        Assert.Contains($"native: {removed}", harness.StandardError.ToString() + harness.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A WSL distribution's leg holds its builds to the floor on the drive its disk grows on as well, through that drive's
     /// mount in the distribution, as the machine that sent it named the drive: the distribution's own room is its virtual
     /// disk's, which a full drive does not shrink. Where that machine named none, or the drive is mounted nowhere there,
@@ -2683,6 +3246,165 @@ public sealed class LegRunServiceTests
         Assert.Equal(mount is null ? Array.Empty<(string, string)>() : [(mount, ", where WSL keeps its disk")], held.Also);
         Assert.Equal(unwatched, held.Unwatched);
     }
+
+    /// <summary>
+    /// A WSL distribution runs on the machine that sent its leg, so its build is held to the floor that machine's settings
+    /// file declares, as it was sent beside the leg - over config.json, and over any settings file of the distribution's
+    /// own, which is not the machine's - and makes room as that file says; a leg sent with none is held as config.json says.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWslLegsFloor_IsTheOneTheSendingMachinesSettingsFileDeclares(bool sent)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        RoomFloor? held = null;
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var config = Admitting(OneLeg(harness), local: new AdmissionSettings { MinFreeGiB = 0.5 });
+
+        config.Hosts.Wsl["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" };
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "minFreeGiB": 9 } }""", TestContext.Current.CancellationToken);
+
+        await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true, Here: HostId.Wsl("Ubuntu")) { Workload = Heavy },
+            ran: leg => held = leg.Floor,
+            origin: CommandOrigin.Served(Dispatch.Of(new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Run,
+                RunId = RunId.New().Value,
+                MachineAdmission = sent ? new AdmissionSettings { MinFreeGiB = 3, ReclaimIdleBuilds = true } : null,
+            })),
+            machineSettings: settings);
+
+        Assert.Equal(((long?)(sent ? 3L << 30 : 1L << 29), sent), (held?.Bytes, held?.MakeRoom is not null));
+    }
+
+    /// <summary>
+    /// A leg's admission rule is read once, as its work begins, and carried with it: this machine's settings file put wrong
+    /// while a WSL leg runs - heavy or light - never fails the leg once it has run, and its page cache is dropped as it ends
+    /// by the rule read then. Read again after the leg's work, the file failed the run with a configuration error and lost
+    /// the leg's verdict.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ASettingsFilePutWrongWhileAWslLegRuns_NeverFailsTheLegOnceItRan(bool heavy)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var cache = new ScriptedPageCache(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), AdmissionKit.Gibibyte));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "heavyLegs": 3 } }""", TestContext.Current.CancellationToken);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            // Put wrong while the leg runs there: a count of no leg at all, out of its bounds.
+            File.WriteAllText(settings.Location!, """{ "admission": { "heavyLegs": 0 } }""");
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            WslLeg(),
+            WslInspector(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = heavy ? Heavy : LegWorkload.Copy },
+            hosts: hosts,
+            pageCache: cache,
+            machineSettings: settings);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Equal("passed", Verdicts(outcome)["remote"].Verdict);
+        Assert.Single(cache.Asked);
+    }
+
+    /// <summary>
+    /// A settings file that cannot be read as a WSL leg's work begins refuses a heavy leg, which asks for the rule, before
+    /// anything of it is sent - a configuration's refusal, which ends the run in the file's words, as every heavy leg of the
+    /// machine would meet it, never one leg's defect; a light one asks for none and runs, its page cache left as it ends and
+    /// its line saying why.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ASettingsFileUnreadAsAWslLegBegins_RefusesAHeavyLeg_AndLetsALightOneRun(bool heavy)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var cache = new ScriptedPageCache(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), AdmissionKit.Gibibyte));
+        var sent = 0;
+        var unread = $"This machine's settings file '{settings.Location}' could not be read: admission heavyLegs must be at least 1, found 0. ";
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "heavyLegs": 0 } }""", TestContext.Current.CancellationToken);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent++;
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            WslLeg(),
+            WslInspector(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = heavy ? Heavy : LegWorkload.Copy },
+            hosts: hosts,
+            pageCache: cache,
+            machineSettings: settings);
+        var printed = harness.StandardOutput.ToString() + harness.StandardError.ToString();
+
+        Assert.Empty(cache.Asked);
+
+        if (heavy)
+        {
+            Assert.Equal((HarnessExit.ConfigInvalid, 0), (outcome.ExitCode, sent));
+            Assert.StartsWith(unread, outcome.Message, StringComparison.Ordinal);
+            return;
+        }
+
+        Assert.Equal((0, 1), (outcome.ExitCode, sent));
+        Assert.Contains(
+            "remote: as the leg ended, WSL's page cache was not dropped: whether this machine admits its heavy legs by the memory could not be read as "
+                + $"the leg began: {unread}",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>A WSL leg of this machine, which declares admission under hosts.local.</summary>
+    private static HarnessConfig WslLeg() => new()
+    {
+        BuildConfigs = { ["debug"] = new BuildConfiguration() },
+        Hosts = new HostsConfig
+        {
+            Local = new LocalHostConfig { Admission = new AdmissionSettings() },
+            Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+        },
+        Legs = { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+    };
+
+    /// <summary>This machine, and its WSL distribution reached through a session.</summary>
+    private static RecordingInspector WslInspector(HarnessFactory harness) => new(host => new HostReport
+    {
+        Host = host,
+        Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+        Processor = host.Kind == HostKind.Local ? harness.Platform.Processor : "x86_64",
+        Session = host.Kind == HostKind.Local ? null : Session(host),
+    });
 
     /// <summary>The real file system, except that what is mounted reads as <paramref name="mounts"/> says.</summary>
     private sealed class MountsListing(IFileSystem inner, string mounts) : PassThroughFileSystem(inner)
@@ -2820,6 +3542,58 @@ public sealed class LegRunServiceTests
         Assert.Empty(AdmissionKit.Read(record));
         Assert.Equal(TimeSpan.Zero, clock.Moved);
         Assert.Contains("native: swept", harness.StandardOutput.ToString() + harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// This machine's settings file put wrong while a sweep runs - between two of its arms - never fails the leg that has
+    /// run: each arm after it is admitted by the count the file declared as the leg's work began, at once though the two
+    /// legs ahead carry fewer, the file's refusal said once, and the leg ends with its own verdict. Read again at each arm's
+    /// look and refused, the next arm's admission ended the run with a configuration's error, and the sweep's line with it.
+    /// </summary>
+    [Fact]
+    public async Task ASettingsFilePutWrongBetweenTwoArms_NeverFailsTheSweep()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => settings.Read().Admission?.HeavyLegs);
+        var taken = new List<(bool Admitted, double Waited)>();
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "heavyLegs": 3, "settleSeconds": [0, 0] } }""", TestContext.Current.CancellationToken);
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "stale-first", slots: 2), AdmissionKit.Holder(harness, "stale-second", slots: 2));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Sweep },
+            admission: AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock()),
+            machineSettings: settings,
+            workAsync: async (work, token) =>
+            {
+                foreach (var arm in new[] { "first-arm", "second-arm", "third-arm" })
+                {
+                    using var unit = await work.AdmitUnit(new UnitAdmission(arm), token);
+
+                    taken.Add((unit!.Fact.Admitted, unit.Fact.WaitedSeconds));
+
+                    // Put wrong after the first arm: a count of no leg at all, out of its bounds.
+                    await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "heavyLegs": 0 } }""", token);
+                }
+
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        var unread = $"This machine's settings file '{settings.Location}' could not be read: admission heavyLegs must be at least 1, found 0. ";
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("passed", Verdicts(outcome)["native"].Verdict);
+        Assert.Equal([(true, 0.0), (true, 0.0), (true, 0.0)], taken);
+        Assert.Equal(["stale-first", "stale-second"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+        Assert.Single(harness.StandardError.ToString().Split(Environment.NewLine), line => line.StartsWith($"admission: WARN - {unread}", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -5149,7 +5923,8 @@ public sealed class LegRunServiceTests
         LegSetUps? setUps = null,
         IProcessRunner? versionProbes = null,
         IHarnessOutput? output = null,
-        RunStops? stops = null)
+        RunStops? stops = null,
+        MachineSettingsFile? machineSettings = null)
     {
         var loading = loader ?? HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
         var run = runId ?? RunId.New();
@@ -5180,6 +5955,9 @@ public sealed class LegRunServiceTests
             harness.Platform,
             output ?? harness.Output,
             stops ?? new RunStops(harness.FileSystem, harness.Identity, harness.Output, claims),
+
+            // Never this machine's own settings file: a test's machine declares what the test writes, and nothing else.
+            machineSettings ?? HostDoubles.MachineSettings(harness.FileSystem),
             origin,
             setUps);
 

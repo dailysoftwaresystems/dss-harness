@@ -46,10 +46,11 @@ public sealed class TreeFloorTests
     }
 
     /// <summary>
-    /// The tree's own floor is git's own directory and every root slot of the layout's, and nothing else - what
-    /// orchestrators and side-tasks keep, the mutation workers, the legs' copies, and the worktrees root - read from the
-    /// layout's one list of them, so a root slot it gains is on the floor the day it is added: none is left to an ignore
-    /// rule a repository can edit away, nor synced to a host's copy.
+    /// The tree's own floor is git's own directory, every root slot of the layout's and every former one, and nothing
+    /// else - what orchestrators and side-tasks keep, the mutation workers, the legs' copies, the slot an earlier version
+    /// kept the workers in, and the worktrees root - read from the layout's lists of them, so a root slot it gains is on
+    /// the floor the day it is added, and one it renames stays: none is left to an ignore rule a repository can edit away,
+    /// nor synced to a host's copy, nor deleted in one.
     /// </summary>
     [Theory]
     [InlineData("wt")]
@@ -57,13 +58,14 @@ public sealed class TreeFloorTests
     [InlineData("../elsewhere")]
     public void TheTreesOwnFloor_IsGitsDirectory_AndEveryRootSlot(string worktreesRoot)
     {
-        Assert.Equal([".git", ".orchestrators", ".mutations", ".legs", ".side-tasks", worktreesRoot], TreeFloor.Of(worktreesRoot));
+        Assert.Equal([".git", ".orchestrators", ".m", ".legs", ".side-tasks", ".mutations", worktreesRoot], TreeFloor.Of(worktreesRoot));
 
-        // The same whole, read from the layout's one list of its root slots.
+        // The same whole, read from the layout's lists of its root slots and its former ones.
         Assert.Equal(
-            [.. new[] { ".git" }.Concat(HarnessLayout.RootSlots(worktreesRoot)).Order(StringComparer.Ordinal)],
+            [.. new[] { ".git" }.Concat(HarnessLayout.RootSlots(worktreesRoot)).Concat(HarnessLayout.FormerRootSlots).Order(StringComparer.Ordinal)],
             TreeFloor.Of(worktreesRoot).Order(StringComparer.Ordinal));
-        Assert.Equal([".orchestrators", ".mutations", ".legs", ".side-tasks"], HarnessLayout.NamedRootSlots);
+        Assert.Equal([".orchestrators", ".m", ".legs", ".side-tasks"], HarnessLayout.NamedRootSlots);
+        Assert.Equal([".mutations"], HarnessLayout.FormerRootSlots);
         Assert.True(TreeFloor.Covers(TreeFloor.OfAgentMoves("wt"), ".side-tasks/2026-10-31-120000-fix-it/transcript.md"));
     }
 
@@ -83,15 +85,17 @@ public sealed class TreeFloorTests
     }
 
     /// <summary>
-    /// The tool's own state is one list from the layout's names: the root slots and what it keeps
-    /// under the harness directory, so a place the layout gains joins it the day it is added.
+    /// The tool's own state is one list from the layout's names: the root slots, the former ones - where what an earlier
+    /// version made is still the tool's, and no agent may write - and what it keeps under the harness directory, so a
+    /// place the layout gains joins it the day it is added.
     /// </summary>
     [Fact]
-    public void TheStatePaths_AreTheRootSlots_AndTheStateUnderTheHarnessDirectory()
+    public void TheStatePaths_AreTheRootSlots_TheFormerOnes_AndTheStateUnderTheHarnessDirectory()
     {
         Assert.Equal(
         [
             .. HarnessLayout.RootSlots("wt"),
+            ".mutations",
             ".harness-config/runs",
             ".harness-config/host-copies",
             ".harness-config/mutation-record",

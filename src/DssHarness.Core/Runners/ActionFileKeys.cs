@@ -21,6 +21,10 @@ public static class ActionFileKeys
         new("default", $"its value when neither {CommandLineInputs.Option} nor the runner's .env gives one"),
         new("required", "refuse a run that gives it no value"),
         new("description", "what the value is for"),
+        new("pattern", "a .NET regular expression its whole value must match"),
+        new("separator", "the text between the items of its value, which minItems and maxItems count"),
+        new("minItems", "the fewest items its value may hold, parted by separator"),
+        new("maxItems", "the most items its value may hold, parted by separator"),
     ];
 
     /// <summary>

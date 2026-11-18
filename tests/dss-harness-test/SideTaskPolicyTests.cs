@@ -438,6 +438,7 @@ public sealed class SideTaskPolicyTests
             ".orchestrators/r1/flow.json",
             ".side-tasks/2026-10-19-143201-add-a-source/task.json",
             ".side-tasks/2026-10-19-143201-add-a-source/stream.jsonl",
+            ".m/m1/file.txt",
             ".mutations/m1/file.txt",
             ".legs/l1/file.txt",
         })

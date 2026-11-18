@@ -37,6 +37,7 @@ public sealed class WorkflowStepTypesTests
                 ("validate-plan", "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget"),
                 ("anchor-balance", "AnchorBalanceStepRunner: IAnchorBalanceService.CheckAsync, AnchorBalanceReport.HeldTo, AnchorReports.BalanceFindings"),
                 ("anchor-citations", "AnchorCitationsStepRunner: IAnchorCitationService.CheckAsync, AnchorCitationReport.HeldTo, AnchorCitationReports.Line"),
+                ("class-closure", "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), FoldLedger, AgentStreamCalls, AgentMeasureSupport.RecordOf, CodebaseGraphService.ReadOnlyAsync, ArmListingReader.DeclaredArmsAsync, IGitClient.CountTouchesAsync"),
                 ("ci-read", "CiReadStepRunner: ICiLegsService.CheckAsync over GhCiJobSource and GhProcess"),
                 ("ci-wait", "CiWaitStepRunner: ICiChecksService over GhCiJobSource and GhProcess, ICiLegsService.ClassifyRunAsync"),
                 ("commit", "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunWithinAsync and RunWithHooksAsync, IAgentIsolation.ForExecutionAsync"),
@@ -70,6 +71,7 @@ public sealed class WorkflowStepTypesTests
                 ("validate-plan", "read main"),
                 ("anchor-balance", "read main"),
                 ("anchor-citations", "read main"),
+                ("class-closure", "read main, read the agent's tree where in names one"),
                 ("ci-read", ""),
                 ("ci-wait", ""),
                 ("commit", "write main"),
@@ -107,6 +109,7 @@ public sealed class WorkflowStepTypesTests
                 ("validate-plan", null),
                 ("anchor-balance", null),
                 ("anchor-citations", null),
+        ("class-closure", null),
                 ("ci-read", null),
                 ("ci-wait", null),
                 ("commit", null),
@@ -172,6 +175,7 @@ public sealed class WorkflowStepTypesTests
                 ("validate-plan", "ok, problems, items"),
                 ("anchor-balance", "passed, findings"),
                 ("anchor-citations", "passed, findings"),
+                ("class-closure", "passed, problems, hotspots, touches"),
                 ("ci-read", "passed, branch, matrixRan, legs, red"),
                 ("ci-wait", "passed, commit, checks, red, pending, unsettled"),
                 ("commit", "committed, sha, paths, ignored, isolation"),
@@ -210,7 +214,7 @@ public sealed class WorkflowStepTypesTests
             ["when", "filterWhen", "forEach", "repeat.until", "repeat.blocking", "repeat.leftover", "items", "scope", "questions", "preAnswer.when", "preAnswer.quote.text"],
             WorkflowStepTypes.ExpressionKeys);
         Assert.Equal(
-            ["writes", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"],
+            ["writes", "filter", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"],
             WorkflowStepTypes.ListOrExpressionKeys);
 
         var keys = new HashSet<string>(

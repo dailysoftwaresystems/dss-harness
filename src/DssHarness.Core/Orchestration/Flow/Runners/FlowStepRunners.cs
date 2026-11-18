@@ -22,13 +22,21 @@ public interface IFlowStepTypeRunner
 /// <summary>
 /// The runner a run's steps are given: each step to the runner of its type, and a step of a type no runner serves yet
 /// refused loudly as <see cref="NoStepRunner"/> refuses it - a run that says what it cannot do, never one that passes a
-/// step over. A reason step's view of the run's codebase graph is synced where it starts, before its runner is asked.
+/// step over. The view of the run's codebase graph of a step that reads it (<see cref="ReadsViewAtStart"/>) is synced
+/// where it starts, before its runner is asked.
 /// </summary>
 public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
 {
     /// <summary>The step types this build serves, in the order help says them: the tool registers a runner for each, and none other.</summary>
     public static IReadOnlyList<string> Served { get; } =
-        ["orient", "graphify-codebase", "validate-plan", "create-agent", "reason", "build", "test", "run", "check-mutations", "anchor-balance", "anchor-citations", "ci-read", "ci-wait", "fold", "delete-agent", "refresh", "rebase", "commit", "push", "pull-request"];
+        ["orient", "graphify-codebase", "validate-plan", "create-agent", "reason", "build", "test", "run", "check-mutations", "anchor-balance", "anchor-citations", "class-closure", "ci-read", "ci-wait", "fold", "delete-agent", "refresh", "rebase", "commit", "push", "pull-request"];
+
+    /// <summary>
+    /// The step types whose view of the run's codebase graph is synced where they start, before their runner is asked: a
+    /// reason step, served the graph as it works, and a class-closure check, which reads what the agent's worktree still
+    /// declares from its view after the work its builder did since that view was last synced.
+    /// </summary>
+    public static IReadOnlyList<string> ReadsViewAtStart { get; } = ["reason", "class-closure"];
 
     private readonly IReadOnlyDictionary<string, IFlowStepTypeRunner> _byType;
     private readonly FlowGraphSyncs _graph;
@@ -36,7 +44,7 @@ public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
 
     /// <summary>Serves each step type by the runner registered for it.</summary>
     /// <param name="runners">The runners, one for each type they serve.</param>
-    /// <param name="graph">The engine's own syncs of a run's codebase graph: a reason step's view where it starts.</param>
+    /// <param name="graph">The engine's own syncs of a run's codebase graph: the view of a step that reads it where it starts.</param>
     /// <exception cref="ArgumentException">Two runners serve one type.</exception>
     public FlowStepRunners(IEnumerable<IFlowStepTypeRunner> runners, FlowGraphSyncs graph)
     {
@@ -63,9 +71,9 @@ public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
     {
         ArgumentNullException.ThrowIfNull(run);
 
-        // A person may have changed the main tree by hand, and an agent its own since its last step: the step is served
-        // the graph as it stands where it starts.
-        if (run.Step.Type == "reason")
+        // A person may have changed the main tree by hand, and an agent its own since its last step: a step that reads the
+        // graph's view is served it as it stands where it starts.
+        if (run.Step.Type is { } reading && ReadsViewAtStart.Contains(reading, StringComparer.Ordinal))
         {
             await _graph.AtStartAsync(run, cancellationToken).ConfigureAwait(false);
         }

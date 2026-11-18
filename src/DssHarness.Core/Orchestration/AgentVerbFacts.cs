@@ -35,6 +35,13 @@ public enum RefusalKind
     Conflict,
 
     /// <summary>
+    /// A row whose status moves to closed holds no closing record that closes its classes - under
+    /// <c>anchors.closure: required</c>, of a lane folded by hand: no consent lifts it, and the record is written or the
+    /// row does not close.
+    /// </summary>
+    Closure,
+
+    /// <summary>
     /// Anything else that must be put right: a path, a row or an option refused for what it is, the agent's own state,
     /// or a consent nobody gave where the request is an <c>--apply</c>, which refuses it rather than asking.
     /// </summary>

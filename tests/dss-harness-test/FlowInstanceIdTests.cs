@@ -138,4 +138,19 @@ public sealed class FlowInstanceIdTests
     [InlineData("prep", "items[0].commit", null)]
     public void TwoInstances_AreOrderedByTheGroupInstancesAroundThem(string earlier, string later, bool? precedes)
         => Assert.Equal(precedes, FlowInstanceId.Precedes(earlier, later));
+
+    /// <summary>
+    /// The work item an id is a step of is the id through its last item segment - every step of one item's use, its folds
+    /// and checkpoints among them, is of that item - and the whole id where no item is marked, for no forEach holds it: a
+    /// step outside every forEach is an item of itself, never of the empty name every other such step would share, which
+    /// would make every fold outside a forEach one item's own commit.
+    /// </summary>
+    [Theory]
+    [InlineData("rounds#2.items[2].fix#3.review.correctness", "rounds#2.items[2]")]
+    [InlineData("rounds#2.items[2].fold", "rounds#2.items[2]")]
+    [InlineData("rounds#1.items[0].remedies[1].fold", "rounds#1.items[0].remedies[1]")]
+    [InlineData("notes-fold", "notes-fold")]
+    [InlineData("fix#2.revise.refold+2", "fix#2.revise.refold+2")]
+    public void AnIdsItem_IsTheIdThroughItsLastItem_OrTheWholeIdWhereNoneIsMarked(string id, string item)
+        => Assert.Equal(item, FlowInstanceId.ItemOf(id));
 }

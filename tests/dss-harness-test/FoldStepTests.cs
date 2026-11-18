@@ -474,7 +474,7 @@ public sealed class FoldStepTests
     /// The step reads its dry run's standing, typed, never its code: a dry run that could not be weighed ends it with its
     /// own code; refused or lacking a consent, it asks - whatever the code; sound with a run holding its tree, it ends 13
     /// with the cause of a held lock where that run is the one thing in the way; holding only a copy, 21; sound and free,
-    /// it applies.
+    /// it applies - its dry run and its apply each asked as a run's.
     /// </summary>
     [Theory]
     [InlineData("unweighed", HarnessExit.CommandFailed, "ends", HarnessExit.CommandFailed, OutcomeCause.None)]
@@ -521,6 +521,9 @@ public sealed class FoldStepTests
         }
 
         _ = await agents.Received(does == "applies" ? 1 : 0).FoldAsync(Arg.Is<FoldAgentRequest>(request => request.Apply), Arg.Any<CancellationToken>());
+
+        // Its dry run and its apply alike are asked as a run's, which no closure.json is asked of.
+        _ = await agents.DidNotReceive().FoldAsync(Arg.Is<FoldAgentRequest>(request => !request.ByRun), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -626,9 +629,9 @@ public sealed class FoldStepTests
 
     /// <summary>
     /// A deletion of an agent whose deletion began - closed, its fold made - folds nothing: it writes no intent, holds no
-    /// path to within, and takes no allowance, whatever its allow names; a fold a crash left after the closing - what it
-    /// left recorded under its hold, and nothing after - is settled all the same, by that record, and the run's graph's
-    /// base is synced by what it changed.
+    /// path to within, and takes no allowance, whatever its allow names, and is asked as a run's; a fold a crash left after
+    /// the closing - what it left recorded under its hold, and nothing after - is settled all the same, by that record, and
+    /// the run's graph's base is synced by what it changed.
     /// </summary>
     [Fact]
     public async Task ADeletionOfAClosedAgent_FoldsNothing_AndTakesNoAllowance()
@@ -662,7 +665,7 @@ public sealed class FoldStepTests
         Assert.Contains("\"why\":\"delete:delete-agent\"", File.ReadLines(kit.Layout.GraphSyncFile).Last(), StringComparison.Ordinal);
         Assert.Equal((crashed, FlowFoldEntry.Interrupted), Assert.Single(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Folds) is var entry ? (entry.Id, entry.State) : default);
         _ = await agents.Received(1).DeleteAsync(
-            Arg.Is<DeleteAgentRequest>(request => request.Apply && request.Expected == null && request.Allowances.New.Count == 0),
+            Arg.Is<DeleteAgentRequest>(request => request.Apply && request.Expected == null && request.Allowances.New.Count == 0 && request.ByRun),
             Arg.Any<CancellationToken>());
     }
 

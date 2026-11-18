@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -31,7 +32,8 @@ public static class FlowStepTemplates
 
         return key switch
         {
-            "filter" => step.Filter is null ? [] : [step.Filter],
+            "affected" => step.Affected is null ? [] : [step.Affected],
+            "noTests" => step.NoTests is null ? [] : [step.NoTests],
             "exclude" => step.Exclude,
             "labels" => step.Labels,
             "inputs" => [.. step.Inputs.Values],
@@ -48,10 +50,10 @@ public static class FlowStepTemplates
 
     /// <summary>
     /// <paramref name="step"/> with every template key of its type filled by <paramref name="fill"/>, but a pause's
-    /// <c>question</c>. A test's <c>filter</c>, and a member of its <c>exclude</c> or <c>labels</c>, that fills to an
-    /// empty text is not given: no filter is passed, and so every test of the step's legs runs (part 04, "Templates in
-    /// step keys"). <see langword="null"/> where one cannot be filled, naming the key in <paramref name="key"/> and why
-    /// in <paramref name="problem"/>.
+    /// <c>question</c>. A member of a test's <c>exclude</c> or <c>labels</c> that fills to an empty text is not given
+    /// (part 04, "Templates in step keys"); its <c>filter</c> is a list the engine reads where the step starts, never a
+    /// template. <see langword="null"/> where one cannot be filled, naming the key in <paramref name="key"/> and why in
+    /// <paramref name="problem"/>.
     /// </summary>
     /// <param name="step">The step, as it starts.</param>
     /// <param name="fill">Fills one text.</param>
@@ -90,7 +92,8 @@ public static class FlowStepTemplates
 
             filled = templateKey switch
             {
-                "filter" => filled with { Filter = texts is [{ Length: > 0 } given] ? given : null },
+                "affected" => filled with { Affected = texts.SingleOrDefault() },
+                "noTests" => filled with { NoTests = texts.SingleOrDefault() },
                 "exclude" => filled with { Exclude = [.. texts.Where(text => text.Length > 0)] },
                 "labels" => filled with { Labels = [.. texts.Where(text => text.Length > 0)] },
                 "inputs" => filled with { Inputs = Mapped(step.Inputs, texts) },
@@ -119,5 +122,44 @@ public static class FlowStepTemplates
         }
 
         return mapped;
+    }
+
+    /// <summary>
+    /// The classes of the work item <paramref name="template"/>, a reason step's prompt, reads - <c>{item.classes}</c>, or
+    /// <c>{input.item.classes}</c> as the item pipeline's prompts spell it - read by <paramref name="read"/>, the very
+    /// reader the template's fill reads its names by: so the classes handed to the step's runner under <c>classes</c>, for
+    /// its pack to be seeded from (<see cref="FlowStepGraph"/>), are the ones the prompt shows, whatever a use binds its
+    /// <c>item</c> to - a forEach item's member, a step's output outside every forEach. The template's first such read
+    /// decides; a read of one class (<c>{input.item.classes[0]}</c>) hands that class alone. Null for a template that reads
+    /// no classes, and for a read that yields none, or nothing the fill would show.
+    /// </summary>
+    /// <param name="template">The prompt's text, as written before it is filled.</param>
+    /// <param name="read">Reads one path of a name, as the template's fill reads it, in the scope the step runs in.</param>
+    public static JsonArray? ClassesOf(string template, Func<FlowExpression.Path, FlowExpression.PathRead> read)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        ArgumentNullException.ThrowIfNull(read);
+
+        if (WorkflowExpressions.TemplateReads(template).FirstOrDefault(reading =>
+                (reading.Root == "input" && reading.Names is ["input", "item", "classes"])
+                || (reading.Root == "item" && reading.Names is ["item", "classes"])) is not { } classes)
+        {
+            return null;
+        }
+
+        try
+        {
+            return FlowExpression.Parse(classes.Whole).Evaluate(read).ToNode() switch
+            {
+                JsonArray declared => [.. declared.OfType<JsonNode>().Select(node => node.DeepClone())],
+                JsonObject one => [one.DeepClone()],
+                _ => null,
+            };
+        }
+        catch (Exception ex) when (ex is UnresolvedReadException or ArgumentException)
+        {
+            // What the fill refuses, it refuses itself and fails the step with why: no classes are read from it here.
+            return null;
+        }
     }
 }

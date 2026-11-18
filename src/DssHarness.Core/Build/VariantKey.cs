@@ -45,24 +45,38 @@ public sealed record VariantKey(string Processor, string Toolchain, string Confi
     private const string CopyKeyDigits = "0123456789abcdef";
 
     /// <summary>
-    /// The key the copies of a tree kept in it for this variant are named by - a sweep's mutation workers: the first
-    /// <see cref="CopyKeyLength"/> hexadecimal digits, in lower case, of the SHA-256 of <see cref="DirectoryName"/>.
+    /// The key the copies of a tree kept in it for this variant are named by - a sweep's mutation workers, and the build
+    /// directory within each: the first <see cref="CopyKeyLength"/> hexadecimal digits, in lower case, of the SHA-256 of
+    /// <see cref="DirectoryName"/>.
     /// </summary>
     /// <remarks>
     /// <para>
     /// A key, never the variant's name: a copy is a second tree, built as deep as the first, so on a machine whose paths
-    /// are bounded every character its name adds is one the tree's own path must leave free. Spelt out, a variant's name
-    /// stood in a copy's path twice - in its name, and in the build directory within it. A key adds the same few
+    /// are bounded every character its path adds is one the tree's own path must leave free. Spelt out, a variant's name
+    /// stood in a worker's path twice - in its name, and in the build directory within it. A key adds the same few
     /// characters whatever the variant is called.
     /// </para>
     /// <para>
     /// Derived from the name alone, so the machine that dispatches a leg and the host that works in its copies name them
     /// alike. Two variants of one tree whose names come to one key - a chance in hundreds of millions for a pair - share
-    /// their workers and their lock, and neither is judged on the other's: each sweep syncs a worker again by content
-    /// and builds in its own variant's directory within it, and a sweep of one holds off the other's, saying whose it is.
+    /// their workers, the build directory within each, and their lock, and neither is judged on the other's: each sweep
+    /// syncs a worker again by content, a build of one in the directory the other's last build recorded itself in starts
+    /// from clean (<see cref="BuildRecord.Variant"/>), and a sweep of one holds off the other's, saying whose it is.
     /// </para>
     /// </remarks>
-    public string CopyKey => FileContentHash.Of(Encoding.UTF8.GetBytes(DirectoryName))[..CopyKeyLength];
+    public string CopyKey => CopyKeyOf(DirectoryName);
+
+    /// <summary>
+    /// The copy key (<see cref="CopyKey"/>) of the variant whose build directory is named <paramref name="directoryName"/>:
+    /// what a build directory found in a tree, whose configuration is not read, is keyed by.
+    /// </summary>
+    /// <param name="directoryName">The variant's directory name (<see cref="DirectoryName"/>).</param>
+    public static string CopyKeyOf(string directoryName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directoryName);
+
+        return FileContentHash.Of(Encoding.UTF8.GetBytes(directoryName))[..CopyKeyLength];
+    }
 
     /// <summary>
     /// Whether <paramref name="key"/> is spelt as a copy key is: <see cref="CopyKeyLength"/> hexadecimal digits, in lower

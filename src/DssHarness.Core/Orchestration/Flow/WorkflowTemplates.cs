@@ -74,10 +74,10 @@ public static class WorkflowTemplates
     /// <summary>The prompt files the implementation workflow names at its own levels.</summary>
     private static IReadOnlyList<string> Prompts =>
     [
-        "priority", "triage", "plan", "replan", "plan-update", "plan-audit",
+        "priority", "triage", "plan", "replan", "plan-update", "plan-audit", "item-audit",
         "anchors", "deferrals", "handoff",
         "self-audit", "pr-body",
-        "diagnose", "rediagnose", "redirect", "pre-existing",
+        "diagnose", "rediagnose", "redirect", "remedy-revise", "pre-existing",
         "recommend", "status", "ask",
     ];
 
@@ -99,6 +99,7 @@ public static class WorkflowTemplates
     private static IReadOnlyList<string> PipelinePrompts =>
     [
         "implement", "remedy", "redo", "undo", "unblock", "mend", "reconcile", "anchors",
+        "closure-record", "home-audit",
         "review-scope", "review", "rework",
     ];
 
@@ -236,7 +237,10 @@ public static class WorkflowTemplates
                 .SelectMany(entry => WorkflowFiles.OfStep(entry.Step, $"step '{entry.Path}'")
                     .Select(named => (entry.Step.WorkflowOf, Named: named)))
                 .Where(schema => schema.Named.IsSchema && EmbeddedText(schema.WorkflowOf, schema.Named.File) is not null)
-                .SelectMany(schema => WorkflowFiles.SchemaProblems(schema.Named, EmbeddedText(schema.WorkflowOf, schema.Named.File)!)),
+                .SelectMany(schema => WorkflowFiles.SchemaProblems(
+                    schema.Named,
+                    EmbeddedText(schema.WorkflowOf, schema.Named.File)!,
+                    beside => WorkflowFiles.RootOf(EmbeddedText(schema.WorkflowOf, WorkflowFiles.Beside(schema.Named.File, beside))))),
             .. UseFilesOf(resolved),
             .. WorkflowValidator.Validate(resolved, hasCommitTemplate: false, (named, owner) => EmbeddedText(owner, named)),
         ];

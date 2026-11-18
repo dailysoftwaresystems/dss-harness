@@ -146,6 +146,7 @@ public interface IAgentService : IUseCase
 /// <param name="sessions">Ends what an orchestrator's steps left running once their starter has gone - a contained child's session, a leg's process group - first in every command over it.</param>
 /// <param name="clock">When things happen.</param>
 /// <param name="processContext">This process's current directory, read per call: where a verb was typed, when none is named.</param>
+/// <param name="listings">The one reading of the arms registry, which judges a manual lane's closing records where it holds arms.</param>
 public sealed class AgentService(
     IHarnessContextLoader contextLoader,
     IGitClient gitClient,
@@ -165,7 +166,8 @@ public sealed class AgentService(
     OrchestrationLog log,
     ChildSessions sessions,
     TimeProvider clock,
-    IProcessContext processContext) : IAgentService
+    IProcessContext processContext,
+    Mutations.ArmListingReader listings) : IAgentService
 {
     /// <summary>The command that creates an agent.</summary>
     public const string CreateCommand = "create-agent";
@@ -204,6 +206,7 @@ public sealed class AgentService(
     private readonly ChildSessions _sessions = sessions;
     private readonly TimeProvider _clock = clock;
     private readonly IProcessContext _processContext = processContext;
+    private readonly Mutations.ArmListingReader _listings = listings;
     private readonly AgentFold _fold = new(gitClient, fileSystem, permissions, platform);
     private readonly AgentEvidence _evidence = new(fileSystem, platform);
 
@@ -1627,11 +1630,12 @@ public sealed class AgentService(
         bool apply,
         CancellationToken cancellationToken = default,
         bool json = false)
-        => FoldHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, intent: null, apply, json, cancellationToken);
+        => FoldHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, intent: null, byRun: false, apply, json, cancellationToken);
 
     /// <summary>
     /// Folding an agent, its <c>--apply</c> held to what its dry run named where <paramref name="expected"/> is given, and its
-    /// write recorded under its hold in the run's ledger of its folds where <paramref name="intent"/> is.
+    /// write recorded under its hold in the run's ledger of its folds where <paramref name="intent"/> is; held to no
+    /// <c>closure.json</c> where a run asks it (<paramref name="byRun"/>, <see cref="FoldAgentRequest.ByRun"/>).
     /// </summary>
     private async Task<CommandOutcome> FoldHeldAsync(
         string startDirectory,
@@ -1640,6 +1644,7 @@ public sealed class AgentService(
         FoldAllowances allowances,
         AgentPlanned? expected,
         Flow.FoldIntent? intent,
+        bool byRun,
         bool apply,
         bool json,
         CancellationToken cancellationToken)
@@ -1659,7 +1664,7 @@ public sealed class AgentService(
         }
 
         var met = new HoldersMet();
-        var outcome = await FoldLiveAsync(at, allowances, expected, intent, apply, json, met, cancellationToken).ConfigureAwait(false);
+        var outcome = await FoldLiveAsync(at, allowances, expected, intent, byRun, apply, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, FoldCommand, outcome) : outcome;
 
         // Asked for one document, what the live agent answered brings one, and what was returned above brings the same
@@ -1668,7 +1673,7 @@ public sealed class AgentService(
     }
 
     /// <summary>Folding a live agent, once it is found.</summary>
-    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, AgentPlanned? expected, Flow.FoldIntent? intent, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, AgentPlanned? expected, Flow.FoldIntent? intent, bool byRun, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var policy = TwoChangePolicy.Of(context, []);
@@ -1684,7 +1689,7 @@ public sealed class AgentService(
 
         if (!apply)
         {
-            var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, AnchorBatchMode.Plan, cancellationToken).ConfigureAwait(false);
+            var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, byRun, AnchorBatchMode.Plan, cancellationToken).ConfigureAwait(false);
 
             var (standing, typed) = Consents(measured, policy);
 
@@ -1695,6 +1700,12 @@ public sealed class AgentService(
 
             var (tail, line) = Ending(FoldCommand, record, allowances, measured.Rows.Batch, "write them");
 
+            // What a manual lane cannot prove is said where its records were judged: no stored stream holds its calls, so
+            // its searches and measurements are read as given, their command lines.
+            var judged = measured.Rows.ClosureJudged > 0
+                ? [$"  {ReportText.Counted(measured.Rows.ClosureJudged, "closing record")} judged as the run's class-closure check judges: their searches and measurements are read as given, their command lines, for no stored stream holds them"]
+                : Array.Empty<string>();
+
             return Dry(
                 json,
                 context.Layout,
@@ -1702,7 +1713,7 @@ public sealed class AgentService(
                 CommandOutcome.Ok(
                     $"dry run: folding {Lower(Agent(record))} writes {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
                     + $"{Merging(measured.Plan, "merges")}{Handing(measured.Plan, "hands")}removes {measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
-                    [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. line]),
+                    [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. judged, .. line]),
                 standing,
                 typed,
                 heldTrees);
@@ -1721,7 +1732,7 @@ public sealed class AgentService(
             // The tree's lock before the measure: what is written is what was weighed, never a file a side-task's write or
             // command was part way through between the two.
             using var tree = await TreeAsync(context.Layout.MainCheckoutRoot, met, cancellationToken).ConfigureAwait(false);
-            var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, AnchorBatchMode.Check, cancellationToken).ConfigureAwait(false);
+            var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, byRun, AnchorBatchMode.Check, cancellationToken).ConfigureAwait(false);
 
             // What it set out to write rides its answer, as measured under the hold.
             met.Planned = PlannedOf(measured, policy);
@@ -1763,11 +1774,12 @@ public sealed class AgentService(
         bool discardUncommitted,
         CancellationToken cancellationToken = default,
         bool json = false)
-        => DeleteHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, intent: null, apply, discardUncommitted, json, cancellationToken);
+        => DeleteHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, intent: null, byRun: false, apply, discardUncommitted, json, cancellationToken);
 
     /// <summary>
     /// Deleting an agent, the <c>--apply</c> of its fold held to what its dry run named where <paramref name="expected"/> is
-    /// given, and that fold's write recorded under its hold in the run's ledger of its folds where <paramref name="intent"/> is.
+    /// given, and that fold's write recorded under its hold in the run's ledger of its folds where <paramref name="intent"/> is;
+    /// held to no <c>closure.json</c> where a run asks it (<paramref name="byRun"/>, <see cref="DeleteAgentRequest.ByRun"/>).
     /// </summary>
     private async Task<CommandOutcome> DeleteHeldAsync(
         string startDirectory,
@@ -1776,6 +1788,7 @@ public sealed class AgentService(
         FoldAllowances allowances,
         AgentPlanned? expected,
         Flow.FoldIntent? intent,
+        bool byRun,
         bool apply,
         bool discardUncommitted,
         bool json,
@@ -1803,7 +1816,7 @@ public sealed class AgentService(
         }
 
         var met = new HoldersMet();
-        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, expected, intent, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
+        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, expected, intent, byRun, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(found.Layout!, agent, DeleteCommand, outcome) : outcome;
 
         // Asked for one document, what the agent found answered brings one, and what was returned above brings the same
@@ -1819,6 +1832,7 @@ public sealed class AgentService(
         FoldAllowances allowances,
         AgentPlanned? expected,
         Flow.FoldIntent? intent,
+        bool byRun,
         bool apply,
         bool discardUncommitted,
         bool json,
@@ -1858,7 +1872,7 @@ public sealed class AgentService(
 
         return record.State == AgentStates.Closed
             ? await FinishAsync(target, allowances, apply, json, met, cancellationToken).ConfigureAwait(false)
-            : await CloseAsync(target, allowances, expected, intent, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
+            : await CloseAsync(target, allowances, expected, intent, byRun, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1923,7 +1937,7 @@ public sealed class AgentService(
     /// Deleting a live agent: its fold and rows - or nothing, abandoning it - then its transcripts and evidence kept, its
     /// closing recorded, and its worktree's removal asked for.
     /// </summary>
-    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, AgentPlanned? expected, Flow.FoldIntent? intent, bool apply, bool discard, bool json, HoldersMet met, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, AgentPlanned? expected, Flow.FoldIntent? intent, bool byRun, bool apply, bool discard, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (target.Context, target.Layout, target.Record, target.Path);
         var policy = TwoChangePolicy.Of(context, []);
@@ -1961,7 +1975,7 @@ public sealed class AgentService(
 
         if (!apply)
         {
-            var dry = await MeasureClosingAsync(target, seed, allowances, discard, AnchorBatchMode.Plan, cancellationToken).ConfigureAwait(false);
+            var dry = await MeasureClosingAsync(target, seed, allowances, discard, byRun, AnchorBatchMode.Plan, cancellationToken).ConfigureAwait(false);
 
             if (dry.Refusal is { } refusal)
             {
@@ -2026,7 +2040,7 @@ public sealed class AgentService(
             // A deletion that folds weighs and writes its fold under the tree's lock, as a fold does, and holds it until it
             // has proved nothing is left to fold; one that discards writes nothing of the main tree, and takes none.
             using var tree = discard ? null : await TreeAsync(context.Layout.MainCheckoutRoot, met, cancellationToken).ConfigureAwait(false);
-            var measured = await MeasureClosingAsync(target, seed, allowances, discard, AnchorBatchMode.Check, cancellationToken).ConfigureAwait(false);
+            var measured = await MeasureClosingAsync(target, seed, allowances, discard, byRun, AnchorBatchMode.Check, cancellationToken).ConfigureAwait(false);
 
             // What its fold set out to write rides its answer, as measured under the hold.
             met.Planned = measured.Fold is { } measuredFold ? PlannedOf(measuredFold, policy) : null;
@@ -2460,7 +2474,7 @@ public sealed class AgentService(
         if (target.Standing.Kind != Standing.Gone || (await LeftAsync(target).ConfigureAwait(false)).Count > 0)
         {
             removal = await _worktrees
-                .DeleteAsync(target.Context.Layout.MainCheckoutRoot, target.Address.Name, force: false, deleteEvidence: false, discardUncommitted: true, CancellationToken.None)
+                .DeleteAsync(target.Context.Layout.MainCheckoutRoot, target.Address.Name, force: false, deleteEvidence: false, discardUncommitted: true, asItsAgent: true, CancellationToken.None)
                 .ConfigureAwait(false);
 
             lines.Add($"{WorktreeService.DeleteCommand} {target.Address.Name}: {removal.Outcome.Message}");
@@ -2581,6 +2595,7 @@ public sealed class AgentService(
         SeedRecord? seed,
         FoldAllowances allowances,
         bool discard,
+        bool byRun,
         AnchorBatchMode mode,
         CancellationToken cancellationToken)
     {
@@ -2597,7 +2612,7 @@ public sealed class AgentService(
             }
             else
             {
-                fold = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: true, mode, cancellationToken).ConfigureAwait(false);
+                fold = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: true, byRun, mode, cancellationToken).ConfigureAwait(false);
 
                 if (fold.Refusal is { } refusal)
                 {
@@ -2618,7 +2633,8 @@ public sealed class AgentService(
     /// <summary>
     /// An agent's fold and rows, measured and checked: nothing is written, and every refusal of either is collected.
     /// <paramref name="mode"/> is how far the rows are held to what applying them would refuse: a dry run shows a cell
-    /// that would lose stored text, and a run that goes on to write refuses it unless it was accepted.
+    /// that would lose stored text, and a run that goes on to write refuses it unless it was accepted. A run's fold
+    /// (<paramref name="byRun"/>) holds its rows to no <c>closure.json</c>.
     /// </summary>
     private async Task<Measured> MeasureAsync(
         HarnessContext context,
@@ -2628,6 +2644,7 @@ public sealed class AgentService(
         SeedRecord seed,
         FoldAllowances allowances,
         bool deleting,
+        bool byRun,
         AnchorBatchMode mode,
         CancellationToken cancellationToken)
     {
@@ -2680,7 +2697,7 @@ public sealed class AgentService(
             // The directories at the top of the tree its fold makes count as the tree's, before its files are written and
             // after, so a path a row cites into one of them is judged the same both times.
             var roots = plan.Written.Where(written => written.Contains('/', StringComparison.Ordinal)).Select(written => written[..written.IndexOf('/', StringComparison.Ordinal)]);
-            rows = await MeasureRowsAsync(main, layout, record, allowances, mode, [.. roots.Distinct(StringComparer.Ordinal)], cancellationToken).ConfigureAwait(false);
+            rows = await MeasureRowsAsync(main, context, layout, record, path, allowances, mode, byRun, [.. roots.Distinct(StringComparer.Ordinal)], cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -2743,10 +2760,13 @@ public sealed class AgentService(
     /// </remarks>
     private async Task<(AgentRowsPlan Plan, AnchorBatchRequest Request, IReadOnlyList<AnchorRowDeclaration> All)> MeasureRowsAsync(
         string main,
+        Repository.HarnessContext context,
         OrchestratorLayout layout,
         AgentRecord record,
+        string worktree,
         FoldAllowances allowances,
         AnchorBatchMode mode,
+        bool byRun,
         IReadOnlyList<string> roots,
         CancellationToken cancellationToken)
     {
@@ -2785,7 +2805,110 @@ public sealed class AgentService(
         var batch = await _anchors.ApplyAsync(main, request, mode, cancellationToken).ConfigureAwait(false);
         var untouched = batch.Rows.Where(outcome => outcome.Action == AnchorRowAction.Untouched).Select(outcome => outcome.Id).ToList();
 
-        return (new AgentRowsPlan(batch with { Problems = [.. unfiled, .. batch.Problems] }, untouched), request, declared);
+        // Where the configuration says a lane folded by hand closes its classes by record, every row whose status moves
+        // to closed is judged before the fold is weighed: its closure.json read against the record's own schema and its
+        // classes closed by the same rules the run's class-closure check reads - searched by data and measurements read
+        // as given, their command lines, for no stored stream holds a manual lane's calls. A run's own fold is no lane
+        // folded by hand: its builder answers its record in its answer, which the run's class-closure check judged.
+        var closure = byRun || context.Config.Anchors.Closure == Configuration.AnchorSettings.DefaultClosure
+            ? (Problems: new List<(string Problem, bool Judged)>(), Judged: 0)
+            : await ClosureProblemsAsync(context, worktree, declared, batch, cancellationToken).ConfigureAwait(false);
+
+        return (
+            new AgentRowsPlan(
+                batch with { Problems = [.. unfiled, .. batch.Problems, .. closure.Problems.Select(problem => problem.Problem)] },
+                untouched)
+            {
+                Closure = [.. closure.Problems.Select(problem => problem.Problem)],
+                ClosureJudged = closure.Judged,
+            },
+            request,
+            declared);
+    }
+
+    /// <summary>
+    /// Why the closing records of rows that close refuse the fold, and how many were judged: a row whose status moves to
+    /// closed holds none, or the record it holds does not close its classes - read against the schema the run's own
+    /// implement answer is held to, and judged by <see cref="ClassClosureRules"/> as a manual lane is judged, its searches
+    /// and measurements read as given, its arms against the registry the lane's worktree holds, where an arm its work adds
+    /// stands before the fold merges it in.
+    /// </summary>
+    private async Task<(List<(string Problem, bool Judged)> Problems, int Judged)> ClosureProblemsAsync(
+        Repository.HarnessContext context,
+        string worktree,
+        IReadOnlyList<AnchorRowDeclaration> declared,
+        AnchorBatch batch,
+        CancellationToken cancellationToken)
+    {
+        var problems = new List<(string Problem, bool Judged)>();
+        var judged = 0;
+        var byId = declared.ToDictionary(row => row.Id, AnchorIdMatch.Comparer);
+        var armsRead = false;
+        IReadOnlyList<(string Id, string Site)>? arms = null;
+
+        foreach (var outcome in batch.Rows)
+        {
+            if (outcome.Action == AnchorRowAction.Untouched
+                || outcome.Change is not { } change
+                || !Anchors.AnchorStatus.IsClosed(change.StatusAfter)
+                || (change.StatusBefore is { } before && Anchors.AnchorStatus.IsClosed(before)))
+            {
+                continue;
+            }
+
+            if (!byId.TryGetValue(outcome.Id, out var row) || row.Closure is not { Length: > 0 } record)
+            {
+                if (byId.TryGetValue(outcome.Id, out var filed))
+                {
+                    problems.Add((
+                        $"'{filed.Id}' closes, and this repository's lanes close their classes by record: its directory holds no "
+                        + $"{AgentRows.ClosureCell}. Write the record - the classes, their sites, their searches and their measurements - "
+                        + "or the row does not close",
+                        Judged: false));
+                }
+
+                continue;
+            }
+
+            System.Text.Json.Nodes.JsonNode? read;
+
+            try
+            {
+                read = System.Text.Json.Nodes.JsonNode.Parse(record);
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                problems.Add(($"'{row.Id}' holds a {AgentRows.ClosureCell} that does not read as JSON: {ex.Message.TrimEnd('.')}", true));
+                judged++;
+                continue;
+            }
+
+            judged++;
+
+            if (ClassClosureRules.RecordSchema() is { } schema)
+            {
+                foreach (var problem in Schemas.JsonSchemaSubset.Problems(schema, read))
+                {
+                    problems.Add(($"'{row.Id}': {problem}", true));
+                }
+            }
+
+            if (!armsRead)
+            {
+                arms = await _listings.DeclaredArmsAsync(await _contextLoader.LoadAsync(worktree, cancellationToken).ConfigureAwait(false), FoldCommand, cancellationToken).ConfigureAwait(false);
+                armsRead = true;
+            }
+
+            List<ClassClosureRecord> entries = [.. (read as System.Text.Json.Nodes.JsonArray ?? []).Select(ClassClosureRecord.In).OfType<ClassClosureRecord>()];
+            var verdict = ClassClosureRules.Judge([], entries, ClassClosureProof.Manual(arms, _platform.PathComparison));
+
+            foreach (var problem in verdict.Problems)
+            {
+                problems.Add(($"'{row.Id}': {problem}", true));
+            }
+        }
+
+        return (problems, judged);
     }
 
     /// <summary>That the options <paramref name="allowances"/> gives let a fold through what it otherwise refuses, for a refusal of them.</summary>
@@ -2874,6 +2997,10 @@ public sealed class AgentService(
 
         var needs = NeedsOf(rowNeeds, measured.Plan?.Mergeable ?? []);
 
+        // Where a closing record refused the fold, the refusal is typed as its own kind: no consent lifts it - the record
+        // is written or the row does not close - so it is never weighed as a consent it sounds like.
+        var closureRefused = measured.Rows.Closure.Count > 0;
+
         if (measured.Refusal is { } refused)
         {
             var standing = DryRuns.StandingOf(refused);
@@ -2888,7 +3015,13 @@ public sealed class AgentService(
                 return (standing, new Typed(needs, [RefusalKind.Other], planned));
             }
 
-            var weighed = Weighed(plan.Refusals.Count, plan.Mergeable, plan.Conflicting, rowNeeds, batch.Problems.Count > batch.UnnamedNew.Count);
+            var weighed = Weighed(
+                plan.Refusals.Count,
+                plan.Mergeable,
+                plan.Conflicting,
+                rowNeeds,
+                batch.Problems.Count > batch.UnnamedNew.Count + measured.Rows.Closure.Count,
+                closureRefused);
 
             return (weighed.Standing, new Typed(weighed.Needs, weighed.Reasons, planned));
         }
@@ -2900,36 +3033,40 @@ public sealed class AgentService(
     /// How a refused plan of the fold family stands - a fold's, a deletion's fold's, a refresh's or a move of an agent's base -
     /// the one rule all four are weighed by: needing consent where every refusal is a clean merge nobody asked for and its
     /// rows lack only consents too, and refused otherwise - for a conflict where a path both changed has a merge that
-    /// conflicts, and for something else where any refusal is neither that nor a clean merge, or a row is refused for more
-    /// than a consent. A clean merge nobody asked for is a consent the request lacks, whatever else refuses it.
+    /// conflicts, for a closing record where a row that closes holds none that closes its classes, and for something else
+    /// where any refusal is neither those nor a clean merge, or a row is refused for more than a consent. A clean merge
+    /// nobody asked for is a consent the request lacks, whatever else refuses it.
     /// </summary>
     /// <param name="refusals">How many paths its plan refuses, clean merges and conflicts among them.</param>
     /// <param name="mergeable">The paths both changed whose merge is clean and that nobody named to be merged.</param>
     /// <param name="conflicting">The paths both changed whose merge conflicts.</param>
     /// <param name="rowNeeds">The consents its rows lack; none for a refresh and a move of an agent's base.</param>
-    /// <param name="rowsOtherwiseRefused">Whether a row is refused for more than a consent it lacks.</param>
+    /// <param name="rowsOtherwiseRefused">Whether a row is refused for more than a consent it lacks, a closing record apart.</param>
+    /// <param name="closureRefused">Whether a closing record refused it: a row that closes, holding none that closes its classes.</param>
     private static (RequestStanding Standing, IReadOnlyList<ConsentKind> Needs, IReadOnlyList<RefusalKind> Reasons) Weighed(
         int refusals,
         IReadOnlyList<string> mergeable,
         IReadOnlyList<string> conflicting,
         IReadOnlyList<ConsentKind> rowNeeds,
-        bool rowsOtherwiseRefused)
+        bool rowsOtherwiseRefused,
+        bool closureRefused = false)
     {
         var needs = NeedsOf(rowNeeds, mergeable);
 
         // Refused with nothing it lacks would read as a consent nobody can give: what refused it is something else.
-        if (refusals == mergeable.Count && !rowsOtherwiseRefused && needs.Count > 0)
+        if (refusals == mergeable.Count && !rowsOtherwiseRefused && !closureRefused && needs.Count > 0)
         {
             return (RequestStanding.NeedsConsent, needs, []);
         }
 
-        var otherwise = refusals > conflicting.Count + mergeable.Count || rowsOtherwiseRefused;
+        var otherwise = refusals > conflicting.Count + mergeable.Count || rowsOtherwiseRefused || closureRefused;
 
         return (
             RequestStanding.Refused,
             needs,
             [
                 .. conflicting.Count > 0 ? [RefusalKind.Conflict] : Array.Empty<RefusalKind>(),
+                .. closureRefused ? [RefusalKind.Closure] : Array.Empty<RefusalKind>(),
                 .. otherwise ? [RefusalKind.Other] : Array.Empty<RefusalKind>(),
             ]);
     }
@@ -4073,7 +4210,7 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<AgentVerbFacts>.From(
-            await FoldHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Intent, request.Apply, request.Json, cancellationToken).ConfigureAwait(false));
+            await FoldHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Intent, request.ByRun, request.Apply, request.Json, cancellationToken).ConfigureAwait(false));
     }
 
     /// <inheritdoc cref="IAgentService.DeleteAsync(DeleteAgentRequest, CancellationToken)"/>
@@ -4082,7 +4219,7 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<AgentVerbFacts>.From(
-            await DeleteHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Intent, request.Apply, request.DiscardUncommitted, request.Json, cancellationToken).ConfigureAwait(false));
+            await DeleteHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Intent, request.ByRun, request.Apply, request.DiscardUncommitted, request.Json, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>What deleting a live agent measured before writing anything, and why it cannot go on where it cannot.</summary>

@@ -45,6 +45,14 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// </summary>
     public const int MostHeldLines = 200;
 
+    /// <summary>
+    /// How many times a leg's command is started once more on its host where the DssHarness there failed as a defect
+    /// before anything ran (<see cref="HostAnswer.FailedBeforeAnythingRan"/>): safe, since nothing ran, and enough for a
+    /// tool or a runtime replaced there while it started - a consumer's leg met a DssHarness in a WSL distribution that
+    /// could not load one of the runtime's own assemblies, once, and the next run was fine. Never once anything ran there.
+    /// </summary>
+    public const int MostRestarts = 1;
+
     private static readonly JsonSerializerOptions LedgerOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -74,14 +82,25 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// Told each set-up the leg left running on the host where it ended there with no line to carry it, so this run
     /// says it as the host's did; <see langword="null"/> where nothing is told.
     /// </param>
+    /// <param name="earlier">
+    /// What each earlier start of the leg's work there that failed before anything ran said - its check's before this
+    /// machine took its slot (<see cref="CheckAsync"/>) - said before this command's own; <see langword="null"/> where none did.
+    /// </param>
     /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
+    /// <returns>
+    /// The leg's line from the host's ledger; or, where the host's DssHarness failed as a defect with no line for the leg,
+    /// a <c>poisoned</c> line naming the host, the code and what it said. A DssHarness there that failed so before
+    /// anything ran is started once more first (<see cref="MostRestarts"/>), and the line says what each such start said
+    /// (<see cref="LegEntry.Retried"/>), <paramref name="earlier"/>'s first, whatever the leg then reached.
+    /// </returns>
     /// <exception cref="HarnessException">
     /// The host could not be reached - its transport would not start - or never reported how the
-    /// command finished, or reported a ledger this build cannot read. None is a verdict about the
-    /// code, so none is reported as one. Or the command refused the whole run there with no line for
-    /// the leg, which is raised as that refusal, with what the host said; one that came with the
-    /// leg's line is carried on it (<see cref="LegEntry.EndsTheRun"/>), and ends the run once the
-    /// line is recorded.
+    /// command finished, or reported a ledger this build cannot read, or ended its command with no line
+    /// for the leg and a code that is neither a refusal of the run nor a defect of its own. None is a
+    /// verdict about the code, so none is reported as one. Or the command refused the whole run there
+    /// with no line for the leg, which is raised as that refusal, with what the host said; one that
+    /// came with the leg's line is carried on it (<see cref="LegEntry.EndsTheRun"/>), and ends the run
+    /// once the line is recorded. Each says what every start that failed before anything ran said, as the line would.
     /// </exception>
     public async Task<LegEntry> RunAsync(
         string commandName,
@@ -90,35 +109,238 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         RunId? run = null,
         Action<string, string>? onNote = null,
         Action<IReadOnlyList<SetUps.SetUpFact>>? setUpsLeftRunning = null,
+        HostRestarts? earlier = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
         ArgumentNullException.ThrowIfNull(leg);
         ArgumentNullException.ThrowIfNull(arguments);
 
-        var session = leg.Host.Session ?? throw new HarnessException(
+        var session = SessionOf(leg);
+        var (entry, restarts) = await StartedOnceMoreAsync(
+                commandName,
+                leg,
+                session,
+                [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. Verbosity, .. arguments],
+                run,
+                onNote,
+                writesLedger: true,
+                again: "starting the leg there once more",
+                earlier ?? HostRestarts.None,
+                answer => Read(answer, leg, session.Connection, commandName, setUpsLeftRunning),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return restarts.On(entry);
+    }
+
+    /// <summary>
+    /// Asks the host of <paramref name="leg"/> to check there, in the copy sync put there and by the host's own values,
+    /// what only it can before this machine admits the leg - <paramref name="commandName"/> as it would run the leg, given
+    /// <paramref name="arguments"/> that have it check and run nothing - and answers whether it refused nothing.
+    /// </summary>
+    /// <param name="commandName">The command to check there, which is the one running here.</param>
+    /// <param name="leg">The placed leg, whose work another machine's process runs.</param>
+    /// <param name="arguments">The command's own options, then those that have it check and run nothing.</param>
+    /// <param name="cancellationToken">Stops the check on the host as well as here.</param>
+    /// <returns>
+    /// What each start of the check that failed as a defect before anything ran said (<see cref="HostCheck.Restarts"/>),
+    /// which the leg's line says whatever the leg then reaches; and, where the host's DssHarness failed so again, started
+    /// once more as a run of the leg is (<see cref="MostRestarts"/>), the leg's <c>poisoned</c> line, naming the host, the
+    /// code and what each start said, as the leg's run there would have ended - none where the host refused nothing.
+    /// </returns>
+    /// <exception cref="HarnessException">
+    /// The host refused - raised as the refusal of the leg's run there would have been, with the host's code and words, so
+    /// the run ends as it would have once the leg ran - or it could not be reached, never said how the check finished, or
+    /// ended it some other way, none of which is a verdict about the code. Each says what every start that failed before
+    /// anything ran said.
+    /// </exception>
+    public async Task<HostCheck> CheckAsync(
+        string commandName,
+        PlacedLeg leg,
+        IReadOnlyList<HostArgument> arguments,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
+        ArgumentNullException.ThrowIfNull(leg);
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        var session = SessionOf(leg);
+
+        // Answered by its exit code and, where it refused, its failure line: it keeps no run and writes no ledger, so what
+        // it writes to standard output is never read as one. It runs nothing, so a start that failed is always one before
+        // anything ran there, started once more as a run of the leg would be. Told what the leg's run there would be told
+        // beside its command line - its distributions among it, which its run lines may name - so it refuses what that run
+        // would, and nothing it would not.
+        var (poisoned, restarts) = await StartedOnceMoreAsync(
+                commandName,
+                leg,
+                session,
+                [commandName, "--legs", leg.Name, HereOption, leg.Host.Host.ToString(), .. Verbosity, .. arguments],
+                run: null,
+                onNote: null,
+                writesLedger: false,
+                again: "asking it to check the leg once more",
+                HostRestarts.None,
+                answer => Checked(answer, leg, session.Connection, commandName),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new HostCheck(poisoned is null ? null : restarts.On(poisoned), restarts);
+    }
+
+    /// <summary>
+    /// What one start of a host's check of <paramref name="leg"/> came to: nothing where it refused nothing, and the leg's
+    /// <c>poisoned</c> line where the host's DssHarness failed as a defect.
+    /// </summary>
+    /// <exception cref="HarnessException">The host refused the run, or ended the check some other way.</exception>
+    private static LegEntry? Checked(HostAnswer answer, PlacedLeg leg, HostConnection connection, string commandName)
+    {
+        if (answer.Finished == HarnessExit.Success)
+        {
+            return null;
+        }
+
+        if (answer.Finished == HarnessExit.InternalError)
+        {
+            return Read(answer, leg, connection, commandName);
+        }
+
+        throw HarnessExit.RefusesTheRun(answer.Finished)
+            ? Refusal(leg, commandName, answer.Finished, answer.Failure)
+            : new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{leg.Host.Host} checked '{commandName}' for leg '{leg.Name}' and exited {answer.Finished}, "
+                + (answer.Failure is null ? "so nothing there said what happened." : $"saying: {answer.Failure}"));
+    }
+
+    /// <summary>
+    /// The leg's own command verbose where this one is: what -v shows - each step's output - is that command's to write,
+    /// and the agent's own --verbose reaches the agent alone, so a leg on a host printed its verdict and nothing else while
+    /// a leg here streamed its steps. Written to the host's standard error under --json, it is relayed from there like
+    /// every line of it.
+    /// </summary>
+    private IReadOnlyList<HostArgument> Verbosity => _output.IsVerbose ? [HostAgentProtocol.VerboseOption] : [];
+
+    /// <summary>The session the survey opened to <paramref name="leg"/>'s host.</summary>
+    /// <exception cref="HarnessException">The host was not reached, so nothing of the leg can be asked of it.</exception>
+    private static HostSession SessionOf(PlacedLeg leg)
+        => leg.Host.Session ?? throw new HarnessException(
             HarnessExit.HostUnavailable,
             $"{leg.Host.Host} was not reached, so leg '{leg.Name}' cannot run there: "
             + $"{leg.Host.Reason ?? "no reason was recorded"}.");
 
-        var nonce = HostAgentProtocol.NewNonce();
+    /// <summary>
+    /// Has the host of <paramref name="leg"/> run <paramref name="commandLine"/> (<see cref="AskAsync"/>), starts it once
+    /// more where the host's own DssHarness failed before anything ran there (<see cref="MostRestarts"/>), saying so with
+    /// <paramref name="again"/>, and reads the last start's answer by <paramref name="read"/>: the one start a leg's run
+    /// and its check share, and the one place what each start that failed so said reaches whatever the leg came to.
+    /// </summary>
+    /// <param name="commandName">The command started there, which is the one running here.</param>
+    /// <param name="leg">The placed leg.</param>
+    /// <param name="session">The session to its host.</param>
+    /// <param name="commandLine">The command line, as typed after <c>DssHarness</c>.</param>
+    /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="onNote">Told each whole note the command writes while it runs; <see langword="null"/> where this reads none.</param>
+    /// <param name="writesLedger">Whether the command was asked for its ledger (<c>--json</c>), which its standard output then is.</param>
+    /// <param name="again">What the warning before a start once more says is done.</param>
+    /// <param name="earlier">What each earlier start of the leg's work there that failed so said, before these starts.</param>
+    /// <param name="read">What the last start's answer comes to; what it raises says what each start that failed so said.</param>
+    /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
+    /// <returns>What <paramref name="read"/> made of the answer, and what each start that failed so said, in order.</returns>
+    /// <exception cref="HarnessException">
+    /// As <see cref="AskAsync"/>, or as <paramref name="read"/> raises; saying what each start that failed so said, earlier
+    /// ones first, wherever one did.
+    /// </exception>
+    private async Task<(T Read, HostRestarts Restarts)> StartedOnceMoreAsync<T>(
+        string commandName,
+        PlacedLeg leg,
+        HostSession session,
+        IReadOnlyList<HostArgument> commandLine,
+        RunId? run,
+        Action<string, string>? onNote,
+        bool writesLedger,
+        string again,
+        HostRestarts earlier,
+        Func<HostAnswer, T> read,
+        CancellationToken cancellationToken)
+    {
+        // What each start that failed before anything ran said, in order: said on whatever the leg then reaches - its line,
+        // or what ended it with none.
+        var restarts = earlier;
 
-        // The leg's own command verbose where this one is: what -v shows - each step's output - is that command's to
-        // write, and the agent's own --verbose below reaches the agent alone, so a leg on a host printed its verdict and
-        // nothing else while a leg here streamed its steps. Written to the host's standard error under --json, it is
-        // relayed from there like every line of it.
-        string[] verbosity = _output.IsVerbose ? [HostAgentProtocol.VerboseOption] : [];
+        try
+        {
+            var answer = await AskAsync(commandName, leg, session, commandLine, run, onNote, writesLedger, cancellationToken).ConfigureAwait(false);
+
+            // Started once more only where the host's own DssHarness failed before anything ran there, which is safe to
+            // repeat: a tool or a runtime replaced on the host while it started fails that way once. Never once anything
+            // ran there, whatever then failed: a second start would run it twice. Counted for this command alone: a check
+            // that failed so before it leaves the leg's run its own start once more.
+            for (var restarted = 0; answer.FailedBeforeAnythingRan && restarted < MostRestarts; restarted++)
+            {
+                var said = answer.SaidAsItStarted(leg);
+
+                restarts = restarts.Then(said);
+                _output.Warn(commandName, $"{leg.Name}: {said}; {again}");
+
+                answer = await AskAsync(commandName, leg, session, commandLine, run, onNote, writesLedger, cancellationToken).ConfigureAwait(false);
+            }
+
+            return (read(answer), restarts);
+        }
+        catch (HarnessException ex) when (restarts.Any)
+        {
+            throw restarts.On(ex);
+        }
+    }
+
+    /// <summary>
+    /// Starts <paramref name="commandLine"/> for one leg on its host once, in its copy of the leg's tree, relaying what it
+    /// prints, and answers how it finished, what it said as it failed and what of its own it said on the way.
+    /// </summary>
+    /// <param name="commandName">The command started there, which is the one running here.</param>
+    /// <param name="leg">The placed leg.</param>
+    /// <param name="session">The session to its host.</param>
+    /// <param name="commandLine">The command line, as typed after <c>DssHarness</c>.</param>
+    /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="onNote">Told each whole note the command writes while it runs; <see langword="null"/> where this reads none.</param>
+    /// <param name="writesLedger">Whether the command was asked for its ledger (<c>--json</c>), which its standard output then is.</param>
+    /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
+    /// <exception cref="HarnessException">
+    /// The host never reported how the command finished, or reported a ledger this build cannot read.
+    /// </exception>
+    private async Task<HostAnswer> AskAsync(
+        string commandName,
+        PlacedLeg leg,
+        HostSession session,
+        IReadOnlyList<HostArgument> commandLine,
+        RunId? run,
+        Action<string, string>? onNote,
+        bool writesLedger,
+        CancellationToken cancellationToken)
+    {
+        var nonce = HostAgentProtocol.NewNonce();
 
         var request = new HostAgentRequest
         {
             Kind = HostAgentRequestKind.Run,
             Directory = leg.HostTreeRoot,
-            Arguments = [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. verbosity, .. arguments],
+            Arguments = [.. commandLine],
             Nonce = nonce,
             RunId = run?.Value,
 
             // The drive a WSL distribution's disk grows on, which the leg's build fills, and which only this machine sees.
             DiskImageDrive = leg.Host.Host.Kind == HostKind.Wsl ? leg.Host.DiskImageSpace?.Filesystem : null,
+
+            // What this machine's settings file declared of its admission as the leg's work began, which holds a WSL leg's
+            // build to its floor: the one reading its slot was admitted by, and the distribution's own file another machine's.
+            MachineAdmission = leg.Host.Host.Kind == HostKind.Wsl ? leg.AdmittedBy?.SettingsFile : null,
+
+            // The distribution each WSL item read here names, which the leg's run lines may name there, where no item is.
+            Distributions = leg.Distributions
+                .Where(told => told.Value is { Length: > 0 })
+                .ToDictionary(told => told.Key, told => told.Value!, StringComparer.OrdinalIgnoreCase),
         };
 
         var ledger = new System.Text.StringBuilder();
@@ -247,7 +469,12 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 $"{leg.Host.Host}: {HostProbes.NeverFinished($"'{commandName}' for leg '{leg.Name}'", result, session.Connection)}");
         }
 
-        return Read(ledger.ToString(), leg, session.Connection, commandName, finished, failure.Count == 0 ? null : string.Join(Environment.NewLine, failure), setUpsLeftRunning);
+        return new HostAnswer(
+            writesLedger ? Parse(ledger.ToString(), leg, commandName) : null,
+            finished,
+            failure.Count == 0 ? null : string.Join(Environment.NewLine, failure),
+            hostRun,
+            lines.Noted);
     }
 
     /// <summary>Shows each line <paramref name="held"/> holds, in order, and holds none after.</summary>
@@ -261,7 +488,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         held.Clear();
     }
 
-    /// <summary>Reads the one leg's entry out of the ledger the host wrote.</summary>
+    /// <summary>The ledger the host wrote, or <see langword="null"/> where it wrote none.</summary>
     /// <remarks>
     /// The whole of standard output is the document. The host was asked with <c>--json</c>, which
     /// sends its progress to standard error precisely so that nothing shares this channel: hunting
@@ -271,43 +498,49 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// </remarks>
     /// <param name="output">Everything the host wrote to standard output.</param>
     /// <param name="leg">The leg asked for.</param>
-    /// <param name="connection">The connection the host answered over.</param>
     /// <param name="commandName">The command the host ran.</param>
-    /// <param name="exitCode">How that command finished.</param>
-    /// <param name="failure">What its failure line said, and every line after it, when it wrote one.</param>
-    /// <param name="setUpsLeftRunning">Told each set-up the leg left running there where it ended with no line.</param>
-    /// <exception cref="HarnessException">
-    /// The host wrote no entry for the leg. A refusal of the whole run there is raised as that same
-    /// refusal; anything else as a host that said nothing about the leg. A refusal that came with an
-    /// entry is no exception here: the entry carries it.
-    /// </exception>
-    private static LegEntry Read(
-        string output,
-        PlacedLeg leg,
-        HostConnection connection,
-        string commandName,
-        int exitCode,
-        string? failure,
-        Action<IReadOnlyList<SetUps.SetUpFact>>? setUpsLeftRunning = null)
+    /// <exception cref="HarnessException">The host wrote a ledger this build cannot read.</exception>
+    private static RemoteLedger? Parse(string output, PlacedLeg leg, string commandName)
     {
         var document = output.Trim();
 
-        RemoteLedger? ledger = null;
-
-        if (document.Length > 0)
+        if (document.Length == 0)
         {
-            try
-            {
-                ledger = JsonSerializer.Deserialize<RemoteLedger>(document, LedgerOptions);
-            }
-            catch (JsonException ex)
-            {
-                throw new HarnessException(
-                    HarnessExit.HostUnavailable,
-                    $"{leg.Host.Host} answered '{commandName}' with a ledger this build cannot read: {ex.Message}");
-            }
+            return null;
         }
 
+        try
+        {
+            return JsonSerializer.Deserialize<RemoteLedger>(document, LedgerOptions);
+        }
+        catch (JsonException ex)
+        {
+            throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{leg.Host.Host} answered '{commandName}' with a ledger this build cannot read: {ex.Message}");
+        }
+    }
+
+    /// <summary>Reads the one leg's entry out of what the host answered.</summary>
+    /// <param name="answer">How the host's command finished, and what it wrote.</param>
+    /// <param name="leg">The leg asked for.</param>
+    /// <param name="connection">The connection the host answered over.</param>
+    /// <param name="commandName">The command the host ran.</param>
+    /// <param name="setUpsLeftRunning">Told each set-up the leg left running there where it ended with no line.</param>
+    /// <exception cref="HarnessException">
+    /// The host wrote no entry for the leg. A refusal of the whole run there is raised as that same
+    /// refusal; anything else but a defect of the host's own DssHarness as a host that said nothing about
+    /// the leg. A refusal that came with an entry is no exception here: the entry carries it, and so is a
+    /// defect, which is the leg's <c>poisoned</c> line.
+    /// </exception>
+    private static LegEntry Read(
+        HostAnswer answer,
+        PlacedLeg leg,
+        HostConnection connection,
+        string commandName,
+        Action<IReadOnlyList<SetUps.SetUpFact>>? setUpsLeftRunning = null)
+    {
+        var (ledger, exitCode, failure) = (answer.Ledger, answer.Finished, answer.Failure);
         var entry = ledger?.Legs?.FirstOrDefault();
 
         // A set-up the leg left running there, where it ended with no line to carry it: it runs on after both runs, so
@@ -327,6 +560,24 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             if (HarnessExit.RefusesTheRun(exitCode))
             {
                 throw Refusal(leg, commandName, exitCode, failure);
+            }
+
+            // A defect of the host's own DssHarness is the harness failing, which is what poisoned means: read as a host
+            // that could not be reached, it was a skip, and a gate that accepts an incomplete run passed a leg whose tool
+            // broke there. Named with the host, the code and what it said, and with whether anything had run by then.
+            if (exitCode == HarnessExit.InternalError)
+            {
+                return new LegEntry
+                {
+                    Leg = leg.Name,
+                    Verdict = LegVerdict.Poisoned,
+                    Detail = answer.FailedBeforeAnythingRan
+                        ? $"{leg.Host.Host} ran '{commandName}' for leg '{leg.Name}', and its DssHarness failed as it started, "
+                            + $"before anything ran there: it exited {exitCode}, {Saying(failure)}"
+                        : $"{leg.Host.Host} ran '{commandName}' for leg '{leg.Name}', and its DssHarness failed once its work "
+                            + $"there had begun: it exited {exitCode} without a ledger entry for it, {Saying(failure)}",
+                    Emulated = leg.Emulated,
+                };
             }
 
             // The exit code is named because it may be the only thing the host did say. A copy with
@@ -467,6 +718,36 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         => new(
             exitCode,
             $"{leg.Host.Host} refused '{commandName}' for leg '{leg.Name}': " + (failure ?? $"it exited {exitCode} and said nothing more"));
+
+    /// <summary>What a host's command said as it failed, closing a sentence: <c>saying: ...</c>, or that it said nothing more.</summary>
+    private static string Saying(string? failure) => failure is null ? "and said nothing more" : $"saying: {failure}";
+
+    /// <summary>How one start of a leg's command on its host finished, and what it wrote and said on the way.</summary>
+    /// <param name="Ledger">The ledger it wrote, or <see langword="null"/> where it wrote none.</param>
+    /// <param name="Finished">The code it ended with, as the agent's completion line carried it.</param>
+    /// <param name="Failure">What its failure line said, and every line after it, where it wrote one.</param>
+    /// <param name="HostRun">The run its command named as it began, where it named one.</param>
+    /// <param name="Noted">Whether it wrote any note of its work.</param>
+    private sealed record HostAnswer(RemoteLedger? Ledger, int Finished, string? Failure, RunId? HostRun, bool Noted)
+    {
+        /// <summary>
+        /// Whether the host's DssHarness failed as a defect before anything ran there: its command ended with
+        /// <see cref="HarnessExit.InternalError"/> having said nothing of its own work - no run named, no note written,
+        /// and no ledger, or one with no line for any leg, no run, no directory of records and no set-up left running.
+        /// What this machine reads of a host is all it can go by: a command that keeps runs names its run before anything
+        /// of it can start, a leg whose work began there ends with its line, and a sweep's notes are written as its work goes.
+        /// </summary>
+        public bool FailedBeforeAnythingRan
+            => Finished == HarnessExit.InternalError
+                && HostRun is null
+                && !Noted
+                && Ledger is null or { Legs: null or { Count: 0 }, RunId: null, RunDirectory: null, SetUpsLeftRunning: null or { Count: 0 } };
+
+        /// <summary>What a start that failed before anything ran said, as the leg's line and the warning before the next start say it.</summary>
+        /// <param name="leg">The leg it was started for.</param>
+        public string SaidAsItStarted(PlacedLeg leg)
+            => $"{leg.Host.Host}'s DssHarness exited {Finished} as it started, before anything ran there, {Saying(Failure)}";
+    }
 
     /// <summary>The shape a host's ledger arrives in, read back by name rather than by position.</summary>
     /// <param name="Legs">Each leg's line.</param>

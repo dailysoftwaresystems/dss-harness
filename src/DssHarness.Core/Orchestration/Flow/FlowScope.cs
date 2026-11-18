@@ -62,7 +62,7 @@ public static class FlowScope
     /// <summary>
     /// Whether <paramref name="name"/> is spelt as a declared input's, param's or output's name is: as a step's, with
     /// capitals allowed within - a run's inputs are a person's words, and the shipped workflow declares
-    /// <c>affectedTests</c> (the user's own, 2026-10-20). A dot still separates the segments of a read, so a name
+    /// <c>finalTests</c>, its words the user's own. A dot still separates the segments of a read, so a name
     /// holds none.
     /// </summary>
     /// <param name="name">The name, as written.</param>

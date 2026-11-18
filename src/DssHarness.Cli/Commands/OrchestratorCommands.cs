@@ -71,8 +71,7 @@ internal static class FoldOptions
     internal static Option<string[]> AcceptOver { get; } = new(AnchorBatchRequest.AcceptOverOption)
     {
         HelpName = AcceptLost.HelpName,
-        Description = $"A cell of a row an earlier fold of the agent applied - {string.Join(", ", AnchorCellNames.All)} - that the registries and the agent both changed since, "
-            + "each otherwise: the fold may write the agent's over the registries'. Read the three texts in the dry run first. Once for each cell.",
+        Description = $"A cell of a row an earlier fold of the agent applied - {string.Join(", ", AnchorCellNames.All)} - that the registries and the agent both changed since, each otherwise - or, where its trigger carries the row's verdict, its status or trigger where the registries changed one of the two and the agent the other, so that the row would state two verdicts: the fold may write the agent's over the registries'. Read the three texts in the dry run first. Once for each cell.",
     };
 
     /// <summary>Adds the options to <paramref name="command"/>, in the order its help lists them.</summary>

@@ -28,6 +28,21 @@ public sealed record BuildRequest(
     string RunDirectory,
     bool Time = false)
 {
+    /// <summary>The directory given to <see cref="BuildDirectory"/>, or <see langword="null"/> for the variant's own.</summary>
+    private readonly string? _buildDirectory;
+
+    /// <summary>
+    /// The directory the build is made in: the variant's own below the tree (<see cref="VariantKey.DirectoryUnder"/>), unless
+    /// whoever asks gives another - a mutation worker builds in one named by its variant's key
+    /// (<see cref="Mutations.WorkerFamily.BuildDirectoryOf"/>), where the build's record says which variant built there.
+    /// Read after <see cref="TreeRoot"/>, so a request made for one tree and given another builds in the other's.
+    /// </summary>
+    public string BuildDirectory
+    {
+        get => _buildDirectory ?? Variant.DirectoryUnder(TreeRoot);
+        init => _buildDirectory = value;
+    }
+
     /// <inheritdoc cref="Hosts.HostReport.ProgramDirectories"/>
     public ProgramDirectories ProgramDirectories { get; init; } = ProgramDirectories.None;
 
@@ -207,7 +222,7 @@ public sealed class BuildService(
         // before anything ran, and a copy's can give its tool no way the tree's gave it.
         KeepGoing.RequireFor(config, request, adapter);
 
-        var buildDirectory = request.Variant.DirectoryUnder(request.TreeRoot);
+        var buildDirectory = request.BuildDirectory;
         var overlay = request.Variant.Overlay(config, request.Project);
 
         // Made once, and read by everything that asks which compiler this build uses: the guard, every
@@ -216,31 +231,45 @@ public sealed class BuildService(
         // had configured with another be reused, the leg passing on a compiler nobody chose.
         var environment = BuildAdapters.EnvironmentFor(overlay, request);
 
+        // A directory another variant last built in is that variant's, whatever else it holds: a mutation worker builds in
+        // one named by its variant's key, which two variants' names can come to alike. Started from clean, and asked before
+        // the guard, which would otherwise refuse it for the compiler or the build type the other variant chose - or keep
+        // it, and judge this variant on the other's objects.
+        var another = AnotherVariant(request, buildDirectory);
+
         // Before configuring, not after: a directory configured from another worktree watches that
         // tree's sources, which produced both a false refusal and a silent wrong answer. Compared
         // against the directory the build is actually configured from, which is the project's own
         // path below the tree root and not the tree root itself.
-        _buildDirectoryGuard.Check(
-            buildDirectory,
-            Path.Combine(request.TreeRoot, request.Project.Path),
-            CompilerValue.For(CompilerValue.C, overlay.CacheVars, environment),
-            CompilerValue.For(CompilerValue.Cxx, overlay.CacheVars, environment),
-            adapter.BuildTypeOf(config, request.Variant.Config),
-            PathSearch.For(environment, request.ProgramDirectories));
+        if (another is null)
+        {
+            _buildDirectoryGuard.Check(
+                buildDirectory,
+                Path.Combine(request.TreeRoot, request.Project.Path),
+                CompilerValue.For(CompilerValue.C, overlay.CacheVars, environment),
+                CompilerValue.For(CompilerValue.Cxx, overlay.CacheVars, environment),
+                adapter.BuildTypeOf(config, request.Variant.Config),
+                PathSearch.For(environment, request.ProgramDirectories));
+        }
 
         // Listed once, for the decision below and for the guards after it: the tracked files that can
         // affect this build, or why they could not be listed.
         var (watched, unmeasurable) = await TrackedInputsAsync(request, cancellationToken).ConfigureAwait(false);
 
-        // A compiler changed since CMake identified it comes first: no record of the tree can answer
-        // for it, since CMake never identifies a cached compiler again.
-        var replaced = adapter is CMakeAdapter
-            ? await CompilerReplacedAsync(request, buildDirectory, environment, cancellationToken).ConfigureAwait(false)
-            : null;
+        // Another variant's directory comes first, and then a compiler changed since CMake identified it:
+        // no record of the tree can answer for it, since CMake never identifies a cached compiler again.
+        var replaced = another
+            ?? (adapter is CMakeAdapter
+                ? await CompilerReplacedAsync(request, buildDirectory, environment, cancellationToken).ConfigureAwait(false)
+                : null);
 
         var (rebuilt, taken) = replaced is not null
             ? (replaced, null)
             : await DecideCleanRebuildAsync(request, buildDirectory, watched, unmeasurable, cancellationToken).ConfigureAwait(false);
+
+        // What another tree's leg left where it removed this build directory to make room, taken before anything here
+        // removes the directory, so a note of a removal since built over is never read as one of this build's.
+        var reclaimed = ReclaimedBuildNote.Take(_fileSystem, buildDirectory);
 
         if (rebuilt is not null)
         {
@@ -248,9 +277,16 @@ public sealed class BuildService(
             UnfollowedFiles.DeleteDirectory(_fileSystem, request.TreeRoot, buildDirectory);
         }
 
+        // A build directory another tree's leg removed to make room is said once, as the build that starts it again from
+        // nothing begins: a build of hours, run again where one stood, is never left for its reader to wonder at.
+        if (reclaimed is not null)
+        {
+            _output.Info(CommandName, $"{request.Leg}: {reclaimed}, so this build starts from nothing");
+        }
+
         // Nothing is built in a copy that holds no build directory yet: said, because a copy is expected to keep a warm
         // build, and this one starts cold - every path of it made new.
-        if (rebuilt is null && request.CopyOf is not null && !_fileSystem.DirectoryExists(buildDirectory))
+        else if (rebuilt is null && request.CopyOf is not null && !_fileSystem.DirectoryExists(buildDirectory))
         {
             _output.Info(CommandName, $"{request.Leg}: nothing is built in its copy yet, so this build starts from nothing");
         }
@@ -339,6 +375,9 @@ public sealed class BuildService(
         // say its directory was built from a tree no phase of it read - and is stopped before its first phase.
         if (floor?.Why is null)
         {
+            // Where the floor's readings stood as the record began: a failure to write it is judged by every reading since.
+            var recording = floor?.Mark ?? 0;
+
             try
             {
                 Record(buildDirectory, recorded);
@@ -350,7 +389,7 @@ public sealed class BuildService(
                 // leaves nothing else behind to be read as a build nobody recorded.
                 asked = adapter is CMakeAdapter ? _toolchainReader.Ask(buildDirectory) : null;
             }
-            catch (IOException) when (floor?.Now() is not null)
+            catch (IOException) when (floor?.Now(recording) is not null)
             {
                 // Filled since the room was read: the floor has stopped the build, and its first turn below ends it.
             }
@@ -359,6 +398,11 @@ public sealed class BuildService(
         foreach (var phase in adapter.Phases(config, request, buildDirectory, overlay, environment))
         {
             PhaseResult result;
+
+            // Where the floor's readings stood as the phase began: a failure of it is judged by every reading since, so one
+            // that found a filesystem under the floor while it ran says it failed for want of room, though room was made
+            // there since.
+            var readings = floor?.Mark ?? 0;
 
             try
             {
@@ -379,7 +423,7 @@ public sealed class BuildService(
             {
                 return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, why), null).ConfigureAwait(false);
             }
-            catch (IOException) when (floor?.Now() is { } full)
+            catch (IOException) when (floor?.Now(readings) is { } full)
             {
                 // What the phase wrote - its log - failing on a filesystem under its floor, filled between two readings,
                 // failed for want of room: stopped, as the next reading would have stopped it.
@@ -398,7 +442,7 @@ public sealed class BuildService(
                 {
                     Record(buildDirectory, recorded);
                 }
-                catch (IOException) when (floor?.Now() is { } full)
+                catch (IOException) when (floor?.Now(readings) is { } full)
                 {
                     return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, full), null).ConfigureAwait(false);
                 }
@@ -421,8 +465,9 @@ public sealed class BuildService(
             if (!result.Passed)
             {
                 // A phase that failed while a filesystem the build fills stood under its floor - filled between two readings,
-                // or as one stopped it - failed for want of room: stopped, as the next reading would have stopped it.
-                if (floor?.Now() is { } full)
+                // as one stopped it, or at one that made room there since - failed for want of room: stopped, as the next
+                // reading would have stopped it.
+                if (floor?.Now(readings) is { } full)
                 {
                     return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, full), null).ConfigureAwait(false);
                 }
@@ -549,6 +594,7 @@ public sealed class BuildService(
         // nothing watched.
         async Task<BuildResult> FinishAsync(ReachedVerdict reached, NinjaDependencyReport? dependencies, FailedUnits? failedUnits = null)
         {
+            var finishing = floor?.Mark ?? 0;
             var seen = await guards.CloseAsync(cancellationToken).ConfigureAwait(false);
             var verdict = seen.Decide(request.Leg, [reached]);
             var dead = await ReadDeadOutputsAsync(request, buildDirectory, environment, cancellationToken).ConfigureAwait(false);
@@ -583,7 +629,7 @@ public sealed class BuildService(
                         Bytes = ranThrough ? left.Bytes : cameTo is { } whole && left.Bytes is { } part ? Math.Max(whole, part) : null,
                     });
                 }
-                catch (IOException ex) when (floor?.Now() is not null)
+                catch (IOException ex) when (floor?.Now(finishing) is not null)
                 {
                     // A build stopped for want of room may have none left for its record: the one it wrote as it began
                     // stands, as it does for a build stopped part way any other way.
@@ -905,14 +951,33 @@ public sealed class BuildService(
     }
 
     /// <summary>
+    /// Why <paramref name="buildDirectory"/> starts from clean because the build that last ran there recorded another
+    /// variant than <paramref name="request"/>'s (<see cref="BuildRecord.Variant"/>), or <see langword="null"/> where it
+    /// recorded this one, or none.
+    /// </summary>
+    /// <remarks>
+    /// A tree's own build directory is named by its variant, and its record names that variant always. A mutation
+    /// worker's is named by the variant's key (<see cref="Mutations.WorkerFamily.BuildDirectoryOf"/>), which two variants
+    /// of one tree whose names come to one key share: the record is then what says whose its objects are.
+    /// </remarks>
+    private string? AnotherVariant(BuildRequest request, string buildDirectory)
+        => BuildRecord.VariantIn(_fileSystem, buildDirectory) is { } built
+            && !string.Equals(built, request.Variant.DirectoryName, StringComparison.Ordinal)
+            ? $"another variant's build: the last build here was of '{built}', and this one is of '{request.Variant.DirectoryName}'"
+            : null;
+
+    /// <summary>
     /// Whether this variant must be rebuilt from clean, and why; with the snapshot of its inputs the
     /// decision took, where it took one, for the guards to open with where the directory is kept.
     /// </summary>
     /// <remarks>
     /// Ninja, Make and MSBuild decide what is stale by ordering timestamps, which a stepped clock
     /// defeats without a word: an object stamped during a forward step looks newer than a source
-    /// edited just after it. Seven conditions rebuild the variant from clean, and the ledger names
-    /// which.
+    /// edited just after it. Seven conditions rebuild the variant from clean here, and the ledger
+    /// names which. Two more are asked before this is, and this is not asked where either holds, since
+    /// no record of the tree answers for them: the last build in the directory was of another variant
+    /// (<see cref="AnotherVariant"/>), whose objects are that variant's whatever the tree did; and a
+    /// compiler CMake identified is not what is at its path now (<see cref="CompilerReplacedAsync"/>).
     /// <para>
     /// Two are answers. The previous build was marked unordered: a phase spanned a clock step, an
     /// input could not be read as it began, its inputs moved while it ran, or something else may have

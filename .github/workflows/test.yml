@@ -42,12 +42,13 @@ jobs:
       # rest, so a macOS shard added shortens each shard more than it does the leg.
       #
       # A class is atomic to a shard, and the dealing weighs a class by the tests it holds.
-      # That undercounts the implementation flow's class, whose every test runs for minutes
-      # on the slow runners - it weighs what many of the suite's other classes do together -
-      # so the shard it lands in is dealt companions as though its tests were ordinary ones,
-      # and its growth is what brings that shard nearest the step's limit. When a shard nears
-      # it, the answer is more shards, or the class's batteries split into classes of their
-      # own, which the dealing then spreads - never a longer limit.
+      # That undercounts a class whose every test runs for minutes on the slow runners, as the
+      # implementation flow's do: one such class weighs what many of the suite's other classes
+      # do together, and the shard it lands in is dealt companions as though its tests were
+      # ordinary ones. So the flow's tests are held in batteries, each a class of its own
+      # (ImplementationFlowTests+Planning and its siblings), which the dealing spreads; when
+      # one grows until its shard nears the step's limit, the answer is more shards, or that
+      # battery split again - never a longer limit.
       matrix:
         include:
           - { os: ubuntu-latest, shard: 1, shards: 1 }           # Linux x86_64

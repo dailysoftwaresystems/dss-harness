@@ -282,16 +282,25 @@ public sealed class AnchorRegistryService(
 
                         try
                         {
+                            // A declaration stating two verdicts itself is no one decision to weigh: refused before any cell
+                            // of it is, whatever taking them one from each side would come to, so no consent is asked that
+                            // could not mend it - the row is refused as any row stating two is.
+                            if (earlier is not null && AnchorRowCells.Of(declared) is var stated && AnchorStatus.SplitVerdict(stated.Status, stated.Trigger, settings) is { } declaredTwo)
+                            {
+                                refusals.Usage(TwoVerdicts("The agent declares two verdicts", declaredTwo));
+                                unjudged.Add(declared.Id);
+                            }
+
                             // A row an earlier fold applied is weighed cell by cell from what that fold recorded as declared,
                             // here, under the lock its write takes: decided against the registries as they are when it is
                             // written, never as they were when a command looked first.
-                            if (earlier is not null)
+                            else if (earlier is not null)
                             {
-                                weighed = AnchorCellMerge.Of(AnchorRowCells.Of(declared), AnchorRowCells.Of(earlier), AnchorRowCells.Of(existing));
+                                weighed = AnchorCellMerge.Of(AnchorRowCells.Of(declared), AnchorRowCells.Of(earlier), AnchorRowCells.Of(existing), settings);
                                 effective = AnchorCellMerge.Effective(declared, existing, weighed);
                             }
 
-                            change = ChangesTo(effective, existing);
+                            change = refusals.Any ? null : ChangesTo(effective, existing);
                         }
                         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.UsageError)
                         {
@@ -307,7 +316,7 @@ public sealed class AnchorRegistryService(
                             .Select(cell =>
                             {
                                 var one = new AnchorRowCell(declared.Id, cell.Cell);
-                                return new AnchorOverCell(one, cell.Earlier!, cell.Registries!, cell.Agent!, over.Contains(one));
+                                return new AnchorOverCell(one, cell.Earlier!, cell.Registries!, cell.Agent!, over.Contains(one)) { Verdict = cell.Verdict };
                             })];
                         bothChanged.UnionWith(both.Select(cell => cell.Cell));
 
@@ -356,10 +365,15 @@ public sealed class AnchorRegistryService(
 
                                 foreach (var cell in both.Where(cell => !cell.Accepted))
                                 {
+                                    var why = cell.Verdict is { } split
+                                        ? $"carries the row's one verdict with its {AnchorCellMerge.OtherVerdictCell(cell.Cell.Cell)}, and the registries changed one of "
+                                            + "the two since an earlier fold of this agent applied it and the agent the other, so that, taken one from each, the row "
+                                            + $"would state two verdicts ({split}): it is weighed as both changed, and"
+                                        : "was changed by the registries and by the agent since an earlier fold of this agent applied it, so";
+
                                     refusals.Refuse(
-                                        $"its {cell.Cell.Cell} was changed by the registries and by the agent since an earlier fold of this agent applied it, so "
-                                        + $"the agent's text is written over the registries' only with {AnchorBatchRequest.AcceptOverOption} {cell.Cell}; the dry "
-                                        + "run shows the three texts.");
+                                        $"its {cell.Cell.Cell} {why} the agent's text is written over the registries' only with {AnchorBatchRequest.AcceptOverOption} "
+                                        + $"{cell.Cell}; the dry run shows the three texts.");
                                 }
                             }
 
@@ -1256,12 +1270,17 @@ public sealed class AnchorRegistryService(
 
         if (AnchorStatus.SplitVerdict(cells[3].Trim(), cells[4].Trim(), settings) is { } split)
         {
-            refusals.Usage(
-                $"The row would state two verdicts: {split}. anchors.triggerCarriesVerdict holds a row's Trigger to "
-                + $"the verdict its Status states: open a closed row's Trigger with {AnchorStatus.ClosedMark}, and no "
-                + "other row's, or set the status the Trigger means.");
+            refusals.Usage(TwoVerdicts("The row would state two verdicts", split));
         }
     }
+
+    /// <summary>
+    /// The refusal of a row stating two verdicts, said by <paramref name="what"/> - the row as it would be written, or an
+    /// agent's declaration of it - with what splits them and the remedy: the one wording of both.
+    /// </summary>
+    private static string TwoVerdicts(string what, string split)
+        => $"{what}: {split}. anchors.triggerCarriesVerdict holds a row's Trigger to the verdict its Status states: open a closed "
+            + $"row's Trigger with {AnchorStatus.ClosedMark}, and no other row's, or set the status the Trigger means.";
 
     private static void AddChange(List<AnchorFieldChange> fields, string field, string before, string? after)
     {

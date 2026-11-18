@@ -35,6 +35,13 @@ public sealed record HarnessContext(HarnessLayout Layout, HarnessConfig Config)
     /// that machine, on its next dispatch, and may trail it until then.
     /// </remarks>
     public bool IsSyncedCopy { get; init; }
+
+    /// <summary>
+    /// What the hosts' items declare that is no credential - where each host keeps its copies for this machine, and each
+    /// WSL item's distribution - read from this machine's items as first asked, or told by the machine that sent legs here;
+    /// nothing for a context made from a configuration alone.
+    /// </summary>
+    public Secrets.HostItems HostItems { get; init; } = Secrets.HostItems.None;
 }
 
 /// <summary>
@@ -70,13 +77,24 @@ public interface IHarnessContextLoader
     /// <param name="cancellationToken">Stops the lookup.</param>
     /// <remarks>
     /// A tree git holds names its main checkout. A copy a sync made is a repository of its own to git, so it is told by
-    /// where it is kept: in a tree's <c>.legs</c>, of that tree's repository - a copy made for a run as one typed in; beside a host's copy of the main checkout as a worktree's copy (<c>repo.worktree-o1--xa</c>),
-    /// of that copy's (<see cref="HostCopies.MainCopyOf"/>); anywhere else, the copy of the main checkout itself.
+    /// where it is kept (<see cref="HostCopies.HolderOf"/>, <see cref="HostCopies.MainCopyOfTree"/>, the rules a host finds
+    /// its main copy by): in a tree's <c>.legs</c>, of that tree's repository - a copy made for a run as one typed in;
+    /// beside a host's copy of the main checkout as a worktree's copy (<c>repo.worktree-o1--xa</c>), of that copy's;
+    /// anywhere else, the copy of the main checkout itself.
     /// </remarks>
     Task<string> RepositoryOfAsync(HarnessContext context, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IHarnessContextLoader"/>
+/// <param name="repositoryLocator">Finds the repository a directory is in.</param>
+/// <param name="configStore">Reads config.json.</param>
+/// <param name="gitClient">Says whether git is there.</param>
+/// <param name="fileSystem">Tells which files are there.</param>
+/// <param name="platform">How this machine compares paths.</param>
+/// <param name="output">Warns of a worktree read with the main checkout's configuration.</param>
+/// <param name="copyTool">Tells a command typed in a synced copy whether its DssHarness trails the newest.</param>
+/// <param name="secrets">Reads the hosts' items, for what each declares that is no credential.</param>
+/// <param name="origin">Who the command runs for: on a host, what the machine that sent its legs told of its items.</param>
 public sealed class HarnessContextLoader(
     IRepositoryLocator repositoryLocator,
     IConfigStore configStore,
@@ -84,7 +102,9 @@ public sealed class HarnessContextLoader(
     IFileSystem fileSystem,
     Platform.IHostPlatform platform,
     Output.IHarnessOutput output,
-    SyncedCopyToolCheck copyTool) : IHarnessContextLoader
+    SyncedCopyToolCheck copyTool,
+    Secrets.IHostSecretsStore secrets,
+    CommandOrigin origin) : IHarnessContextLoader
 {
     private readonly IRepositoryLocator _repositoryLocator = repositoryLocator;
     private readonly IConfigStore _configStore = configStore;
@@ -93,6 +113,17 @@ public sealed class HarnessContextLoader(
     private readonly Platform.IHostPlatform _platform = platform;
     private readonly Output.IHarnessOutput _output = output;
     private readonly SyncedCopyToolCheck _copyTool = copyTool;
+    private readonly Secrets.IHostSecretsStore _secrets = secrets;
+    private readonly CommandOrigin _origin = origin;
+
+    /// <summary>
+    /// What the hosts' items declare for <paramref name="layout"/>'s repository: this machine's own, read as first asked;
+    /// or, for legs another machine sent here, what that machine told of its WSL items, since a host's copy holds none.
+    /// </summary>
+    private Secrets.HostItems ItemsOf(HarnessLayout layout)
+        => _origin.Dispatched is { } dispatched
+            ? Secrets.HostItems.Told(dispatched.Distributions)
+            : Secrets.HostItems.Reading(_secrets, layout);
 
     public async Task<HarnessContext> LoadAsync(
         string startDirectory,
@@ -149,6 +180,7 @@ public sealed class HarnessContextLoader(
                         {
                             ConfigFile = fallback,
                             IsSyncedCopy = _fileSystem.FileExists(layout.SyncedCopyMarkerFile),
+                            HostItems = ItemsOf(layout),
                         },
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -163,6 +195,7 @@ public sealed class HarnessContextLoader(
                 new HarnessContext(layout, _configStore.Load(configFile))
                 {
                     IsSyncedCopy = _fileSystem.FileExists(layout.SyncedCopyMarkerFile),
+                    HostItems = ItemsOf(layout),
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -191,7 +224,7 @@ public sealed class HarnessContextLoader(
         var configFile = layout.ConfigFile;
 
         return _fileSystem.FileExists(configFile)
-            ? new HarnessContext(layout, _configStore.Load(configFile)) { ConfigFile = configFile, IsSyncedCopy = true }
+            ? new HarnessContext(layout, _configStore.Load(configFile)) { ConfigFile = configFile, IsSyncedCopy = true, HostItems = of.HostItems }
             : throw new HarnessException(
                 HarnessExit.NotInitialized,
                 $"'{copy}' holds no harness configuration at '{configFile}', so work cannot run by the reading it was made from. "
@@ -210,18 +243,17 @@ public sealed class HarnessContextLoader(
 
         var root = Whole(context.Layout.RepositoryRoot);
 
-        if (Path.GetDirectoryName(root) is { } slot
-            && string.Equals(Path.GetFileName(slot), HarnessLayout.LegsDirectoryName, _platform.PathComparison)
-            && Path.GetDirectoryName(slot) is { Length: > 0 } holder
-            && await _repositoryLocator.LocateAsync(holder, cancellationToken).ConfigureAwait(false) is { } held)
+        // A leg's own copy, kept in a tree's .legs, is of that tree's repository: of a tree git holds here, its main checkout.
+        if (HostCopies.HolderOf(root, _platform.PathComparison) is { } holder
+            && await _repositoryLocator.LocateAsync(holder, cancellationToken).ConfigureAwait(false) is { } held
+            && !_fileSystem.FileExists(held.SyncedCopyMarkerFile))
         {
-            return await RepositoryOfAsync(
-                    new HarnessContext(held, context.Config) { IsSyncedCopy = _fileSystem.FileExists(held.SyncedCopyMarkerFile) },
-                    cancellationToken)
-                .ConfigureAwait(false);
+            return Whole(held.MainCheckoutRoot);
         }
 
-        return HostCopies.MainCopyOf(root);
+        // A host's copy of a tree, or a leg's copy kept in one: the host's copy of the main checkout it belongs to, by the
+        // one rule a host finds its main copy by (HostCopies.MainCopyOfTree).
+        return HostCopies.MainCopyOfTree(root, _platform.PathComparison);
     }
 
     private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));

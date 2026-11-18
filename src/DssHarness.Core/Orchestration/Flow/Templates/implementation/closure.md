@@ -7,9 +7,11 @@ same behaviour. A defect that comes back was decided in several places; this fil
 closing a class of defects at its one home begins.
 
 The workflow declares this file as its text `closure`, and an agent is given it where its
-step's prompt reads `{text.closure}`, as the file stands when the prompt is given. None of
-the prompts shipped beside it reads it: what is written here reaches an agent once a prompt
-of this repository's says `{text.closure}` where its agent is to weigh it.
+step's prompt reads `{text.closure}`, as the file stands when the prompt is given. The
+prompts shipped beside it that read it are the plan's, the plan audit's, the item audit's
+and the builders' - the implement prompt and the recovery's remedy - which plan, check and
+close the classes of the work items: what is written here weighs on what they decide a
+class covers, so keep it true of the repository.
 
 ## The axes
 

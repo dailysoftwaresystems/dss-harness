@@ -44,6 +44,9 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// <summary>What a run's pre-existing issues are, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string PreExistingIssuesKind = "the run's pre-existing issues";
 
+    /// <summary>What a run's record of affected tests is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string AffectedTestsKind = "the run's record of affected tests";
+
     /// <summary>What a step's own record is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string StepRecordKind = "a step's own record";
 
@@ -355,6 +358,25 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(issues);
         Write(orchestrator.PreExistingIssuesFile, PreExistingIssuesKind, issues, issues.Problem());
+    }
+
+    /// <summary>The run's record of affected tests, or null where the run holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public FlowAffectedTestsFile? ReadAffectedTests(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<FlowAffectedTestsFile>(orchestrator.AffectedTestsFile, AffectedTestsKind, affected => affected.Problem());
+    }
+
+    /// <summary>Writes the run's record of affected tests.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="affected">The record, which must be one.</param>
+    public void WriteAffectedTests(OrchestratorLayout orchestrator, FlowAffectedTestsFile affected)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(affected);
+        Write(orchestrator.AffectedTestsFile, AffectedTestsKind, affected, affected.Problem());
     }
 
     /// <summary>One step's own record, wherever the run keeps it, or null where the step's directory holds none.</summary>

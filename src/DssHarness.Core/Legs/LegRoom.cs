@@ -362,14 +362,14 @@ public static class LegRoom
             var built = variant.DirectoryOn(host, own);
 
             // The trees as they were found there: on a host running a leg another machine sent it, the main checkout's copy
-            // where the configuration says this host keeps it - the tree here is a copy, a repository whose main checkout
+            // beside the copy the leg was sent to - the tree here is a copy, a repository whose main checkout
             // is itself, and measured against itself a worktree copy's first build needed nothing anyone said. The leg's
             // own tree may be among them: what its own build recorded is taken first, and where it recorded nothing it has
             // nothing to add.
             IReadOnlyList<(string Tree, string Build)> siblings =
                 [.. (trees.GetValueOrDefault(host)?.Trees ?? []).Select(tree => (tree.Name, variant.DirectoryOn(host, tree.Root)))];
 
-            return (main, built, sweeps ? variant.DirectoryOn(host, MutationWorkers.PathOf(own, variant, 1)) : built, siblings);
+            return (main, built, sweeps ? MutationWorkers.Of(own, variant).BuildDirectoryOf(1) : built, siblings);
         }
         catch (HarnessException)
         {

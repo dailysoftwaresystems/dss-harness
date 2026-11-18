@@ -54,7 +54,12 @@ out:
 
 {orient.tests}
 
-Each item's filter must mean the same tests on every leg, and name only tests that are there or that the item writes.
+Each unit of an item's tests must mean the same tests on every leg, and name only tests that are there or that the item
+writes; an item that names none says in noTests why its change affects no test, and that reason must hold.
+
+## The universe this repository declares
+
+{text.closure}
 
 ## Where a plan update is under way
 
@@ -90,7 +95,17 @@ The work of this run: {update.work}
 8. Where a person gave a plan, check their plan against the items and the departures, as your instructions say.
 9. Weigh each assumption: is it one a careful colleague would make, or one that should have been a question?
 10. Where a person decided something when the run stopped to ask them, check that the plan holds to it.
+11. Audit each class, never taking the plan's word for its sites: search the data yourself - the kind, the key, the
+    diagnostic, the verb, the literal - by your own text search across every tier, format, target and file kind, never
+    the plan's searches; compare what you find with the plan's site list; hold the universe of each class against the
+    repository's closure text above; and check that a class with one site has searches that prove the home is the only
+    one.
 
 ## What to return
 
-Go, or the findings; and what you checked. Go means the plan can be built as it stands.
+Go, or the findings; what you checked; and, for each class you audited, what your closure part found - the sites you
+searched out that the plan's site list lacks, and the cells of its universe it leaves out without a reason. Go means
+the plan can be built as it stands; each of these is a finding that holds it back: a site the plan missed, an axis of
+the closure text the universe leaves out without a reason, an item that patches one site of several, a short site
+list, a home that is one of the sites and not the place that decides, and an item that changes a decision and declares
+no class.

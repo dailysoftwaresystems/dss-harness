@@ -88,8 +88,12 @@ public sealed record TestRequest
     /// </summary>
     public IReadOnlyDictionary<string, string> HostEnvironment { get; init; } = new Dictionary<string, string>();
 
-    /// <summary>A filter the caller asked for, passed through the invocation's <c>filterArg</c>.</summary>
-    public string? Filter { get; init; }
+    /// <summary>
+    /// The filter units the caller asked for, passed through the invocation's <c>filterArg</c> - joined by its
+    /// <c>filterJoin</c>, or by its runner's own where it declares none and the harness knows that runner
+    /// (<see cref="FilterUnits.JoinOf"/>); none for every test.
+    /// </summary>
+    public IReadOnlyList<string> Filters { get; init; } = [];
 
     /// <summary>
     /// Exclusions the caller asked for, passed through the invocation's <c>excludeArg</c>: beside the
@@ -215,7 +219,7 @@ public sealed class TestService(
     /// The options a host running one of this run's legs is given, so it runs the command this
     /// machine was asked to run rather than a bare one.
     /// </summary>
-    /// <param name="filter">The filter asked for, or null.</param>
+    /// <param name="filters">The filter units asked for; none for every test.</param>
     /// <param name="excludes">The exclusions asked for.</param>
     /// <param name="labels">The labels asked for.</param>
     /// <param name="skipBuild">Whether the run tests what is already built.</param>
@@ -227,20 +231,21 @@ public sealed class TestService(
     /// about its own state.
     /// </remarks>
     public static IReadOnlyList<string> RemoteArguments(
-        string? filter,
+        IReadOnlyList<string> filters,
         IReadOnlyList<string> excludes,
         IReadOnlyList<string> labels,
         bool skipBuild,
         bool time)
     {
+        ArgumentNullException.ThrowIfNull(filters);
         ArgumentNullException.ThrowIfNull(excludes);
         ArgumentNullException.ThrowIfNull(labels);
 
         var remote = new List<string>();
 
-        // Whenever one was given, an empty one among them: the host refuses it as this machine does,
-        // where left out it would run every test under the leg's name.
-        if (filter is not null)
+        // Each unit given, an empty one among them: the host refuses it as this machine does, where left out the host
+        // would run tests nobody asked for under the leg's name. The host joins them as this machine would.
+        foreach (var filter in filters)
         {
             remote.Add("--filter");
             remote.Add(filter);
@@ -450,7 +455,7 @@ public sealed class TestService(
         IReadOnlyList<string> remote = request.InCopy ? invocation.RemoteExcludes ?? [] : [];
 
         TestCommand Given(IReadOnlyList<string> excludes)
-            => TestInvocationResolver.CommandFor(invocation, cores.Value, request.Filter, excludes, paths, request.Labels, _fileSystem);
+            => TestInvocationResolver.CommandFor(invocation, cores.Value, request.Filters, excludes, paths, request.Labels, _fileSystem);
 
         TestCommand command;
 

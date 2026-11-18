@@ -39,6 +39,7 @@ public sealed class HostAgentService(
     IDetachedProcessLauncher launcher,
     HomeShorthand home,
     IHostAgentLastResort lastResort,
+    Configuration.MachineSettingsFile machineSettings,
     HostAgentPatience? patience = null) : DssHarness.Core.Application.IUseCase
 {
     private readonly IHostPlatform _platform = platform;
@@ -53,7 +54,14 @@ public sealed class HostAgentService(
     private readonly IDetachedProcessLauncher _launcher = launcher;
     private readonly HomeShorthand _home = home;
     private readonly IHostAgentLastResort _lastResort = lastResort;
+    private readonly Configuration.MachineSettingsFile _machineSettings = machineSettings;
     private readonly HostAgentPatience _patience = patience ?? new HostAgentPatience();
+
+    /// <summary>
+    /// What this machine's settings file says, as this machine answers it to itself: its path as it is, never with its home
+    /// as <c>~</c> - which <see cref="Told(HostAgentInfo)"/> writes it as for another machine.
+    /// </summary>
+    public Configuration.MachineSettingsAnswer MachineSettings() => _machineSettings.Answer(path => path);
 
     /// <summary>Reads one request from <paramref name="input"/> and serves it.</summary>
     /// <param name="input">
@@ -415,6 +423,10 @@ public sealed class HostAgentService(
             Space = space,
             SpaceUnmeasured = unmeasured,
             Builds = [.. room.Builds.Distinct(StringComparer.Ordinal).Select(BuildRoom)],
+
+            // Read here, by the machine whose file it is, as it reads it to admit its legs: another machine's look at it
+            // would be a second reading of a file only this one keeps.
+            MachineSettings = MachineSettings(),
         };
     }
 
@@ -451,6 +463,7 @@ public sealed class HostAgentService(
         Space = Told(info.Space),
         SpaceUnmeasured = Told(info.SpaceUnmeasured),
         Builds = [.. info.Builds.Select(build => build with { Disk = Told(build.Disk), Unmeasured = Told(build.Unmeasured) })],
+        MachineSettings = info.MachineSettings is { } settings ? settings with { Path = Told(settings.Path), Problem = Told(settings.Problem) } : null,
     };
 
     private string? Told(string? text) => text is null ? null : _home.Shown(text);

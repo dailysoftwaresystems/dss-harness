@@ -100,8 +100,8 @@ public sealed class ItemEnvironment(IFileSystem fileSystem, IFilePermissions fil
 
     /// <summary>
     /// Reads an item's environment file into its declared keys, filling in the default of every key
-    /// that has one, or names the one thing to fix: the file's permissions, or a key that is absent
-    /// or blank.
+    /// that has one, or names the one thing to fix: the file's permissions, a key it holds that is none
+    /// of the declared ones, or a key that is absent or blank.
     /// </summary>
     /// <param name="file">The environment file.</param>
     /// <param name="shown">The file as the reader spells it, which is where the one fixing it has to go.</param>
@@ -153,6 +153,14 @@ public sealed class ItemEnvironment(IFileSystem fileSystem, IFilePermissions fil
 
         // The file is read by then: what it holds was asked once it was known to be one others cannot change.
         values ??= new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // A key the item does not read is refused, never passed over: a misspelt one - REPOSTORY_PATH for REPOSITORY_PATH -
+        // would leave what it was written to change as it was, while whoever wrote it believes it changed.
+        if (values.Keys.FirstOrDefault(name => !expected.Any(key => string.Equals(key.Name, name, StringComparison.Ordinal))) is { } unread)
+        {
+            return (null, $"'{shown}' declares '{unread}', which is no key it is read for; "
+                + $"the keys are {string.Join(", ", expected.Select(key => key.Name))}");
+        }
 
         foreach (var key in expected)
         {

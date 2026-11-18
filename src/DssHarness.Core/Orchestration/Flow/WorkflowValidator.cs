@@ -709,6 +709,11 @@ public static class WorkflowValidator
                             WorksIn(entry, entry.Step.In);
                         }
 
+                        if (type.Type == "test")
+                        {
+                            TestRules(entry, where);
+                        }
+
                         break;
 
                     case "anchor-balance":
@@ -724,6 +729,17 @@ public static class WorkflowValidator
                         {
                             Expression(entry, paths, "paths");
                         }
+
+                        break;
+
+                    case "class-closure":
+                        // The classes and the record are read where the step starts, as expressions the engine resolves;
+                        // the thresholds of its homes' touches are whole numbers from one up - a home touched by no other
+                        // hand needs no audit, and a hotspot of one touch is every home.
+                        Expression(entry, entry.Step.Classes ?? string.Empty, "classes");
+                        Expression(entry, entry.Step.Record ?? string.Empty, "record");
+                        Positive(entry.Step.Touches, $"{where}: touches");
+                        Positive(entry.Step.Hotspot, $"{where}: hotspot");
 
                         break;
 
@@ -1132,12 +1148,6 @@ public static class WorkflowValidator
             if (step.When is not null)
             {
                 Expression(entry, step.When, "when");
-            }
-
-            if (step.Type == "test" && step.FilterWhen is { } filterWhen)
-            {
-                // As when is, with the same reads and the same refusals, and it must yield a boolean (V16-V19).
-                Expression(entry, filterWhen, "filterWhen");
             }
 
             foreach (var (kind, answer) in step.Answers)
@@ -1777,6 +1787,38 @@ public static class WorkflowValidator
             if (tier is not null && model is not null)
             {
                 _problems.Add($"{where} names a model and a tier: the model would be used and the tier never read");
+            }
+        }
+
+        /// <summary>
+        /// What a test step's keys say of its filter: given as an expression, it is read as when is, with the same reads
+        /// and refusals, and yields a list (V16-V19); its filterWhen is an expression that yields a boolean; and
+        /// filterWhen, affected and noTests each say what becomes of the filter, so a step that gives none takes none of
+        /// them - a key that loads is a key that is read.
+        /// </summary>
+        private void TestRules(Entry entry, string where)
+        {
+            var step = entry.Step;
+
+            if (step.Filter?.Expression is { } filter)
+            {
+                Expression(entry, filter, "filter");
+            }
+
+            if (step.FilterWhen is { } filterWhen)
+            {
+                Expression(entry, filterWhen, "filterWhen");
+            }
+
+            if (step.Filter is null)
+            {
+                foreach (var (key, given) in new[] { ("filterWhen", step.FilterWhen), ("affected", step.Affected), ("noTests", step.NoTests) })
+                {
+                    if (given is not null)
+                    {
+                        _problems.Add($"{where} says {key} and gives no filter: {key} says what becomes of the filter's units, and a step with no filter runs every test of its legs");
+                    }
+                }
             }
         }
 
@@ -4153,6 +4195,7 @@ public static class WorkflowValidator
             ["amend.scope"] = ("array", "a plan update is the pieces it holds"),
             ["questions"] = ("array", "the step shows each question it holds under its own"),
             ["writes"] = ("array", Listed),
+            ["filter"] = ("array", Listed),
             ["within"] = ("array", Listed),
             ["paths"] = ("array", Listed),
             ["except"] = ("array", Listed),
@@ -4632,6 +4675,9 @@ public static class WorkflowValidator
         /// <summary>
         /// The schema the reason step's <paramref name="outputs"/> names, as a reading; <see langword="null"/> where no
         /// files are given, the file is not there, or it is no schema the subset reads - each said by whoever reads files.
+        /// It is read by the one reading of a schema's text (<see cref="Schemas.JsonSchemaSubset.Whole"/>), the
+        /// definitions its references share with the schema files beside it taken in, so a schema holding its work
+        /// items by a shared definition types them as the definition says.
         /// </summary>
         private JsonSchemaSubset.Reading? SchemaOf(string outputs, string? workflow = null)
         {
@@ -4642,18 +4688,10 @@ public static class WorkflowValidator
 
             if (!_schemas.TryGetValue((workflow ?? string.Empty, outputs), out var reading))
             {
-                try
-                {
-                    reading = _files(outputs, workflow) is { } text
-                        && JsonNode.Parse(text) is JsonObject schema
-                        && JsonSchemaSubset.SubsetProblems(schema).Count == 0
-                            ? JsonSchemaSubset.Read(schema)
-                            : null;
-                }
-                catch (JsonException)
-                {
-                    reading = null;
-                }
+                reading = _files(outputs, workflow) is { } text
+                    && Schemas.JsonSchemaSubset.Whole(text, beside => WorkflowFiles.RootOf(_files(WorkflowFiles.Beside(outputs, beside), workflow))) is { Schema: { } whole, Problems.Count: 0 }
+                        ? Schemas.JsonSchemaSubset.Read(whole)
+                        : null;
 
                 _schemas[(workflow ?? string.Empty, outputs)] = reading;
             }

@@ -1,3 +1,4 @@
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Anchors;
@@ -60,16 +61,27 @@ public enum AnchorCellResolution
     /// <summary>Neither the registries nor the agent changed it since: left as it is.</summary>
     Unchanged,
 
-    /// <summary>Only the agent changed it: the agent's is written.</summary>
+    /// <summary>
+    /// Only the agent changed it: the agent's is written - unless it carries the row's verdict and writing it beside the
+    /// registries' change of the other cell that carries it would have the row state two verdicts, which is <see cref="Both"/>.
+    /// </summary>
     Agents,
 
-    /// <summary>Only the registries changed it: theirs is kept, no consent asked, and said.</summary>
+    /// <summary>
+    /// Only the registries changed it: theirs is kept, no consent asked, and said - unless it carries the row's verdict and
+    /// keeping it beside the agent's change of the other cell that carries it would have the row state two verdicts, which
+    /// is <see cref="Both"/>.
+    /// </summary>
     Kept,
 
     /// <summary>Both changed it, to the same: left as it is.</summary>
     Alike,
 
-    /// <summary>Both changed it, each otherwise: the agent's is written over the registries' only where it is named.</summary>
+    /// <summary>
+    /// Both changed it, each otherwise - or it carries the row's verdict, of which the registries changed one cell and the
+    /// agent the other, so that the row taken a cell from each would state two verdicts (<see cref="AnchorCellWeighed.Verdict"/>):
+    /// the agent's is written over the registries' only where it is named.
+    /// </summary>
     Both,
 }
 
@@ -79,33 +91,76 @@ public enum AnchorCellResolution
 /// <param name="Earlier">What the agent declared at its earlier fold; null for a priority it declared none of.</param>
 /// <param name="Registries">What the registries hold.</param>
 /// <param name="Agent">What the agent declares now; null for a priority it declares none of.</param>
-public sealed record AnchorCellWeighed(string Cell, AnchorCellResolution Resolution, string? Earlier, string? Registries, string? Agent);
+public sealed record AnchorCellWeighed(string Cell, AnchorCellResolution Resolution, string? Earlier, string? Registries, string? Agent)
+{
+    /// <summary>
+    /// Where the cell is <see cref="AnchorCellResolution.Both"/> because it carries the row's verdict - weighed on its own it
+    /// would have been kept or the agent's, and the row taken a cell from each side would state two verdicts - the two it
+    /// would state, as <see cref="AnchorStatus.SplitVerdict"/> says them; null for a cell weighed on its own.
+    /// </summary>
+    public string? Verdict { get; init; }
+}
 
 /// <summary>
 /// A row an earlier fold of the agent applied, weighed cell by cell against what the registries took since: each of its
 /// five cells three ways, what that fold recorded as the agent's declaration the ancestor - the cells the registries changed
 /// and the agent did not kept, those only the agent changed written, those both changed alike left, and those both changed
-/// otherwise written over the registries' only where it is named. Pure: it reads and writes nothing.
+/// otherwise written over the registries' only where it is named - and the two cells that carry the row's verdict weighed as
+/// the one decision they state. Pure: it reads and writes nothing.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The ancestor is the declaration, never what the registries held after that fold: where a cell kept the registries'
 /// text, the agent's file still holds the earlier text, and taking the registries' as the ancestor would read that
 /// unchanged file as the agent's change and write it over theirs. A declaration with no priority declares none: never the
 /// agent's change; an earlier one with none gives nothing to say the registries changed it from.
+/// </para>
+/// <para>
+/// The verdict is one decision. Where a Trigger carries its row's verdict (<see cref="AnchorSettings.TriggerCarriesVerdict"/>),
+/// the status and the trigger state it together (<see cref="VerdictCells"/>), and are never taken one from each side where
+/// that would state two: where the registries changed one of them and the agent the other - one kept, the other the agent's
+/// alone or both changed - and the row merged cell by cell would state two verdicts though the agent's declaration states
+/// one, both are <see cref="AnchorCellResolution.Both"/>. Each is then written only where it is named, so the row states
+/// the agent's one verdict once both are, and nothing of it is written while either is not: the registries' verdict
+/// stands, never a row stating two. A row the registries reopened that the agent closes again with its trigger, its status
+/// file closed as it was, is the case this is for, and its mirror, a row the registries closed that the agent keeps open.
+/// Where the agent's declaration states two verdicts itself, there is no one decision to take: its cells are weighed here on
+/// their own, and the command that applies it refuses the row before weighing it at all, whatever the row taken one from
+/// each side would state. Where a Trigger carries no verdict, the status alone states
+/// it and is weighed as any cell is: a status the agent's file holds as it declared it at its earlier fold is no decision
+/// of the agent's, so the registries' change of it is kept, whatever the agent's trigger says.
+/// </para>
 /// </remarks>
 public static class AnchorCellMerge
 {
-    /// <summary>Each of the five cells of a row weighed three ways.</summary>
+    /// <summary>
+    /// The cells that state a row's verdict where its Trigger carries one too (<see cref="AnchorSettings.TriggerCarriesVerdict"/>):
+    /// the status and the trigger, weighed as one decision.
+    /// </summary>
+    public static IReadOnlyList<string> VerdictCells { get; } = [AnchorCellNames.Status, AnchorCellNames.Trigger];
+
+    /// <summary>The other of the two <see cref="VerdictCells"/>: the trigger of the status, the status of the trigger.</summary>
+    /// <param name="cell">One of <see cref="VerdictCells"/>.</param>
+    public static string OtherVerdictCell(string cell) => cell switch
+    {
+        AnchorCellNames.Status => AnchorCellNames.Trigger,
+        AnchorCellNames.Trigger => AnchorCellNames.Status,
+        _ => throw new ArgumentOutOfRangeException(nameof(cell), cell, "Not a cell that carries a row's verdict."),
+    };
+
+    /// <summary>Each of the five cells of a row weighed three ways, the two that carry its verdict as one decision.</summary>
     /// <param name="declared">What the agent declares now.</param>
     /// <param name="earlier">What it declared at its earlier fold.</param>
     /// <param name="existing">What the registries hold.</param>
-    public static IReadOnlyList<AnchorCellWeighed> Of(AnchorRowCells declared, AnchorRowCells earlier, AnchorRowCells existing)
+    /// <param name="settings">The repository's anchor settings, which say whether a Trigger carries its row's verdict.</param>
+    public static IReadOnlyList<AnchorCellWeighed> Of(AnchorRowCells declared, AnchorRowCells earlier, AnchorRowCells existing, AnchorSettings settings)
     {
         ArgumentNullException.ThrowIfNull(declared);
         ArgumentNullException.ThrowIfNull(earlier);
         ArgumentNullException.ThrowIfNull(existing);
+        ArgumentNullException.ThrowIfNull(settings);
 
-        return [.. AnchorCellNames.All.Select(cell =>
+        List<AnchorCellWeighed> weighed = [.. AnchorCellNames.All.Select(cell =>
         {
             var (before, theirs, ours) = (earlier[cell], existing[cell], declared[cell]);
             var registries = before is not null && !string.Equals(theirs, before, StringComparison.Ordinal);
@@ -122,12 +177,15 @@ public static class AnchorCellMerge
 
             return new AnchorCellWeighed(cell, resolution, before, theirs, ours);
         })];
+
+        return OneVerdict(weighed, declared, settings);
     }
 
     /// <summary>
     /// The row the registries are to hold: the agent's cell where it changed it - alone, or where both did otherwise, which
-    /// the command that applies it refuses until named - and the registries' everywhere else, as they hold it. A priority
-    /// not the agent's is declared as none, so the registries' stands.
+    /// the command that applies it refuses until named - and where it carries the row's verdict weighed as both changed,
+    /// named the same way; the registries' everywhere else, as they hold it. A priority not the agent's is declared as none,
+    /// so the registries' stands.
     /// </summary>
     /// <param name="declared">What the agent declares now.</param>
     /// <param name="existing">The row the registries hold.</param>
@@ -138,7 +196,7 @@ public static class AnchorCellMerge
         ArgumentNullException.ThrowIfNull(existing);
         ArgumentNullException.ThrowIfNull(weighed);
 
-        bool Agents(string cell) => weighed.First(one => one.Cell == cell).Resolution is AnchorCellResolution.Agents or AnchorCellResolution.Both;
+        bool Agents(string cell) => TakesTheAgents(weighed.First(one => one.Cell == cell).Resolution);
 
         return new AnchorRowDeclaration(
             declared.Id,
@@ -149,5 +207,34 @@ public static class AnchorCellMerge
         {
             Priority = Agents(AnchorCellNames.Priority) ? declared.Priority : null,
         };
+    }
+
+    /// <summary>Whether the row the registries are to hold takes a cell so resolved from the agent: one it changed, alone or with them.</summary>
+    private static bool TakesTheAgents(AnchorCellResolution resolution) => resolution is AnchorCellResolution.Agents or AnchorCellResolution.Both;
+
+    /// <summary>
+    /// The cells weighed, with the two that carry the row's verdict made <see cref="AnchorCellResolution.Both"/> where the
+    /// registries changed one and the agent the other, and the row merged cell by cell would state two verdicts though the
+    /// agent's declaration states one; as weighed otherwise - always where a Trigger carries no verdict, since no row then
+    /// states two.
+    /// </summary>
+    private static List<AnchorCellWeighed> OneVerdict(List<AnchorCellWeighed> weighed, AnchorRowCells declared, AnchorSettings settings)
+    {
+        var (status, trigger) = (weighed.Single(cell => cell.Cell == AnchorCellNames.Status), weighed.Single(cell => cell.Cell == AnchorCellNames.Trigger));
+        string Merged(AnchorCellWeighed cell) => TakesTheAgents(cell.Resolution) ? cell.Agent! : cell.Registries!;
+
+        var oneEach = (status.Resolution, trigger.Resolution) is (AnchorCellResolution.Kept, AnchorCellResolution.Agents or AnchorCellResolution.Both)
+            or (AnchorCellResolution.Agents or AnchorCellResolution.Both, AnchorCellResolution.Kept);
+
+        if (!oneEach
+            || AnchorStatus.SplitVerdict(declared.Status, declared.Trigger, settings) is not null
+            || AnchorStatus.SplitVerdict(Merged(status), Merged(trigger), settings) is not { } split)
+        {
+            return weighed;
+        }
+
+        return [.. weighed.Select(cell => VerdictCells.Contains(cell.Cell, StringComparer.Ordinal) && cell.Resolution != AnchorCellResolution.Both
+            ? cell with { Resolution = AnchorCellResolution.Both, Verdict = split }
+            : cell)];
     }
 }

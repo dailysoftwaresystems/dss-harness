@@ -118,6 +118,25 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         held.DeleteDirectory(Path.GetFileName(full));
     }
 
+    public void EmptyDirectory(string path, IReadOnlyCollection<string> keeping, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(keeping);
+
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        // Held from its parent, as DeleteMarked holds a directory it removes: a link at the directory itself is refused
+        // there, never entered, and everything below it is reached relative to a handle, however long its path.
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var parent = Path.GetDirectoryName(full) ?? throw new IOException($"'{path}' is a volume's own root, which is never emptied");
+
+        using var held = HeldDirectory.Hold(parent, full, make: false);
+
+        held.Empty(keeping, cancellationToken);
+    }
+
     public void MoveDirectory(string source, string destination) => Directory.Move(source, destination);
 
     public void ReplaceFile(string source, string destination) => ReplaceWith(source, destination);
@@ -369,7 +388,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
                         break;
 
                     case JunctionKind.MountedVolume:
-                        throw new JunctionRemovalException(link, "a volume is mounted there, and it is never unmounted here", [.. removed]);
+                        throw new JunctionRemovalException(link, HeldDirectory.MountedThere, [.. removed]);
                 }
             }
             catch (IOException ex) when (ex is not JunctionRemovalException)

@@ -7,6 +7,7 @@ using System.Security.Principal;
 using System.Text;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
+using Microsoft.Win32.SafeHandles;
 
 namespace DssHarness.Tests;
 
@@ -1151,6 +1152,145 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
+    /// Emptying a directory deletes everything in it but the entries it is told to keep - a file and a directory of
+    /// that name, whatever they hold - read-only files and paths past 260 characters among what goes, and a link in it
+    /// as the link, never what it leads to; the directory itself stays. An absent directory is nothing to empty.
+    /// </summary>
+    [Fact]
+    public void EmptyDirectory_DeletesAllButWhatIsKept_LinksAsThemselves_AndPathsPastTheShortLimit()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var tree = temp.Combine("tree");
+        var canary = outside.WriteFile("canary.txt", "kept");
+        var kept = temp.WriteFile(Path.Combine("tree", ".git"), "gitdir: elsewhere");
+        var keptBelow = temp.WriteFile(Path.Combine("tree", "kept", "inside.txt"), "kept with its directory");
+        var readOnly = temp.WriteFile(Path.Combine("tree", "objects", "ab", "cdef"), "blob");
+        File.SetAttributes(readOnly, File.GetAttributes(readOnly) | FileAttributes.ReadOnly);
+        var deep = Path.Combine(tree, "build");
+
+        while (deep.Length <= 300)
+        {
+            deep = Path.Combine(deep, "a-directory-a-build-makes-deep-in-its-tree");
+        }
+
+        Directory.CreateDirectory(deep);
+        File.WriteAllText(Path.Combine(deep, "object.o"), "made by a build");
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(Path.Combine(tree, "out"), outside.Path));
+
+        Create().EmptyDirectory(tree, [".git", "kept"], TestContext.Current.CancellationToken);
+
+        Assert.Equal([".git", "kept"], Directory.EnumerateFileSystemEntries(tree).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.Equal("gitdir: elsewhere", File.ReadAllText(kept));
+        Assert.True(File.Exists(keptBelow));
+        Assert.True(File.Exists(canary));
+
+        Create().EmptyDirectory(temp.Combine("absent"), [], TestContext.Current.CancellationToken);
+
+        Assert.False(Directory.Exists(temp.Combine("absent")));
+    }
+
+    /// <summary>
+    /// Emptying a directory that is stopped deletes no further entry once it is: the interruption is met between one entry
+    /// and the next, and what is kept stays.
+    /// </summary>
+    [Fact]
+    public void EmptyDirectory_Stopped_DeletesNothingMore()
+    {
+        using var temp = new TempDirectory();
+        var tree = temp.Combine("tree");
+        temp.WriteFile(Path.Combine("tree", ".git"), "gitdir: elsewhere");
+        temp.WriteFile(Path.Combine("tree", "a.txt"), "a");
+        temp.WriteFile(Path.Combine("tree", "b.txt"), "b");
+        using var stopped = new CancellationTokenSource();
+        stopped.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => Create().EmptyDirectory(tree, [".git"], stopped.Token));
+
+        Assert.Equal([".git", "a.txt", "b.txt"], Directory.EnumerateFileSystemEntries(tree).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// On Linux and macOS a removal tells a directory a volume is mounted on - which it never goes into, so a mount in a tree
+    /// it deletes or empties keeps everything on it - from one of the volume it is in: the system's own mounts are such
+    /// directories, /proc on Linux and /dev on macOS, and a directory just made beside a file is none. Windows has its own
+    /// test: a mounted volume there is a reparse point, refused as itself by its removal.
+    /// </summary>
+    [Fact]
+    public void AVolumeMountedOnADirectory_IsToldFromADirectoryOfTheVolumeItIsIn()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "On Windows a volume mounted on a directory is a reparse point, never held as a directory.");
+
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(temp.Combine("child"));
+        using var system = Create().Hold("/", "/", make: false);
+        using var tree = Create().Hold(temp.Path, temp.Path, make: false);
+
+        Assert.True(system.IsMountedOn(OperatingSystem.IsLinux() ? "proc" : "dev"));
+        Assert.False(tree.IsMountedOn("child"));
+    }
+
+    /// <summary>
+    /// The device a file is on, as the runtime's own stat reads it - what tells a mounted volume from the directory it is
+    /// mounted in where the system marks no mount - is one for two files of one volume, and another for a file of the
+    /// system's own mount: read at any other place of the status, a time or a file's number, the two files would differ.
+    /// </summary>
+    [Fact]
+    public void TheDeviceAFileIsOn_IsItsVolumes()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Windows numbers no device this way; its mounted volumes are reparse points.");
+            return;
+        }
+
+        using var temp = new TempDirectory();
+        var one = temp.WriteFile("one.txt", "one");
+        var two = temp.WriteFile(Path.Combine("child", "two.txt"), "two, longer");
+        var elsewhere = OperatingSystem.IsLinux() ? "/proc/self/status" : "/dev/null";
+        using var first = File.OpenHandle(one);
+        using var second = File.OpenHandle(two);
+        using var other = File.OpenHandle(elsewhere);
+
+        Assert.Equal(UnixFiles.DeviceOf(first, one), UnixFiles.DeviceOf(second, two));
+        Assert.NotEqual(UnixFiles.DeviceOf(first, one), UnixFiles.DeviceOf(other, elsewhere));
+    }
+
+    /// <summary>
+    /// A removal never goes into a directory a volume is mounted on, whichever system says one is: deleting a tree with one
+    /// in it, or emptying the directory it is in, is refused there, naming it, and nothing on that volume is removed - nor
+    /// the tree, which still holds it. Emptied, a dataset bind-mounted in a worktree would go with the worktree. No test may
+    /// mount a volume, nor go near the contents of one a system mounts, so the system's answer is stood in for, for one
+    /// ordinary directory of a scratch tree, which is all a removal that went into it could reach.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ADirectoryAVolumeIsMountedOn_IsNeverGoneInto_ByADeletionOrAnEmptying(bool emptying)
+    {
+        using var temp = new TempDirectory();
+        var precious = temp.WriteFile(Path.Combine("tree", "mounted", "deep", "precious.txt"), "the volume's");
+        var mounted = temp.Combine("tree", "mounted");
+        using var held = HeldDirectory.Hold(new MountedOn(HeldDirectory.SystemNative, mounted), temp.Path, emptying ? temp.Combine("tree") : temp.Path, make: false);
+
+        var refused = Assert.Throws<JunctionRemovalException>(() =>
+        {
+            if (emptying)
+            {
+                held.Empty([], TestContext.Current.CancellationToken);
+            }
+            else
+            {
+                held.DeleteDirectory("tree", TestContext.Current.CancellationToken);
+            }
+        });
+
+        Assert.Equal((mounted, HeldDirectory.MountedThere, 0), (refused.Path, refused.Reason, refused.Removed.Count));
+        Assert.Equal([precious], Directory.EnumerateFileSystemEntries(temp.Combine("tree"), "*", SearchOption.AllDirectories).Where(File.Exists));
+        Assert.Equal("the volume's", File.ReadAllText(precious));
+    }
+
+    /// <summary>
     /// A walk of a tree never descends through a directory link: one leads out of the tree, to files
     /// it does not contain, and one leads back into it, round and round. Both are here - a link out,
     /// and a link to the tree's own root - and the walk lists the tree's own file and ends. The links
@@ -1532,6 +1672,51 @@ public sealed class PhysicalFileSystemTests
         SpinWait.SpinUntil(() => (held = Create().FindHeld(tree, TestContext.Current.CancellationToken)).Count == 0, TimeSpan.FromSeconds(10));
 
         return held;
+    }
+
+    /// <summary>
+    /// This system's way of acting on held directories, but that it says a volume is mounted on <paramref name="mounted"/>, an
+    /// ordinary directory: what a removal would destroy, going into it, is a test's own scratch files.
+    /// </summary>
+    private sealed class MountedOn(IHeldNative system, string mounted) : IHeldNative
+    {
+        public SafeFileHandle OpenAnchor(string path) => system.OpenAnchor(path);
+
+        public HeldOpen OpenDirectory(SafeFileHandle parent, string name, string path) => system.OpenDirectory(parent, name, path);
+
+        public SafeFileHandle MakeDirectory(SafeFileHandle parent, string name, string path)
+            => system.MakeDirectory(parent, name, path);
+
+        public PathKind KindOf(SafeFileHandle parent, string name, string path) => system.KindOf(parent, name, path);
+
+        public IReadOnlyList<HeldName> Entries(SafeFileHandle directory, string path) => system.Entries(directory, path);
+
+        public SafeFileHandle OpenFile(SafeFileHandle parent, string name, string path)
+            => system.OpenFile(parent, name, path);
+
+        public SafeFileHandle CreateFile(SafeFileHandle parent, string name, string path)
+            => system.CreateFile(parent, name, path);
+
+        public void KeepMode(SafeFileHandle parent, string name, SafeFileHandle written)
+            => system.KeepMode(parent, name, written);
+
+        public void Replace(SafeFileHandle parent, string temporary, SafeFileHandle written, string name, string path)
+            => system.Replace(parent, temporary, written, name, path);
+
+        public void Rename(
+            SafeFileHandle fromParent,
+            string fromName,
+            SafeFileHandle toParent,
+            string toName,
+            bool replace,
+            string from,
+            string to)
+            => system.Rename(fromParent, fromName, toParent, toName, replace, from, to);
+
+        public void Remove(SafeFileHandle parent, string name, bool directory, string path) => system.Remove(parent, name, directory, path);
+
+        public bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path)
+            => string.Equals(path, mounted, StringComparison.Ordinal) || system.IsMountedOn(parent, child, path);
     }
 
     /// <summary>

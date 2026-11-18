@@ -17,7 +17,12 @@ internal static class CleanCommand
 
     private static readonly Option<bool> FormerWorkersOption = new(CleanService.FormerWorkersOption)
     {
-        Description = "Remove only the mutation workers an earlier version of this tool kept beside the repository's trees, as <tree>.mutation-<key><mark>-<n>, on each machine a selected leg runs on - with --dry-run, list them with their sizes. One a sweep of that version still claims is kept, refused-locked.",
+        Description = "Remove only the mutation workers an earlier version of this tool kept beside the repository's trees, as <tree>.mutation-<key><mark>-<n>, or in them, as <tree>/.mutations/<key><mark>-<n>, on each machine a selected leg runs on - with --dry-run, list them with their sizes. One a sweep of that version still claims is kept, refused-locked.",
+    };
+
+    private static readonly Option<bool> GoneCopiesOption = new(CleanService.GoneCopiesOption)
+    {
+        Description = "Remove only the copies hosts keep of worktrees gone from this machine, told by the tree this machine's record names - never by name, so a worktree here of the same name keeps its copies - on every host the record names one on, a line each, or with --legs those a selected leg can run on; with --dry-run, say what each holds and would become. One a run or a sweep holds is kept, refused-locked; a host that cannot be reached keeps its copies recorded for a later clean.",
     };
 
     private static readonly Option<bool> JsonOption = new("--json")
@@ -34,6 +39,7 @@ internal static class CleanCommand
         command.Options.Add(LegsOption);
         command.Options.Add(DryRunOption);
         command.Options.Add(FormerWorkersOption);
+        command.Options.Add(GoneCopiesOption);
         command.Options.Add(JsonOption);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
@@ -56,6 +62,7 @@ internal static class CleanCommand
                         arguments.GetValue(DispatchOptions.Here))
                     {
                         FormerWorkers = arguments.GetValue(FormerWorkersOption),
+                        GoneCopies = arguments.GetValue(GoneCopiesOption),
                     },
                     cancellationToken)
                 .ConfigureAwait(false);

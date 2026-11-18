@@ -833,11 +833,15 @@ public sealed class FlowResumeTests
         Assert.Equal("a1", taken.File.Steps[1].Agent);
     }
 
-    /// <summary>A run's questions or issues missing are refused by name, never made again empty: a step waiting on a question would wait for ever.</summary>
+    /// <summary>
+    /// A run's questions, issues or affected tests missing are refused by name, never made again empty: a step waiting on a
+    /// question would wait for ever, and a gate reading run.affectedTests would run none of the tests the run's work affects.
+    /// </summary>
     [Theory]
     [InlineData("questions.json", "its questions and answers")]
     [InlineData("pre-existing-issues.json", "its pre-existing issues")]
-    public async Task ARunsQuestionsOrIssuesMissing_AreRefusedByName(string missing, string what)
+    [InlineData(OrchestratorLayout.AffectedTestsFileName, "its affected tests")]
+    public async Task ARunsQuestionsIssuesOrAffectedTestsMissing_AreRefusedByName(string missing, string what)
     {
         using var temp = new TempDirectory();
         var definition = Parse("""
@@ -3907,6 +3911,14 @@ public sealed class FlowResumeTests
                 inner.Updates(updates);
             }
         }
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+        {
+            if (Interlocked.Increment(ref _made) <= writes)
+            {
+                inner.AffectedTests(entries);
+            }
+        }
     }
 
     /// <summary>The run's records, each change shown to the test before it is written through - which may fail it there.</summary>
@@ -3923,6 +3935,9 @@ public sealed class FlowResumeTests
 
         public void Updates(FlowUpdatesFile updates)
             => inner.Updates(updates);
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner.AffectedTests(entries);
     }
 
     /// <summary>The run's records, watched: each change is written through, and a test waits on the change it times.</summary>
@@ -3971,6 +3986,9 @@ public sealed class FlowResumeTests
 
         public void Updates(FlowUpdatesFile updates)
             => inner.Updates(updates);
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner.AffectedTests(entries);
     }
 
     /// <summary>The owner of a run is claimed at the start of a session: a live owner refuses it, a dead one is reclaimed and said, and the run is released where its session leaves it.</summary>

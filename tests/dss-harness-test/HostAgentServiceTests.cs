@@ -510,6 +510,35 @@ public sealed class HostAgentServiceTests
         Assert.Equal($"{Path.Combine("~", "bin", "absent")} is missing", info.Emulators["qemu"].Reason);
     }
 
+    /// <summary>
+    /// A host answers its own settings file as it reads it to admit the legs sent to it - its admission, or why it could not
+    /// be read - with its home written '~', as every place in an answer is: the machine that asked shows it as the host's.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "admission": { "heavyLegs": 3 } }""", 3, false)]
+    [InlineData("""{ "admission": { "heavyLeg": 3 } }""", null, true)]
+    public async Task Info_AnswersTheHostsOwnSettingsFile_WithItsHomeWrittenAsTilde(string json, int? heavyLegs, bool refused)
+    {
+        using var home = new TempDirectory();
+        var path = home.WriteFile(Path.Combine(".local", "share", "dssharness", MachineSettingsFile.FileNameFor("tests")), json);
+        var shown = Path.Combine("~", ".local", "share", "dssharness", MachineSettingsFile.FileNameFor("tests"));
+        using var output = new StringWriter();
+
+        await Service(home.Path, current: ThisPlatform, machineSettings: new MachineSettingsFile(new PhysicalFileSystem(FilePermissionsFactory.Create()), path)).ServeAsync(
+            new StringReader(JsonSerializer.Serialize(new HostAgentRequest { Kind = HostAgentRequestKind.Info }, HostAgentProtocol.JsonOptions)),
+            output,
+            new StringWriter(),
+            NothingRuns,
+            TestContext.Current.CancellationToken);
+
+        var answered = JsonSerializer.Deserialize<HostAgentInfo>(output.ToString(), HostAgentProtocol.JsonOptions)!.MachineSettings!;
+
+        Assert.Equal(shown, answered.Path);
+        Assert.Equal(heavyLegs, answered.Admission?.HeavyLegs);
+        Assert.Equal(refused, answered.Problem?.StartsWith($"This machine's settings file '{shown}' could not be read: ", StringComparison.Ordinal) ?? false);
+        Assert.DoesNotContain(home.Path, answered.Problem ?? string.Empty, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Run_ReportsACopyThatCannotBeEntered_AsUnavailable()
     {
@@ -1190,7 +1219,7 @@ public sealed class HostAgentServiceTests
         var run = new HostAgentRequest { Kind = HostAgentRequestKind.Run };
         var read = JsonSerializer.Deserialize<HostAgentRequest>(JsonSerializer.Serialize(run, HostAgentProtocol.JsonOptions), HostAgentProtocol.JsonOptions)!;
 
-        Assert.Equal(12, HostAgentProtocol.Version);
+        Assert.Equal(14, HostAgentProtocol.Version);
         Assert.Equal(15, read.BeatSeconds);
         Assert.Equal(new InputBeat(TimeSpan.FromSeconds(15), "host-agent: beat"), HostAgentProtocol.BeatOf(read));
         Assert.Null(HostAgentProtocol.BeatOf(new HostAgentRequest { Kind = HostAgentRequestKind.Run, BeatSeconds = 0 }));
@@ -1456,7 +1485,8 @@ public sealed class HostAgentServiceTests
         PlatformId current = PlatformId.Linux,
         IFileSystem? files = null,
         IHostAgentLastResort? lastResort = null,
-        HostAgentPatience? patience = null)
+        HostAgentPatience? patience = null,
+        MachineSettingsFile? machineSettings = null)
     {
         var platform = HostDoubles.Platform(current, "arm64", home);
 
@@ -1479,6 +1509,7 @@ public sealed class HostAgentServiceTests
                 new RecordingLauncher(),
                 HomeShorthand.Of(platform, fileSystem),
                 lastResort ?? new RecordingLastResort(),
+                machineSettings ?? HostDoubles.MachineSettings(fileSystem),
                 patience);
     }
 

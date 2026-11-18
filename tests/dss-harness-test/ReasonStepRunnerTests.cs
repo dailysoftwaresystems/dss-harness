@@ -115,7 +115,7 @@ public sealed class ReasonStepRunnerTests
         return (kit, runner);
     }
 
-    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null, DssHarness.Core.Codebase.ICodebaseGraphService? graphService = null)
+    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null, DssHarness.Core.Codebase.ICodebaseGraphService? graphService = null, MeasuredTests? tests = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -128,10 +128,92 @@ public sealed class ReasonStepRunnerTests
             kit.Harness.Output,
             TimeProvider.System,
             isolation ?? new TestIsolation(),
+            tests ?? new MeasuredTests(),
+            kit.Harness.ChildSessions,
             kit.Harness.GitClient,
             kit.Harness.ConfigStore,
             updates,
             graphService);
+
+    /// <summary>
+    /// The kit's configuration with one leg declared, of the configuration <c>debug</c>: what a step's measure tool is
+    /// offered and answered over.
+    /// </summary>
+    private static void WithLegs(OrchestrationKit kit)
+    {
+        var config = Path.Combine(kit.Main, ".harness-config", "config.json");
+
+        File.WriteAllText(
+            config,
+            File.ReadAllText(config).Replace(
+                "\"worktrees\":",
+                "\"legs\": {\"windows\": {\"os\": \"windows\", \"processor\": \"x86_64\", \"config\": \"debug\"}},\n  \"buildConfigs\": {\"debug\": {}},\n  \"worktrees\":",
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The test service a step's measure tool is answered by, keeping every request it was asked and the process scope
+    /// each ran under, and answering the leg's line a test sets - or a run cut off, a run with no line, or a refusal.
+    /// </summary>
+    private sealed class MeasuredTests : DssHarness.Core.Application.Legs.ITestLegs
+    {
+        public List<DssHarness.Core.Application.Legs.TestLegsRequest> Asked { get; } = [];
+
+        /// <summary>The process scope each request ran under, in order; null for one that ran under none.</summary>
+        public List<DssHarness.Core.Processes.ProcessScope?> Scopes { get; } = [];
+
+        /// <summary>The verdict the leg's line comes to.</summary>
+        public DssHarness.Core.Execution.LegVerdict Verdict { get; set; } = DssHarness.Core.Execution.LegVerdict.Passed;
+
+        /// <summary>What the leg's line says.</summary>
+        public string Detail { get; set; } = "the tests passed";
+
+        /// <summary>Whether the run was cut off before it finished.</summary>
+        public bool Cancelled { get; set; }
+
+        /// <summary>Whether the run reached no leg's line.</summary>
+        public bool NoLine { get; set; }
+
+        /// <summary>The refusal the run throws, where a test sets one.</summary>
+        public HarnessException? Refusal { get; set; }
+
+        public Task<DssHarness.Core.Runs.LegRunResult> RunAsync(DssHarness.Core.Application.Legs.TestLegsRequest request, DssHarness.Core.Execution.RunId run, CancellationToken cancellationToken = default)
+        {
+            Asked.Add(request);
+            Scopes.Add(DssHarness.Core.Processes.ProcessScope.Current);
+
+            if (Refusal is { } refusal)
+            {
+                throw refusal;
+            }
+
+            var passed = Verdict == DssHarness.Core.Execution.LegVerdict.Passed;
+
+            return Task.FromResult(new DssHarness.Core.Runs.LegRunResult(
+                "test",
+                run,
+                $"/runs/{run.Value}",
+                DssHarness.Core.Execution.LedgerReport.From(
+                    NoLine
+                        ? []
+                        : [
+                            new()
+                            {
+                                Leg = request.LegNames is [var leg] ? leg : "windows",
+                                Verdict = Verdict,
+                                Duration = TimeSpan.Zero,
+                                Detail = Detail,
+                                LogTail = ["last line of the run"],
+                            },
+                        ],
+                    0),
+                passed ? 0 : 20,
+                Cancelled ? "the run was cut off" : passed ? "the run passed" : "the run did not pass",
+                Cancelled,
+                [],
+                []));
+        }
+    }
 
     /// <summary>The kit's slot, as the runner reads it.</summary>
     private static AgentKeyStore Keys(OrchestrationKit kit)
@@ -1530,6 +1612,297 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal("tools", result.Graph["mode"]!.GetValue<string>());
         Assert.Equal("base", result.Graph["view"]!.GetValue<string>());
         Assert.Equal(WorkflowStep.GraphFromTask, result.Graph["from"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A reason step the engine reads the classes of the work item it is an instance of for - under <c>classes</c>,
+    /// where its prompt reads <c>{input.item.classes}</c> - is served a pack seeded from every site and home of those
+    /// classes, so a fresh agent holds every site's declaration, not only those near the defect: the home's and each
+    /// site's declaration is in the pack, said by why it is a seed.
+    /// </summary>
+    [Fact]
+    public async Task AStepTheEngineReadsTheItemsClassesFor_IsServedAPackSeededFromEverySiteAndHome()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit, (Path.Combine("src", "Keys.cs"), "namespace Demo;\n\npublic static class Keys\n{\n    public static string TokenOf(string key) => key;\n}\n"));
+
+        var classes = JsonNode.Parse(
+            """
+            [{"id": "C1", "invariant": "a plan's token is read one way", "home": {"path": "src/Planner.cs", "symbol": "Plan", "exists": true},
+              "sites": [{"path": "src/Planner.cs", "symbol": "Plan", "decides": "the plan", "then": "home"},
+                        {"path": "src/Keys.cs", "symbol": "TokenOf", "decides": "the token", "then": "reads-home"}]}]
+            """);
+
+        var run = Graphing(kit, Graphed()) with
+        {
+            Read = new Dictionary<string, FlowValue>(StringComparer.Ordinal) { ["classes"] = FlowValue.Of(classes) },
+        };
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(run, Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.Contains("member public int Plan() | src/Planner.cs", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("member public static string TokenOf(string key) | src/Keys.cs", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("| the home of a class the item closes", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("| a site of a class the item closes", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("2 declaration(s) at the sites and homes of the classes it is to close", asked.Codebase, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A reason step of a repository that declares legs is given the measure tool: each call answered through the test
+    /// service, as any leg is run - the leg it names, built as the variant it names, tested with the filter it names -
+    /// in a local copy of the main tree where the step's agent has no worktree of its own, so no fold in flight changes
+    /// what it measures; its verdict spelt as the ledger spells it, and its ledger kept in the call's own records of the
+    /// step's directory, by the call's id, with where the run's records are. A call naming a configuration the leg does
+    /// not build, or a leg that is not declared, is answered unmeasured with the reason, nothing run.
+    /// </summary>
+    [Fact]
+    public async Task AStepOfARepositoryThatDeclaresLegs_IsGivenTheMeasureTool_AnsweredAsAnyLegIsRun()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        WithLegs(kit);
+        var tests = new MeasuredTests();
+
+        var result = await Runner(kit, agents, tests: tests).RunAsync(Graphing(kit, Graphed()), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.NotNull(asked.Measure);
+
+        var step = kit.Layout.InstanceDirectory("think", "a9");
+        var records = AgentMeasureSupport.RecordsOf(step, "toolu_1");
+        var answer = await asked.Measure!.Measure(new AgentMeasureCall("toolu_1", "windows", "debug", "TheShape", "windows / the plain form", records), Token);
+
+        Assert.True(answer.Measured && answer.Passed, answer.Reason ?? answer.Detail);
+
+        // The verdict spelt as the ledger and the help spell it, never the enum's own name.
+        Assert.Equal("passed", answer.Verdict);
+        Assert.Equal("the tests passed\nlast line of the run", answer.Detail);
+
+        var request = Assert.Single(tests.Asked);
+
+        Assert.Equal(kit.Main, request.Directory);
+        Assert.Equal(["windows"], request.LegNames);
+        Assert.Equal(["TheShape"], request.Filters);
+        Assert.True(request.LocalCopy);
+
+        // Where its run's records are, and its ledger kept in the call's own records under the step's directory, by the
+        // call's id - none of a red leg's logs, for the step works in no worktree of its own.
+        var ledger = JsonNode.Parse(File.ReadAllText(Path.Combine(records, OrchestratorLayout.StepLedgerFileName)))!;
+
+        Assert.StartsWith("/runs/", answer.RunDirectory, StringComparison.Ordinal);
+        Assert.Equal(answer.RunDirectory, ledger["runDirectory"]!.GetValue<string>());
+        Assert.Equal(["windows"], ledger["legs"]!.AsArray().Select(leg => leg!["leg"]!.GetValue<string>()));
+        Assert.False(Directory.Exists(Path.Combine(records, OrchestratorLayout.StepLogsDirectoryName)));
+
+        // A configuration the leg does not build, and a leg that is not declared: unmeasured, with the reason, and nothing run.
+        var otherConfig = await asked.Measure.Measure(new AgentMeasureCall("toolu_2", "windows", "release", "TheShape", "windows / release", AgentMeasureSupport.RecordsOf(step, "toolu_2")), Token);
+
+        Assert.False(otherConfig.Measured);
+        Assert.Equal("the leg 'windows' builds the configuration 'debug'", otherConfig.Reason);
+
+        var noLeg = await asked.Measure.Measure(new AgentMeasureCall("toolu_3", "linux", "debug", "TheShape", "linux", AgentMeasureSupport.RecordsOf(step, "toolu_3")), Token);
+
+        Assert.False(noLeg.Measured);
+        Assert.Equal("no leg 'linux' is declared: the run's legs are windows", noLeg.Reason);
+        Assert.Single(tests.Asked);
+        Assert.False(Directory.Exists(AgentMeasureSupport.RecordsOf(step, "toolu_2")));
+    }
+
+    /// <summary>
+    /// A measure call's legs run as a leg step's do, under a process scope of the step's own - what they start bound is
+    /// apart from the engine's terminal and recorded while it runs - whose records are kept in the reason step's own
+    /// directory, where the next command over the run reads them, so a killed engine leaves none of the measurement's
+    /// build or tests running unrecorded.
+    /// </summary>
+    [Fact]
+    public async Task AMeasureCallsLegs_RunUnderAProcessScope_RecordingInTheStepsOwnDirectory()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        WithLegs(kit);
+        var tests = new MeasuredTests();
+
+        var result = await Runner(kit, agents, tests: tests).RunAsync(Graphing(kit, Graphed()), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var step = kit.Layout.InstanceDirectory("think", "a9");
+        _ = await agents.Asked.Single().Measure!.Measure(new AgentMeasureCall("toolu_1", "windows", "debug", "", "windows", AgentMeasureSupport.RecordsOf(step, "toolu_1")), Token);
+
+        var record = Assert.IsType<DssHarness.Core.Processes.ProcessScope>(Assert.Single(tests.Scopes)).Record();
+        var file = OrchestratorLayout.ChildFile(step, Environment.ProcessId);
+
+        record.Placed(Environment.ProcessId, started: null, TestHost.AssemblyProgram, group: true);
+
+        Assert.True(File.Exists(file), $"the scope's record is not at '{file}'");
+
+        record.Ended();
+
+        Assert.False(File.Exists(file));
+    }
+
+    /// <summary>
+    /// A measure call's answer is its leg's verdict as the one owner of what a verdict means reads it
+    /// (<see cref="FlowLegVerdicts.ClassOf"/>): a red leg - its build or its tests failed - is measured and failed; every
+    /// other verdict that is no pass measured nothing of the cell - a leg another run's lock refused, one skipped as
+    /// unavailable or for a missing tool, one not admitted, stopped, whose inputs moved, or one whose filter matched no test
+    /// - and is answered unmeasured, the leg's own words as why and the verdict spelt as the ledger spells it.
+    /// </summary>
+    [Theory]
+    [InlineData(DssHarness.Core.Execution.LegVerdict.Failed, "test failed: 2 of 9 failed", true)]
+    [InlineData(DssHarness.Core.Execution.LegVerdict.RefusedLocked, "another run holds the lock of leg 'windows'", false)]
+    [InlineData(DssHarness.Core.Execution.LegVerdict.SkippedUnavailable, "agentPolicy.isolation is required and this machine has none", false)]
+    [InlineData(DssHarness.Core.Execution.LegVerdict.SkippedToolMissing, "ctest is not installed", false)]
+    [InlineData(DssHarness.Core.Execution.LegVerdict.NotAdmitted, "no heavy-leg slot was free in 60 minutes", false)]
+    [InlineData(DssHarness.Core.Execution.LegVerdict.Stopped, "the build was stopped from outside", false)]
+    [InlineData(DssHarness.Core.Execution.LegVerdict.InputsMoved, "src/a.cs changed while the tests ran", false)]
+    [InlineData(DssHarness.Core.Execution.LegVerdict.Unwitnessed, "the filter matched no test", false)]
+    public async Task AMeasureCall_IsAnsweredByWhatItsLegsVerdictMeans(DssHarness.Core.Execution.LegVerdict verdict, string detail, bool measured)
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        WithLegs(kit);
+        var tests = new MeasuredTests { Verdict = verdict, Detail = detail };
+
+        _ = await Runner(kit, agents, tests: tests).RunAsync(Graphing(kit, Graphed()), Token);
+
+        var step = kit.Layout.InstanceDirectory("think", "a9");
+        var answer = await agents.Asked.Single().Measure!.Measure(new AgentMeasureCall("toolu_1", "windows", "debug", "Shape", "windows", AgentMeasureSupport.RecordsOf(step, "toolu_1")), Token);
+        var display = DssHarness.Core.Execution.Verdicts.Display(verdict);
+
+        Assert.Equal((measured, false, display, $"{detail}\nlast line of the run"), (answer.Measured, answer.Passed, answer.Verdict, answer.Detail));
+        Assert.Equal(measured ? "failed" : "unmeasured", answer.Result);
+        Assert.Equal(measured ? null : $"the leg 'windows' came to {display}, which measures nothing of the cell: {detail}", answer.Reason);
+        Assert.StartsWith("/runs/", answer.RunDirectory, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A measure call whose run something other than its leg ended - cut off, or reaching no leg's line - or that its use
+    /// case refused is answered unmeasured with the run's own words, never failed; and one the agents' isolation refuses,
+    /// where <c>agentPolicy.isolation</c> is required and this machine has none, is answered unmeasured saying so, with
+    /// nothing run.
+    /// </summary>
+    [Fact]
+    public async Task AMeasureCallItsLegDidNotEnd_OrThatWasRefused_IsAnsweredUnmeasuredWithWhy()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        WithLegs(kit);
+        var tests = new MeasuredTests { Cancelled = true };
+
+        _ = await Runner(kit, agents, tests: tests).RunAsync(Graphing(kit, Graphed()), Token);
+
+        var measure = agents.Asked.Single().Measure!;
+        var step = kit.Layout.InstanceDirectory("think", "a9");
+
+        Task<AgentMeasureAnswer> MeasureAsync(string id) => measure.Measure(new AgentMeasureCall(id, "windows", "debug", "", "windows", AgentMeasureSupport.RecordsOf(step, id)), Token);
+
+        var cut = await MeasureAsync("toolu_1");
+
+        Assert.Equal((false, "unmeasured", "the run was cut off", string.Empty), (cut.Measured, cut.Result, cut.Reason, cut.Verdict));
+
+        tests.Cancelled = false;
+        tests.NoLine = true;
+        var noLine = await MeasureAsync("toolu_2");
+
+        Assert.Equal((false, "unmeasured", "the run passed"), (noLine.Measured, noLine.Result, noLine.Reason));
+
+        tests.NoLine = false;
+        tests.Refusal = new HarnessException(HarnessExit.Refused, "the tree 'main' is locked by another run");
+        var refused = await MeasureAsync("toolu_3");
+
+        Assert.Equal((false, "unmeasured", "the tree 'main' is locked by another run", (string?)null), (refused.Measured, refused.Result, refused.Reason, refused.RunDirectory));
+        Assert.Equal(3, tests.Asked.Count);
+
+        // The agents' isolation required and none here for what their work builds: nothing run, the call unmeasured saying why.
+        var unisolated = new MeasuredTests();
+        var isolatedAgents = new Agents();
+
+        _ = await Runner(kit, isolatedAgents, isolation: TestIsolation.UnavailableToExecutions("this machine has no sandbox", "install one"), tests: unisolated).RunAsync(Graphing(kit, Graphed()), Token);
+
+        var isolated = await isolatedAgents.Asked.Single().Measure!.Measure(new AgentMeasureCall("toolu_4", "windows", "debug", "", "windows", AgentMeasureSupport.RecordsOf(step, "toolu_4")), Token);
+
+        Assert.Equal(
+            (false, "the measure call 'toolu_4' of 'think' is refused: agentPolicy.isolation is \"required\" and this machine has no sandbox, so nothing the agents wrote is built, tested or run here; install one. Nothing was run."),
+            (isolated.Measured, isolated.Reason));
+        Assert.Empty(unisolated.Asked);
+    }
+
+    /// <summary>
+    /// A reason step whose agent has a worktree of its own - a builder in the item pipeline - measures in it: the leg
+    /// the call names works on the worktree as a test step's does, and no copy is made.
+    /// </summary>
+    [Fact]
+    public async Task AStepWorkingInAnAgentsWorktree_MeasuresInIt_NoCopyMade()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        var worktree = await kit.CreateAgentAsync("a1");
+        WithLegs(kit);
+        var tests = new MeasuredTests();
+
+        var result = await Runner(kit, agents, tests: tests).RunAsync(Graphing(kit, Graphed(), agent: "a1", made: false, prompt: "Go on."), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.Equal(worktree, asked.Workspace.Worktree);
+
+        var answer = await asked.Measure!.Measure(new AgentMeasureCall("toolu_1", "windows", "debug", "", "windows / the plain form", AgentMeasureSupport.RecordsOf(kit.Layout.InstanceDirectory("think", "a1"), "toolu_1")), Token);
+
+        Assert.True(answer.Measured, answer.Reason);
+
+        var request = Assert.Single(tests.Asked);
+
+        Assert.Equal(worktree, request.Directory);
+        Assert.False(request.LocalCopy);
+        Assert.Empty(request.Filters);
+    }
+
+    /// <summary>A repository that declares no leg gives its reason steps no measure tool, for there is nothing to measure on.</summary>
+    [Fact]
+    public async Task ARepositoryThatDeclaresNoLeg_GivesItsReasonStepsNoMeasureTool()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+
+        var result = await Runner(kit, agents).RunAsync(Graphing(kit, Graphed()), Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Null(agents.Asked.Single().Measure);
+    }
+
+    /// <summary>
+    /// A step whose agent may run no command - a read-only reviewer's definition says <c>capabilities: [read, web]</c> -
+    /// is given no measure tool where the repository declares legs, by the one rule every client serves it by: a
+    /// measurement builds and runs what it measures. Its launch is then asked to take no tool its server does not list.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhoseAgentRunsNoCommand_IsGivenNoMeasureTool_WhereTheRepositoryDeclaresLegs()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        WithLegs(kit);
+        OrchestrationKit.Write(kit.Main, Path.Combine(".harness-config", "workflows", "flow", "agents", "reviewer.md"), "---\nname: reviewer\ndescription: reviews\ncapabilities: [read, web]\n---\nYou review.\n");
+        var reviewer = new WorkflowStep { Name = "think", Type = "reason", Agent = "reviewer", Prompt = "prompts/plan.md", Outputs = "schemas/plan.schema.json" };
+
+        var result = await Runner(kit, agents).RunAsync(Graphing(kit, Graphed()) with { Step = reviewer }, Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.Equal([AgentCapability.Read, AgentCapability.Web], asked.Ground!.Capabilities);
+        Assert.Null(asked.Measure);
     }
 
     /// <summary>

@@ -146,6 +146,26 @@ public sealed class TestInvocation
     public string? FilterArg { get; init; }
 
     /// <summary>
+    /// What joins several filter units - each a value <see cref="FilterArg"/> takes, a test class, a test name, a
+    /// name pattern - into the one value <see cref="FilterArg"/> is given. Unset, a runner the harness knows is given them
+    /// joined by its own, <c>|</c>: ctest, whose <c>-R</c> keeps only the last it is given; <c>dotnet test</c>, which
+    /// refuses a second <c>--filter</c> and whose filter expression joins alternatives so; and <c>dart test</c>, which runs
+    /// only a test every <c>--name</c> matches. Unset for any other runner, or empty, each unit is given a
+    /// <see cref="FilterArg"/> of its own; empty says so in an operating system's section over a join the shared one
+    /// declares.
+    /// </summary>
+    /// <remarks>
+    /// A run that names several units - <c>test --filter</c> given more than once, a workflow's test step given a list -
+    /// runs the tests any of them names. So ctest, <c>dotnet test</c> and <c>dart test</c>, none of which runs those given
+    /// its filter option apart, are given them joined where no join is declared - the harness owns the join of each, so
+    /// a file that leaves it out, as every one an earlier init wrote does, reads the one value that works - and are
+    /// refused when the file is read an empty join and any join but <c>|</c>, which each reads as part of one pattern or
+    /// expression that chooses other tests; and dart's <c>--plain-name</c>, which reads plain text and so takes several
+    /// units neither way, is refused for <c>--name</c> (<see cref="Testing.FilterUnits"/>).
+    /// </remarks>
+    public string? FilterJoin { get; init; }
+
+    /// <summary>
     /// Argument introducing a test exclusion, such as <c>-LE</c> for ctest, so one <c>--exclude</c>
     /// option works everywhere; what <see cref="RemoteExcludes"/> leave out on a host's legs reaches
     /// the runner through it too. For ctest, one of its options that leave tests out: one that

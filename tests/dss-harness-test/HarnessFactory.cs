@@ -13,6 +13,7 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Projects;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Secrets;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Tools;
 using DssHarness.Core.Worktrees;
@@ -63,7 +64,9 @@ public sealed class HarnessFactory
             FileSystem,
             Platform,
             Output,
-            new SyncedCopyToolCheck(PublishedVersions, RunningTool, CommandOrigin.Typed, Output));
+            new SyncedCopyToolCheck(PublishedVersions, RunningTool, CommandOrigin.Typed, Output),
+            new HostSecretsStore(FileSystem, FilePermissions, Platform),
+            CommandOrigin.Typed);
         LocalTransport = Local(FileSystem);
         RunLock = new RunLock(FileSystem, Output, Identity);
         Slots = new HeavyLegSlots(FileSystem, Output, Identity, ScratchSlotsRecord());
@@ -141,7 +144,8 @@ public sealed class HarnessFactory
             new OrchestrationLog(fileSystem, TimeProvider.System, Output),
             SessionsOver(fileSystem),
             TimeProvider.System,
-            ProcessContext);
+            ProcessContext,
+            new DssHarness.Core.Mutations.ArmListingReader(SyncKit.Service(this, fileSystem: fileSystem, git: gitClient), fileSystem, Platform));
     }
 
     /// <summary>

@@ -152,13 +152,13 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
         var count = 0;
         var tokens = 0;
 
-        foreach (var (tool, input, result) in Making.Calls(stream))
+        foreach (var call in AgentStreamCalls.Of(stream))
         {
-            if ((ClaudeCodeTools.ServedAs(tool) ?? tool) is ClaudeCodeTools.Read or AgentTools.ViewFile
-                && input["offset"] is null && input["limit"] is null && input["start_line"] is null && input["end_line"] is null)
+            if (call.Tool is ClaudeCodeTools.Read or AgentTools.ViewFile
+                && call.Input["offset"] is null && call.Input["limit"] is null && call.Input["start_line"] is null && call.Input["end_line"] is null)
             {
                 count++;
-                tokens += EstimatedTokens.Of(result);
+                tokens += EstimatedTokens.Of(call.Result);
             }
         }
 
@@ -215,9 +215,9 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
                 Touched(call.Asked, WorkingSetUses.Found);
             }
 
-            foreach (var (tool, input, result) in Calls(stream))
+            foreach (var call in AgentStreamCalls.Of(stream))
             {
-                Call(tool, input, result);
+                Call(call.Tool, call.Input, call.Result);
             }
 
             List<WorkingSetNode> nodes = [.. _touched.Values
@@ -230,12 +230,13 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
         }
 
         /// <summary>
-        /// One call of a client's file tools, as its client names it - a call Claude Code made of the engine's tool server as
-        /// the runtime's tool it is: a read by the lines its answer gave, a write by the lines it wrote.
+        /// One call of a client's file tools, by the tool the one reading of a stream's calls names
+        /// (<see cref="AgentStreamCalls"/>) - a call Claude Code made of the engine's tool server as the runtime's tool it is:
+        /// a read by the lines its answer gave, a write by the lines it wrote.
         /// </summary>
         private void Call(string tool, JsonObject input, string result)
         {
-            switch (ClaudeCodeTools.ServedAs(tool) ?? tool)
+            switch (tool)
             {
                 case ClaudeCodeTools.Read or AgentTools.ViewFile:
                     if (Held(input, tool) is { } read && Numbered(result) is { } given)
@@ -449,50 +450,6 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
             }
 
             return lines;
-        }
-
-        /// <summary>
-        /// Every call of the stream that went through, in order, by the tool its client named it - by its start, or by the
-        /// message of the model that made it - with its input and its answer: the one reading of a call's form, every
-        /// client's alike.
-        /// </summary>
-        public static IEnumerable<(string Tool, JsonObject Input, string Result)> Calls(IReadOnlyList<AgentEvent> stream)
-        {
-            var tools = new Dictionary<string, string>(StringComparer.Ordinal);
-
-            foreach (var @event in stream)
-            {
-                switch (@event)
-                {
-                    case ToolCallStarted started:
-                        tools[started.Id] = started.Tool;
-                        break;
-
-                    case AssistantMessage message:
-                        foreach (var made in message.Calls)
-                        {
-                            tools[made.Id] = made.Name;
-                        }
-
-                        break;
-
-                    case ToolCallFinished { Ok: true } finished when tools.TryGetValue(finished.Id, out var tool) && Input(finished.Input) is { } input:
-                        yield return (tool, input, finished.Result);
-                        break;
-                }
-            }
-        }
-
-        private static JsonObject? Input(string input)
-        {
-            try
-            {
-                return JsonNode.Parse(input) as JsonObject;
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
         }
 
         private static string? Text(JsonObject input, string name) => input[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;

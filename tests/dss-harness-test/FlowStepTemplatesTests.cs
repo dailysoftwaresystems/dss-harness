@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using DssHarness.Core.Orchestration.Flow;
 
 namespace DssHarness.Tests;
@@ -94,8 +95,9 @@ public sealed class FlowStepTemplatesTests
     }
 
     /// <summary>
-    /// A key whose text cannot be filled is named with why, and nothing of the step is handed on; and a test's filter,
-    /// exclusion or label that fills to nothing is not given.
+    /// A key whose text cannot be filled is named with why, and nothing of the step is handed on; a test's exclusion or
+    /// label that fills to nothing is not given; its affected and noTests are filled as they read; and its filter, a
+    /// list the engine reads where the step starts, is handed on as written, never filled.
     /// </summary>
     [Fact]
     public void AKeyThatCannotBeFilled_IsNamed_AndOneFilledToNothingIsNotGiven()
@@ -103,9 +105,11 @@ public sealed class FlowStepTemplatesTests
         var step = Step("""
               - name: verify
                 type: test
-                filter: '{input.filter}'
+                filter: 'union(input.units, run.affectedTests)'
                 exclude: ['{input.skip}', slow]
                 labels: ['{input.label}']
+                affected: '{input.key}'
+                noTests: 'none: {input.reason}'
             """);
 
         Assert.Null(FlowStepTemplates.Fill(step, Unreadable, out var key, out var problem));
@@ -114,9 +118,10 @@ public sealed class FlowStepTemplatesTests
         var empty = FlowStepTemplates.Fill(step, Empty, out key, out problem)!;
 
         Assert.Equal((null, null), (key, problem));
-        Assert.Null(empty.Filter);
+        Assert.Equal("union(input.units, run.affectedTests)", empty.Filter!.Expression);
         Assert.Equal(["slow"], empty.Exclude);
         Assert.Empty(empty.Labels);
+        Assert.Equal((string.Empty, "none: {input.reason}"), (empty.Affected, empty.NoTests));
 
         static string? Unreadable(string template, out string? problem)
         {
@@ -129,5 +134,41 @@ public sealed class FlowStepTemplatesTests
             problem = null;
             return template.StartsWith('{') ? string.Empty : template;
         }
+    }
+
+    /// <summary>
+    /// The classes of the work item a reason step's prompt reads (<see cref="FlowStepTemplates.ClassesOf"/>), read by the
+    /// reader the template's fill reads by: a prompt that reads <c>{input.item.classes}</c> - or <c>{item.classes}</c>, as
+    /// a step of the flow's own names the <c>forEach</c> variable - is handed what that read yields, taken apart from what
+    /// the reader holds, and one that reads one class (<c>{input.item.classes[1]}</c>) that class alone; one that reads no
+    /// classes, or whose read yields none - nothing in scope, an item that declares none - is handed nothing.
+    /// </summary>
+    [Fact]
+    public void APromptThatReadsTheItemsClasses_IsHandedThemAsItsReaderReadsThem_AndOneThatReadsNoneIsHandedNothing()
+    {
+        var item = JsonNode.Parse("""{"title": "one", "classes": [{"id": "C1"}, {"id": "C2"}]}""")!;
+        var input = new JsonObject { ["item"] = item.DeepClone() };
+
+        var throughInput = FlowStepTemplates.ClassesOf("The classes you are closing:\n\n{input.item.classes}", Reader(("input", input)));
+        var throughItem = FlowStepTemplates.ClassesOf("The classes you are closing:\n\n{item.classes}", Reader(("item", item)));
+        var one = FlowStepTemplates.ClassesOf("The class you are closing:\n\n{input.item.classes[1]}", Reader(("input", input)));
+
+        Assert.Equal("""[{"id":"C1"},{"id":"C2"}]""", throughInput!.ToJsonString());
+        Assert.Equal(throughInput!.ToJsonString(), throughItem!.ToJsonString());
+        Assert.Equal("""[{"id":"C2"}]""", one!.ToJsonString());
+
+        // Taken apart from what the reader holds: what the step does of its classes does not touch the item the run holds.
+        Assert.Equal(2, item["classes"]!.AsArray().Count);
+        throughItem.Add(JsonNode.Parse("""{"id":"C3"}"""));
+        Assert.Equal(2, item["classes"]!.AsArray().Count);
+
+        Assert.Null(FlowStepTemplates.ClassesOf("Build this work item: {input.item.title}.", Reader(("input", input))));
+        Assert.Null(FlowStepTemplates.ClassesOf("The classes you are closing:\n\n{input.item.classes}", Reader()));
+        Assert.Null(FlowStepTemplates.ClassesOf("The classes you are closing:\n\n{input.item.classes}", Reader(("input", JsonNode.Parse("""{"item": {"title": "one", "noClass": "nothing to decide"}}""")))));
+
+        static Func<FlowExpression.Path, FlowExpression.PathRead> Reader(params (string Root, JsonNode? Value)[] roots)
+            => path => roots.FirstOrDefault(root => string.Equals(root.Root, path.Root, StringComparison.Ordinal)) is { Root: not null } found
+                ? new(FlowValue.Of(found.Value), 0)
+                : new(FlowValue.Missing, 0);
     }
 }

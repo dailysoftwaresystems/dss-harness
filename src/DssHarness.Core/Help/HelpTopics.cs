@@ -333,15 +333,29 @@ public static class HelpTopics
         builder.AppendLine("machine nobody set up here.");
         builder.AppendLine();
         builder.AppendLine($"  .harness-config/{HarnessLayout.SshItemsDirectoryName}/<name>/{HarnessLayout.ItemEnvFileName}");
-        builder.AppendLine("                                     ADDRESS=, USER=, PORT= (optional), and the");
-        builder.AppendLine($"                                     superuser credential as {HostSecretsStore.SuperuserKey}= (optional)");
+        builder.AppendLine("                                     ADDRESS=, USER=, PORT= (optional), the");
+        builder.AppendLine($"                                     superuser credential as {HostSecretsStore.SuperuserKey}= (optional),");
+        builder.AppendLine($"                                     and {HostSecretsStore.RepositoryPathKey}= (optional, below)");
         builder.AppendLine($"  .harness-config/{HarnessLayout.SshItemsDirectoryName}/<name>/{HarnessLayout.ItemKeyFileName}");
         builder.AppendLine("                                     the private key");
         builder.AppendLine($"  .harness-config/{HarnessLayout.SshItemsDirectoryName}/<name>/{HarnessLayout.ItemKnownHostsFileName}");
         builder.AppendLine("                                     the host keys ssh may accept");
         builder.AppendLine($"  .harness-config/{HarnessLayout.WslDistrosDirectoryName}/<name>/{HarnessLayout.ItemEnvFileName}");
-        builder.AppendLine("                                     the distribution, and the superuser credential");
-        builder.AppendLine("                                     install-missing-tools needs");
+        builder.AppendLine($"                                     the distribution as {HostSecretsStore.DistributionKey}=, as wsl.exe");
+        builder.AppendLine("                                     lists it, the superuser credential");
+        builder.AppendLine($"                                     install-missing-tools needs, and {HostSecretsStore.RepositoryPathKey}=");
+        builder.AppendLine("                                     (optional, below)");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{HostSecretsStore.RepositoryPathKey} is where that host keeps the main checkout's copy for this machine, over the "
+            + "repositoryPath config.json declares for every machine: config.json is shared, and two machines sharing one "
+            + "host each keep their own copies there. It is held to repositoryPath's rules - absolute or under ~/, no '.' "
+            + "or '..' segment, never a home or root directory - and refused, naming the file, where it breaks one. Every "
+            + $"reader of a host's copies - sync, a leg placed there, host-exec, legs, list-worktree --hosts, clean - reads this "
+            + $"one answer, and '{ToolPackage.Command} legs' says each host's copy and what set it. A key the item is not read "
+            + "for is refused, naming the keys it is read for, never passed over: a misspelt one would leave what it was "
+            + "written to change as it was.");
         builder.AppendLine();
         builder.AppendLine("hosts.ssh and hosts.wsl are keyed by these names, and a host declared without an");
         builder.AppendLine("item is refused when config.json is read: it could never be reached, and failing");
@@ -514,6 +528,13 @@ public static class HelpTopics
         builder.AppendLine("  {leg} {os} {processor}              which leg this is, derived rather than typed:");
         builder.AppendLine("  {toolchain} {config} {variant}      an instrument that records what it measured");
         builder.AppendLine("  {host} {runId}                      cannot then be labelled wrongly by hand");
+        builder.AppendLine($"  {{{LegPathNames.Distribution}}}                      the distribution the leg's own WSL item");
+        builder.AppendLine("                                      names, as wsl.exe lists it: what 'wsl.exe -d'");
+        builder.AppendLine("                                      takes. Refused on a leg that runs in no WSL");
+        builder.AppendLine("                                      distribution");
+        builder.AppendLine($"  {{{LegPathNames.ItemDistributionPrefix}<item>}}               the distribution WSL item <item> names, on");
+        builder.AppendLine("                                      any leg. Refused where wslDistros declares no");
+        builder.AppendLine("                                      such item");
         builder.AppendLine("  {product}                           the one file this build is declared to make.");
         builder.AppendLine("                                      Refused where the project declares none or");
         builder.AppendLine("                                      several, rather than guessing which");
@@ -556,6 +577,15 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
+            $"{{{LegPathNames.Distribution}}} and {{{LegPathNames.ItemDistributionPrefix}<item>}} are read from the WSL item's "
+            + $".env - its {Secrets.HostSecretsStore.DistributionKey}, never its credential - where the leg is placed, and a "
+            + "host running a leg another machine sent it is told them beside the leg: config.json names a WSL item alone, "
+            + "and an item named otherwise than its distribution, given to 'wsl.exe -d', reaches none. Where the leg was "
+            + "placed, an item whose .env cannot be read has no distribution, and a line naming it is refused before the "
+            + $"first step runs, saying so; '{Hosts.ToolPackage.Command} legs' names each WSL host's distribution.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             $"An input or a {HarnessLayout.RunnerEnvDirectoryName} value named like a name above is refused, since a run line "
             + "naming it would get this tool's value while the environment held its own; so is an input whose "
             + "name a run line cannot write.");
@@ -565,13 +595,55 @@ public static class HelpTopics
             $"An action's 'inputs' are resolved from 'run {CommandLineInputs.Option} <name>=<value>' first, "
             + $"{HarnessLayout.RunnerDirectoryRelative}/{HarnessLayout.RunnerEnvDirectoryName} second and each input's "
             + $"own 'default' last; {HarnessLayout.RunnerSecretsDirectoryName} never gives one a value. A required input "
-            + "with none of them is refused before the first step runs, and so is a step naming one that is not "
-            + "required and has none, naming the input and how it can have one. Where the action has a "
+            + "with none of them is refused, and so is a step naming one that is not required and has none, naming "
+            + "the input and how it can have one - both before any leg is admitted (below). Where the action has a "
             + $"{PredefinedActions.ReadInputs} step, the same values reach every step as INPUT_<NAME> in the "
             + "environment. The environment is how a secret is handed over, under its own name: a value spliced "
             + "into a command line reaches the process table, where anything on the machine can read it. A step's "
             + "own inputs are resolved the same way and reach only its own run lines, by name; the environment "
             + "holds the action's alone.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "An input may declare what its value must be: 'pattern', a .NET regular expression the whole value must "
+            + "match, case and all - [0-9]+ takes 12 and not 12a; and for a list, 'separator', the text between its "
+            + "items, matched as written, with 'minItems', 'maxItems' or both, each at least 1. An item is the text "
+            + "between separators with white space trimmed from either end, and one left empty is not counted, so a "
+            + "separator of one space parts a run of spaces as one does and a trailing separator adds no item. Each "
+            + "declaration is held to sense when the file is read: an empty or unreadable pattern, a bound with no "
+            + "separator, a separator with no bound and a minItems over maxItems are refused, and so is a default its "
+            + "own input refuses.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A required input with no value, and a value its input refuses, are refused before any leg is placed, "
+            + "synced, locked or admitted - a heavy run never waits for a slot to be told - naming every such input "
+            + "at once, as a usage error; then a step naming an input with no value, as a configuration error; and "
+            + "all of it again as each leg's runner starts. A leg this machine runs is held to this machine's "
+            + $"{HarnessLayout.RunnerEnvDirectoryName}; for a leg another machine runs, only what "
+            + $"{CommandLineInputs.Option} gave is held to its input here, since that machine's "
+            + $"{HarnessLayout.RunnerEnvDirectoryName} is its own, and the rest is that machine's to hold by its own "
+            + "values: a WSL distribution, whose leg this machine admits, is asked to check it once the leg's copy is "
+            + "synced and before this machine asks for the leg's slot, its refusal the run's; an ssh host checks it "
+            + "before it admits the leg itself.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Everything else a leg's runner would refuse before its first step that does not wait on the leg's build is "
+            + "refused before a heavy leg waits for its slot as well, by the checks the runner makes as it starts and in "
+            + "their order: the steps the run selects and the leg's system runs, every input and every name a run line "
+            + "holds, each program a line starts held to the tool policy, a line that starts nothing or would put a "
+            + "secret in its arguments, and an action's working space git does not ignore. A leg this machine runs is "
+            + "checked here once its tree is synced and locked and its isolation and developer environment are decided, "
+            + "right before its slot is asked for; a WSL distribution's leg by the distribution, sent the leg's run line "
+            + $"without --json, {SetUps.LegSetUps.Option} or {Build.KeepGoing.Option} and with {Application.Legs.RunnerLegs.CheckBeforeAdmissionOption}, "
+            + "which checks and runs nothing; an ssh host's by the host, before it admits the leg. A leg whose work would "
+            + "never start - its isolation refused, or its developer environment not set up - ends with its own line and "
+            + "is never checked. A step reading the build of a leg this run did not build is refused as the runner "
+            + "starts, after the slot, for the build it waits on is made then; a leg that waits for no slot is checked "
+            + "as its runner starts. A run check's runner is checked alike, and what would refuse it is warned of rather "
+            + "than refusing the run: a check runs only where a failure matches the exception it confirms, and one that "
+            + "starts it is refused by it then, leaving that failure unexcused.");
         builder.AppendLine();
         builder.AppendLine($"{CommandLineInputs.Option} takes one name=value each time it is given, for an input the action");
         builder.AppendLine("declares or a step the run runs declares for itself, and only for the runner the");
@@ -1142,16 +1214,21 @@ public static class HelpTopics
             $"Each leg is swept in worker copies of its tree, kept in it as <tree>/{HarnessLayout.MutationsDirectoryName}/<key>{WorkerFamily.OwnMark}-<n>, numbered "
             + "from 1: as many as workers, never more than the leg has arms to drive, and one in a WSL distribution. The key "
             + $"is the first {VariantKey.CopyKeyLength} hexadecimal digits of the SHA-256 of the leg's variant, as its build "
-            + $"directory is named: its first worker adds {ReportText.Counted(WorkerFamily.AddedToItsTreesPath, "character")} to its tree's path "
+            + $"directory is named, and a worker builds in <worker>/{VariantKey.BuildRootName}/<key>, never in the directory "
+            + "the variant's name gives the tree's own build: its first worker adds "
+            + $"{ReportText.Counted(WorkerFamily.AddedToItsTreesPath, "character")} to its tree's path, and its build directory "
+            + $"{ReportText.Counted(WorkerFamily.BuildBelowItsWorker, "character")} below that, "
             + "whatever the variant is called, since a worker is built as deep as the tree and a machine whose paths are bounded "
-            + "has no more to spare, and the lines of a sweep and of a clean say which leg a worker is. Each is a repository "
+            + "has no more to spare. Which variant a worker builds is what its build records, and a build of one variant where "
+            + "that record names another - two whose names come to one key share their workers - starts from clean; the lines "
+            + "of a sweep and of a clean say which leg, and which variant, a worker is. Each is a repository "
             + $"of its own, as every copy a sync makes is, and init keeps {HarnessLayout.MutationsDirectoryName} in git and "
             + "everything made in it out: a sweep in a tree where git does not ignore what it would make there is refused "
             + $"({HarnessExit.Refused}), naming init, with nothing made - asked on the machine that makes the workers, so a "
             + "host answers for its own copy. Before every "
             + "sweep each is synced again from one reading of the tree, by content - so its build stays warm, and a site a "
             + "killed sweep left mutated is put back - and built whole before it drives an arm: that sync withholds the "
-            + "worker's own build directory itself, whatever sync.neverTransfer says, and sync.maxDeleteFraction judges "
+            + $"worker's own build directory, {VariantKey.BuildRootName}/<key>, itself, whatever sync.neverTransfer says, and sync.maxDeleteFraction judges "
             + "only what mirrors the tree the sweep read. Of the tree itself a sweep "
             + $"reads every file and writes none: its workers, and the claims on them, are in {HarnessLayout.MutationsDirectoryName}, "
             + $"and its run's records in {HarnessLayout.DirectoryName}, as every run's are. On this machine a sweep makes no copy "
@@ -1196,11 +1273,13 @@ public static class HelpTopics
             + "with the worktree, or the host's copy, as everything else in it does, and is said. No copy of a tree carries "
             + "its workers, and a sync into a host's "
             + "copy never deletes that copy's own. Workers an earlier version of this tool kept beside a tree, as "
-            + "<tree>.mutation-<key><mark>-<n>, are no workers to a sweep: nothing counts one, and clean --former-workers "
-            + "alone removes them - beside each tree of the repository on each machine a selected leg runs on, here and on "
-            + "hosts, and beside each one deleted since, a dry run listing each with its size - keeping one a sweep of that "
-            + "version still claims by the claim "
-            + "file beside it. Each holds a .git of its own that git records no worktree at, so until then one below the "
+            + $"<tree>.mutation-<key><mark>-<n>, or in it, as <tree>/{HarnessLayout.FormerMutationsDirectoryName}/<key><mark>-<n> - "
+            + $"which init keeps out of git whole, with no placeholder, and no sync sends or deletes - are no workers to a "
+            + "sweep: nothing counts one, and clean --former-workers removes them - beside and in each tree of the repository "
+            + "on each machine a selected leg runs on, here and on hosts, and beside each one deleted since, a dry run listing "
+            + "each with its size - keeping one a sweep of that version still claims by the claim file beside it; those in a "
+            + "worktree, or a host's copy, also go with it as its workers do. Each beside a tree holds a .git of its own that "
+            + "git records no worktree at, so until then one below the "
             + "worktrees root is said as any such directory: list-worktree warns of it, and delete-orchestrator, and "
             + $"delete-worktree of an orchestrator's directory with or without --force, refuse ({HarnessExit.Refused}) while one "
             + "is below it.");
@@ -1570,21 +1649,70 @@ public static class HelpTopics
         builder.AppendLine($"  maxWaitMinutes    how long a leg waits before it is not-admitted, above 0 ({AdmissionSettings.DefaultMaxWaitMinutes})");
         builder.AppendLine("  minFreeGiB        the room a heavy leg's build leaves free on each filesystem it");
         builder.AppendLine($"                    fills, from 0 to {AdmissionSettings.MostMinFreeGiB}; 0 stops no build ({AdmissionSettings.DefaultMinFreeGiB})");
+        builder.AppendLine("  reclaimIdleBuilds true or false: whether a leg short of room first removes other");
+        builder.AppendLine("                    trees' idle builds on the same filesystem (false)");
         builder.AppendLine();
         builder.AppendLine($"Seconds are at most {AdmissionSettings.MostSeconds}, and the wait at most {AdmissionSettings.MostWaitMinutes} minutes.");
         builder.AppendLine();
-        builder.AppendLine("Declared under defaults, or under hosts.local or an ssh host, whose fields replace");
-        builder.AppendLine("the defaults' one by one; a machine where neither declares one takes every leg at");
-        builder.AppendLine("once. What a command's own configuration declares is what its legs are admitted by:");
-        builder.AppendLine("a repository that declares none never joins the line, and where repositories that");
-        builder.AppendLine("declare different counts share a machine, a leg starts only while it is fewer legs");
-        builder.AppendLine("from the front than every count up to it allows. A WSL distribution runs on this");
-        builder.AppendLine("machine: its heavy legs take this machine's slots, against its memory, and claim");
-        builder.AppendLine("room on the drive where WSL keeps the distribution's disk, before they are sent");
-        builder.AppendLine("there, and admission under hosts.wsl is refused - though a command typed");
-        builder.AppendLine("inside a distribution keeps a record of the distribution's own, apart from those of");
-        builder.AppendLine("the commands typed on Windows. An ssh host is a machine of its own, and takes the");
-        builder.AppendLine("legs sent to it by its own section.");
+        builder.AppendLine("Declared in the machine's own settings file, under defaults, or under hosts.local or");
+        builder.AppendLine("an ssh host: each field from the first of them that declares it - the settings file,");
+        builder.AppendLine("then the machine's section, then the defaults - and the built-in value where none");
+        builder.AppendLine("does; a machine where none declares one takes every leg at once. The settings file is");
+        builder.AppendLine($"<user data>/dssharness/{MachineSettingsFile.FilePrefix}-<machine id>.json, the user data as below, beside the");
+        builder.AppendLine("slots' record, holding { \"admission\": { ... } } in the keys above, read as strictly");
+        builder.AppendLine("as config.json: a key it does not know, a key written twice or a value out of its");
+        builder.AppendLine("bounds is refused, naming the file, and no heavy leg is admitted by it, nor by a");
+        builder.AppendLine("tree's config.json in its place, until it is put right. A leg's rule is read once,");
+        builder.AppendLine("as its work begins: its slot, its floor and the page cache dropped as it ends all");
+        builder.AppendLine("answer to that reading, so a file put wrong while a run goes on refuses the heavy");
+        builder.AppendLine("legs that begin after it, and never a leg that has run. It is the machine's: every");
+        builder.AppendLine("command this user runs there reads it, whichever tree it runs in, and an ssh host");
+        builder.AppendLine("reads its own as it admits the legs sent to it. config.json is tracked, so each");
+        builder.AppendLine("worktree holds the copy of its last commit, and a count raised there leaves the");
+        builder.AppendLine("trees made before saying the old one; a count the settings file declares is every");
+        builder.AppendLine("leg's in line, read again at each look - where the file cannot be read then, a unit");
+        builder.AppendLine("of a leg whose work has begun, an arm of a sweep, is weighed by the count the file");
+        builder.AppendLine("declared as that work began, its refusal said once. Where it declares none, what a");
+        builder.AppendLine("command's own configuration declares is what its legs are admitted by: a repository");
+        builder.AppendLine("that declares none never joins the line, and where repositories that declare");
+        builder.AppendLine("different counts share a machine, a leg starts only while it is fewer legs from the");
+        builder.AppendLine($"front than every count up to it allows. '{ToolPackage.Command} legs' says, for each host it");
+        builder.AppendLine("reaches, the rule in force and where each field came from, or why the settings file");
+        builder.AppendLine("could not be read. A WSL distribution runs on this machine: its heavy legs take this");
+        builder.AppendLine("machine's slots, against its memory, by this machine's settings file and hosts.local,");
+        builder.AppendLine("and claim room on the drive where WSL keeps the distribution's disk, before they are");
+        builder.AppendLine("sent there - this machine's settings file sent with each, for its floor - and");
+        builder.AppendLine("admission under hosts.wsl is refused; though a command typed inside a distribution");
+        builder.AppendLine("keeps a record, and reads a settings file, of the distribution's own, apart from");
+        builder.AppendLine("those of the commands typed on Windows. An ssh host is a machine of its own, and");
+        builder.AppendLine("takes the legs sent to it by its own settings file and its own section.");
+        builder.AppendLine();
+        builder.AppendLine("With reclaimIdleBuilds true, a leg short of room - waiting for room as it is");
+        builder.AppendLine("admitted, or under minFreeGiB as it builds - first removes the build directories the");
+        builder.AppendLine("repository's other trees keep on that filesystem of its machine that no run or");
+        builder.AppendLine("sweep holds: the least recently built first, and only as many as it is short of -");
+        builder.AppendLine("as it is admitted, what the disk itself lacks of its need, never the room the other");
+        builder.AppendLine("admitted legs claim, which ends with their work and counts what their builds have");
+        builder.AppendLine("written already; at the floor, what falls under it with its need as it was admitted");
+        builder.AppendLine("beyond it - and none at all where every one that could be removed would not cover");
+        builder.AppendLine("what it lacks, or bring it back to the floor. One leg makes room on a filesystem at");
+        builder.AppendLine("a time, across every command this user runs on the machine: a leg that finds another");
+        builder.AppendLine("making room there removes nothing beside it, is not stopped for it, and reads the");
+        builder.AppendLine("room again once that one has. Each is removed as clean --legs removes one, under the");
+        builder.AppendLine("lock a build of it takes, into an aside of its process's own that only that process");
+        builder.AppendLine("deletes; one a run's lock names, a sweep of its variant in that tree holds, or whose");
+        builder.AppendLine("tree's lock cannot be read, is left and said, and the leg's own tree");
+        builder.AppendLine("and the copies its legs work in are never touched, nor a sweep's workers. A build");
+        builder.AppendLine("directory is one below a tree's build holding the record a build of this tool");
+        builder.AppendLine("writes, whatever variant it is. The trees are the machine's: here the main checkout,");
+        builder.AppendLine("each worktree and agent's repository and the copies they keep in .legs; on an ssh");
+        builder.AppendLine("host, or in a WSL distribution a leg was sent to, its copy of the main checkout and");
+        builder.AppendLine("each worktree's copy beside it. A WSL leg is admitted here, so it makes room here,");
+        builder.AppendLine("on the drive its disk grows on; removing anything inside a distribution gives that");
+        builder.AppendLine("drive nothing back. The leg's line, and its admission in --json, say what was");
+        builder.AppendLine("removed, whose tree it was, when it was last built and the room before and after;");
+        builder.AppendLine("that tree's next build says its directory was removed, when and for which leg, as");
+        builder.AppendLine("it starts from nothing.");
         builder.AppendLine();
         builder.AppendLine("The memory in use is each system's own count of what it can no longer give: on");
         builder.AppendLine("Windows the commit charge against the commit limit, which grows with the page file;");
@@ -1633,11 +1761,11 @@ public static class HelpTopics
         builder.AppendLine("room the legs claim beside them in admission-<machine id>.room.json - the user");
         builder.AppendLine("data being LOCALAPPDATA on Windows, ~/Library/Application Support on macOS, and");
         builder.AppendLine("$XDG_DATA_HOME or ~/.local/share on Linux - beside the hold that keeps the machine");
-        builder.AppendLine("awake: one of each per machine and per user, whichever repository asks, named by the");
-        builder.AppendLine("identifier the system keeps for the machine rather than by its name, which a Mac");
-        builder.AppendLine("takes from each network it joins. Where the system keeps none - a container its");
-        builder.AppendLine("image gave no machine-id - the record is named by the machine's name, and the first");
-        builder.AppendLine("heavy leg says so. Another user's legs are counted in that user's own.");
+        builder.AppendLine("awake and the settings file: one of each per machine and per user, whichever");
+        builder.AppendLine("repository asks, named by the identifier the system keeps for the machine rather than");
+        builder.AppendLine("by its name, which a Mac takes from each network it joins. Where the system keeps none");
+        builder.AppendLine("- a container its image gave no machine-id - each is named by the machine's name, and");
+        builder.AppendLine("the first heavy leg says so. Another user's legs are counted in that user's own.");
 
         return builder.ToString();
     }
@@ -2026,6 +2154,21 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
+            $"A leg whose host's {ToolPackage.Id} fails as a defect (exit {HarnessExit.InternalError}) with no line for it is poisoned - the "
+            + "harness failing, never a host that could not be reached - its line naming the host, the code and what the host "
+            + "said. Where it failed so before anything ran there - no run named, no note written, and no ledger, or one with no "
+            + "line, no run and no set-up left running - the leg is started there again, "
+            + $"{(RemoteLegRunner.MostRestarts == 1 ? "once" : $"{RemoteLegRunner.MostRestarts} times")} at most, which is safe since "
+            + "nothing ran: a runtime or a tool replaced there while it started fails that way once. "
+            + "A start that then answers is the leg's line, which says what the failed start said ('retried once: ...', and "
+            + "retried in --json); one that fails so again is poisoned, saying it was retried; and one that ends with no line "
+            + "for the leg says it in what ends it. Once anything ran there, the leg is never started again. A WSL distribution "
+            + "asked to check a heavy leg before this machine takes its slot is asked once more alike - a check runs nothing - "
+            + "and one that fails so again is the leg's poisoned line, with no slot waited for; what its failed start said is "
+            + "said on whatever line the leg then reaches, before what its run's own starts said.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             $"This machine's own {ToolPackage.Id} is updated through '{ToolPackage.Command} {ToolUpdateService.CommandName}', never by a "
             + $"'dotnet tool update' typed beside running commands: an update beside a running {ToolPackage.Id} fails on Windows after "
             + "taking the tool away for ten seconds, and takes its files from under it elsewhere, and whatever anybody types "
@@ -2101,17 +2244,21 @@ public static class HelpTopics
         builder.AppendLine("typed on the host names its paths in full; and under host-exec a document other than");
         builder.AppendLine("a ledger is written as the host prints it - but for an address the host's name");
         builder.AppendLine("resolved to, which reads as the address declared. A copy's path this machine builds");
-        builder.AppendLine("from repositoryPath is said as that is written: '~/src/app' keeps the account out of");
-        builder.AppendLine("it.");
+        builder.AppendLine($"from repositoryPath, or an item's {HostSecretsStore.RepositoryPathKey}, is said as that is written:");
+        builder.AppendLine("'~/src/app' keeps the account out of it.");
         builder.AppendLine();
         builder.AppendLine("A host keeps a copy of each tree whose legs it runs: the main checkout's at its");
-        builder.AppendLine($"repositoryPath, and each worktree's beside it, at <repositoryPath>{HostCopies.WorktreeSuffix}<name>,");
-        builder.AppendLine("named for the worktree's directory. So worktrees do not share a copy on a host, or");
-        builder.AppendLine("the lock on it, and their legs there run side by side; each worktree's first sync to");
-        builder.AppendLine("a host carries its whole tree. A worktree made elsewhere, under the name of one that");
-        builder.AppendLine("has a copy, is refused that copy while the other exists. This machine records which");
-        builder.AppendLine($"hosts hold a copy of which worktree, in {HarnessLayout.HostCopiesDirectoryRelative} in the main");
-        builder.AppendLine("checkout, and delete-worktree asks each of them to remove it.");
+        builder.AppendLine($"repositoryPath - or the {HostSecretsStore.RepositoryPathKey} its item's .env sets, which wins ('help");
+        builder.AppendLine($"secrets') - and each worktree's beside it, at <repositoryPath>{HostCopies.WorktreeSuffix}<name>,");
+        builder.AppendLine("named for the worktree's directory. 'legs' names, for each host, where it keeps the");
+        builder.AppendLine("copy of the tree it was typed in, and what set that; a host running legs finds its");
+        builder.AppendLine("main copy beside the copy it was sent, never from config.json. So worktrees do not");
+        builder.AppendLine("share a copy on a host, or the lock on it, and their legs there run side by side;");
+        builder.AppendLine("each worktree's first sync to a host carries its whole tree. A worktree made");
+        builder.AppendLine("elsewhere, under the name of one that has a copy, is refused that copy while the");
+        builder.AppendLine("other exists. This machine records which hosts hold a copy of which worktree, in");
+        builder.AppendLine($"{HarnessLayout.HostCopiesDirectoryRelative} in the main checkout, and delete-worktree asks each of");
+        builder.AppendLine("them to remove it.");
         builder.AppendLine();
         builder.AppendLine("An emulator declares the hosts it runs on (hostOs, hostProcessor), the processor it");
         builder.AppendLine("runs programs for, the launcher placed in front of each program (such as");
@@ -2259,16 +2406,43 @@ public static class HelpTopics
         builder.AppendLine("kept and said - on a host, the copy a sweep works in there among them, with its");
         builder.AppendLine("workers. A host holding no copy of the tree holds nothing of it to remove.");
         builder.AppendLine();
-        builder.AppendLine($"clean {CleanService.FormerWorkersOption} removes only the workers an earlier version of this tool");
-        builder.AppendLine("kept beside the repository's trees, as <tree>.mutation-<key><mark>-<n>, once a machine:");
-        builder.AppendLine("here beside the main checkout, every worktree, and each worktree deleted since in the");
-        builder.AppendLine("worktrees root; on each host a selected leg runs on, asked of it from its home, beside");
-        builder.AppendLine("its copy of the main checkout and each worktree's copy beside it, there still or removed");
-        builder.AppendLine("since, whatever copy the host holds. With --dry-run it lists each with its size. One a");
-        builder.AppendLine("sweep of that version still claims, by the claim file beside it, is kept,");
-        builder.AppendLine("refused-locked; one no sync made is said and left. Where the worktrees, or those");
-        builder.AppendLine("deleted since, cannot be listed, the leg fails, saying so, once the workers beside the");
-        builder.AppendLine("trees it knows are dealt with.");
+        AppendWrapped(
+            builder,
+            $"clean {CleanService.FormerWorkersOption} removes only the workers an earlier version of this tool kept beside the "
+            + "repository's trees, as <tree>.mutation-<key><mark>-<n>, or in them, as "
+            + $"<tree>/{HarnessLayout.FormerMutationsDirectoryName}/<key><mark>-<n>, once a machine: here beside and in the main "
+            + "checkout and every worktree, and beside each worktree deleted since in the worktrees root; on each host a "
+            + "selected leg runs on, asked of it from its home, beside and in its copy of the main checkout and each "
+            + "worktree's copy beside it, and beside each removed since, whatever copy the host holds - and in the copies "
+            + $"each of those trees keeps in its {HarnessLayout.LegsDirectoryName}. With --dry-run it lists each with its size. "
+            + "One a sweep of that version still claims, by the claim file beside it, is kept, refused-locked; one no sync "
+            + "made is said and left. Where the worktrees, or those deleted since, cannot be listed, the leg fails, saying "
+            + "so, once the workers of the trees it knows are dealt with.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"clean {CleanService.GoneCopiesOption} removes only the copies hosts keep of worktrees gone from this machine, "
+            + "told by the tree this machine's record of host copies names - never by the name a copy is kept under, so a "
+            + "worktree here that bears a gone one's name, a live agent's among them, keeps its own copies. It is driven by "
+            + "that record, not by the legs: every host the record names such a copy on is asked, one no declared leg runs "
+            + "on any more among them, each on a line of its own named as the record spells the host, in place of the legs' "
+            + "lines; --legs narrows it to the hosts the selected legs can run on. A tree is gone only where that is seen: "
+            + "its path is whole on this machine, nothing is at it, and the directory it was in - for an orchestrator's "
+            + "agent, the one its orchestrator's was in, once that is gone too - is there to look in. One that cannot be "
+            + "looked at - a path spelt for another system, a drive or a share that is not mounted, a directory this user "
+            + "may not look in - is never taken for gone: its copies stay recorded, each kept, refused-locked "
+            + $"({HarnessExit.Refused}), its line saying why. Each copy goes as deleting its worktree would remove it, at the "
+            + "path the record names, under the same lock: a copy the harness took over, or one nothing marks as its own, is "
+            + "forgotten and left where it is, one the host no longer keeps is forgotten, and one a run or a sweep holds is "
+            + $"kept, refused-locked ({HarnessExit.Refused}), as is one whose marker cannot be read. A host that cannot be "
+            + "reached is said on its line, unavailable, its copies kept recorded for a later clean, and the next host is "
+            + $"asked all the same ({HarnessExit.Incomplete}); one no configuration here declares any more can never be "
+            + "asked, so its copies are forgotten and left on it for you to remove, as deleting a worktree forgets them. "
+            + "With --dry-run it says what each holds and what removing it would do, measured at that same path - beside "
+            + "the repositoryPath it was kept beside, whatever the host's item or config.json name now - and removes and "
+            + "forgets nothing. Every "
+            + "line names the record, and so does the line the clean ends on - one saying it records none where it does. "
+            + $"It cannot be given with {CleanService.FormerWorkersOption} ({HarnessExit.UsageError}).");
         builder.AppendLine();
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug,linux-arm64-release");
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug --dry-run");
@@ -2428,8 +2602,12 @@ public static class HelpTopics
             "An agent's repository of its own is weighed the same way, but for its commits: those made in it that no ref of "
             + "the main checkout's reaches refuse its deletion, since its own store, deleted with it, is the only place they "
             + "are, and the refusal names fold-agent for its changes and a fetch into the main checkout for its commits - a "
-            + "branch or a stash made in it would go with it. It has no lock and no record of git's: its directory is deleted "
-            + "whole, its read-only object files with it, and then the records of the commit it stood on, "
+            + "branch or a stash made in it would go with it. It has no lock and no record of git's. Once its checks pass, git "
+            + "is asked once more what changed in it and what was committed in it, and a file changed or added since, beyond "
+            + $"the changes being discarded, or a commit made since, refuses it ({HarnessExit.Refused}) with nothing removed; "
+            + "then everything in it but its own .git directory is deleted, and that last, its read-only object files with "
+            + "it, so one stopped part way is still a repository holding every commit made in it; and then the records of "
+            + "the commit it stood on, "
             + "refs/harness/worktree-base/<address> and refs/harness/worktree-moving/<address>, which are forgotten too "
             + "whenever its directory is already gone.");
         builder.AppendLine();
@@ -2449,16 +2627,17 @@ public static class HelpTopics
         builder.AppendLine($"On Windows, without --force, a worktree something holds part of is refused ({HarnessExit.Refused})");
         builder.AppendLine("whole once every check has passed, with nothing removed, naming what is held: a");
         builder.AppendLine("directory that is a process's current directory, this command's own among them,");
-        builder.AppendLine("a file open without sharing its deletion, or one a program is running from. git's");
-        builder.AppendLine("removal would stop there part way, with the worktree's .git file and git's record");
-        builder.AppendLine("of it already gone. Close what holds it and run delete-worktree again, from outside");
-        builder.AppendLine("the worktree where it is this command's own. A watcher on a directory, as an editor");
-        builder.AppendLine("keeps, holds nothing; --force looks for nothing, and goes as far as it can.");
+        builder.AppendLine("a file open without sharing its deletion, or one a program is running from. The");
+        builder.AppendLine("removal would stop there part way, with some of the worktree's files already gone.");
+        builder.AppendLine("Close what holds it and run delete-worktree again, from outside the worktree where");
+        builder.AppendLine("it is this command's own. A watcher on a directory, as an editor keeps, holds");
+        builder.AppendLine("nothing; --force looks for nothing, and goes as far as it can.");
         builder.AppendLine();
         AppendWrapped(
             builder,
             "The copies kept in a worktree go before it, of its two families: the mutation workers its sweeps made "
-            + $"('help mutations'), in {HarnessLayout.MutationsDirectoryName}, and the copies of it its legs work in "
+            + $"('help mutations'), in {HarnessLayout.MutationsDirectoryName} - and in {HarnessLayout.FormerMutationsDirectoryName}, "
+            + "where an earlier version kept them - and the copies of it its legs work in "
             + $"('help legs'), in {HarnessLayout.LegsDirectoryName} - never sent to any host, so only this machine holds "
             + "them. They are asked about before anything "
             + $"of it is removed or looked through: one a sweep still running holds - or a run holds a leg copy - keeps the "
@@ -2478,16 +2657,40 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "On Windows, each directory junction in the worktree is removed first, as a link, never what it leads to: "
+            "Once every check has passed, the removal of one of git's linked worktrees is the harness's own, every step of "
+            + "it reversible until the worktree's files are gone: git is asked once more what changed in it and whether it "
+            + "is locked, and a file changed or added since the checks, beyond the changes being discarded - told by its "
+            + "path, as git's status gives it - or a lock, refuses it "
+            + $"({HarnessExit.Refused}) with nothing removed; then everything in it but its .git file is deleted, by a deletion "
+            + "that reaches any path, however long, and only then is git asked to clear its record of it, the .git file "
+            + "going with the directory. A removal that stops before git clears that record - a file another program "
+            + $"holds ({HarnessExit.CommandFailed}), or an interruption ({HarnessExit.Cancelled}) - leaves a worktree git still "
+            + "knows, its .git file and git's record of it there, and says so, naming 'git -C <path> checkout -- .', which "
+            + "puts back the files its index holds, and, where it holds submodules, 'git -C <path> submodule update --init "
+            + "--recursive', which puts back theirs, the directory junctions it had removed, which nothing puts back, and "
+            + "the delete-worktree --force that finishes it. --force has git remove the worktree, and deletes whatever git left. "
+            + "On Windows, each directory junction in the worktree is removed first, as a link, never what it leads to: "
             + "git leaves every junction, and the directories above it, while reporting the worktree removed. One that "
-            + $"cannot be removed stops the deletion before git runs ({HarnessExit.CommandFailed}), and a volume mounted "
-            + "on a directory is never unmounted. A directory under the root with no .git and no record of git's - "
+            + $"cannot be removed stops the deletion before any file of it goes ({HarnessExit.CommandFailed}), and a volume mounted "
+            + "on a directory is never unmounted. On Linux and macOS a volume mounted on a directory in it - on Linux a bind "
+            + "mount of a directory among them - is never gone into: the deletion stops there "
+            + $"({HarnessExit.CommandFailed}), what went before it gone, still a worktree. Every git command the harness runs on "
+            + "Windows reaches a path past 260 characters as any other (core.longpaths). A directory under the root with no "
+            + ".git and no record of git's - "
             + $"what a removal that stopped part way leaves - is refused ({HarnessExit.Refused}), naming --force; git "
             + "worktree repair is named only while git still records a worktree there - at that path, or, after the checkout was "
             + "moved by hand, at another place that holds none now.");
         builder.AppendLine();
-        builder.AppendLine("An interruption during the deletion can leave it partly done, on any platform;");
-        builder.AppendLine("running delete-worktree again with --force finishes it.");
+        builder.AppendLine("An interruption during the deletion can leave it partly done, on any platform, and");
+        builder.AppendLine("says what is left; running delete-worktree again with --force finishes it.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The worktree of an orchestrator's live agent - one whose record says it is live and names that worktree - is "
+            + $"refused ({HarnessExit.Refused}), naming the delete-agent that deletes it with the agent, its evidence and "
+            + "transcripts kept; one whose record cannot be read is refused too, since whether the agent is live cannot be "
+            + "told. --force deletes the worktree anyway, leaving the agent's record naming a worktree that is gone. A closed "
+            + "or deleted agent's worktree is deleted as any other.");
         builder.AppendLine();
         builder.AppendLine("A worktree synced to a host has a copy there of its own, beside the main checkout's,");
         builder.AppendLine("and deleting the worktree asks each host that holds one to remove it, where the");
@@ -2505,17 +2708,27 @@ public static class HelpTopics
         builder.AppendLine($"be reached, {HarnessExit.CommandFailed} where removing it failed there; or {HarnessExit.Cancelled} when interrupted. Running");
         builder.AppendLine("delete-worktree again removes what it left. For a name whose worktree is gone, it");
         builder.AppendLine("removes what any worktree of that name left, and never the copies of one that still");
-        builder.AppendLine("exists.");
+        builder.AppendLine("exists, or of one that cannot be looked at here, which stay recorded and are said,");
+        builder.AppendLine($"refused ({HarnessExit.Refused}). The copies a gone worktree left are removed alone, told by their");
+        builder.AppendLine($"tree, never by the name, by clean {CleanService.GoneCopiesOption} ('help space').");
         builder.AppendLine();
         AppendWrapped(
             builder,
             $"{WorktreeService.ListCommand} lists each worktree with the copies this machine records hosts keeping of it, and the "
-            + "copies left by worktrees that are gone - removed by hand, or by another tool - each with the "
-            + $"{WorktreeService.DeleteCommand} that deals with them. With --hosts it also asks each declared host which worktree "
+            + "copies left by worktrees that are gone - removed by hand, or by another tool - with the "
+            + $"clean {CleanService.GoneCopiesOption} that removes them by their tree, never a {WorktreeService.DeleteCommand} of "
+            + "their name, which a worktree here may bear now: where one does, a live agent's among them, the line says so, "
+            + "and that deleting it would take them too. With --hosts it also asks each declared host which worktree "
             + "copies it keeps beside its repositoryPath, and how large each is, and sets them against that record: "
             + "a copy of a worktree here, one left by a worktree that is gone, one the record does not hold - made "
-            + "from another checkout or machine, or forgotten here, which deleting a worktree never reaches - and one "
-            + "recorded that is not there. A host that cannot be asked is named, and the command fails with the "
+            + "from another checkout or machine, or forgotten here, which nothing here reaches, said with the tree its "
+            + "marker says it was made from and whether that tree is on this machine - and one recorded that is not "
+            + "there: a gone tree's, which the clean forgets, or a tree's here, whose next sync makes it again. Each "
+            + "recorded copy is looked for where it was kept, as its removal acts on it: one kept beside an earlier "
+            + "repositoryPath, before the host's item or config.json named another, is asked about there, and listed "
+            + "beside it. A tree that cannot be looked at here - a path spelt for another system, a drive or a share that "
+            + "is not mounted, a directory this user may not look in - is never listed as gone: it is said with why, and "
+            + "nothing here removes or forgets its copies. A host that cannot be asked is named, and the command fails with the "
             + $"highest code among them, {HarnessExit.HostUnavailable} where a host cannot be reached. --json prints the "
             + $"listing as one JSON document. {StoppedDocument}");
 
@@ -3562,7 +3775,7 @@ public static class HelpTopics
             + "test commands, a runner's steps, a sweep's arms - is held inside it, its own profile from the leg's ground, "
             + "built as a launch's is: the machine read-only; every credential slot of the main checkout, every Claude "
             + "Code directory and every place the user keeps credentials in hidden; the tree the leg works in - the step's tree or its copy under .legs - a sweep's "
-            + "workers under .mutations, the build directory of the leg's run of each runner action it runs, its own and a "
+            + $"workers under {HarnessLayout.MutationsDirectoryName}, the build directory of the leg's run of each runner action it runs, its own and a "
             + "run check's ({actionBuild}, each step's {stepBuild} in it), a temporary directory of its own and the declared "
             + "tool caches written, and inside them git's code-running files, the configuration directory - but those build "
             + "directories, under it - and the tool's state written by nobody. The run's "
@@ -3816,7 +4029,8 @@ public static class HelpTopics
             Agents.ClaudeCode.ClaudeCodeTools.Table.Select(row =>
                 $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"
                 + (Agents.ClaudeCode.ClaudeCodeTools.ServedOf(row.Capability) is [_, ..] served ? $", but {string.Join(" and ", served)} of the engine's tool server beside them" : string.Empty)))
-            + $"; and a step that has a codebase graph (graph: tools) takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentGraphSupport.ToolName)} of the engine's tool server beside them, only where its step is given one";
+             + $"; and a step that has a codebase graph (graph: tools) takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentGraphSupport.ToolName)} of the engine's tool server beside them, only where its step is given one"
+             + $", and a step whose agent runs commands, of a repository that declares legs, takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentMeasureSupport.ToolName)}, which measures one cell of the universe a class of the item names on one of the run's legs";
         var controlled = string.Join(", ", Agents.Policy.ClaudeSettings.Controlled.Select(name => $"{name.Key}={name.Value}"));
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
@@ -3839,6 +4053,8 @@ public static class HelpTopics
             + "its tool list and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask "
             + "rule, and run by the tool runtime below as on the API clients, each address decided and recorded, the graph's calls "
             + "answered by the same owner that answers them on the API clients and each recorded as a line of the step's graph - "
+            + "a step whose agent runs commands, of a repository that declares legs, takes the measure tool from the same server, "
+            + "by the one rule the tool runtime offers it by, its calls answered and recorded as every tool call is - "
             + "but its edit operation is not given on this client: the probe measured an Edit taken after a ranged Read, inside "
             + "the range and outside it, on every version taken, so an agent that means to change a body reads its lines with Read "
             + "and Edits them. A step's first user message holds the run's repository map first, then its context pack, then "
@@ -4230,9 +4446,21 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("A row is closed exactly when its Status cell starts with the closed mark. Closing");
         builder.AppendLine("an anchor moves its row to the done registry, and any other status moves it back.");
+        builder.AppendLine("Closing by record. Where anchors.closure says 'required', a lane folded by hand");
+        builder.AppendLine("with fold-agent closes its classes by record: a row whose status moves to closed is");
+        builder.AppendLine("refused unless its directory holds closure.json, the closing record, read against");
+        builder.AppendLine("the same schema the run's implement answer is held to and judged by the same rules");
+        builder.AppendLine("the run's class-closure check reads. No consent lifts it: the record is written or");
+        builder.AppendLine("the row does not close. A manual lane has no records of its calls, so its searches");
+        builder.AppendLine("and measurements are read as given, their command lines, and the fold's dry run says");
+        builder.AppendLine("so; a record that names no class closes no row, and a class's arm is named against the");
+        builder.AppendLine("registry the lane's worktree holds. A run's own folds are held to no closure.json:");
+        builder.AppendLine("the builder's answer is its record, which the run's class-closure check judges.");
+        builder.AppendLine("The default is 'off', and a row closes as it always did.");
         builder.AppendLine("No verdict is read from the prose beside the Status, unless anchors.triggerCarriesVerdict");
         builder.AppendLine("is true: then a closed row's Trigger opens with the closed mark and no other row's");
-        builder.AppendLine("does, write-anchor and set-anchor refuse a row whose two cells disagree, and");
+        builder.AppendLine("does, write-anchor and set-anchor refuse a row whose two cells disagree, fold-agent");
+        builder.AppendLine("weighs the two as the one verdict they state (see 'help orchestrators'), and");
         builder.AppendLine("read-anchors --lint and check-anchor-balance report one. A closed row's Trigger may");
         builder.AppendLine($"open with {bookkeeping} instead, the closed mark and then the bookkeeping mark, when its");
         builder.AppendLine("closure only repairs the mark of work done before the change that closes it.");
@@ -4436,6 +4664,7 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSyncFileName}", "one line for each sync of the graph"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphViewsDirectoryName}/<agent>{OrchestratorLayout.GraphExtractExtension}", "an agent's view of the graph: what its worktree holds that the base does not"),
                 ($"  {OrchestratorLayout.PreExistingIssuesFileName}", "each pre-existing issue the run listed, proven"),
+                ($"  {OrchestratorLayout.AffectedTestsFileName}", "the run's record of affected tests: the units each test step that keeps them (affected) ran, under the key it filled, written before the step runs - which run.affectedTests reads"),
                 ($"  {OrchestratorLayout.EventsFileName}", "the run's history, one event to a line, written after the state it tells of"),
                 ($"  {OrchestratorLayout.ReportFileName}, {OrchestratorLayout.ReportJsonFileName}", "the report of the run's last session"),
                 ($"  {OrchestratorLayout.InboxFileName}, {OrchestratorLayout.StopFileName}", "an answer, and a pause or a stop, handed to the engine running the run"),
@@ -4641,7 +4870,7 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, and "
-            + "what a machine step's legs start a process group of its own, apart from the engine's terminal; nothing ends either "
+            + "what a machine step's legs, and a reason step's measure call's, start a process group of its own, apart from the engine's terminal; nothing ends either "
             + "when the process that started it is killed, so each session, and the group of each phase - a set-up's up line apart - "
             + $"keepAwake command and ssh that carries a leg to a host, is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
             + "while it runs, and the record taken back once nothing is left in it: a group still holding what its child left at its "
@@ -4667,7 +4896,8 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "Seeding. create-agent hands the agent the main tree's uncommitted state - every path git status lists, off the "
-            + "worktrees root, .git, .orchestrators, .mutations, .legs and .side-tasks: each changed file copied into its worktree, each deletion made there - and "
+            + $"worktrees root, .git, .orchestrators, {HarnessLayout.MutationsDirectoryName}, .legs and .side-tasks - and "
+            + $"{HarnessLayout.FormerMutationsDirectoryName}, where an earlier version kept its mutation workers: each changed file copied into its worktree, each deletion made there - and "
             + "records what it was handed, each file with its digest. An untracked directory git will not look into, a repository "
             + "of its own, is named and not handed; --empty hands it nothing. A symbolic link among it is refused before the "
             + "worktree is made, so nothing is left behind. seed-agent does it again, refused over changes of the agent's own - a "
@@ -4797,7 +5027,9 @@ public static class HelpTopics
             + $"'{OrchestrationReports.Named(ConsentKind.FoldOverCells)}' ({AnchorBatchRequest.AcceptOverOption}) "
             + $"or '{OrchestrationReports.Named(ConsentKind.FoldTwoChanges)}' ({FoldAllowances.MergeOption}) - and refusals each "
             + $"reason it is refused for, '{OrchestrationReports.Named(RefusalKind.Conflict)}' where a path both trees changed has "
-            + $"a merge that conflicts and '{OrchestrationReports.Named(RefusalKind.Other)}' for anything else, so a request "
+            + $"a merge that conflicts, '{OrchestrationReports.Named(RefusalKind.Closure)}' where a row whose status moves to "
+            + "closed holds no closing record that closes its classes - under anchors.closure: required, of a lane folded by "
+            + $"hand, its searches and measurements read as given - and '{OrchestrationReports.Named(RefusalKind.Other)}' for anything else, so a request "
             + $"refused for conflicting merges alone says '{OrchestrationReports.Named(RefusalKind.Conflict)}' and nothing else; "
             + "folded says what the --apply of a fold and of a deletion did, gone through or stopped part way after writing some "
             + "of it - what it wrote, deleted, merged and handed, the arm registry merged by arm, the registries and rows it "
@@ -4906,7 +5138,17 @@ public static class HelpTopics
             + "both changed otherwise is written over the registries' only where --accept-over <ID>:<cell> names it, the dry run "
             + "showing the three texts - what --accept-over consents to includes what the registries' text loses. The fold never "
             + "writes the agent's own row files: before it changes a kept cell, the agent writes the registries' text into it, or "
-            + "its change is two changes of one cell. An --accept-over naming a cell not both changed is refused, as is one naming "
+            + "its change is two changes of one cell. The verdict is one decision: where anchors.triggerCarriesVerdict holds, a "
+            + "row's status and its trigger state it together, so where the registries changed one of the two and the agent the "
+            + "other, and the row taken one from each would state two verdicts though the agent's states one - a row the main tree "
+            + "reopened that the agent closes again with its trigger, its status file closed as it was, or a row the main tree "
+            + "closed that the agent keeps open - both are weighed as both changed, each line of the dry run saying why, and "
+            + "written, the agent's together, only where --accept-over <ID>:status and --accept-over <ID>:trigger name them; "
+            + "until both are named nothing of the row is written, and the registries' verdict stands. A row the agent declares "
+            + "with two verdicts itself is refused for them before any cell of it is weighed, whatever the row taken one from each "
+            + "would state, no consent asked. Where the setting does not hold, the status alone "
+            + "carries the verdict and is weighed as any cell is: one the agent's file holds as it declared it then is kept, "
+            + "whatever its trigger says. An --accept-over naming a cell not both changed is refused, as is one naming "
             + "a row the agent did not file, and one naming a row declared as its earlier fold recorded it is let stand; a row an "
             + "earlier fold applied that the registries no longer hold is refused, to be set by hand.");
         builder.AppendLine();
@@ -5121,7 +5363,8 @@ public static class HelpTopics
             + "same way and held against the base - the main checkout's graph, synced first where the run has none - as an "
             + "overlay of each file the worktree holds otherwise and each of the base's it does not hold, so no file is read "
             + "whose extract the base or an earlier sync made. An agent that only reads has no worktree: its view is the base. "
-            + "The engine syncs on its own too, under the claim its step already holds: a reason step's view where it starts - "
+            + "The engine syncs on its own too, under the claim its step already holds: a reason step's view where it starts, "
+            + "and a class-closure check's, which reads what the worktree still declares from it - "
             + "its agent's, the one the step it goes on with works in, or the base for one that reads; the base by every path "
             + "the run's folds changed that it has not taken yet - after a fold or a delete-agent's fold, and before each "
             + "attempt of one - with no listing, the run's ledger of its folds saying which it took, and with every path git "
@@ -5230,7 +5473,7 @@ public static class HelpTopics
             builder,
             "A reason step is given, at its start, its context pack - the part of the graph its work touches, made from its view and what the step says alone, "
             + "so the same step on the same tree is given the same pack. Its seeds are what its prompt names exactly - a symbol or a path in backquotes, a qualified name or its last parts (Order.Total), "
-            + $"a handle, a path:line as a stack frame or a compiler writes one - the working sets it is given, the declarations of the files its writes covers, and the {CodebaseContextPack.WordSeeds} nodes its words match best. "
+            + $"a handle, a path:line as a stack frame or a compiler writes one - every site and home of the classes of the work item it is an instance of, where its prompt reads them ({{input.item.classes}}), each site's declaration at the weight of a node named and its file's declarations at a named file's where it names no symbol its file carries, so a fresh agent holds every site's declaration - the working sets it is given, the declarations of the files its writes covers, and the {CodebaseContextPack.WordSeeds} nodes its words match best. "
             + $"The walk goes {CodebaseContextPack.NamedHops} hops from a node named or worked with and {CodebaseContextPack.OtherHops} from the others, over calls both ways, the type relations, tests and the types a node names, each node scored by its seed's weight "
             + $"halved at each hop and weighed by each edge's confidence ({string.Join(", ", CodeConfidences.All.Select(confidence => $"{confidence} {CodebaseContextPack.Confidence(confidence).ToString(CultureInfo.InvariantCulture)}"))}), "
             + $"and not gone through along a kind it has more edges of than the view's 99th percentile, and at least {CodebaseGraphQueries.CrowdFloor}, which its line says. It is written best first by file, "
@@ -5398,7 +5641,8 @@ public static class HelpTopics
         builder.AppendLine("code keep the tool - the implementer and the pre-existing-issue triage say nothing and are given it");
         builder.AppendLine("and their task's seeds by default, as the planner is, which the measurement left as it was, and the");
         builder.AppendLine("reviewers, the self-audit, the diagnosis and the steps that verify and fix say graphFrom: changes -");
-        builder.AppendLine("the request triage and the plan audit, whose work is text the map does not light, ask none, the");
+        builder.AppendLine("the request triage and the plan audit, whose work is text the map does not light, ask none, as the");
+        builder.AppendLine("item audit does, the plan audit's agent on a later round's items, searching by its own text search, the");
         builder.AppendLine("prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the");
         builder.AppendLine("run's records, ask none of it. Where");
         builder.AppendLine($"config.json declares {WorkflowTemplates.ShippedWorkflowName},");
@@ -5568,10 +5812,17 @@ public static class HelpTopics
         builder.AppendLine("step can run one model at xhigh and another at max, where that is the highest it takes. Each");
         builder.AppendLine("model's level is checked against what that model takes when the definition is checked");
         builder.AppendLine("against the configuration's providers ('help agent-clients'), and validate-workflow says");
-        builder.AppendLine("every step's models and levels under the line that says it holds. A test step's filterWhen");
-        builder.AppendLine("is an expression that switches its filter: where it reads false the step gives no filter and");
-        builder.AppendLine("every test of its legs runs, as the shipped verify steps do where the run's input");
-        builder.AppendLine("affectedTests is off (on with --input affectedTests=on, each item tested on its own tests).");
+        builder.AppendLine("every step's models and levels under the line that says it holds. A test step's filter names");
+        builder.AppendLine("the tests it runs as units - a list, or an expression read where it starts - each given after");
+        builder.AppendLine("the invocation's filterArg, all joined into one value by its filterJoin - by '|' for ctest,");
+        builder.AppendLine("dotnet test and dart test where it declares none; a filter that reads no unit runs no test,");
+        builder.AppendLine("and the step ends skipped, saying its noTests. Its filterWhen switches the filter: where it");
+        builder.AppendLine("reads false every test of its legs runs, as the shipped gate does where the run's input");
+        builder.AppendLine("finalTests is all. Its affected keeps the units it runs in the run's affected-tests.json");
+        builder.AppendLine("under the key it fills, before the step runs: a later step under that key replaces them, and");
+        builder.AppendLine("one for a work item a plan update takes back, or one its when skips, removes them.");
+        builder.AppendLine("run.affectedTests reads every unit kept, each once: the shipped verify steps test each item");
+        builder.AppendLine("on its own units alone, and the gate on run.affectedTests.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -5651,15 +5902,27 @@ public static class HelpTopics
             + "what it kept, read, reused and removed and what it could not read ('help codebase-graph'). "
             + $"validate-plan checks the work items its items yields and answers ok, problems and the items, never a failure: at "
             + $"least one item and at most {PlanValidator.MostItems}; each with a name in lowercase letters, digits and single "
-            + "hyphens, used once, ownedPaths, forbiddenPaths and the lists reuses, creates and replaces - an item without them is of "
+            + "hyphens, used once - and, where the list opens a round, no item the round builds but an owed one under the name "
+            + "of a work item of an earlier round, for the run knows a work item by its name alone; a round added to a group "
+            + "with no loop around it builds the owed work alone, its own items being those the round before built - "
+            + "ownedPaths, forbiddenPaths and the lists reuses, creates and replaces - an item without them is of "
             + "the wrong shape; no path owned by two items, and none an item owns that it must not touch; the path budget of the "
             + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
-            + "each thing it creates. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
+            + "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "
+            + "decides none, the classes held to what the tree and the item's own paths say of them: a class id used once in the "
+            + "plan, each home and each site a path inside the tree as a path an item reuses is, the home among the item's own "
+            + "paths and there in the tree where it exists, a site marked home exactly where it is the home by its path and "
+            + "symbol, every other site - which changes, reading the home or deleted - the item's too - patching some of a "
+            + "class's sites is never done - more than one site consolidated at the home, as one site that is not the home is, "
+            + "each class searched by data its queries name again, its universe holding the axes the repository declares, and "
+            + "one home belonging to one item, two classes of one item sharing one as they may; and each item naming the tests its change affects in "
+            + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
             + "with the items, each problem among the rest: each piece of one of the four kinds (added, changed, removed, told) "
             + "and its texts; an added or a changed piece's item an item of the list, a removed piece's of a work item's shape; "
             + "no two pieces naming one work item; a changed or a removed piece naming a work item the plan had before the "
-            + "update; and the items the update places checked with those of the round it joins, as one list - among themselves "
+            + "update, and an added one naming none a round of the run carries - one that does such an item again is changed; "
+            + "and the items the update places checked with those of the round it joins, as one list - among themselves "
             + "where the run has no round. One whose items yield no list, or whose scope yields neither a list nor nothing, "
             + "fails, as a definition that does not hold does. create-agent makes the agent the engine named for it - a<N>, one past the "
             + "highest the run's agent directories and step records hold, never given twice - for the model of the first reason "
@@ -5677,7 +5940,18 @@ public static class HelpTopics
             + "the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
             + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new "
             + "launch rendered where it does not; and its answer, held to the schema its outputs names - one the engine reads, "
-            + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. A failed "
+            + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. Where the "
+            + "repository declares legs, a step whose agent runs commands (its capabilities hold run) is given the measure tool on "
+            + "every client: one call takes a leg, its "
+            + "variant - the build configuration the leg's own configuration declares - a test filter and the cell of a universe "
+            + "being measured, runs those tests of that leg through the test service as a test step's legs are run, in the agent's worktree "
+            + "where it has one and in a local copy of the main tree where it does not, under the agents' isolation and the step's "
+            + "own record of what its legs start, and answers what they showed - passed where the leg passed, failed where its "
+            + "build or its tests failed, and unmeasured with why for anything else: a leg refused by another run's lock, "
+            + "skipped, stopped, a filter that matched no test, a leg not declared - the verdict as the ledger spells it, with the "
+            + "run's directory and the call's own records (measures/<call id>/ of the step's directory: the ledger, and what the "
+            + "call answered, which is what class-closure reads of what it measured); the call is a tool call of the step's "
+            + "stored stream, its id what a closure record's measuredBy cites. A failed "
             + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, "
             + "absent the workflow's, twice as long before each later try - and then on each model of its order; a run that ended "
             + "on a key the provider refused moves to the next key at once, with no wait, and the run's pause ends the wait "
@@ -5754,7 +6028,29 @@ public static class HelpTopics
             + "to its rows or its paths where it names them: the anchors among those rows the change opened, closed and lost, a "
             + "problem at a line of one of them and every problem of a registry as a whole, or the citations in those files; a rows "
             + "or paths expression that reads nothing names nothing. Each answers passed and findings, each a line as the check "
-            + "prints it. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
+            + "prints it. class-closure runs before every fold of an item, judging the work of the agent its in names: it "
+            + "judges the classes the item's plan declares against the closing record its builder answered - every planned "
+            + "site accounted for and the planned home kept or its move said (homeMoved), a deleted site no longer declaring "
+            + "its symbol in the worktree (the graph's view of it, synced where the step starts, or its text), a site that "
+            + "reads its home among the paths the agent changed (what its fold would write and what its earlier folds of the "
+            + "run changed), every search a tool call of the item's stored streams that ran, however its program exited - a "
+            + "search that found nothing exits 1 - and never one refused or whose input did not read, one of whose input's "
+            + "texts holds its query, every neighbour measured by a measure call of the same streams - whichever client called it, whatever it "
+            + "answered - whose own record "
+            + $"({Agents.AgentMeasureSupport.RecordsDirectoryName}/<call id>/{Agents.AgentMeasureSupport.RecordFileName} of the "
+            + "directory of the step whose stream holds it) can be read, names the neighbour's cell and answered its result, "
+            + "failed for failed-fixed - the newest call of that measurement, the same leg, variant, filter and cell, to measure "
+            + "anything answering passed: the call cited or a later one for passed, one whose record was written after the "
+            + "failing call's for failed-fixed - or reasoned why not, every test of the pin declared, the arm one of the registry its "
+            + "worktree holds and mutating "
+            + "the home's own file or a reason the class has nothing to mutate, the universe holding every planned axis and "
+            + "the claim naming each - and each home's touches since its base, the item's own commits left out, a record "
+            + "without a home audit refused where the home was touched by other work; a class's paths - the plan's and the "
+            + "record's, the paths changed, an arm's site and the touches - are read as the plan check reads them, either "
+            + "separator, and compared as this machine compares paths; a fold it cannot weigh fails it with "
+            + "the weighing's own code. Its problems are the record's (1, which close-class repairs) apart from a missing "
+            + "home audit (2, which home-audit makes), and it answers passed, problems, hotspots - the homes touched hotspot "
+            + "times or more - and touches. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
             + "it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as check-ci-legs --json "
             + "gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the commit the run last "
             + $"pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore names - a job "
@@ -5901,11 +6197,12 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"An expression reads names joined by &&, ||, !, ==, != and ?? with ( ) to group, 'empty(x)' for whether a read holds nothing "
-            + "and 'any(list, test)' for whether any member meets a test written with 'it' for the member: every step, input and param it "
+            $"An expression reads names joined by &&, ||, !, ==, != and ?? with ( ) to group, 'empty(x)' for whether a read holds nothing, "
+            + "'any(list, test)' for whether any member meets a test written with 'it' for the member and 'union(list, list, ...)' for the "
+            + "lists joined, each value once in the order first read and a null read as none: every step, input and param it "
             + "names must be declared before it, every path it reads is typed by what holds it - a reason step's schema, the output a "
             + "built-in type answers, the engine's facts of a step, the run's own names - and every operator takes what it says: !, && and "
-            + "|| a boolean, == and != no list and no object, any a list and a test that yields a boolean. A when, an until and a blocking "
+            + "|| a boolean, == and != no list and no object, any a list and a test that yields a boolean, union lists. A when, an until and a blocking "
             + "yield a boolean, and a forEach and a key that takes a list a list; how the run stands without its always steps "
             + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step alone. A placeholder in braces - "
             + "'{step.member}' - in a template key reads the same names, typed the same way, as one in a prompt does; one in any other key "
@@ -5935,7 +6232,11 @@ public static class HelpTopics
             + "template key or a prompt reads, every file the definition names, each step's schema one the engine reads (each "
             + "problem naming the file, the step and the place in the schema; a step's start holds it there again) - and "
             + $"refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
-            + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it is "
+            + "config.json that does not hold is refused. A schema may share a definition with the schema files beside it: a "
+            + "$ref of the form plan.schema.json#/$defs/workItem names one, and where the schema is read - the check, a run, "
+            + "a path typed by it - the definition is taken into the schema's own $defs, so the work-item shape the shipped "
+            + "plan, self-audit and diagnosis schemas hold is one definition among them; a reference nothing beside the schema "
+            + "answers is refused where the schema is checked, naming the file. Where config.json declares no workflow there is nothing to check, and it is "
             + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");
         builder.AppendLine();
         builder.AppendLine("Worked examples, each a whole workflow as a file holds it: the two ways a step is raised");
@@ -6172,10 +6473,10 @@ public static class HelpTopics
         ($"{HarnessLayout.RunnerDirectoryRelative}/{HarnessLayout.RunnerSecretsDirectoryName}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; secret values actions read"),
         ($"{HarnessLayout.DirectoryName}/{HarnessLayout.SshItemsDirectoryName}/<name>/",
-            $"ignored, and written by you, not init: {HarnessLayout.ItemEnvFileName} (address, user, port), "
+            $"ignored, and written by you, not init: {HarnessLayout.ItemEnvFileName} (address, user, port, copies' path), "
             + $"{HarnessLayout.ItemKeyFileName}, {HarnessLayout.ItemKnownHostsFileName}"),
         ($"{HarnessLayout.DirectoryName}/{HarnessLayout.WslDistrosDirectoryName}/<name>/",
-            $"ignored; {HarnessLayout.ItemEnvFileName} (distribution, credential)"),
+            $"ignored; {HarnessLayout.ItemEnvFileName} (distribution, credential, copies' path)"),
         ($"{WorktreeSettings.SeededRoot}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the worktrees, at worktrees.root, which init writes as this"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/",
@@ -6231,7 +6532,12 @@ public static class HelpTopics
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the tree's mutation workers, in every tree, never "
             + $"sent to a host by sync ('{ToolPackage.Command} help mutations')"),
         ($"{HarnessLayout.MutationsDirectoryName}/<key><mark>-<n>/",
-            "ignored; a worker, a repository of its own, and its claim beside it"),
+            $"ignored; a worker, a repository of its own, building in {VariantKey.BuildRootName}/<key>, and its claim beside it"),
+        ($"{HarnessLayout.FormerMutationsDirectoryName}/",
+            "ignored whole, with no placeholder, an empty one left there removed by init; where an earlier version kept the "
+            + "tree's mutation workers, never made again: "
+            + "never sent to a host by sync nor deleted by one, and what is left there removed by clean --former-workers, or "
+            + "with the tree"),
         ($"{HarnessLayout.LegsDirectoryName}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the copies of the tree its legs work in, in every "
             + "tree, never sent to a host by sync"),
@@ -6300,6 +6606,15 @@ public static class HelpTopics
         builder.AppendLine("whole copy of the tree, so a program of the repository's own that walks the tree");
         builder.AppendLine("from its root - a census, a guard over every file - must leave out what the block");
         builder.AppendLine("ignores, as git does, or it reads every file once more for each copy kept there.");
+        AppendWrapped(
+            builder,
+            $"{HarnessLayout.FormerMutationsDirectoryName}, where an earlier version kept the tree's mutation workers before "
+            + $"they moved to {HarnessLayout.MutationsDirectoryName}, keeps its rule in the block for ever - the directory ignored "
+            + "whole, with no placeholder, since nothing is made there again - so what that version left there, each worker a "
+            + "repository of its own, never reads as work to commit; sync withholds it by name too, and no agent writes "
+            + "there. The placeholder that version's init wrote there, still empty, init removes, the directory with it where "
+            + "nothing else is left, for the repository to commit its removal; one holding anything is left, and said. "
+            + "clean --former-workers removes what is left there, as does whatever removes the tree.");
         builder.AppendLine();
         builder.AppendLine("A block an earlier build wrote under the markers of the tool's former name");
         builder.AppendLine($"('{GitIgnoreManager.RetiredBeginMarker}') is the managed block too: init");
@@ -6314,7 +6629,7 @@ public static class HelpTopics
         builder.AppendLine("Ignored state lives in the main checkout. A worktree receives the tracked part of");
         builder.AppendLine(".harness-config through git but never the ignored part, so connection data and the");
         builder.AppendLine("run lock resolve back to the originating checkout. A run's records are an");
-        builder.AppendLine("exception, and so are a tree's .mutations and .legs: each belongs to the tree that");
+        builder.AppendLine($"exception, and so are a tree's {HarnessLayout.MutationsDirectoryName} and {HarnessLayout.LegsDirectoryName}: each belongs to the tree that");
         builder.AppendLine("ran or made it, so a run started inside a worktree writes its records there, and");
         builder.AppendLine("build, test, run and check-mutations name the directory in");
         builder.AppendLine("their output and as runDirectory in --json. Each leg that kept records has a line of");
@@ -6484,6 +6799,9 @@ public static class HelpTopics
         builder.AppendLine("what to rebuild. It starts from clean only where one of these holds, and the");
         builder.AppendLine("leg's line says which, as 'rebuilt from clean:':");
         builder.AppendLine();
+        builder.AppendLine("  - another variant built there last, as its record says: a mutation worker builds");
+        builder.AppendLine($"    in {VariantKey.BuildRootName}/<key>, named by its variant's key, which two variants' names can");
+        builder.AppendLine("    come to alike ('help mutations')");
         builder.AppendLine("  - the build before it cannot be trusted: a phase spanned a clock step, the inputs");
         builder.AppendLine("    moved while it ran, something else used the directory, or an input could not");
         builder.AppendLine("    be read");
@@ -6596,6 +6914,16 @@ public static class HelpTopics
         builder.AppendLine("where they stand: to each -LE's, and to the last -E's. An empty excludeJoin gives each");
         builder.AppendLine("its own excludeArg over a join the shared section declares.");
         builder.AppendLine();
+        builder.AppendLine("'test --filter' may be given more than once, each value a unit that names tests, and");
+        builder.AppendLine("the tests any unit names run. None of ctest, dotnet test and dart test runs them given");
+        builder.AppendLine("its filter option apart - ctest keeps only the last -R, dotnet test refuses a second");
+        builder.AppendLine("--filter, and dart test runs only a test every --name matches - so the units reach");
+        builder.AppendLine("each as one value joined by '|', the join the harness knows each of the three reads");
+        builder.AppendLine("as alternatives, where its invocation declares no filterJoin; init writes none.");
+        builder.AppendLine("Another runner is given each unit after a filterArg of its own where it declares no");
+        builder.AppendLine("filterJoin, and an empty filterJoin does that over a join the shared section");
+        builder.AppendLine("declares. A workflow's test step gives its filter's units the same way.");
+        builder.AppendLine();
         AppendWrapped(
             builder,
             "A test invocation may name what a failed run keeps as evidence: keepOnFailure, paths relative to the "
@@ -6662,7 +6990,8 @@ public static class HelpTopics
         builder.AppendLine("preset that takes a union or cannot be read. So is a selection ctest could only find");
         builder.AppendLine("empty, before anything is built for it: a value one option chooses tests by that");
         builder.AppendLine("another leaves out by the same part of a test - its name, or a label - where either is");
-        builder.AppendLine("given. With excludeArg '-LE', '--label x' is refused beside an exclusion 'x', given by");
+        builder.AppendLine("given - of several filter units, where it is so of every one. With excludeArg '-LE',");
+        builder.AppendLine("'--label x' is refused beside an exclusion 'x', given by");
         builder.AppendLine("--exclude or the remoteExcludes, and beside the args' '-LE x' where it is their");
         builder.AppendLine("only -LE and no test preset they name adds one. Values are judged as written: spelled");
         builder.AppendLine("the same, or plain text where the chosen one holds the other, since ctest finds a");
@@ -6678,7 +7007,13 @@ public static class HelpTopics
         builder.AppendLine("When the file is read, ctest is also refused an invocation that would pass an option");
         builder.AppendLine("on as its opposite: a filterArg or a labelArg that leaves tests out, a labelArg that");
         builder.AppendLine("chooses them by name, an excludeArg that chooses them, and an excludeJoin other than");
-        builder.AppendLine("'|', which ctest would read as part of one pattern that leaves out nothing.");
+        builder.AppendLine("'|', which ctest would read as part of one pattern that leaves out nothing. And ctest,");
+        builder.AppendLine("dotnet test and dart test - dotnet or dart run with test as its command - are");
+        builder.AppendLine("refused an empty filterJoin, which would give them several units apart, and a");
+        builder.AppendLine("filterJoin other than '|', which each would read as part of one pattern or filter");
+        builder.AppendLine("expression; dart test's --plain-name, which reads plain text, takes several units");
+        builder.AppendLine("neither way, and is refused for --name. Each is refused a filter beside the same");
+        builder.AppendLine("option its args give, as a run starts.");
         builder.AppendLine();
         builder.AppendLine("The file is checked when it is read: unknown keys, a key written twice, and");
         builder.AppendLine("references to undeclared names are rejected, with every problem listed at once.");

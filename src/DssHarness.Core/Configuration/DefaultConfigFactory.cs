@@ -138,6 +138,9 @@ public static class DefaultConfigFactory
             {
                 Runner = Ctest.Program,
                 Args = ["--output-on-failure", "--no-tests=error"],
+
+                // Several filter units reach ctest - and dotnet test and dart test below - joined by the one join each
+                // reads as alternatives, which the harness owns (FilterUnits.JoinOf), so no filterJoin is written.
                 FilterArg = Ctest.FilterArg,
                 ExcludeArg = Ctest.ExcludeArg,
 

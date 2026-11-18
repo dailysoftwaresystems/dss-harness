@@ -30,7 +30,24 @@ public sealed record LegIdentity(
     string Config,
     string Variant,
     string Host,
-    string RunId);
+    string RunId)
+{
+    /// <summary>
+    /// The distribution the leg's own WSL item names, spelt as WSL lists it - what <c>wsl.exe -d</c> takes - or
+    /// <see langword="null"/> for a leg of any other host, or one whose item could not be read where it was placed.
+    /// </summary>
+    public string? Distribution { get; init; }
+
+    /// <summary>
+    /// Each WSL item the configuration declares, by its name, with the distribution it names as read where the leg was
+    /// placed - on a host, as the machine that sent the leg there told it - or <see langword="null"/> where its .env could
+    /// not be read there. Never an item's credential.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?> Distributions { get; init; } = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether the leg runs in a WSL distribution, whose own item's distribution <see cref="Distribution"/> is.</summary>
+    public bool InWsl { get; init; }
+}
 
 /// <summary>
 /// The directories one leg runs against, who that leg is, and what its build produces.
@@ -314,6 +331,20 @@ public static partial class LegPathNames
     /// <summary>Names the run this work belongs to.</summary>
     public const string RunId = "runId";
 
+    /// <summary>
+    /// Names the distribution a WSL leg's own item names, spelt as WSL lists it - what <c>wsl.exe -d</c> takes. Followed by
+    /// a dot and a WSL item's name, <c>{distribution.&lt;item&gt;}</c>, it names that item's distribution, on any leg.
+    /// </summary>
+    /// <remarks>
+    /// The distribution lives in the item's .env, beside its credential, which a program the repository runs must never
+    /// read for it: config.json names the item alone, and an item named otherwise than its distribution sent a driver that
+    /// passed the item's name to <c>wsl.exe -d</c> to no distribution at all.
+    /// </remarks>
+    public const string Distribution = "distribution";
+
+    /// <summary>What a name of a WSL item's distribution starts with, before the item's name: <c>distribution.</c>.</summary>
+    public const string ItemDistributionPrefix = Distribution + ".";
+
     /// <summary>Names the one file this leg's build is declared to produce.</summary>
     public const string Product = "product";
 
@@ -355,12 +386,28 @@ public static partial class LegPathNames
         => Compilers.Any(compiler => string.Equals(written, $"{{{compiler.Name}}}", StringComparison.Ordinal));
 
     /// <summary>Every name, in the order a refusal lists them.</summary>
+    /// <remarks>A WSL item's distribution, <c>{distribution.&lt;item&gt;}</c>, is one of a family, by the item's name: see <see cref="IsOwned"/>.</remarks>
     public static IReadOnlyList<string> All { get; } =
     [
         BuildDirectory, TreeRoot, HarnessDirectory,
-        Leg, Os, Processor, Toolchain, Config, Variant, Host, RunId,
+        Leg, Os, Processor, Toolchain, Config, Variant, Host, RunId, Distribution,
         Product, CompilerC, CompilerCxx, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
     ];
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is one this tool fills in: one of <see cref="All"/>, or a WSL item's distribution,
+    /// <c>distribution.&lt;item&gt;</c>, whatever item it names - an input or a value of either name would get this tool's
+    /// value in a run line, and the action's in its environment.
+    /// </summary>
+    /// <param name="name">A name, without its braces.</param>
+    public static bool IsOwned(string name) => All.Contains(name, StringComparer.Ordinal) || ItemOf(name) is not null;
+
+    /// <summary>The WSL item <paramref name="name"/> names the distribution of, or <see langword="null"/> where it is no such name.</summary>
+    /// <param name="name">A name, without its braces.</param>
+    public static string? ItemOf(string name)
+        => name.StartsWith(ItemDistributionPrefix, StringComparison.Ordinal) && name.Length > ItemDistributionPrefix.Length
+            ? name[ItemDistributionPrefix.Length..]
+            : null;
 
     /// <summary>
     /// The names whose value is a directory that is never under a leg's build directory: the tree, the harness's own
@@ -593,6 +640,10 @@ public static partial class LegPathNames
     /// Names this caller declares and has no value for this time. A refusal lists them apart from the
     /// names it can fill in: left out, a name meant as one of them read as one nobody declared.
     /// </param>
+    /// <param name="wslItems">
+    /// The WSL items the configuration declares, where the caller knows them: a WSL item's distribution named for any
+    /// other is refused, naming them. <see langword="null"/> leaves that to the expansion, which knows them.
+    /// </param>
     /// <exception cref="HarnessException">A placeholder names nothing this caller can fill in.</exception>
     /// <remarks>
     /// Called when the configuration is read, where no leg has been placed and no build directory
@@ -605,13 +656,87 @@ public static partial class LegPathNames
         string setting,
         PlaceholderPolicy policy = PlaceholderPolicy.Refuse,
         IReadOnlyCollection<string>? extra = null,
-        IReadOnlyCollection<string>? unvalued = null)
+        IReadOnlyCollection<string>? unvalued = null,
+        IReadOnlyCollection<string>? wslItems = null)
     {
-        foreach (var name in NamesIn(value).Where(name => !Known(name) && (extra is null || !extra.Contains(name))))
+        foreach (var name in NamesIn(value))
         {
-            Refuse(setting, name, policy, extra, unvalued);
+            if (wslItems is not null && ItemOf(name) is { } item && !wslItems.Contains(item, StringComparer.OrdinalIgnoreCase))
+            {
+                throw Undeclared(setting, name, item, wslItems);
+            }
+
+            if (!Known(name) && (extra is null || !extra.Contains(name)))
+            {
+                Refuse(setting, name, policy, extra, unvalued);
+            }
         }
     }
+
+    /// <summary>
+    /// Refuses each distribution <paramref name="value"/> names that <paramref name="identity"/>'s leg has nothing for -
+    /// <c>{distribution}</c> on a leg that runs in no WSL distribution, a WSL item's that is not declared or could not be
+    /// read - by the rule its expansion refuses it by: asked of every line of an action before its first step runs.
+    /// </summary>
+    /// <param name="value">The configured string.</param>
+    /// <param name="setting">What to call the setting in a refusal.</param>
+    /// <param name="identity">Which leg the line runs for.</param>
+    /// <exception cref="HarnessException">A distribution is named that the leg has nothing for.</exception>
+    public static void RefuseAbsentDistributions(string? value, string setting, LegIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+
+        foreach (var name in NamesIn(value).Where(name => name == Distribution || ItemOf(name) is not null))
+        {
+            _ = DistributionFor(setting, name, identity);
+        }
+    }
+
+    /// <summary>
+    /// The distribution <paramref name="name"/> - <see cref="Distribution"/>, or a WSL item's - is filled with for
+    /// <paramref name="identity"/>'s leg.
+    /// </summary>
+    /// <exception cref="HarnessException">
+    /// The leg has nothing for it: it runs in no WSL distribution, or the item is not declared, or its .env could not be
+    /// read where the leg was placed. Each says which.
+    /// </exception>
+    private static string DistributionFor(string setting, string name, LegIdentity identity)
+    {
+        if (ItemOf(name) is { } item)
+        {
+            if (!identity.Distributions.TryGetValue(item, out var distribution))
+            {
+                throw Undeclared(setting, name, item, [.. identity.Distributions.Keys]);
+            }
+
+            return distribution ?? throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"{setting} names '{{{name}}}', and WSL item '{item}''s .env could not be read where leg '{identity.Leg}' was placed, "
+                + $"so its distribution is not known there; '{Hosts.ToolPackage.Command} legs' there says why.");
+        }
+
+        if (!identity.InWsl)
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"{setting} names '{{{Distribution}}}', and leg '{identity.Leg}' runs on {identity.Host}, which is no WSL distribution, so "
+                + $"it has no distribution to put there. Name a WSL item's as '{{{ItemDistributionPrefix}<item>}}', or take the name out.");
+        }
+
+        return identity.Distribution ?? throw new HarnessException(
+            HarnessExit.ConfigInvalid,
+            $"{setting} names '{{{Distribution}}}', and the .env of leg '{identity.Leg}''s WSL item could not be read where it was placed, "
+            + $"so its distribution is not known there; '{Hosts.ToolPackage.Command} legs' there says why.");
+    }
+
+    /// <summary>A refusal of a WSL item's distribution named for an item the configuration does not declare, naming those it does.</summary>
+    private static HarnessException Undeclared(string setting, string name, string item, IReadOnlyCollection<string> declared)
+        => new(
+            HarnessExit.ConfigInvalid,
+            $"{setting} names '{{{name}}}', and no WSL item '{item}' is declared under wslDistros: "
+            + (declared.Count == 0
+                ? "none is."
+                : $"the declared ones are {string.Join(", ", declared.Order(StringComparer.OrdinalIgnoreCase).Select(each => $"'{each}'"))}."));
 
     /// <summary>
     /// Refuses a prompt's placeholder that names nothing its caller fills in: the closed check of a
@@ -689,12 +814,26 @@ public static partial class LegPathNames
                     + "action, so there is no action directory to put there. Only a step of an "
                     + "action file has one.");
 
-            case Leg or Os or Processor or Toolchain or Config or Variant or Host or RunId
+            case Leg or Os or Processor or Toolchain or Config or Variant or Host or RunId or Distribution
                 when paths.Identity is null:
                 throw new HarnessException(
                     HarnessExit.UsageError,
                     $"{setting} names '{{{name}}}', and this run reaches no leg, so there is nothing "
                     + "to put there. Run it for a leg, or take the name out.");
+
+            case Distribution:
+                // Throws, saying which case it is: a leg in no WSL distribution, or one whose item could not be read.
+                _ = DistributionFor(setting, name, paths.Identity!);
+                break;
+
+            case not null when ItemOf(name) is not null:
+                _ = paths.Identity is { } identity
+                    ? DistributionFor(setting, name, identity)
+                    : throw new HarnessException(
+                        HarnessExit.UsageError,
+                        $"{setting} names '{{{name}}}', and this run reaches no leg, so no WSL item was read for it. "
+                        + "Run it for a leg, or take the name out.");
+                break;
 
             default:
                 break;
@@ -768,7 +907,7 @@ public static partial class LegPathNames
     }
 
     /// <summary>Whether <paramref name="name"/> is one this vocabulary owns.</summary>
-    private static bool Known(string name) => All.Contains(name, StringComparer.Ordinal);
+    private static bool Known(string name) => IsOwned(name);
 
     /// <summary>What <paramref name="name"/> spells for this leg, or null when nothing does.</summary>
     private static string? Value(string name, LegPaths paths) => name switch
@@ -789,7 +928,8 @@ public static partial class LegPathNames
         Variant => paths.Identity?.Variant,
         Host => paths.Identity?.Host,
         RunId => paths.Identity?.RunId,
-        _ => null,
+        Distribution => paths.Identity?.Distribution,
+        _ => ItemOf(name) is { } item ? paths.Identity?.Distributions.GetValueOrDefault(item) : null,
     };
 
     private static HarnessException Unknown(
@@ -798,7 +938,11 @@ public static partial class LegPathNames
         IEnumerable<string>? extra,
         IReadOnlyCollection<string>? unvalued)
     {
-        var known = All.Concat(extra ?? []).Select(spelled => $"{{{spelled}}}");
+        // The family of a WSL item's distribution beside the names it follows, as a reader writes one.
+        var known = All
+            .SelectMany(spelled => spelled == Distribution ? [spelled, $"{ItemDistributionPrefix}<item>"] : new[] { spelled })
+            .Concat(extra ?? [])
+            .Select(spelled => $"{{{spelled}}}");
 
         var declared = unvalued is { Count: > 0 }
             ? $"; {string.Join(", ", unvalued.Select(spelled => $"{{{spelled}}}"))} "

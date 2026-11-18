@@ -245,8 +245,8 @@ public sealed class FlowServiceTests
 
     /// <summary>
     /// The engine's deleting of a read-only agent whose work is over says its failure in the agent's own log however it
-    /// failed - a throw as well as a refusal answered - and the run goes on all the same; an agent with no record left
-    /// is deleted already, and nothing is asked or said of it.
+    /// failed - a throw as well as a refusal answered - and the run goes on all the same, the deletion asked as a run's;
+    /// an agent with no record left is deleted already, and nothing is asked or said of it.
     /// </summary>
     [Fact]
     public async Task AReadOnlyAgentsDeletionThatThrows_IsSaidInItsLog_AndAnAgentGoneIsNotAskedAgain()
@@ -285,7 +285,7 @@ public sealed class FlowServiceTests
         Assert.Equal(
             ("delete-agent", HarnessExit.InternalError, "deleting agent 'a1' failed: the disk went away"),
             ((string?)said["command"], (int?)said["exitCode"], (string?)said["message"]));
-        await agents.Received(1).DeleteAsync(Arg.Is<DeleteAgentRequest>(request => request.Agent == "a1"), Arg.Any<CancellationToken>());
+        await agents.Received(1).DeleteAsync(Arg.Is<DeleteAgentRequest>(request => request.Agent == "a1" && request.ByRun), Arg.Any<CancellationToken>());
         await agents.DidNotReceive().DeleteAsync(Arg.Is<DeleteAgentRequest>(request => request.Agent == "a2"), Arg.Any<CancellationToken>());
         Assert.False(File.Exists(RunOf(repository).LogFile("a2")));
     }
@@ -777,6 +777,7 @@ public sealed class FlowServiceTests
         Assert.NotNull(store.ReadWorkflowStatus(run));
         Assert.NotNull(store.ReadDefinition(run));
         Assert.NotNull(store.ReadFlowQuestions(run));
+        Assert.NotNull(store.ReadAffectedTests(run));
         Assert.Null(store.ReadOwner(run));
         Assert.True(File.Exists(run.ReportFile));
         Assert.True(File.Exists(run.ReportJsonFile));
@@ -789,6 +790,7 @@ public sealed class FlowServiceTests
                 $"questions: {run.QuestionsFile}",
                 $"updates: {run.UpdatesFile}",
                 $"issues: {run.PreExistingIssuesFile}",
+                $"affectedTests: {run.AffectedTestsFile}",
                 $"definition: {run.DefinitionFile}",
                 $"events: {run.EventsFile}",
                 $"report: {run.ReportFile}",
@@ -1079,7 +1081,7 @@ public sealed class FlowServiceTests
         Assert.Equal("Done", document["status"]!.GetValue<string>());
         Assert.Equal(0d, document["spent"]!["usd"]!.GetValue<double>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "updates", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
+            ["run", "state", "status", "questions", "updates", "issues", "affectedTests", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
         Assert.Equal(run.FlowFile, document["records"]!["state"]!.GetValue<string>());
         Assert.Equal(run.LogFile("r1"), document["records"]!["log"]!.GetValue<string>());
@@ -3074,6 +3076,7 @@ public sealed class FlowServiceTests
                 $"questions: {run.QuestionsFile}",
                 $"updates: {run.UpdatesFile}",
                 $"issues: {run.PreExistingIssuesFile}",
+                $"affectedTests: {run.AffectedTestsFile}",
                 $"definition: {run.DefinitionFile}",
                 $"events: {run.EventsFile}",
                 $"report: {run.ReportFile}",
@@ -3090,7 +3093,7 @@ public sealed class FlowServiceTests
         Assert.Equal("r1", document["run"]!.GetValue<string>());
         Assert.Equal("Stopped", document["status"]!.GetValue<string>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "updates", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
+            ["run", "state", "status", "questions", "updates", "issues", "affectedTests", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
 
         var logged = repository.Harness.OrchestrationLog.Read(run.LogFile("r1"))[^1];

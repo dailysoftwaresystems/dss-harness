@@ -26,7 +26,8 @@ public sealed class AnchorSettings
     /// <summary>
     /// Whether a row's Trigger carries its verdict too. When true, a closed row's Trigger opens with the
     /// closed mark, as its Status does, and no other row's does: write-anchor and set-anchor refuse a row
-    /// whose two cells disagree, and read-anchors --lint and check-anchor-balance report one. A closed row's
+    /// whose two cells disagree, fold-agent weighs the two as the one verdict they state
+    /// (<see cref="Anchors.AnchorCellMerge"/>), and read-anchors --lint and check-anchor-balance report one. A closed row's
     /// Trigger may open with the bookkeeping pair instead, the closed mark and then the bookkeeping mark, to
     /// say its closure only repairs the mark of work done before the change that closes it:
     /// check-anchor-balance counts the anchor closed and credits that change with nothing. False, the
@@ -44,6 +45,22 @@ public sealed class AnchorSettings
     /// every citation of it.
     /// </summary>
     public int MinimumIdSegments { get; init; } = 3;
+
+    /// <summary>
+    /// Whether a lane folded by hand with <c>fold-agent</c> must close its classes by record:
+    /// <c>required</c>, a row whose status moves to closed is refused unless its directory holds
+    /// <c>closure.json</c>, the closing record judged by the same rules the run's own
+    /// <c>class-closure</c> check reads; <c>off</c> (the default), a row closes as it always
+    /// did. What a manual lane cannot prove is said: its searches and measurements are read as
+    /// given, their command lines, for no stored stream holds them.
+    /// </summary>
+    public string Closure { get; init; } = DefaultClosure;
+
+    /// <summary>The closure setting a repository names none of.</summary>
+    public const string DefaultClosure = "off";
+
+    /// <summary>What <see cref="Closure"/> may say: off, or required.</summary>
+    public static IReadOnlyList<string> ClosureValues { get; } = [DefaultClosure, "required"];
 
     /// <summary>
     /// Files and directories, relative to the repository root, where every cited anchor id must

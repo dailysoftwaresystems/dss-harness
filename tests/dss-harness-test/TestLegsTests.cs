@@ -28,7 +28,7 @@ public sealed class TestLegsTests
 
         var refused = await Assert.ThrowsAsync<HarnessException>(() => services.GetRequiredService<ITestLegs>()
             .RunAsync(
-                new TestLegsRequest { Directory = temp.Path, LocalCopy = true, InPlace = true, SkipBuild = true, SetUp = true, Filter = "Suite.*" },
+                new TestLegsRequest { Directory = temp.Path, LocalCopy = true, InPlace = true, SkipBuild = true, SetUp = true, Filters = ["Suite.*"] },
                 RunId.New(),
                 Token));
 

@@ -36,7 +36,7 @@ public sealed class StoppedDocumentTests
     /// </summary>
     private static readonly Dictionary<string, string[]> OwnDocuments = new(StringComparer.Ordinal)
     {
-        ["list-worktree"] = ["exitCode", "summary", "worktrees", "elsewhere", "gone"],
+        ["list-worktree"] = ["exitCode", "summary", "worktrees", "elsewhere", "gone", "untold"],
         ["list-orchestrator"] = ["exitCode", "summary", "orchestrators"],
         ["list-agent-providers"] = ["exitCode", "summary", "slot", "files", "providers", "balanceKeyUsage", "tiers", "clients", "settings", "sources", "unappointed"],
         ["run-orchestrator"] = FlowDocument,
@@ -159,8 +159,8 @@ public sealed class StoppedDocumentTests
 
         var document = Stopped(await CliRunner.RunAsync(["list-worktree", "--json", "--directory", temp.Combine("does-not-exist")], Token));
 
-        Assert.Equal(["exitCode", "summary", "worktrees", "elsewhere", "gone"], document.Select(member => member.Key));
-        Assert.All(new[] { "worktrees", "elsewhere", "gone" }, member => Assert.Empty(document[member]!.AsArray()));
+        Assert.Equal(["exitCode", "summary", "worktrees", "elsewhere", "gone", "untold"], document.Select(member => member.Key));
+        Assert.All(new[] { "worktrees", "elsewhere", "gone", "untold" }, member => Assert.Empty(document[member]!.AsArray()));
     }
 
     /// <summary>

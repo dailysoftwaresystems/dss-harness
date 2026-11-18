@@ -2,7 +2,8 @@ namespace DssHarness.Core.Processes;
 
 /// <summary>
 /// What the children an operation starts for its work are started under, where the operation opens one: apart from the
-/// terminal, and each bound one recorded while it runs - the scope a run's machine step opens around its legs, so that
+/// terminal, and each bound one recorded while it runs - the scope a run's machine step, and a reason step's measure call,
+/// opens around its legs (<see cref="Orchestration.Flow.FlowStepLegs"/>), so that
 /// nothing its legs start is in reach of an interruption typed at the engine's terminal, which a safe pause needs, and a
 /// killed engine leaves none of its legs' work (<see cref="ProcessRequest.Bound"/>: each phase - a set-up's <c>up</c> line
 /// apart, which is left running on purpose - its keep-awake, the ssh or wsl.exe that carries a leg to a host) running

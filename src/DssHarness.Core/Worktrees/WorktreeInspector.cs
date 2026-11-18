@@ -64,8 +64,25 @@ internal sealed record WorktreesBelow(IReadOnlyList<string> Worktrees, IReadOnly
         => string.Join("; ", Moved.Select(moved => WorktreeInspector.SaidMoved(mainCheckoutRoot, moved.Path, moved.Recorded)));
 }
 
+/// <summary>
+/// One uncommitted change found in a worktree: the path it is at, as git spells it, and how a line names it. The two looks a
+/// checked removal takes - the checks, and the one just before its files go - compare by the path alone, so a change named
+/// with why it was never looked into is the same change the second look's status gives by its path.
+/// </summary>
+/// <param name="Path">
+/// The path relative to the worktree, as git's quoting writes it (<see cref="Git.GitName.Quoted"/>): what the second look's
+/// status gives for the same change.
+/// </param>
+/// <param name="Shown">How a refusal, or the count of the changes discarded, names it: the path, with why where there is one.</param>
+internal sealed record WorktreeChange(string Path, string Shown)
+{
+    /// <summary>A change named by its path alone.</summary>
+    /// <param name="path">The path, as git's quoting writes it.</param>
+    public static WorktreeChange At(string path) => new(path, path);
+}
+
 /// <summary>Everything that stops a worktree being deleted without --force, found before anything is touched.</summary>
-/// <param name="Changes">Paths with uncommitted changes, including edits status cannot see.</param>
+/// <param name="Changes">The uncommitted changes, including edits status cannot see.</param>
 /// <param name="Commits">
 /// Commits that no branch, tag, remote-tracking ref, the newest stash, or other worktree's HEAD contains.
 /// </param>
@@ -78,7 +95,7 @@ internal sealed record WorktreesBelow(IReadOnlyList<string> Worktrees, IReadOnly
 /// worktree by hand; empty when the record names none; <see langword="null"/> when it names this one.
 /// </param>
 internal sealed record WorktreeFindings(
-    IReadOnlyList<string> Changes,
+    IReadOnlyList<WorktreeChange> Changes,
     int Commits,
     string? Head,
     IReadOnlyList<SubmoduleLoss> Submodules,
@@ -187,12 +204,12 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         var status = await _gitClient.GetStatusAsync(path, cancellationToken).ConfigureAwait(false);
         var index = await _gitClient.ListIndexAsync(path, cancellationToken).ConfigureAwait(false);
 
-        List<string> changes = [.. status.Select(entry => entry.Path.Quoted)];
-        changes.AddRange(await FindHiddenEditsAsync(path, index, cancellationToken).ConfigureAwait(false));
+        List<WorktreeChange> changes = [.. status.Select(entry => WorktreeChange.At(entry.Path.Quoted))];
+        changes.AddRange((await FindHiddenEditsAsync(path, index, cancellationToken).ConfigureAwait(false)).Select(WorktreeChange.At));
 
         var head = await _gitClient.ResolveCommitAsync(path, "HEAD", cancellationToken).ConfigureAwait(false);
         var commits = head is null ? 0
-            : ownRepository ? await _gitClient.CountCommitsAsync(path, ["HEAD", "--all", "--not", "--alternate-refs"], cancellationToken).ConfigureAwait(false)
+            : ownRepository ? await CountOwnCommitsAsync(path, cancellationToken).ConfigureAwait(false)
             : await CountUnreferencedCommitsAsync(path, mainCheckoutRoot, head, administrativeDirectory, cancellationToken).ConfigureAwait(false);
 
         var repositories = new List<SubmoduleRepository>();
@@ -223,6 +240,43 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             OwnRepository = ownRepository,
         };
     }
+
+    /// <summary>
+    /// What has come since its checks to stop deleting the worktree at <paramref name="path"/>, asked once more just before
+    /// its files are deleted: each path git's status lists, and, for one of git's linked worktrees, its lock - the look
+    /// git's own removal took before it deleted anything, which a removal that deletes the files itself, before git clears
+    /// its record, takes here instead - or, for an agent's repository of its own, which has no lock, the commits made in it
+    /// that no ref of the main checkout's reaches, which its own store takes with it.
+    /// </summary>
+    /// <param name="path">The worktree: one of git's linked worktrees of this repository, or an agent's repository.</param>
+    /// <param name="identity">What git made of it: a linked worktree's git directory holds its lock.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <returns>Its changes, and its lock or its commits, spelt as <see cref="FindAsync"/> spells them; nothing else is asked again.</returns>
+    /// <exception cref="HarnessException">git could not answer (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    public async Task<WorktreeFindings> LookAgainAsync(string path, WorktreeIdentity identity, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+
+        var status = await _gitClient.GetStatusAsync(path, cancellationToken).ConfigureAwait(false);
+        List<WorktreeChange> changes = [.. status.Select(entry => WorktreeChange.At(entry.Path.Quoted))];
+
+        if (identity.Membership != WorktreeMembership.AgentRepository)
+        {
+            return new WorktreeFindings(changes, 0, null, [], ReadLockReason(identity.AdministrativeDirectory!), HoldsSubmodules: false);
+        }
+
+        var head = await _gitClient.ResolveCommitAsync(path, "HEAD", cancellationToken).ConfigureAwait(false);
+        var commits = head is null ? 0 : await CountOwnCommitsAsync(path, cancellationToken).ConfigureAwait(false);
+
+        return new WorktreeFindings(changes, commits, head, [], LockReason: null, HoldsSubmodules: false) { OwnRepository = true };
+    }
+
+    /// <summary>
+    /// The commits made in an agent's repository of its own that no ref of the main checkout's reaches, which deleting it
+    /// deletes with its own store: those its HEAD and its refs reach and none of its alternates' refs does.
+    /// </summary>
+    private Task<int> CountOwnCommitsAsync(string path, CancellationToken cancellationToken)
+        => _gitClient.CountCommitsAsync(path, ["HEAD", "--all", "--not", "--alternate-refs"], cancellationToken);
 
     /// <summary>
     /// git's record of a worktree at <paramref name="path"/>, or <see langword="null"/> when git records none there:
@@ -661,7 +715,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         string shownPrefix,
         IReadOnlyList<GitIndexEntry> index,
         List<SubmoduleRepository> repositories,
-        List<string> changes,
+        List<WorktreeChange> changes,
         CancellationToken cancellationToken)
     {
         var populated = false;
@@ -678,6 +732,9 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             populated = true;
             var shown = shownPrefix + entry.Path;
 
+            // Spelt as status spells the change, so the change it named is this one, and the second look finds it so.
+            var at = shownPrefix + entry.Name.Quoted;
+
             var location = await _gitClient.GetLocationAsync(directory, cancellationToken).ConfigureAwait(false)
                 ?? throw new HarnessException(
                     HarnessExit.CommandFailed,
@@ -689,13 +746,13 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
             if (!PathContainment.IsStrictlyInside(Path.Combine(gitDirectory, "modules"), location.GitDirectory, _platform.PathComparison))
             {
-                changes.Remove(shown);
-                changes.Add($"{shown} (a submodule whose repository is not among its superproject's modules, so its work tree is never looked into)");
+                changes.RemoveAll(change => string.Equals(change.Path, at, StringComparison.Ordinal));
+                changes.Add(new WorktreeChange(at, $"{shown} (a submodule whose repository is not among its superproject's modules, so its work tree is never looked into)"));
             }
-            else if (!changes.Contains(shown, StringComparer.Ordinal)
+            else if (!changes.Exists(change => string.Equals(change.Path, at, StringComparison.Ordinal))
                 && (await _gitClient.GetStatusAsync(directory, cancellationToken).ConfigureAwait(false)).Count > 0)
             {
-                changes.Add(shown);
+                changes.Add(new WorktreeChange(at, shown));
             }
 
             var nested = await _gitClient.ListIndexAsync(directory, cancellationToken).ConfigureAwait(false);

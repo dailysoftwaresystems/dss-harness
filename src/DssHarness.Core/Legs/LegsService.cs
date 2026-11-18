@@ -71,12 +71,22 @@ public sealed record LegsReport(IReadOnlyList<LegPlacement> Placements, IReadOnl
 /// that provides its operating system, its processor and its emulator - turning it away there when
 /// that host lacks a program the command requires.
 /// </summary>
+/// <param name="contextLoader">Reads the repository and its configuration.</param>
+/// <param name="inspector">Measures each host.</param>
+/// <param name="trees">Lists the repository's trees each host holds.</param>
+/// <param name="platform">How this machine compares paths.</param>
+/// <param name="output">Says what cannot run, and why.</param>
+/// <param name="origin">
+/// Who the command runs for: in a WSL distribution running legs another machine sent it, that machine, whose settings file
+/// came with them and admits them.
+/// </param>
 public sealed class LegsService(
     IHarnessContextLoader contextLoader,
     IHostInspector inspector,
     IRepositoryTrees trees,
     IHostPlatform platform,
-    IHarnessOutput output)
+    IHarnessOutput output,
+    CommandOrigin? origin = null)
 {
     /// <summary>The command's name, which prefixes what it reports.</summary>
     public const string CommandName = "legs";
@@ -86,6 +96,7 @@ public sealed class LegsService(
     private readonly IRepositoryTrees _trees = trees;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
+    private readonly CommandOrigin _origin = origin ?? CommandOrigin.Typed;
 
     /// <summary>
     /// Checks the legs <paramref name="legNames"/> selects, or every leg when <c>--legs</c> was left out and
@@ -152,6 +163,13 @@ public sealed class LegsService(
             reports[report.Host] = report;
         }
 
+        // The rule each host's heavy legs are admitted by, as the machine that admits them reads it: before the legs are
+        // placed, so each placed leg's host carries it.
+        foreach (var host in reports.Keys.ToList())
+        {
+            reports[host] = WithAdmission(config, reports[host], here, _origin.Dispatched);
+        }
+
         // A leg is refused a host without the room its build needs before it starts, as it is one without the
         // programs: started, it died with the disk full half way through, and took any other leg building there
         // with it.
@@ -175,7 +193,56 @@ public sealed class LegsService(
             _output.Warn(CommandName, $"leg '{placement.Leg.Name}' cannot run: {placement.Reason}");
         }
 
+        foreach (var host in reports.Keys.Where(host => host.Kind != HostKind.Local).ToList())
+        {
+            reports[host] = Described(context, reports[host]);
+        }
+
         return new LegsReport(placements, [.. reports.Values], selection.Named) { Here = here, LocalTrees = local, CopyOnHosts = workload.CopyOnHosts };
+    }
+
+    /// <summary>
+    /// <paramref name="report"/>, with the rule its heavy legs are admitted by - read from the sections
+    /// <see cref="AdmissionSection.For"/> names for its host, the one owner of which, in which order, that a run's legs are
+    /// admitted by too - or why that rule could not be read; as it was where the host was not reached, and said nothing.
+    /// </summary>
+    private static HostReport WithAdmission(HarnessConfig config, HostReport report, HostId? here, Dispatch? dispatched)
+    {
+        if (report.MachineSettings is not { } settings)
+        {
+            return report;
+        }
+
+        try
+        {
+            return report with { Admission = AdmissionSettings.InForce(AdmissionSection.For(report.Host, here, () => settings, dispatched, config)) };
+        }
+        catch (ConfigException ex)
+        {
+            return report with { AdmissionUnread = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="report"/> with what this machine's items say of its host that no measuring there could: where it
+    /// keeps the copy of the tree the command was typed in for this machine, and what set it - or why that is not known -
+    /// and a WSL host's distribution, which config.json never names. Read from the items here, never their credential.
+    /// </summary>
+    private HostReport Described(HarnessContext context, HostReport report)
+    {
+        var described = report with
+        {
+            Distribution = report.Host.Kind == HostKind.Wsl ? context.HostItems.Of(report.Host).Distribution : null,
+        };
+
+        try
+        {
+            return described with { CopyPlace = HostCopyPlace.Of(context, report.Host, context.Layout.RepositoryRoot, _platform.PathComparison) };
+        }
+        catch (HarnessException ex)
+        {
+            return described with { CopyUnplaced = ex.Message.TrimEnd('.') };
+        }
     }
 
     /// <summary>
@@ -202,18 +269,17 @@ public sealed class LegsService(
             .SelectMany(entry => entry.Hosts)
             .Distinct())
         {
-            // A host that declares nowhere to keep a copy holds none of the repository's, and is refused where a leg is
-            // placed on it; this machine, running legs another machine sent it, keeps them where it declares for itself.
-            var keeper = host.Kind == HostKind.Local ? HostCopies.KeptAs(here) : host;
-
-            if (keeper is not null && HostCopies.DeclaredFor(context.Config, keeper)?.RepositoryPath is not { Length: > 0 })
-            {
-                continue;
-            }
-
             var trees = host.Kind == HostKind.Local
                 ? await _trees.HereAsync(context, here, cancellationToken).ConfigureAwait(false)
                 : _trees.On(context, host);
+
+            // A host this machine knows nowhere to keep a copy for - none declared, or an item that cannot be read - holds
+            // none of the repository's, and is refused where a leg is placed on it; this machine, running legs another
+            // machine sent it, keeps them beside the copy it was sent, which it always knows.
+            if (trees.Trees.Count == 0)
+            {
+                continue;
+            }
 
             if (trees.Unlisted is { } why)
             {

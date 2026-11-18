@@ -28,12 +28,13 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
-        Assert.Equal(82, Count(definition.Steps));
-        Assert.Equal(48, Count(definition.Recover!.Steps));
-        Assert.Equal(48, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(89, Count(definition.Steps));
+        Assert.Equal(57, Count(definition.Recover!.Steps));
+        Assert.Equal(58, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
-        Assert.Contains(definition.Inputs, input => input.Name == "affectedTests" && input.Default == "off");
-        Assert.Equal(["on", "off"], definition.Inputs.Single(input => input.Name == "affectedTests").Options);
+        Assert.Contains(definition.Inputs, input => input.Name == "finalTests" && input.Default == "affected");
+        Assert.Equal(["affected", "all"], definition.Inputs.Single(input => input.Name == "finalTests").Options);
+        Assert.DoesNotContain(definition.Inputs, input => input.Name == "affectedTests");
     }
 
     /// <summary>
@@ -98,7 +99,8 @@ public sealed class WorkflowTemplatesTests
     /// diagnosis, and the pre-existing-issue triage (it measured cheaper) - the reviewers, the self-audit, the
     /// diagnosis and the steps that verify and fix starting their packs from their changes (<c>graphFrom: changes</c>);
     /// the request triage and the plan audit, whose work is text the map does not light, ask none (each measured
-    /// costlier with no quality gained); the prioritiser and a review's scope keep the map (the scope's whole overhead
+    /// costlier with no quality gained), as the item audit - the plan audit's agent on a later round's items - does,
+    /// searching the data by its own text search; the prioritiser and a review's scope keep the map (the scope's whole overhead
     /// is a fifth of a cent beside the review rounds it steers; the prioritiser is unmeasured, serving only a run with
     /// no request); the scribes ask none as before. The planner, which resumes itself and so may say a graph key of its
     /// own, keeps its default, the tool, as it was: the measurement found it costlier with the graph and did not move
@@ -149,6 +151,7 @@ public sealed class WorkflowTemplatesTests
             ("plan", null, null),
             ("plan-update", null, null),
             ("plan-audit", "off", null),
+            ("item-audit", "off", null),
             ("implement", null, null),
             ("unblock", null, null),
             ("redo", null, null),
@@ -156,6 +159,8 @@ public sealed class WorkflowTemplatesTests
             ("mend", null, "changes"),
             ("settle", null, "changes"),
             ("cite", null, "changes"),
+            ("close-class", null, "changes"),
+            ("home-audit", null, "changes"),
             ("review-scope", "map", "changes"),
             ("correctness", null, "changes"),
             ("errors", null, "changes"),
@@ -165,6 +170,8 @@ public sealed class WorkflowTemplatesTests
             ("simplicity", null, "changes"),
             ("rework", null, "changes"),
             ("remend", null, "changes"),
+            ("reclose-class", null, "changes"),
+            ("rehome-audit", null, "changes"),
             ("resettle", null, "changes"),
             ("recite", null, "changes"),
             ("self-audit", null, "changes"),
@@ -173,6 +180,7 @@ public sealed class WorkflowTemplatesTests
             ("notes-cite", null, null),
             ("diagnose", null, "changes"),
             ("redirect", null, "changes"),
+            ("remedy-revise", null, "changes"),
             ("triage-pre-existing-issue", null, null),
         };
 
@@ -570,23 +578,29 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains(schema.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
         Assert.Contains("one builder's cycle", schema.GetProperty("properties").GetProperty("items").GetProperty("description").GetString(), StringComparison.Ordinal);
 
-        // The work item is one definition: the plan's items and a scope piece's item both refer to it.
+        // The work item is one definition, shared by every list that holds one: the plan's items and a scope piece's
+        // item both refer to it, and it alone says what a work item is - its definition of done among that, and now
+        // its classes and its noClass.
         var item = schema.GetProperty("$defs").GetProperty("workItem");
 
         Assert.Equal("#/$defs/workItem", schema.GetProperty("properties").GetProperty("items").GetProperty("items").GetProperty("$ref").GetString());
         Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
+        Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "classes");
+        Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "noClass");
         Assert.Equal("string", item.GetProperty("properties").GetProperty("done").GetProperty("type").GetString());
+        Assert.Equal("#/$defs/closureClass", item.GetProperty("properties").GetProperty("classes").GetProperty("items").GetProperty("$ref").GetString());
 
         var piece = schema.GetProperty("properties").GetProperty("scope").GetProperty("items").GetProperty("properties").GetProperty("item");
 
         Assert.Contains(piece.GetProperty("anyOf").EnumerateArray(), shape => shape.TryGetProperty("$ref", out var reference) && reference.GetString() == "#/$defs/workItem");
 
-        // A further round's items and a recovery's are work items as the plan's are: each carries its definition of done.
+        // A further round's items and a recovery's hold no shape of their own: each names the plan's one definition,
+        // which carries its definition of done and its classes with it wherever it is shared.
         foreach (var further in new[] { "schemas/self-audit.schema.json", "schemas/diagnosis.schema.json" })
         {
             var items = JsonDocument.Parse(Read(further)).RootElement.GetProperty("properties").GetProperty("items").GetProperty("items");
 
-            Assert.Contains(items.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
+            Assert.Equal("plan.schema.json#/$defs/workItem", items.GetProperty("$ref").GetString());
         }
 
         var pipeline = Read("item-pipeline/item-pipeline.yml");
@@ -604,6 +618,30 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal("review.findings", fix.Repeat.Leftover);
         Assert.Equal("review", fix.Repeat.DecideAfter);
         Assert.Equal(new FlowAnswer("accept", null, null), fix.Answers["loopBound"]);
+    }
+
+    /// <summary>
+    /// Every repair of the item pipeline that goes on with the implementation - and so may change its code - goes back
+    /// through the item's tests before anything is folded: one the item's own steps raise goes on to the item's block,
+    /// whose verify runs again (a blocked answer asked first), and one the review loop's revise raises goes on to reverify.
+    /// The class-closure check's own repairs are among them - close-class consolidates sites and arms the class, home-audit
+    /// refactors the home and its callers - for a repair that went on to the check alone would fold code no test ran on,
+    /// under a checkpoint naming the tests run before it.
+    /// </summary>
+    [Fact]
+    public void EveryRepairThatGoesOnWithTheImplementation_GoesBackThroughTheItemsTests()
+    {
+        var items = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items");
+        var revise = StepAt(items.Steps, "fix", "revise");
+
+        static bool GoesOn(WorkflowStep step) => step.Resume == "implement" || step.Steps.Any(GoesOn);
+
+        Assert.Equal(
+            [("unblock", "item-blocked"), ("mend", "item-blocked"), ("close-class", "item-blocked"), ("home-audit", "item-blocked"), ("reconcile", "item-blocked"), ("cite", "item-blocked")],
+            [.. items.Steps.Where(step => step.On is not null && GoesOn(step)).Select(step => (step.Name, step.Then ?? string.Empty))]);
+        Assert.Equal(
+            [("remend", "reverify"), ("reclose-class", "reverify"), ("rehome-audit", "reverify"), ("rereconcile", "reverify"), ("recite", "reverify")],
+            [.. revise.Steps.Where(step => step.On is not null && GoesOn(step)).Select(step => (step.Name, step.Then ?? string.Empty))]);
     }
 
     /// <summary>
@@ -641,25 +679,118 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
-    /// <c>closure.md</c> says what reads it, as what ships does: an agent is given it only where its step's prompt reads
-    /// <c>{text.closure}</c>, and no file shipped beside it does yet - so a repository that fills its heading is told
-    /// that its words reach no agent until a prompt of its own reads them, never left to think the shipped flow weighs
-    /// them; the README says the same. A shipped prompt that comes to read it changes both sentences in the same change.
+    /// <c>closure.md</c> says what reads it, as what ships does: an agent is given it only where its step's prompt
+    /// reads <c>{text.closure}</c> - the planner's, the plan audit's, the item audit's and the builders', the prompts
+    /// that plan, check and close the classes of the work items - and the file tells a repository its words weigh on
+    /// what those prompts decide; the README says the same.
     /// </summary>
     [Fact]
-    public void ClosureMd_SaysNoShippedPromptReadsIt_AsNoneDoes()
+    public void ClosureMd_IsReadByThePromptsThatPlanCheckAndCloseTheClasses()
     {
-        Assert.DoesNotContain(WorkflowTemplates.Files.Where(file => file != "closure.md"), file => WorkflowTemplates.TextOf(file)!.Contains("{text.closure}", StringComparison.Ordinal));
+        Assert.Equal(
+            ["item-pipeline/prompts/implement.md", "item-pipeline/prompts/remedy.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
+            [.. WorkflowTemplates.Files
+                .Where(file => file != "closure.md" && WorkflowTemplates.TextOf(file)!.Contains("{text.closure}", StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal)]);
         Assert.Contains(
-            "an agent is given it where its step's prompt reads `{text.closure}`, as the file stands when the prompt is given. "
-                + "None of the prompts shipped beside it reads it: what is written here reaches an agent once a prompt of this "
-                + "repository's says `{text.closure}` where its agent is to weigh it.",
+            "an agent is given it where its step's prompt reads `{text.closure}`, as the file stands when the prompt is given. The "
+                + "prompts shipped beside it that read it are the plan's, the plan audit's, the item audit's and the builders' - the "
+                + "implement prompt and the recovery's remedy - which plan, check and close the classes of the work items: what is "
+                + "written here weighs on what they decide a class covers, so keep it true of the repository.",
             Prose.Words(WorkflowTemplates.TextOf("closure.md")!),
             StringComparison.Ordinal);
         Assert.Contains(
-            "No prompt the tool ships reads `{text.closure}` yet, and the file says so: what a repository writes there reaches an agent once a prompt of its own reads it.",
+            "The planner's, the plan audit's, the item audit's and the builders' prompts read `{text.closure}`, and the file says so: what a repository writes there weighs on what they decide a class covers.",
             Prose.Document("README.md"),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every prompt of the item pipeline that builds or goes on with an item reads the item's classes: the builders'
+    /// prompts hold the class-closure paragraph beside the item's classes, its noClass reason and the repository's
+    /// universe, the implementer's definition holds the paragraph, and every prompt that goes on with an item - mend
+    /// (which serves remend too), rework, reconcile (resettle), anchors (recite), unblock, redo and undo - reads them
+    /// with the record so far under "The class you are closing", so a fresh agent is given the class, never trusted to
+    /// remember it. The recovery's remedy builds fresh, so it holds the builders' part alone: its record starts empty,
+    /// and a step's prompt reads no step that is not before it. No other shipped prompt reads the classes: the
+    /// reviewers judge what the change-first pack shows them. The record is what the implement step's answer schema
+    /// requires, closure and arms among its members.
+    /// </summary>
+    [Fact]
+    public void EveryPromptThatBuildsOrGoesOnWithAnItem_IsGivenTheClassItCloses_AndTheRecordSoFar()
+    {
+        string[] goesOn =
+        [
+            "item-pipeline/prompts/anchors.md",
+            "item-pipeline/prompts/closure-record.md",
+            "item-pipeline/prompts/home-audit.md",
+            "item-pipeline/prompts/mend.md",
+            "item-pipeline/prompts/redo.md",
+            "item-pipeline/prompts/reconcile.md",
+            "item-pipeline/prompts/rework.md",
+            "item-pipeline/prompts/undo.md",
+            "item-pipeline/prompts/unblock.md",
+        ];
+
+        foreach (var prompt in goesOn)
+        {
+            var text = WorkflowTemplates.TextOf(prompt)!;
+
+            Assert.Contains("## The class you are closing", text, StringComparison.Ordinal);
+            Assert.Contains("{input.item.classes}", text, StringComparison.Ordinal);
+            Assert.Contains("{implement.latest.closure}", text, StringComparison.Ordinal);
+        }
+
+        foreach (var builds in new[] { "item-pipeline/prompts/implement.md", "item-pipeline/prompts/remedy.md" })
+        {
+            var text = Prose.Words(WorkflowTemplates.TextOf(builds)!);
+
+            Assert.Contains(
+                "For every class of your item, before you edit: read its invariant, its one home and its site list below, and check them in the code; a site the list missed is yours to add",
+                text,
+                StringComparison.Ordinal);
+            Assert.Contains("Nothing is folded without the record.", text, StringComparison.Ordinal);
+            Assert.Contains("{input.item.classes}", text, StringComparison.Ordinal);
+            Assert.Contains("{input.item.noClass}", text, StringComparison.Ordinal);
+            Assert.Contains("{text.closure}", text, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "For every class of your item, before you edit: read its invariant, its one home and its site list below, and check them in the code",
+            Prose.Words(WorkflowTemplates.TextOf("item-pipeline/agents/implementer.md")!),
+            StringComparison.Ordinal);
+
+        // The builders and the goings-on alone read the classes; no other shipped file does.
+        Assert.Equal(
+            [.. goesOn.Append("item-pipeline/prompts/implement.md").Append("item-pipeline/prompts/remedy.md").Order(StringComparer.Ordinal)],
+            [.. WorkflowTemplates.Files
+                .Where(file => WorkflowTemplates.TextOf(file)!.Contains("{input.item.classes}", StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal)]);
+
+        var schema = JsonDocument.Parse(Read("item-pipeline/schemas/implement.schema.json")).RootElement;
+
+        Assert.Contains(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "closure");
+
+        // Each class's arm is its own entry's: no flat list of arms beside the record, which nothing would read.
+        Assert.DoesNotContain(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "arms");
+        Assert.False(schema.GetProperty("properties").TryGetProperty("arms", out _));
+
+        // The builders measure on declared legs alone, and name any other reference unmeasured; a neighbour's result is
+        // what the call it cites answered for its cell, as the class-closure check holds it to that call's own record, and
+        // a cell is measured again after its fix, the same leg, variant, filter and cell, for the check holds the cell to the
+        // newest call of that measurement.
+        foreach (var builds in new[] { "item-pipeline/prompts/implement.md", "item-pipeline/prompts/remedy.md" })
+        {
+            Assert.Contains(
+                "Only a leg this run's configuration declares is measured; a reference that is no declared leg - a tool, a service, another implementation - is named unmeasured, with the reason, and so is a cell the tool answers unmeasured.",
+                Prose.Words(WorkflowTemplates.TextOf(builds)!),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "Your record's `measuredBy` cites the id of the call that measured, and its `result` is what that call answered for that cell: `passed` where it passed, `failed-fixed` where it failed and you fixed it in this item. "
+                    + "A fix is shown, never said: after you fix a failed cell, measure it again - the same leg, variant, filter and cell - and the check holds the cell to the newest call of that measurement, which must answer passed, for `passed` and `failed-fixed` alike; your record may still cite the call that failed.",
+                Prose.Words(WorkflowTemplates.TextOf(builds)!),
+                StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
@@ -684,7 +815,7 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(FlowRecover.PauseOnFailure, recover.OnFailure);
         Assert.Equal(5, recover.MaxVisits);
         Assert.Equal("diagnose", recover.Steps[0].Resume);
-        Assert.Equal(["diagnose", "direction", "redirect", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
+        Assert.Equal(["diagnose", "direction", "redirect", "remedy-check", "remedy-revise", "remedy-recheck", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
 
         var passedOver = new List<string>();
         var untried = new List<string>();
@@ -775,6 +906,39 @@ public sealed class WorkflowTemplatesTests
                 Walk(step.Steps, path, effective, recovering, step.With.TryGetValue("failTo", out var filled) ? filled : failTo);
             }
         }
+    }
+
+    /// <summary>
+    /// What the shipped flow builds is what a plan check read, after the last word on it, and a later round is audited
+    /// before it is built. The rounds' items wait for the item audit as well as for the check, so the audit reads the
+    /// tree they are built on and the self-audit after the build reads what it found; the round is judged by that
+    /// self-audit, so the item audit's go - said before the build that may settle it - is no term of the rounds' until.
+    /// The recovery checks the diagnosis's items once the person's answer, where one was given, made its last word
+    /// (redirect); sends what the check refuses back to the diagnostician within the visit (remedy-revise); checks what
+    /// it gives again (remedy-recheck); and builds the items those checks read, never the diagnosis's own list.
+    /// </summary>
+    [Fact]
+    public void WhatTheShippedFlowBuilds_IsWhatAPlanCheckRead_AfterTheLastWordOnIt()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+        var recover = definition.Recover!.Steps;
+
+        Assert.Equal(["item-problems", "item-audit"], StepAt(definition.Steps, "rounds", "items").DependsOn);
+        Assert.Equal("item-check.items", StepAt(definition.Steps, "rounds", "items").ForEach);
+        Assert.Equal(
+            "self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && empty(round-checks.findings)",
+            StepAt(definition.Steps, "rounds").Repeat!.Until);
+
+        Assert.Equal(["direction"], StepAt(recover, "redirect").DependsOn);
+        Assert.Equal("(direction.answer ?? '') == 'continue'", StepAt(recover, "redirect").When);
+        Assert.Equal(["redirect"], StepAt(recover, "remedy-check").DependsOn);
+        Assert.Equal("diagnose.latest.items", StepAt(recover, "remedy-check").Items);
+        Assert.Equal(("diagnose", "!(remedy-check.ok ?? true)"), (StepAt(recover, "remedy-revise").Resume, StepAt(recover, "remedy-revise").When));
+        Assert.Equal(["remedy-check"], StepAt(recover, "remedy-revise").DependsOn);
+        Assert.Equal(["remedy-revise"], StepAt(recover, "remedy-recheck").DependsOn);
+        Assert.Equal("diagnose.latest.items", StepAt(recover, "remedy-recheck").Items);
+        Assert.Equal(["remedy-recheck"], StepAt(recover, "remedies").DependsOn);
+        Assert.Equal("remedy-recheck.items ?? remedy-check.items", StepAt(recover, "remedies").ForEach);
     }
 
     /// <summary>

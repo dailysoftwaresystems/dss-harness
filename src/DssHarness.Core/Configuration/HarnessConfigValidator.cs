@@ -226,8 +226,8 @@ public static partial class HarnessConfigValidator
 
         // The directories the harness keeps apart from the worktrees - the never-transfer floor: git's own, and every
         // root slot the layout names - the one orchestrators keep what they hold in, beside which their agents' worktrees
-        // are made, the one side-tasks keep their records in, and the two a tree keeps its own copies in. A root that is
-        // one, or inside one, would mix them. Compared ignoring case: on Windows and macOS the two spellings are one
+        // are made, the one side-tasks keep their records in, and the two a tree keeps its own copies in - and the one an
+        // earlier version kept a tree's mutation workers in. A root that is one, or inside one, would mix them. Compared ignoring case: on Windows and macOS the two spellings are one
         // directory.
         var root = Repository.PathPatterns.Normalize(worktrees.Root);
 
@@ -284,6 +284,11 @@ public static partial class HarnessConfigValidator
         }
 
         RequireAtLeastOne(anchors.MinimumIdSegments, "anchors.minimumIdSegments", problems);
+
+        if (!AnchorSettings.ClosureValues.Contains(anchors.Closure, StringComparer.Ordinal))
+        {
+            problems.Add($"anchors.closure '{anchors.Closure}' is not one of the settings it takes: {string.Join(", ", AnchorSettings.ClosureValues.Select(value => $"'{value}'"))}");
+        }
 
         RequireRelativePaths(anchors.CitationRoots, "anchors.citationRoots", problems);
 
@@ -2069,11 +2074,12 @@ public static partial class HarnessConfigValidator
             // exist is its own business: ctest says it cannot change into it and exits 1, which reads
             // as a suite that failed. Found here it names the line to fix, and has cost nobody the
             // build that would have preceded it.
-            CheckPlaceholders(invocation.Args, $"{setting}.args", problems);
+            CheckPlaceholders(invocation.Args, $"{setting}.args", problems, wslItems: config.WslDistros);
             CheckPlaceholders(
                 invocation.WorkingDirectory is null ? null : [invocation.WorkingDirectory],
                 $"{setting}.workingDirectory",
-                problems);
+                problems,
+                wslItems: config.WslDistros);
 
             // The one setting where the core count's own name belongs. It is spliced by the rule that
             // owns it and only into these, so the same name in 'args' reaches the runner as literal
@@ -2082,7 +2088,8 @@ public static partial class HarnessConfigValidator
                 invocation.CoresArgs,
                 $"{setting}.coresArgs",
                 problems,
-                [CoreCounts.PlaceholderName]);
+                [CoreCounts.PlaceholderName],
+                config.WslDistros);
 
             // What a run that did not pass keeps of the files its build directory holds, as evidence beside its verdict.
             // Given empty it is refused as every such list is; an entry that is not a path inside the build directory,
@@ -2178,8 +2185,8 @@ public static partial class HarnessConfigValidator
             }
         }
 
-        // How --filter, --label and --exclude reach ctest, each problem said once with the systems it
-        // holds for: read otherwise, they run the opposite of what was asked, and say nothing.
+        // How --filter, --label and --exclude reach ctest, and several filter units ctest, dotnet test and dart test, each
+        // problem said once with the systems it holds for: read otherwise, they run what was not asked, and say nothing.
         var misread = merged
             .SelectMany(entry => TestInvocationResolver.Misread(entry.Invocation).Select(problem => (entry.Platform, Problem: problem)))
             .GroupBy(entry => entry.Problem, StringComparer.Ordinal);
@@ -2231,7 +2238,7 @@ public static partial class HarnessConfigValidator
 
         try
         {
-            _ = TestInvocationResolver.CommandFor(invocation, cores: 1, filter: null, excludes: invocation.RemoteExcludes);
+            _ = TestInvocationResolver.CommandFor(invocation, cores: 1, filters: null, excludes: invocation.RemoteExcludes);
 
             return null;
         }
@@ -2308,40 +2315,12 @@ public static partial class HarnessConfigValidator
         }
     }
 
-    /// <summary>
-    /// Checks where a host keeps its copy of the repository. It is named absolutely, or from the
-    /// home directory of the user the host is reached as: a relative path would resolve against
-    /// whatever directory a transport happens to start in. A home or root directory itself is
-    /// refused, because the copy is kept identical to the repository, and everything else in the
-    /// directory would have to go.
-    /// </summary>
+    /// <summary>Checks where a host keeps its copy of the repository, by the one rule an item's .env is held to as well (<see cref="RepositoryPaths"/>).</summary>
     private static void CheckRepositoryPath(string path, string owner, bool allowWindowsPaths, List<string> problems)
     {
-        var trimmed = path.TrimEnd('/', '\\');
-        var isHome = trimmed == "~";
-        var isRoot = trimmed.Length == 0 || (trimmed.Length == 2 && PlatformPaths.NamesADrive(trimmed));
-
-        // A POSIX path, or one from the home directory - or, where the host may run Windows, a drive
-        // or a share.
-        var isAbsolute = PlatformPaths.IsHomeRelative(path)
-            || PlatformPaths.IsAbsoluteOn(path, PlatformNames.Linux)
-            || (allowWindowsPaths && PlatformPaths.IsWindowsAbsolute(path));
-
-        if (string.IsNullOrWhiteSpace(path) || (!isAbsolute && !isHome))
+        if (RepositoryPaths.Problem(path, allowWindowsPaths) is { } problem)
         {
-            problems.Add(
-                $"{owner} repositoryPath '{path}' must be absolute, or start with ~/ for the home directory"
-                + (allowWindowsPaths ? string.Empty : " inside the distribution"));
-        }
-        else if (path.Split('/', '\\').Any(segment => segment is "." or ".."))
-        {
-            // Compared as written, a path that steps back up, such as ~/src/.., could still name the home
-            // or root directory the next check refuses.
-            problems.Add($"{owner} repositoryPath '{path}' has a '.' or '..' segment; name the directory directly");
-        }
-        else if (isHome || isRoot)
-        {
-            problems.Add($"{owner} repositoryPath '{path}' is a home or root directory; name a directory of its own for the copy");
+            problems.Add($"{owner} repositoryPath '{path}' {problem}");
         }
     }
 
@@ -2504,17 +2483,19 @@ public static partial class HarnessConfigValidator
     /// Names that are legal in this setting beyond the leg's directories, such as the core count's
     /// own name in <c>coresArgs</c>.
     /// </param>
+    /// <param name="wslItems">The WSL items the configuration declares, the only ones whose distribution a string may name.</param>
     private static void CheckPlaceholders(
         IReadOnlyList<string>? values,
         string setting,
         List<string> problems,
-        IReadOnlyCollection<string>? extra = null)
+        IReadOnlyCollection<string>? extra = null,
+        IReadOnlyCollection<string>? wslItems = null)
     {
         foreach (var value in values ?? [])
         {
             try
             {
-                LegPathNames.RefuseUnknown(value, setting, PlaceholderPolicy.Refuse, extra);
+                LegPathNames.RefuseUnknown(value, setting, PlaceholderPolicy.Refuse, extra, wslItems: wslItems);
             }
             catch (HarnessException ex)
             {
@@ -2561,13 +2542,31 @@ public static partial class HarnessConfigValidator
             return;
         }
 
+        if (PatternProblem(pattern, setting) is { } problem)
+        {
+            problems.Add(problem);
+        }
+    }
+
+    /// <summary>
+    /// Why <paramref name="pattern"/> is no regular expression this tool can run, said of <paramref name="setting"/>, or
+    /// <see langword="null"/> where it compiles: the one check a pattern a file declares is held to, a pattern of
+    /// config.json and of an action file alike, so the two files are refused for one mistake in one way.
+    /// </summary>
+    /// <param name="pattern">The pattern, as written.</param>
+    /// <param name="setting">What the problem calls the setting that declares it.</param>
+    internal static string? PatternProblem(string pattern, string setting)
+    {
+        ArgumentNullException.ThrowIfNull(pattern);
+
         try
         {
             _ = new Regex(pattern, RegexOptions.None, TimeSpan.FromSeconds(1));
+            return null;
         }
         catch (ArgumentException ex)
         {
-            problems.Add($"{setting} is not a valid regular expression: {ex.Message}");
+            return $"{setting} is not a valid regular expression: {ex.Message}";
         }
     }
 }

@@ -750,7 +750,7 @@ public sealed class TestServiceTests
 
         var request = Request(temp, Child("All 1 tests passed"), filterArg: "-R", excludeArg: "-LE", labelArg: "-L") with
         {
-            Filter = "parser",
+            Filters = ["parser"],
             Excludes = ["slow"],
             Labels = ["unit"],
         };

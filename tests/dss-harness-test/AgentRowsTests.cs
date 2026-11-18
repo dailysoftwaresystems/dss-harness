@@ -620,6 +620,104 @@ public sealed class AgentRowsTests
     }
 
     /// <summary>
+    /// A consumer's run, where a Trigger carries its row's verdict: a lane closed a row, the main tree reopened it with a new
+    /// trigger and closing, and the lane closed it again - its status file closed as it was, its trigger opening with the
+    /// closed mark anew. The verdict is one decision: taken a cell from each side the row would state two, so its status is
+    /// weighed as both changed beside its trigger. The dry run names both with the three texts and the command that writes
+    /// them, exiting as its --apply does; --apply refuses, saying why, with nothing written; and named, --accept-over writes
+    /// the agent's verdict whole, the row closed again and moved to the done registry as set-anchor would move it.
+    /// </summary>
+    [Fact]
+    public async Task ARowTheMainTreeReopened_ThatTheLaneClosesAgain_IsOneVerdict_WrittenWhereAcceptOverNamesItsStatusAndTrigger()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        kit.Harness.WriteConfig(kit.Main, new HarnessConfig { Worktrees = OrchestrationKit.Settings, Anchors = new AnchorSettings { TriggerCarriesVerdict = true } });
+        var closed = new Dictionary<string, string>(Row) { ["status"] = "closed", ["trigger"] = $"{AnchorStatus.ClosedMark} closed by the lane" };
+        kit.FileRow("ag", Id, closed);
+        Assert.True((await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id))).Succeeded);
+        await kit.Harness.AnchorRegistryService.SetAsync(
+            kit.Main, new AnchorSetRequest(Id) { Status = "open", Trigger = "reopened: the fix did not hold", ClosingWork = "make the fix hold" }, dryRun: false, Token);
+        kit.FileRow("ag", Id, new Dictionary<string, string>(closed) { ["trigger"] = $"{AnchorStatus.ClosedMark} closed again by the lane", ["closing"] = "the fix, made to hold" });
+        var pending = OrchestrationKit.Read(kit.Main, AnchorSettings.DefaultPendingAnchorsPath);
+        var done = OrchestrationKit.Read(kit.Main, AnchorSettings.DefaultDoneAnchorsPath);
+
+        var dry = await kit.FoldAsync("ag", apply: false);
+        var refused = await kit.FoldAsync("ag", apply: true);
+        var statusAlone = await kit.FoldAsync("ag", apply: true, new FoldAllowances { AcceptOver = [$"{Id}:status"] });
+
+        const string Verdicts = $"the row would state two verdicts (the Trigger opens with the closed mark, {AnchorStatus.ClosedMark}, and the Status does not read closed)";
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.Equal(RequestStanding.NeedsConsent, Facts(dry).Standing);
+        Assert.Equal([ConsentKind.FoldOverCells], Facts(dry).Needs);
+        Assert.Equal([$"{Id}:status", $"{Id}:trigger", $"{Id}:closing"], Facts(dry).Planned!.OverCells);
+        Assert.Contains(
+            $"    its Status carries the row's one verdict with its Trigger, and the registries changed one of the two since its earlier fold and the agent the other, so that, "
+            + $"taken one from each, {Verdicts}: it is weighed as both changed - then '{AnchorStatus.Render(AnchorState.Closed)}', the registries "
+            + $"'{AnchorStatus.Render(AnchorState.Open)}', the agent '{AnchorStatus.Render(AnchorState.Closed)}' - and the agent's is written only with --accept-over {Id}:status",
+            dry.Details!);
+        Assert.Contains($"    its Trigger was changed by the registries and by the agent since its earlier fold, and the agent's is written only with --accept-over {Id}:trigger", dry.Details!);
+        Assert.Contains($"    its Closing work was changed by the registries and by the agent since its earlier fold, and the agent's is written only with --accept-over {Id}:closing", dry.Details!);
+        Assert.DoesNotContain(dry.Details!, line => line.Contains("keeps what the registries took since", StringComparison.Ordinal));
+        Assert.Equal($"to write them: '{ToolPackage.Command} fold-agent o1 ag --apply --accept-over {Id}:status --accept-over {Id}:trigger --accept-over {Id}:closing'", dry.Details![^1]);
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            $"  refused: {Id}: its status carries the row's one verdict with its trigger, and the registries changed one of the two since an earlier fold of this agent applied "
+            + $"it and the agent the other, so that, taken one from each, {Verdicts}: it is weighed as both changed, and the agent's text is written over the registries' only "
+            + $"with --accept-over {Id}:status; the dry run shows the three texts.",
+            refused.Details!);
+
+        // Its status named alone is no decision: the trigger that carries the verdict with it still waits for its consent.
+        Assert.Equal(HarnessExit.Refused, statusAlone.ExitCode);
+        Assert.Contains(
+            $"  refused: {Id}: its trigger was changed by the registries and by the agent since an earlier fold of this agent applied it, so the agent's text is written over "
+            + $"the registries' only with --accept-over {Id}:trigger; the dry run shows the three texts.",
+            statusAlone.Details!);
+        Assert.DoesNotContain(statusAlone.Details!, line => line.Contains($"  refused: {Id}: its status", StringComparison.Ordinal));
+        Assert.Equal(pending, OrchestrationKit.Read(kit.Main, AnchorSettings.DefaultPendingAnchorsPath));
+        Assert.Equal(done, OrchestrationKit.Read(kit.Main, AnchorSettings.DefaultDoneAnchorsPath));
+
+        var written = await kit.FoldAsync("ag", apply: true, new FoldAllowances { AcceptOver = [$"{Id}:status", $"{Id}:trigger", $"{Id}:closing"] });
+
+        Assert.True(written.Succeeded, OrchestrationKit.Describe(written));
+        Assert.Equal([$"{Id}:status", $"{Id}:trigger", $"{Id}:closing"], Facts(written).Folded!.OverCells);
+        var row = await RowAsync(kit);
+        Assert.Equal(AnchorStatus.Render(AnchorState.Closed), row.Status);
+        Assert.Equal($"{AnchorStatus.ClosedMark} closed again by the lane", row.Trigger);
+        Assert.Equal("the fix, made to hold", row.ClosingWork);
+        Assert.Contains($"`{Id}`", OrchestrationKit.Read(kit.Main, AnchorSettings.DefaultDoneAnchorsPath));
+        Assert.DoesNotContain($"`{Id}`", OrchestrationKit.Read(kit.Main, AnchorSettings.DefaultPendingAnchorsPath));
+    }
+
+    /// <summary>
+    /// Where a Trigger carries its row's verdict, a status the main tree changed since the agent's earlier fold that agrees
+    /// with the trigger the agent restated is kept, as any cell only the registries changed is, with no consent asked: the
+    /// verdict is weighed as one only where taking a cell from each side would have the row state two.
+    /// </summary>
+    [Fact]
+    public async Task AStatusTheMainTreeChanged_ThatAgreesWithTheTriggerTheAgentRestated_IsKept_WithNoConsentAsked()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        kit.Harness.WriteConfig(kit.Main, new HarnessConfig { Worktrees = OrchestrationKit.Settings, Anchors = new AnchorSettings { TriggerCarriesVerdict = true } });
+        kit.FileRow("ag", Id, Row);
+        Assert.True((await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id))).Succeeded);
+        await kit.Harness.AnchorRegistryService.SetAsync(kit.Main, new AnchorSetRequest(Id) { Status = "gated" }, dryRun: false, Token);
+        kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["trigger"] = "something the agent found and restated" });
+
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Contains($"    its Status keeps what the registries took since its earlier fold: '{AnchorStatus.Render(AnchorState.Gated)}', where the agent's file holds '{AnchorStatus.Render(AnchorState.Open)}'", folded.Details!);
+        Assert.Empty(Facts(folded).Folded!.OverCells);
+        var row = await RowAsync(kit);
+        Assert.Equal(AnchorStatus.Render(AnchorState.Gated), row.Status);
+        Assert.Equal("something the agent found and restated", row.Trigger);
+    }
+
+    /// <summary>
     /// A cell written over cites a row the same fold makes with --new: judged as any cell's text is, against the registries
     /// and the batch's own rows, so the citation is refused where the row is not named new and passes where it is.
     /// </summary>

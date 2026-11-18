@@ -1737,7 +1737,8 @@ public sealed class MutationServiceTests
 
     /// <summary>
     /// A sweep on a machine whose worktrees beside the main checkout could not be listed says so, naming the leg and why:
-    /// its workers' builds are then measured by its own tree's and the main checkout's alone.
+    /// its workers' builds are then measured by the trees it knows alone - here, on a host running the leg another machine
+    /// sent it in the main checkout's copy, which is the main copy itself, its own tree's alone.
     /// </summary>
     [Fact]
     public async Task ASweepWhereTheTreesCouldNotBeListed_SaysSo_NamingTheLegAndWhy()
@@ -1762,7 +1763,7 @@ public sealed class MutationServiceTests
 
         Assert.Contains(
             "leg 'native': the worktrees beside the main checkout could not be listed, so a worker's build is measured by its own tree's "
-            + "and the main checkout's alone: the disk is gone",
+            + "alone: the disk is gone",
             harness.StandardError.ToString(),
             StringComparison.Ordinal);
     }
@@ -2074,7 +2075,8 @@ public sealed class MutationServiceTests
             harness.FileSystem,
             harness.Platform,
             harness.Output,
-            new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity)));
+            new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity)),
+            HostDoubles.MachineSettings(harness.FileSystem));
 
         return new MutationService(
             loader,

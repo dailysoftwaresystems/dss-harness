@@ -66,14 +66,14 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `init [--install-tools]` | Create `.harness-config` in the tree it runs in, a worktree's included, seed `config.json`, add ignore rules; installs tools only when asked |
 | `verify-git` | Check git is installed and this is a repository |
 | `create-worktree <name>` | Create a worktree (`--random` generates the name) |
-| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in `.mutations`, and on this machine the leg copies in `.legs`; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, or one with a copy in it that a sweep or a run still holds or that cannot be removed, without `--force`; an agent's repository of its own is deleted whole, the commits made in it that no ref of the main checkout's reaches counted as work that would be lost |
-| `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is; `--json` says of each whether it is one of git's linked worktrees (`"kind": "worktree"`) or an agent's repository of its own (`"kind": "repository"`) |
+| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in `.m` and those an earlier version kept in `.mutations`, and on this machine the leg copies in `.legs`; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, one with a copy in it that a sweep or a run still holds or that cannot be removed, or an orchestrator's live agent's, which `delete-agent` deletes with the agent, without `--force`; an agent's repository of its own is weighed the same way, the commits made in it that no ref of the main checkout's reaches counted as work that would be lost; once the checks pass, git is asked once more what changed - and, in an agent's repository, what was committed - and anything come since refuses it with nothing removed; a linked worktree's removal is then reversible until its files are gone - everything but its `.git` file is deleted by a deletion that reaches any path however long, and only then does git clear its record, so one that stops part way is still a worktree, `git checkout -- .` putting back what its index holds, `git submodule update --init --recursive` its submodules', and `--force` finishing it - and an agent's repository goes with its own `.git` directory last, so one stopped part way still holds its commits; a volume mounted on a directory in either is never gone into, on any system |
+| `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone, with the `clean --gone-copies` that removes them by their tree - and, where a worktree here bears a gone one's name now, that worktree; a tree that cannot be looked at here - a drive or a share not mounted, a path spelt for another system - is said with why, never as gone, and nothing here removes its copies; `--hosts` also asks each host what it keeps, and how large each copy is, each recorded copy looked for where it was kept, beside an earlier repositoryPath too, a copy no record here holds said with the tree its marker says it was made from; `--json` says of each whether it is one of git's linked worktrees (`"kind": "worktree"`) or an agent's repository of its own (`"kind": "repository"`) |
 | `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
 | `create-agent <o> <a> --model <id> [--empty \| --no-worktree]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>` - a git repository of its own that borrows the main checkout's objects, not one of git's linked worktrees, so `git worktree list` in the main checkout does not show it and nothing done in it reaches the main checkout's refs or objects - and its seed, the main tree's uncommitted state handed to it; `--no-worktree` makes the engine's own kind, a record and two directories that read the main tree and record no session - a person has no use for one by hand |
 | `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again, with every path the main tree holds otherwise than the agent shares it, committed or not; refused over changes of its own without `--force`; a file written after it was weighed stops it, exit 21, never written over |
 | `refresh-agent <o> <a> [<path>... \| --all] [--except <path>]... [--stale <path>]... [--merge <path>]... [--apply] [--json]` | Copy into a live agent every path under the paths - the anchor registries' directory by default, anywhere in the tree with `--all` - that the main tree holds otherwise than the agent shares it, committed or not, recorded as handed to it; a path the agent already holds as the main tree does is recorded as shared; refused over a path the agent changed, naming each, unless `--except` leaves it as the agent changed it, `--stale` hands it the main tree's copy where the main tree's history holds the agent's very bytes at that path, or `--merge` writes a clean three-way merge of the two into its worktree as its change, the path recorded as handed the main tree's copy; the arm registry both changed is merged by arm, unasked, and taken where the result reads as a registry; a file the agent's session wrote after it was weighed stops it, exit 21, never written over |
 | `rebase-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; a path both changed is refused with what a three-way merge of it gives, unless `--merge` names it and its merge is clean - written into the worktree as the agent's own change on the new base - or `--settled` keeps the copy reconciled by hand; the arm registry is merged by arm, unasked, and taken where the result reads as a registry; refused over anything of its own what comes in would go over, a file renamed in case alone over the agent's copy at its old name, or its deletion of it, among it; a file the agent's session wrote after it was weighed stops it, exit 21, never written over; run again after one that stopped part way - the command its last words name - it finishes it |
-| `fold-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a path both trees changed is refused with what a three-way merge of it gives, and a clean merge written into both trees only where `--merge` names it - the arm registry is merged by arm, unasked, and taken where the result reads as a registry; a path reconciled in the main tree by hand and named with `--settled` is handed to the agent as the main tree holds it and recorded as shared; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; a row an earlier fold applied is weighed cell by cell against what the registries took since - their change kept where the agent made none, and a cell both changed otherwise written only where `--accept-over` names it; a rename of case alone the agent made is refused, saying to `git mv -f` it in the main tree, and once made there is weighed against the base's file under its old name; its worktree is kept |
+| `fold-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a path both trees changed is refused with what a three-way merge of it gives, and a clean merge written into both trees only where `--merge` names it - the arm registry is merged by arm, unasked, and taken where the result reads as a registry; a path reconciled in the main tree by hand and named with `--settled` is handed to the agent as the main tree holds it and recorded as shared; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; a row an earlier fold applied is weighed cell by cell against what the registries took since - their change kept where the agent made none, and a cell both changed otherwise written only where `--accept-over` names it - and where `anchors.triggerCarriesVerdict` holds, the status and the trigger weighed as the one verdict they state, so a row the main tree reopened that the agent closes again (or closed that the agent keeps open), which taken one cell from each would state two verdicts, has both weighed as both changed and written, the agent's together, only where `--accept-over` names each; a rename of case alone the agent made is refused, saying to `git mv -f` it in the main tree, and once made there is weighed against the base's file under its old name; its worktree is kept |
 | `delete-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts; an agent with no worktree is marked deleted in one write, nothing folded and no transcript looked for |
 | `list-orchestrator [<o>] [--steps] [--questions] [--json]` | List orchestrators, their agents and where each stands; for a run, its own lines from `flow.json` and what its engine is doing - none, running, pausing, recording what a complete pause left running, or gone - each step instance with its state, visit, attempt, agent and directory with `--steps`, and each question and what became of it with `--questions` |
 | `run-orchestrator <workflow> [--run <name>] [--input k=v]... [--json]` | Start a run of a declared workflow: validate it, make the run - `r<N>`, one more than the highest there, or `--run`'s name, refused where it is taken - claim it for this process, and drive it until nothing more can run: done `0`, failed `20` (`21` where every failure that ended it was incomplete), paused on a question `1`, paused or stopped on request `130`; `k=@<file>` gives a text input a file's text, relative to `--directory`. Refused (13) while another run of the repository is unfinished with work in the tree |
@@ -108,11 +108,11 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own; `--dry-run` lists what it would write and delete and exits as the sync would; `--pull <path>` instead brings a file back from it, or every file below a directory named with a `/` at its end |
 | `build [--legs a,b] [--time] [--keep-going]` | Build every selected leg, in its own variant-keyed build directory; `--keep-going` has each build go on past the units that fail to build, so a red leg names every one (`help legs`) |
 | `test [--legs a,b] [--time] [--set-up] [--keep-going]` | Build and test every selected leg, with a witness for each verdict; `--set-up` brings up the set-ups its test invocation names around each leg's work, on the machine that runs it, and down after (`help setups`) |
-| `run <runner> [--legs a,b] [--time] [--input name=value] [--set-up] [--keep-going]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run; `--set-up` brings up the set-ups the runner and its run checks' runners name around each leg's work, and down after (`help setups`). A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
+| `run <runner> [--legs a,b] [--time] [--input name=value] [--set-up] [--keep-going]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run - an input may declare a `pattern` its whole value must match and, for a list, a `separator` with `minItems`/`maxItems`, and a value that fails them, or a required input with none, is refused (10) before a heavy leg waits for its slot - before any leg is placed where this machine holds the values, by the WSL distribution or ssh host whose values they are where it does not - as is everything else the runner would refuse before its first step that does not wait on the leg's build (its steps, the names its lines hold, the programs they start, an action's working space git does not ignore) of a leg whose work would start - one whose isolation is refused, or whose developer environment will not set up, ends with its own line, never checked; `--set-up` brings up the set-ups the runner and its run checks' runners name around each leg's work, and down after (`help setups`). A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
 | `check-mutations [--legs a,b] [--arms a,b] [--self-test] [--list] [--pending]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain; `--list` says, without sweeping, each arm's last verdict on each leg and whether anything it was judged on has moved - of what a test binary reads at run time, only the files `mutations.runReads` names for its runner; `--pending` sweeps only the arms with no passed that still holds, and with nothing pending passes, sweeping nothing (`help mutations`) |
 | `stop-run <run> [--now] [--json]` | Stop a `build`, `test`, `run` or `check-mutations` run from another terminal, typed in the tree that ran it: asked of its dispatcher, which stops every leg where it stands as an interrupt does and writes its ledger, and waited for 60 s - said stopped only where its dispatcher took the stop; `--now` ends the dispatcher's process where it stands, with all it started - only on this machine, and only the process its owner file names by its start. On Windows a dispatcher that ends in any way, a kill among them, ends its local legs with it |
 | `query-codebase-graph <run> (--find <query> \| --node <symbol> \| --related <symbol> --relation <relation> [--depth <n>] \| --outline [<path or symbol>] \| --body <symbol>...) [--agent <agent>] [--json]` | Read a run's codebase graph by hand: one of the `graph` tool's read operations on the base or an agent's view, printing the answer an agent would be given - each node with its handle and `path:start-end #hash` - or with `--json` the same in one document. It reads only: no sync, no lock, nothing written; a view not made yet is said and the base answered; 13 where the run has no graph |
-| `clean [--legs a,b] [--dry-run] [--former-workers]` | Remove each selected leg's build directory, the mutation workers its sweeps and self-tests keep in its tree, and the copies of its tree it works in (`.legs`), wherever the leg runs, so a full disk can be freed; `--dry-run` says what each holds and exits as the clean would; `--former-workers` removes only the workers an earlier version kept beside the repository's trees, here and on each host (`help space`) |
+| `clean [--legs a,b] [--dry-run] [--former-workers \| --gone-copies]` | Remove each selected leg's build directory, the mutation workers its sweeps and self-tests keep in its tree, and the copies of its tree it works in (`.legs`), wherever the leg runs, so a full disk can be freed; `--dry-run` says what each holds and exits as the clean would; `--former-workers` removes only the workers an earlier version kept beside the repository's trees or in their `.mutations`, here and on each host; `--gone-copies` removes only the copies hosts keep of worktrees gone from this machine, told by the tree this machine's record names and never by name - a worktree here bearing a gone one's name, a live agent's among them, keeps its own, and a tree that cannot be looked at is never taken for gone, its copies kept recorded and refused - each measured and removed at the path that record names, on every host that record names one on, whether or not a leg runs there, a line for each host (`--legs` narrows it to the hosts the selected legs can run on; a host that cannot be reached keeps its copies recorded for a later clean) (`help space`) |
 | `up <name> [--input name=value] [--json]` | Bring a set-up up on this machine: run the `up` command line `setUp` declares for it, at the root of the tree - a program and its arguments, no shell, a line per platform where they differ, its declared inputs filled in with what `--input` gives over their defaults (`help setups`) |
 | `down <name> [--input name=value] [--json]` | Bring a set-up down: run its `down` command line there, with the values it was brought up with; refused (13) while a leg of a run on this machine still uses it in that tree - in any of the repository's, for one the machine shares - whose last leg brings it down |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
@@ -202,8 +202,9 @@ run at once *on any one machine*, so a busy laptop is not asked for more than it
 remote hosts sit idle, and `defaults.maxParallelLegsTotal` caps the whole fleet for what it shares
 even when its machines do not — a license server, a network share, a sync's bandwidth.
 
-Both are counted by one command. Where a machine declares `admission` — under `defaults`, or its own
-under `hosts.local` or an ssh host — its heavy legs (a build, a test, a runner that requires the build
+Both are counted by one command. Where a machine declares `admission` — in its own settings file
+(below), under `defaults`, or its own under `hosts.local` or an ssh host — its heavy legs (a build, a
+test, a runner that requires the build
 or says `"heavy": true`, a run of an action step or a runner's own phase that names `{product}`,
 `{buildDir}` or one of the leg's compilers — which builds its leg first — or of a step that says
 `heavy: true`) share it across every
@@ -220,7 +221,30 @@ most once a minute - and reads the memory again once what was dropped has come b
 at the most; a WSL leg drops it as it ends. While a heavy leg builds, each filesystem it fills - for a
 WSL leg, the Windows drive its disk grows on too - is held to `minFreeGiB` (2 GiB): one that falls
 under it, read every 15 seconds and again as a build or a write of its fails, stops the build,
-`stopped`, what it built left for `clean`; a build under it as it starts writes nothing. Run
+`stopped`, what it built left for `clean`; a build under it as it starts writes nothing. With
+`reclaimIdleBuilds` true, a leg short of room - waiting for it, or under `minFreeGiB` - first removes
+the build directories the repository's other trees keep on that filesystem that no run or sweep
+holds, the least recently built first and only as many as it is short of - as it is admitted, what
+the disk itself lacks of its need, never the room the other legs claim - and none where all of them
+would not cover it, as `clean --legs` removes one; one leg makes room on a filesystem at a time, the
+next reading the room once it has. Its line says what it removed, whose tree it was and the room
+before and after, and that tree's next build says its directory was removed as it starts from
+nothing.
+
+What a machine can hold is the machine's, while `config.json` is tracked and each worktree holds the
+copy of its last commit: so the machine's own settings file,
+`<user data>/dssharness/settings-<machine id>.json` - the user data being `LOCALAPPDATA` on Windows,
+`~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on Linux - holds
+`{ "admission": { ... } }` in the same keys, read as strictly as `config.json`, and each field it
+declares wins over what any tree's `config.json` says for that machine, `hosts.<machine>.admission`
+and `defaults.admission` staying the rule for each field it leaves out. A count it declares is every
+leg's in line, so a worktree committed before the count was raised no longer holds the machine to the
+old one. Every command this user runs there reads it; an ssh host reads its own. A file that cannot
+be read, or holds what `config.json` would refuse, is refused naming it, and no heavy leg is admitted
+until it is put right; a leg's rule is read once, as its work begins, so a file put wrong while a run
+goes on never fails a leg that has run - a unit of one whose work has begun, an arm of a sweep, is
+weighed by the count the file declared as that work began, its refusal said once. `dssharness legs`
+says, for each host it reaches, the rule in force and where each field came from. Run
 `dssharness help admission` for the rules.
 
 ## Design
@@ -285,8 +309,8 @@ is enforced by tests that read the built command line itself. The
 .harness-config/runner/actions/<name>/<name>.yml tracked; one directory per action, holding its steps and whatever those steps run
 .harness-config/runner/.env/                 contents ignored, .gitkeep tracked; values actions read
 .harness-config/runner/.secrets/             contents ignored, .gitkeep tracked; secret values actions read
-.harness-config/sshItems/<name>/             ignored, and written by you, not init: .env (address, user, port), .key, known_hosts
-.harness-config/wslDistros/<name>/           ignored; .env (distribution, credential)
+.harness-config/sshItems/<name>/             ignored, and written by you, not init: .env (address, user, port, copies' path), .key, known_hosts
+.harness-config/wslDistros/<name>/           ignored; .env (distribution, credential, copies' path)
 .worktrees/                                  contents ignored, .gitkeep tracked; the worktrees, at worktrees.root, which init writes as this
 .orchestrators/                              contents ignored, .gitkeep tracked; what each orchestrator and its agents keep, in the main checkout, and never sent to a host by sync ('dssharness help orchestrators')
 .orchestrators/<o>/agent.json                ignored; the orchestrator's record
@@ -304,8 +328,9 @@ is enforced by tests that read the built command line itself. The
 .orchestrators/key-spend.jsonl               ignored; what each key spent, by its name and never its value: a line for each key and model of each entry of a step's order or of a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where balanceKeyUsage chooses a key ('dssharness help agent-clients')
 .side-tasks/                                 contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout, and never sent to a host by sync ('dssharness help side-tasks')
 .side-tasks/<task>/                          ignored; one side-task: its task.json, stored stream, transcript, denials and web, its conversation where its client stores one, and its own codebase graph (graph/, its map and each call of the graph tool) where it was given one; <task>.owner.json beside it while a side-task holds it open
-.mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by sync ('dssharness help mutations')
-.mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
+.m/                                          contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by sync ('dssharness help mutations')
+.m/<key><mark>-<n>/                          ignored; a worker, a repository of its own, building in build/<key>, and its claim beside it
+.mutations/                                  ignored whole, with no placeholder, an empty one left there removed by init; where an earlier version kept the tree's mutation workers, never made again: never sent to a host by sync nor deleted by one, and what is left there removed by clean --former-workers, or with the tree
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a host by sync
 .harness-config/runs/                        ignored; one directory of records per run, in the tree that ran it
 .harness-config/lock.json                    ignored; records in-progress runs
@@ -324,22 +349,28 @@ configuration that names none keeps worktrees under `.harness-config/worktrees`,
 A sweep keeps its workers in the tree it sweeps, and a leg that works in a copy keeps it in its
 tree's `.legs`; either is refused (exit 13), nothing made, in a tree whose git does not ignore
 that slot: run `init` once in each repository and commit what it writes - each agent's branch
-needs that commit before it can sweep or have a leg work in a copy. Workers an earlier version kept
-beside a tree, `<tree>.mutation-*`, on this machine and on every host, are no workers to a sweep:
-`clean --former-workers --dry-run` lists them with their sizes, beside each tree of the repository
-here and on each host a selected leg runs on, and beside each one deleted since, and
-`clean --former-workers` removes them - one a
-sweep of that version still claims is kept. Until then `list-worktree` warns of one beside a
+needs that commit before it can sweep or have a leg work in a copy. A worker is
+`<tree>/.m/<key><mark>-<n>`, the key 7 hexadecimal digits of its variant's name, and builds in its
+own `build/<key>`, never in the directory the variant's name gives the tree's own build, so a worker
+adds the same few characters to the tree's path whatever the variant is called; its build records
+which variant it built, and the lines of a sweep and of a `clean` name it. Workers an earlier
+version kept beside a tree, `<tree>.mutation-*`, or in it, `<tree>/.mutations/*`, on this machine
+and on every host, are no workers to a sweep: `init` keeps `.mutations` out of git whole, with no
+placeholder, and no sync sends or deletes it; `clean --former-workers --dry-run` lists them with
+their sizes, beside and in each tree of the repository here and on each host a selected leg runs
+on, and beside each one deleted since, and `clean --former-workers` removes them - one a
+sweep of that version still claims is kept - as deleting a worktree, or a host's copy, removes
+those in it. Until then `list-worktree` warns of one beside a
 worktree, and `delete-orchestrator` is refused (13) while one is beside an agent's worktree. Each
 worker's build is made once again.
 
 Secrets and the run lock live only in the main checkout. A worktree receives the tracked
 part of `.harness-config` through git but never the ignored part, so both resolve back to
 the originating checkout. What a tree makes for itself - its runs' records, its mutation
-workers in `.mutations`, its legs' copies in `.legs` - is ignored too, and kept in that tree.
+workers in `.m`, its legs' copies in `.legs` - is ignored too, and kept in that tree.
 The run lock knows a tree on this machine by where it leads, every link followed, so
 worktrees kept on another disk through a worktrees root that is a link, and copies kept
-through a `.legs` or `.mutations` that is one, are held, and asked about, as one tree however
+through a `.legs` or `.m` that is one, are held, and asked about, as one tree however
 a command spells them - a build before this one's too, since the lock keeps each tree as its
 run spelled it.
 
@@ -455,12 +486,24 @@ which git ignores: an `.env` naming the address, the user and the port, a `.key`
 tracked configuration never carries an address, a user, a key path or a credential. A WSL
 distribution has the same shape under `.harness-config/wslDistros/`. ssh runs in batch mode,
 so it never waits at a prompt, and a key other users can read is refused before anything
-connects, with the command that fixes it.
+connects, with the command that fixes it. An item's `.env` may set `REPOSITORY_PATH`, where
+that host keeps this machine's copies, over the `repositoryPath` the shared `config.json`
+declares - so two machines reaching one host each keep their own - held to the same rules and
+read by every command that touches a host's copies; a key the item is not read for is refused,
+naming the ones it is. `legs` names each host's copy of the tree it was typed in and what set it,
+and each WSL host's distribution, which a run line writes as `{distribution}` on a WSL leg or
+`{distribution.<item>}` on any leg (`help secrets`, `help runners`).
 
 Every WSL distribution and ssh host runs DssHarness itself, installed from nuget.org at
 this machine's exact version: a host that is behind is updated, never downgraded. Betas are
 released on GitHub rather than nuget.org, so only a stable build can bring a host to its
-version. `install-missing-tools` installs the .NET SDK, and everything `tools` declares an
+version. A leg whose host's DssHarness fails as a defect (exit 70) with no line for it is
+`poisoned` - the harness failing, never a host that could not be reached - naming the host, the
+code and what it said; where it failed so before anything ran there, the leg is started there once
+more first, and the line says what the failed start said (`retried once: ...`), whatever the leg
+then reached, as does what ends it with no line - as is a WSL distribution's check of a heavy leg
+before this machine takes its slot, which fails so again as the leg's `poisoned` line, with no slot
+waited for, and whose failed start the leg's line says too. `install-missing-tools` installs the .NET SDK, and everything `tools` declares an
 `install` for, on every configured leg's host; a `tools` entry with no `install` is an
 allowlist entry, reported when missing and never installed. An install that needs a superuser
 takes the password from that host's own `.env`, as `SUDO_PASSWORD`, and asks for it at the
@@ -486,7 +529,8 @@ is unknown, and nothing is installed for it. `--dry-run` asks every host and ins
 naming each command that would run; the survey it asks puts DssHarness on a host as `legs` does,
 so a host with no .NET SDK yet has every tool unknown. `sync` creates the host's copy
 of the tree it runs in and keeps it in step, deletions included: the main checkout's at the host's
-`repositoryPath`, and each worktree's beside it, so worktrees do not wait for each other on a host.
+`repositoryPath` (or its item's `REPOSITORY_PATH`), and each worktree's beside it, so worktrees do
+not wait for each other on a host.
 The copy's git HEAD names the commit this tree is at, so a step that asks git about HEAD is answered
 on a host as it is here: the commit alone by default, and every commit behind it with
 `"sync": { "history": "full" }`. A clone the sync took over has its HEAD moved, detached, where it
@@ -545,7 +589,8 @@ implementer and everything that resumes it, the six reviewers, the self-audit, t
 pre-existing-issue triage, which measured cheaper - the reviewers, the self-audit, the diagnosis and
 the steps that verify and fix starting their packs from their changes (`graphFrom: changes`); the
 request triage and the plan audit, whose work is text the map does not light, ask none, each having
-measured costlier with no quality gained; the prioritiser and a review's scope are given the map alone
+measured costlier with no quality gained, and the item audit, the plan audit's agent on a later
+round's items, asks none as it does, searching the data by its own text search; the prioritiser and a review's scope are given the map alone
 (the scope's whole overhead a fifth of a cent beside the review rounds it steers); and the scribe's
 steps, which write the run's records, ask none of it (`dssharness help codebase-graph`). The planner
 keeps the tool, its default, as it was: the measurement found it costlier with the graph and did not
@@ -620,8 +665,45 @@ directory read in a prompt as `{text.<name>}` the same live way - the used workf
 where the reading step is one of its, and the run's where none between them declares the name - and
 the shipped flow declares its `recommendations` and its `closure` there, `closure.md` being the
 repository's own from the day init writes it: the universe its decisions range over, and what else
-judges them. No prompt the tool ships reads `{text.closure}` yet, and the file says so: what a
-repository writes there reaches an agent once a prompt of its own reads it.
+judges them. The planner's, the plan audit's, the item audit's and the builders' prompts read
+`{text.closure}`, and the file says so: what a repository writes there weighs on what they
+decide a class covers. The builders' prompts hold the class-closure paragraph - close the class,
+at its one home, over the universe it names, nothing folded without the record of each class -
+and every prompt that goes on with an item (mend, rework, reconcile, anchors, unblock, redo and
+undo) is given the item's classes and the record so far under "The class you are closing", so a
+fresh agent holds the class as text, never a memory of it; and a step whose prompt reads the
+item's classes has its context pack seeded from every site and home of them. Before every fold of
+an item, the `class-closure` check judges the record with no model - every planned site accounted
+for and the planned home kept or its move said (`homeMoved`), a deleted site no longer declaring
+its symbol in the worktree (the graph's view of it, synced where the check starts, or its text), a
+site that reads its home among the paths the agent changed (what its fold would write and what its
+earlier folds of the run changed), every search a tool call of the item's stored streams that
+ran, however its program exited (`rg`, `grep` and `git grep` exit 1 finding nothing), and never
+one refused or whose input did not read, one of whose input's texts holds its query, every
+neighbour measured by a `measure` call - whichever client called it, whatever it answered - whose
+own record (`measures/<call id>/measure.json` of the step whose stream holds it, never the
+builder's word or the stream's capped text of the answer) can be read, names the neighbour's
+cell and answered its result (`failed` for `failed-fixed`; and the newest call of that
+measurement - the same leg, variant, filter and cell, never another measurement under the cell's
+name - to measure anything answered `passed`: the call cited or a later one for `passed`, one
+whose record was written after the failing call's for `failed-fixed`), or reasoned why not,
+every test of the pin declared, the arm one of the registry the worktree holds
+and mutating the home's own file or a reason the class has nothing to mutate, the universe
+holding every planned axis and the claim naming each - and each home's touches since the run's
+start commit, the item's own commits left out: a home touched by other work must carry a home
+audit. A class's paths - the plan's and the record's, the paths changed, an arm's site and the
+touches - are read as the plan check reads them, either separator, and compared as the machine
+compares paths, so the plan's spelling of a file and git's are one. A fold it cannot weigh fails
+the check. The record's problems are repaired by `close-class`, which goes on with the
+implementation, and a missing audit by `home-audit`, which reads the whole home and makes its
+invariants structural; each changes code, so each goes back through the item's tests - its
+verify, or reverify in the review loop - before the check runs again and anything is folded; a
+home touched often enough is named a hotspot in the check's answer. A lane folded by hand joins
+the same rule opt-in: `anchors.closure: "required"` has `fold-agent` refuse a row whose status
+moves to closed unless its directory holds `closure.json` naming a class at least, judged by the
+same rules, its searches and measurements read as given and its arms against the registry its
+worktree holds - no consent lifts it. A run's own folds are held to no `closure.json`: the
+builder's answer is its record, which the check judged.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its
@@ -640,10 +722,30 @@ obtained - a bar that could not be read among the reasons - the question says so
 advisor is named it says that plainly. The advisor takes no question a step's own agent asked, nor
 a `pause` step's that shows an upstream step's questions (they carry their recommendations), nor one
 the run's input answers, nor the budget's own, nor a kind its `kinds` leaves out. A `test` step's
-`filter` names the tests it runs; its `filterWhen` is an
-expression that switches it - where it reads false the step gives no filter and every test of its
-legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item
-tested on its own tests only where the run turns it on (`--input affectedTests=on`).
+`filter` names the tests it runs, as units - a list written out, or an expression read where the
+step starts that yields one - each given to every leg's runner after the invocation's `filterArg`,
+all joined into one value by its `filterJoin` and each after a `filterArg` of its own where nothing
+joins them, as `test --filter`, given more than once, gives them. None of ctest, `dotnet test` and
+`dart test` runs the tests any unit names given its filter option apart - ctest keeps the last `-R`,
+`dotnet test` refuses a second `--filter`, `dart test` runs only a test every `--name` matches - so
+where an invocation of one declares no `filterJoin` its units are joined by `|`, the join the harness
+knows each reads as alternatives, and `init` writes none; each is refused, when `config.json` is
+read, an empty `filterJoin` or a join but `|`. A filter that reads no unit runs
+no test: the step ends skipped, saying why - its `noTests`, filled where it starts. Its
+`filterWhen` is an expression that switches the filter: where it reads false the step gives none
+and every test of its legs runs. Its `affected` keeps the units it runs in the run's record of
+affected tests (`.orchestrators/<run>/affected-tests.json`) under the key it fills, written whole
+before anything of the step runs, so a pause, a stop or a crash keeps them for the resume: a later
+step under the same key replaces the entry, a step that runs for a work item a plan update takes
+back removes it, and so does one its `when` skips. `run.affectedTests` reads every unit the record
+holds, each once, and `union(a, b, ...)` joins lists, each value once and a null read as none. The
+shipped implementation workflow tests each work item on its own units alone - those its plan names
+(`tests`) and those its builder's answer adds, `union(input.item.tests, implement.latest.tests)` -
+each item naming its tests or saying in `noTests` why its change affects none, which the plan check
+holds it to (P-C9): such an item runs no test, and its review judges the reason. The gate of each
+round runs `run.affectedTests`, the units of every item built in the run, where the run's input
+`finalTests` is `affected`, its default, and every test where it is `all`
+(`--input finalTests=all`).
 
 The models a step runs on are the configuration's, under `providers`: each provider is a company
 whose models the tool will reach - its API's address, its keys' names, its client - and each model's
@@ -1293,7 +1395,7 @@ profile from the leg's ground (`ExecutionGrounds.OfLeg`), built as a launch's is
 read-only; every credential slot of the main checkout, every Claude Code directory and every place the
 user keeps credentials in hidden;
 the tree the leg works in - the step's tree or its copy under `.legs` - a sweep's workers under
-`.mutations`, the build directory of the leg's run of each runner action it runs, its own and a run
+`.m`, the build directory of the leg's run of each runner action it runs, its own and a run
 check's (`{actionBuild}`, each step's `{stepBuild}` in it; `LegWorkload.WritesIn`), a temporary
 directory of its own and the declared tool caches written, and inside them git's code-running files,
 the configuration directory - but those build directories, under it - and the tool's state written by
@@ -2025,7 +2127,7 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Twenty steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Twenty-one steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
 of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
@@ -2034,12 +2136,18 @@ C and C++ through a structural scanner that reads every branch of a conditional,
 `graph/`, reading again only the files whose content, reader, reader's version, size limit or languages changed and those it could not read, and starting a run's first
 graph from the newest earlier run's - or, with `in`, the view of that agent's worktree, held against the main checkout's
 graph as an overlay of what the worktree holds otherwise, so no file is read whose extract either made; the engine syncs
-on its own too, under the claim its step holds - a reason step's view where it starts, the main checkout's by every path
+on its own too, under the claim its step holds - a reason step's view where it starts, and a class-closure check's, the main checkout's by every path
 the run's folds changed that it has not taken yet and every path a commit changed since its last sync, a worktree's after a refresh or a rebase moved it, and a view dropped
 once its agent is no longer live - and a sync of its own that fails is said, owed until one goes through, and never
 fails the step (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
 `validate-plan`, the machine's check of a plan's
-work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
+work items - each declaring the classes of the decisions it changes or saying in `noClass` why it decides none, the
+classes held to what the tree and the item's own paths say: one id to a class in a plan, each home and each site a path
+inside the tree as a path an item reuses is, the home among the item's own paths and there in the tree where it exists,
+a site marked `home` exactly where it is the home by its path and symbol, every other site - which changes, reading the
+home or deleted - the item's too, more than one site consolidated at the home, each class searched by data its queries
+name again, its universe holding the axes the repository declares, and one home belonging to one item, two classes of
+one item sharing one as they may; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
 first reason step runs on, both recorded before the agent is made so a step run again asks for the same one;
 `reason`, which works the step's agent - the one its `in` names or the work it goes on with (`resume`), or, where it
 names neither, the engine's own read-only agent, with no worktree, made before the step runs and deleted once no step
@@ -2050,14 +2158,29 @@ directory; the work it goes on with rendered as its continuation record, and its
 stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer,
 held to the schema its `outputs` names, the step's output - a schema in the subset the engine reads, which
 `validate-workflow` and a run's start refuse otherwise (exit 12), each problem naming the file, the step and the place
-in the schema that says it, and which the step's start holds it to again before any client is asked; and the leg
+in the schema that says it, and which the step's start holds it to again before any client is asked; a schema may share
+a definition with the schema files beside it, a `$ref` of the form `plan.schema.json#/$defs/workItem` naming one, and
+where the schema is read - the check, a run, a path typed by it - the definition is taken into the schema's own
+`$defs`, so the shipped plan, self-audit and diagnosis schemas hold one work-item definition between them; and where
+the repository declares legs, a step whose agent runs commands (its capabilities hold `run`) is given the `measure`
+tool on every client: one call takes a leg, its variant (the build configuration the leg's own configuration
+declares), a test filter and the cell of a universe being measured, runs those tests of that leg through the test
+service as a `test` step's legs are run - in the agent's worktree where it has one, in a local copy of the main tree
+where it does not, under the agents' isolation and the step's own record of what its legs start - and answers what
+they showed: `passed` where the leg passed, `failed` where its build or its tests failed, and `unmeasured` with why
+for anything else (a leg refused by another run's lock, skipped, stopped, a filter that matched no test, a leg not
+declared), the verdict spelt as the ledger spells it, with the run's directory and the call's own records
+(`measures/<call id>/` of the step's directory: the ledger, and what the call answered, which is what the
+`class-closure` check reads of what it measured); the call is a tool call of
+the step's stored stream whose id a closure record's `measuredBy` cites. The leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass and its last lines, and for `build`, `test` and `run` the units its build
 failed as `failedUnits` (null where its own tool failed no build of it), a sweep's arm with its arm - a leg in a copy letting the
 tree go once its copy is made, and keep the ledger, and in an agent's worktree each red leg's failing log, in the step's
 directory, the work of each leg this machine runs held inside the isolation of the agents' work and answered as
-`isolation` (none here and `agentPolicy.isolation: required` fails the step, 14, nothing run); the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `ci-read`,
+`isolation` (none here and `agentPolicy.isolation: required` fails the step, 14, nothing run); the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `class-closure`, which judges
+an item's closing record before its fold with no model, as the class-closure paragraph above says; `ci-read`,
 the legs `check-ci-legs` reads; and `ci-wait`, which waits for every check the forge runs on a commit - the one the run
 last pushed where it names none - ends at the first red one with its job's failing step and whole log, and asks where
 none appeared, some are still running, or one ended neither green nor red; and the fold family - `fold`, `delete-agent`,

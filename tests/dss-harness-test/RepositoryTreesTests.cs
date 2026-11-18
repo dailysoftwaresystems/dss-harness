@@ -3,6 +3,7 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Secrets;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Worktrees;
 
@@ -116,22 +117,30 @@ public sealed class RepositoryTreesTests
     }
 
     /// <summary>
-    /// On a host keeping its main copy under its home - <c>~/src/repo</c>, as a configuration shared by every host says it -
-    /// the trees are spelt with that home, where this process is: what is read of a tree there, and the paths its processes
-    /// name, are its home's, never a directory called <c>~</c> below wherever the process started.
+    /// On a host running legs another machine sent it, the main copy is the one the copy the legs run in is kept beside -
+    /// that copy itself where it is the main checkout's, and the copy holding a leg's own copy in its <c>.legs</c> - never
+    /// where config.json's repositoryPath says: the machine that sent the legs may keep its copies where its own item's
+    /// .env says, which no host's copy holds an item to read.
     /// </summary>
-    [Fact]
-    public async Task OnAHostKeepingItsMainCopyUnderItsHome_TheTreesAreSpeltWithThatHome()
+    [Theory]
+    [InlineData("repo", "repo")]
+    [InlineData("repo.worktree-o1--xa", "repo")]
+    [InlineData("repo.worktree-o1--xa/.legs/357e24c", "repo")]
+    [InlineData("repo/.legs/357e24c", "repo")]
+    public async Task OnAHostRunningLegsItWasSent_TheMainCopyIsTheOneItsCopyIsKeptBeside_NeverConfigJsons(string copy, string main)
     {
+        using var temp = new TempDirectory();
+        var tree = temp.Combine(copy.Split('/'));
         var context = new HarnessContext(
-            new HarnessLayout("/repo", "/repo"),
-            new HarnessConfig { Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = "~/src/repo" } } } });
+            new HarnessLayout(tree, tree),
+            new HarnessConfig { Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = "~/src/elsewhere" } } } });
+
+        Directory.CreateDirectory(tree);
 
         var found = await Trees(new HarnessFactory()).HereAsync(context, HostId.Ssh("pi"), TestContext.Current.CancellationToken);
 
-        Assert.Equal(
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "src/repo"),
-            found.Trees[0].Root);
+        Assert.Equal(temp.Combine(main), RepositoryTree.MainCheckoutOf(context, HostId.Ssh("pi"), new DssHarness.Core.Platform.HostPlatform().PathComparison));
+        Assert.Equal(new RepositoryTree(temp.Combine(main), RepositoryTree.MainCheckout), found.Trees[0]);
     }
 
     /// <summary>A host whose copies could not be looked for says why, with its main copy still known.</summary>
@@ -207,25 +216,54 @@ public sealed class RepositoryTreesTests
     }
 
     /// <summary>
-    /// A host declaring nowhere to keep its copy - which nothing could have sent a leg to, since a sync keeps its copy
-    /// there - holds no tree of the repository: said as a listing that could not be made, with why, asked here and asked
-    /// of another machine alike, and never thrown, so no leg's work stops for it.
+    /// A host this machine knows nowhere to keep its copy for - none declared, or an item that cannot be read - holds no
+    /// tree of the repository this machine could have sent it, since a sync keeps its copy there: said as a listing that
+    /// could not be made, with why, and never thrown, so no leg's work stops for it.
     /// </summary>
     [Fact]
-    public async Task AHostDeclaringNowhereToKeepItsCopy_HoldsNoTree_SaidWithWhy_NeverThrown()
+    public void AHostKnownToKeepItsCopyNowhere_HoldsNoTree_SaidWithWhy_NeverThrown()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var context = new HarnessContext(new HarnessLayout(temp.Path, temp.Path), new HarnessConfig());
-
-        var here = await Trees(harness).HereAsync(context, HostId.Ssh("pi"), TestContext.Current.CancellationToken);
-        var there = Trees(harness).On(context, HostId.Ssh("pi"));
-
-        foreach (var found in new[] { here, there })
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var undeclared = new HarnessContext(layout, new HarnessConfig());
+        var unread = new HarnessContext(
+            layout,
+            new HarnessConfig { Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = "~/src/repo" } } } })
         {
-            Assert.Empty(found.Trees);
-            Assert.Equal("Host ssh pi declares no repositoryPath, so there is nowhere to keep its copy", found.Unlisted);
-        }
+            HostItems = Items(new ItemFacts { Problem = "other users can change '.harness-config/sshItems/pi/.env'" }),
+        };
+
+        var nowhere = Trees(harness).On(undeclared, HostId.Ssh("pi"));
+        var unknown = Trees(harness).On(unread, HostId.Ssh("pi"));
+
+        Assert.Empty(nowhere.Trees);
+        Assert.Equal("Host ssh pi declares no repositoryPath, so there is nowhere to keep its copy", nowhere.Unlisted);
+        Assert.Empty(unknown.Trees);
+        Assert.Equal(
+            "Where host ssh pi keeps its copies for this machine is not known, since its item cannot be read: "
+                + "other users can change '.harness-config/sshItems/pi/.env'",
+            unknown.Unlisted);
+    }
+
+    /// <summary>
+    /// The trees this machine knows a host to keep start where the host's item sets REPOSITORY_PATH, which wins over
+    /// config.json's repositoryPath: the copies are this machine's, kept where its own item says.
+    /// </summary>
+    [Fact]
+    public void OnAHostWhoseItemSetsWhereItKeepsItsCopies_TheMainCopyIsThere()
+    {
+        using var temp = new TempDirectory();
+        var context = new HarnessContext(
+            new HarnessLayout(temp.Path, temp.Path),
+            new HarnessConfig { Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = "~/src/repo" } } } })
+        {
+            HostItems = Items(new ItemFacts { RepositoryPath = "/srv/mine/repo" }),
+        };
+
+        var found = Trees(new HarnessFactory()).On(context, HostId.Ssh("pi"));
+
+        Assert.Equal([new RepositoryTree("/srv/mine/repo", RepositoryTree.MainCheckout)], found.Trees);
     }
 
     /// <summary>
@@ -269,6 +307,15 @@ public sealed class RepositoryTreesTests
 
     private static RepositoryTrees Trees(HarnessFactory harness)
         => new(harness.GitClient, harness.LocalTransport, harness.FileSystem, harness.Platform);
+
+    /// <summary>Hosts' items each declaring <paramref name="facts"/>.</summary>
+    private static HostItems Items(ItemFacts facts)
+    {
+        var secrets = Substitute.For<IHostSecretsStore>();
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), Arg.Any<HostId>()).Returns(facts);
+
+        return HostItems.Reading(secrets, new HarnessLayout("/repo", "/repo"));
+    }
 
     /// <summary>A host's copy of the main checkout at <paramref name="main"/>, as a host running legs it was sent loads it.</summary>
     private static HarnessContext Copy(string main)

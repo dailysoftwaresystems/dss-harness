@@ -108,6 +108,13 @@ public sealed record PlacedLeg(
     public RoomNeed? Need { get; init; }
 
     /// <summary>
+    /// The rule the machine that runs the leg's work admits it by, read once as that work began - its slot, its floor, and
+    /// the page cache dropped as it ends all answer to this one reading - or why it could not be read; <see langword="null"/>
+    /// until then.
+    /// </summary>
+    public AdmissionReading? AdmittedBy { get; init; }
+
+    /// <summary>
     /// The least room the leg's builds leave free on each filesystem they fill, on the machine that runs them, below which
     /// each is stopped; <see langword="null"/> until its work starts there, and where nothing stops them for room.
     /// </summary>
@@ -212,7 +219,22 @@ public sealed record PlacedLeg(
         Config: Variant.Config,
         Variant: Variant.DirectoryName,
         Host: Named.ToString(),
-        RunId: runId);
+        RunId: runId)
+    {
+        // The leg's own item by the name the machine that placed it knows its host by: to the distribution itself, it is
+        // this machine.
+        InWsl = Named.Kind == HostKind.Wsl,
+        Distribution = Named.Kind == HostKind.Wsl ? Distributions.GetValueOrDefault(Named.Name) : null,
+        Distributions = Distributions,
+    };
+
+    /// <summary>
+    /// Each WSL item the configuration declares, by its name, with the distribution it names as read where the leg was
+    /// placed - on a host, as the machine that sent it told it - or <see langword="null"/> where it could not be read there:
+    /// what its run lines' <c>{distribution}</c> and <c>{distribution.&lt;item&gt;}</c> are filled with, and what a leg
+    /// sent to a host carries there.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?> Distributions { get; init; } = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The one file this leg's build is declared to produce, and why there is none when there is
@@ -265,14 +287,31 @@ public sealed record PlacedLeg(
     /// <param name="command">The command taking it.</param>
     public static LockRequest BuildLock(HostId host, string hostTreeRoot, VariantKey variant, RunId runId, string command)
     {
-        ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(variant);
+
+        return BuildLock(host, hostTreeRoot, variant.DirectoryName, runId, command);
+    }
+
+    /// <summary>
+    /// The lock a build of the variant whose build directory is named <paramref name="variantDirectory"/> in
+    /// <paramref name="hostTreeRoot"/> on <paramref name="host"/> takes: what whatever finds a build directory in a tree,
+    /// whose configuration it does not read, asks the lock.
+    /// </summary>
+    /// <param name="host">The host the leg builds on.</param>
+    /// <param name="hostTreeRoot">The tree it builds in there.</param>
+    /// <param name="variantDirectory">Its variant's directory name (<see cref="VariantKey.DirectoryName"/>).</param>
+    /// <param name="runId">The run taking it.</param>
+    /// <param name="command">The command taking it.</param>
+    public static LockRequest BuildLock(HostId host, string hostTreeRoot, string variantDirectory, RunId runId, string command)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentException.ThrowIfNullOrWhiteSpace(variantDirectory);
 
         return new LockRequest
         {
             Host = host.ToString(),
             Tree = hostTreeRoot,
-            Variant = variant.DirectoryName,
+            Variant = variantDirectory,
             Scope = LockScope.TreeShared,
             RunId = runId,
             Command = command,
@@ -449,6 +488,7 @@ public static class LegRunPlan
             Named = named,
             LocalCopy = tree.LocalCopy,
             KeptIn = tree.KeptIn,
+            Distributions = context.HostItems.Distributions(config.WslDistros),
         };
     }
 
@@ -466,7 +506,7 @@ public static class LegRunPlan
         foreach (var leg in placed.Where(leg => leg.LocalCopy))
         {
             var settings = context.Config.Worktrees;
-            var reckoned = CopyPathBudget.Check(budget, settings, leg.HostTreeRoot, leg.Variant, settings.PathBudgetReserve);
+            var reckoned = CopyPathBudget.Check(budget, settings, leg.HostTreeRoot, leg.Variant.DirectoryUnder(leg.HostTreeRoot), settings.PathBudgetReserve);
 
             if (!reckoned.IsWithinBudget && reckoned.Limit is { } limit)
             {

@@ -194,6 +194,76 @@ public sealed class FlowReasonStepTests
     }
 
     /// <summary>
+    /// A reason step of a used workflow whose prompt reads <c>{input.item.classes}</c> is handed, under <c>classes</c>,
+    /// the very classes its prompt shows - read through the use's own binding of <c>item</c>, here a member of the
+    /// <c>forEach</c> item (<c>item: 'item.work'</c>), never the <c>forEach</c> item's own <c>classes</c> - so its pack is
+    /// seeded from the classes the agent reads; a step whose prompt reads no classes is handed none.
+    /// </summary>
+    [Fact]
+    public async Task AUsedReasonStepWhosePromptReadsTheItemsClasses_IsHandedTheClassesItsPromptShows()
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["flow/pipeline/pipeline.yml"] = """
+                name: pipeline
+                inputs:
+                  - name: item
+                    kind: value
+                steps:
+                  - name: implement
+                    type: reason
+                    prompt: prompts/implement.md
+                    outputs: schemas/implement.json
+                  - name: summarise
+                    type: reason
+                    prompt: prompts/summarise.md
+                    outputs: schemas/implement.json
+                    dependsOn: [implement]
+                """,
+        };
+        var (definition, problems) = WorkflowResolver.Resolve(
+            Parse("""
+                name: flow
+                steps:
+                  - name: listing
+                    type: orient
+                  - name: items
+                    use: ./pipeline/pipeline.yml
+                    forEach: listing.list
+                    dependsOn: [listing]
+                    with:
+                      item: 'item.work'
+                """),
+            "flow",
+            path => files.GetValueOrDefault(path));
+
+        Assert.Empty(problems);
+
+        var work = JsonNode.Parse("""{"title": "the rate", "classes": [{"id": "C1", "home": {"path": "src/Rate.cs", "symbol": "Of"}, "sites": [{"path": "src/Old.cs", "symbol": "Rate"}]}]}""")!;
+        var runner = new Runner().On("listing", _ => FlowStepResult.Ended(
+            passed: true,
+            HarnessExit.Success,
+            output: new JsonObject { ["list"] = new JsonArray(new JsonObject { ["work"] = work.DeepClone(), ["classes"] = new JsonArray(new JsonObject { ["id"] = "NOT-THE-ITEMS" }) }) }));
+        var end = await Coordinator(
+            definition,
+            runner,
+            workflowFile: (owner, named) => named switch
+            {
+                "prompts/implement.md" => "Close the classes:\n{input.item.classes}\n",
+                "prompts/summarise.md" => "Summarise {input.item.title}.\n",
+                _ => throw new ArgumentException(named),
+            }).RunAsync(Token);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+
+        var implement = runner.Runs.Single(asked => asked.Step.Name == "implement");
+
+        Assert.Equal(work["classes"]!.ToJsonString(), implement.Read!["classes"].ToNode()!.ToJsonString());
+        Assert.Contains(work["classes"]!.ToJsonString(), FlowTemplate.Joined(implement.Prompts!["prompt"]), StringComparison.Ordinal);
+        Assert.False(runner.Runs.Single(asked => asked.Step.Name == "summarise").Read?.ContainsKey("classes") ?? false);
+    }
+
+    /// <summary>
     /// A resume prompt is read and filled in place of the step's own where the step goes on with another's work; the
     /// step that begins its own work is handed its own prompt, never the resumed one.
     /// </summary>

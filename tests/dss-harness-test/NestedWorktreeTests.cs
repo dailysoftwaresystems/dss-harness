@@ -199,23 +199,30 @@ public sealed class NestedWorktreeTests
     }
 
     /// <summary>
-    /// The copies a gone agent left on hosts are listed by the address a person types, with the delete-worktree that deals
-    /// with them, never by the two-hyphen name their directories bear.
+    /// The copies a gone agent left on hosts are listed by the address a person types, never by the two-hyphen name their
+    /// directories bear, with the clean that removes them by their tree - never a delete-worktree of the address, which a
+    /// live agent of that name, made since at another place, bears now, and which the line names.
     /// </summary>
     [Fact]
-    public void AGoneAgentsCopies_AreListedByItsAddress()
+    public void AGoneAgentsCopies_AreListedByItsAddress_WithTheCleanThatRemovesThem()
     {
-        var copy = new HostCopyEntry("o1--api", "ssh pi", "/home/dev/repo.worktree-o1--api", "/repo/.worktrees/o1/api");
-        var listing = new HostCopyListing { Gone = [new RecordedTree("o1--api", "/repo/.worktrees/o1/api", [copy])] };
+        var copy = new HostCopyEntry("o1--api", "ssh pi", "/home/dev/repo.worktree-o1--api", "/old/.worktrees/o1/api");
+        var listing = new HostCopyListing
+        {
+            Gone = [new RecordedTree("o1--api", "/old/.worktrees/o1/api", [copy]) { NameNowAt = "/repo/.worktrees/o1/api" }],
+        };
 
         var lines = WorktreeReports.List([], listing, json: false).Details!;
         var json = WorktreeReports.List([], listing, json: true).Data!.Single();
 
         Assert.Contains(
-            $"o1/api, gone from '/repo/.worktrees/o1/api': '{ToolPackage.Command} delete-worktree o1/api' deals with the copies it left",
+            $"o1/api, gone from '/old/.worktrees/o1/api': '{ToolPackage.Command} clean --gone-copies' removes the copies it left; 'o1/api' is now the "
+            + "worktree at '/repo/.worktrees/o1/api', whose deletion would take them with it - the clean never reaches it",
             lines);
+        Assert.DoesNotContain(lines, line => line.Contains("delete-worktree", StringComparison.Ordinal));
         Assert.Contains("\"name\": \"o1/api\"", json, StringComparison.Ordinal);
-        Assert.Contains($"\"deletedBy\": \"{ToolPackage.Command} delete-worktree o1/api\"", json, StringComparison.Ordinal);
+        Assert.Contains($"\"deletedBy\": \"{ToolPackage.Command} clean --gone-copies\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"nameNowAt\": \"/repo/.worktrees/o1/api\"", json, StringComparison.Ordinal);
     }
 
     private static string Root(TempDirectory temp) => Path.Combine(temp.Path, WorktreeSettings.DefaultRoot.Replace('/', Path.DirectorySeparatorChar));

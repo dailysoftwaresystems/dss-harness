@@ -5,6 +5,7 @@ using DssHarness.Core.Commands;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
+using DssHarness.Core.Mutations;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
@@ -57,8 +58,9 @@ public sealed class InitServiceTests
 {
     /// <summary>
     /// init's managed block is, rule for rule and in order: the lock, the runs, each root slot's contents ignored with its
-    /// placeholder kept, the same for each credential slot - made from the layout's one list of them, so a slot it gains
-    /// is ignored the day it is added - and what an action's steps write. Its placeholders under the harness directory
+    /// placeholder kept, each slot an earlier version kept copies in ignored whole, the same for each credential slot -
+    /// made from the layout's lists of them, so a slot it gains is ignored the day it is added, and one it renames stays
+    /// ignored - and what an action's steps write. Its placeholders under the harness directory
     /// are the credential slots and the actions directory, in the order init creates them.
     /// </summary>
     [Fact]
@@ -70,9 +72,10 @@ public sealed class InitServiceTests
                 "/.harness-config/runs",
                 "/.worktrees/*", "!/.worktrees/.gitkeep",
                 "/.orchestrators/*", "!/.orchestrators/.gitkeep",
-                "/.mutations/*", "!/.mutations/.gitkeep",
+                "/.m/*", "!/.m/.gitkeep",
                 "/.legs/*", "!/.legs/.gitkeep",
                 "/.side-tasks/*", "!/.side-tasks/.gitkeep",
+                "/.mutations/",
                 "/.harness-config/sshItems/*", "!/.harness-config/sshItems/.gitkeep",
                 "/.harness-config/wslDistros/*", "!/.harness-config/wslDistros/.gitkeep",
                 "/.harness-config/runner/.env/*", "!/.harness-config/runner/.env/.gitkeep",
@@ -124,8 +127,9 @@ public sealed class InitServiceTests
         Assert.True(File.Exists(temp.Combine(".harness-config", "config.json")));
         Assert.True(File.Exists(temp.Combine(".worktrees", ".gitkeep")));
         Assert.True(File.Exists(temp.Combine(".orchestrators", ".gitkeep")));
-        Assert.True(File.Exists(temp.Combine(".mutations", ".gitkeep")));
+        Assert.True(File.Exists(temp.Combine(".m", ".gitkeep")));
         Assert.True(File.Exists(temp.Combine(".legs", ".gitkeep")));
+        Assert.False(Directory.Exists(temp.Combine(".mutations")), "init made the slot an earlier version kept its workers in");
         Assert.Equal(".worktrees", harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path)).Worktrees.Root);
         Assert.True(File.Exists(temp.Combine(".harness-config", "sshItems", ".gitkeep")));
         Assert.True(File.Exists(temp.Combine(".harness-config", "wslDistros", ".gitkeep")));
@@ -894,6 +898,122 @@ public sealed class InitServiceTests
         Assert.Equal(string.Empty, status.StandardOutput.Trim());
     }
 
+    /// <summary>
+    /// The slot an earlier version kept mutation workers in keeps its rule in the block for ever: init ignores .mutations
+    /// whole and makes nothing there - no placeholder, no directory - so the workers that version left there, each a
+    /// repository of its own, and their claims, never read as untracked work in git status, as they would the day the
+    /// block dropped its rule; and the placeholder that version's init made, which the repository committed, is removed
+    /// for the repository to commit its removal, the directory kept while the workers are there.
+    /// </summary>
+    [Fact]
+    public async Task TheSlotAnEarlierVersionKeptWorkersIn_IsIgnoredWhole_AndNothingIsMadeThere()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        const string Former = HarnessLayout.FormerMutationsDirectoryName;
+
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.False(Directory.Exists(temp.Combine(Former)), "init made the slot an earlier version kept its workers in");
+        Assert.Contains($"\n/{Former}/\n", File.ReadAllText(temp.Combine(".gitignore")), StringComparison.Ordinal);
+
+        // As an earlier version left the tree: its placeholder committed, and a worker there with its claim beside it,
+        // the worker a repository of its own.
+        temp.WriteFile(Path.Combine(Former, HarnessLayout.GitKeepFileName), string.Empty);
+        await harness.RunGitAsync(temp.Path, ["add", "--force", $"{Former}/{HarnessLayout.GitKeepFileName}"], token);
+        await harness.CommitAllAsync(temp.Path, "harness", token);
+
+        var worker = temp.Combine(Former, "357e24cw-1");
+
+        temp.WriteFile(Path.Combine(Former, "357e24cw-1", "src", "main.c"), "int main;");
+        temp.WriteFile(Path.Combine(Former, "357e24cw-1" + MutationWorkers.ClaimSuffix), "{}");
+        await harness.InitializeGitRepositoryAsync(worker, token);
+
+        var again = await harness.InitService.InitializeAsync(temp.Path, token);
+        var status = await harness.RunGitAsync(temp.Path, ["status", "--porcelain", "--untracked-files=all"], token);
+
+        Assert.True(again.Succeeded);
+        Assert.Equal($" D {Former}/{HarnessLayout.GitKeepFileName}", status.StandardOutput.TrimEnd());
+        Assert.True(await IsIgnoredAsync(harness, temp.Path, $"{Former}/357e24cw-1/src/main.c", token), "a former worker's file is not ignored");
+        Assert.True(await IsIgnoredAsync(harness, temp.Path, $"{Former}/357e24cw-1{MutationWorkers.ClaimSuffix}", token), "a former worker's claim is not ignored");
+        Assert.Contains(
+            $"removed {Former}/{HarnessLayout.GitKeepFileName} (the placeholder of a slot no longer made, ignored whole now: commit its removal)",
+            again.Details ?? []);
+        Assert.True(File.Exists(temp.Combine(Former, "357e24cw-1", "src", "main.c")), "init removed a former worker");
+        Assert.True(File.Exists(temp.Combine(Former, "357e24cw-1" + MutationWorkers.ClaimSuffix)), "init removed a former worker's claim");
+    }
+
+    /// <summary>
+    /// The placeholder an earlier version's init wrote in the slot it kept mutation workers in goes with its directory
+    /// where nothing else is there, the repository committing its removal - and a placeholder holding anything is the
+    /// repository's own, left and said.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("kept by hand")]
+    public async Task ThePlaceholderAnEarlierVersionWroteInTheFormerSlot_IsRemovedWithIt_UnlessItHoldsAnything(string held)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        const string Former = HarnessLayout.FormerMutationsDirectoryName;
+        var placeholder = $"{Former}/{HarnessLayout.GitKeepFileName}";
+
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        temp.WriteFile(Path.Combine(Former, HarnessLayout.GitKeepFileName), held);
+        await harness.RunGitAsync(temp.Path, ["add", "--force", placeholder], token);
+        await harness.CommitAllAsync(temp.Path, "an earlier version's placeholder", token);
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded);
+
+        if (held.Length == 0)
+        {
+            Assert.False(Directory.Exists(temp.Combine(Former)), "the slot no longer made was left with nothing in it");
+            Assert.Contains($"removed {placeholder} (the placeholder of a slot no longer made, ignored whole now: commit its removal)", outcome.Details ?? []);
+        }
+        else
+        {
+            Assert.Equal(held, File.ReadAllText(temp.Combine(Former, HarnessLayout.GitKeepFileName)));
+            Assert.Contains(
+                $"note    {placeholder} was left: it holds more than the placeholder an earlier version wrote in a slot no longer made",
+                outcome.Details ?? []);
+        }
+    }
+
+    /// <summary>
+    /// Where the slot an earlier version kept mutation workers in is a link, init removes nothing through it, as it writes
+    /// nothing through one: an empty placeholder where the link leads is wherever it leads, and not the repository's to
+    /// retire - it and its directory stay, the link with them, and nothing is said of them.
+    /// </summary>
+    [Fact]
+    public async Task TheFormerSlot_WhereItIsALink_HasNothingRemovedThroughIt()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        const string Former = HarnessLayout.FormerMutationsDirectoryName;
+        var linked = temp.Combine(Former);
+        var target = elsewhere.Combine("slot");
+
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        elsewhere.WriteFile(Path.Combine("slot", HarnessLayout.GitKeepFileName), string.Empty);
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(linked, target));
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded);
+        Assert.True(File.Exists(Path.Combine(target, HarnessLayout.GitKeepFileName)), "init removed the placeholder where the link leads");
+        Assert.Equal(string.Empty, File.ReadAllText(Path.Combine(target, HarnessLayout.GitKeepFileName)));
+        Assert.True(Directory.Exists(target), "init removed the directory the link leads to");
+        Assert.NotNull(new DirectoryInfo(linked).LinkTarget);
+        Assert.DoesNotContain(outcome.Details ?? [], line => line.Contains($"{Former}/{HarnessLayout.GitKeepFileName}", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task AFreshlyInitialisedRepository_IsNotRefusedBySync_BeforeItsPlaceholdersAreCommitted()
     {
@@ -1072,8 +1192,8 @@ public sealed class InitServiceTests
         Assert.Contains($"{WorktreeSettings.SeededRoot}/.gitkeep", files);
         Assert.Contains(".orchestrators/.gitkeep", files);
         Assert.DoesNotContain(files, file => file.StartsWith(".orchestrators/o1", StringComparison.Ordinal));
-        Assert.Contains(".mutations/.gitkeep", files);
-        Assert.DoesNotContain(files, file => file.StartsWith(".mutations/357e24cw-1", StringComparison.Ordinal));
+        Assert.Contains(".m/.gitkeep", files);
+        Assert.DoesNotContain(files, file => file.StartsWith(".m/357e24cw-1", StringComparison.Ordinal));
         Assert.Contains(".legs/.gitkeep", files);
         Assert.DoesNotContain(files, file => file.StartsWith(".legs/357e24c", StringComparison.Ordinal));
         Assert.Contains(".harness-config/sshItems/.gitkeep", files);

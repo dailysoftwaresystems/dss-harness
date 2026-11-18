@@ -47,6 +47,17 @@ internal static class RunCommand
 
     private static readonly Option<bool> LocalCopyOption = DispatchOptions.LocalCopy;
 
+    /// <summary>
+    /// The hidden option that has the run check what it would refuse of its legs before they wait for their slots - by this
+    /// machine's values - and run nothing: given, with --here, to a WSL distribution by the machine it runs on, before that
+    /// machine asks for the slot of a leg the distribution runs; typed by nobody.
+    /// </summary>
+    private static readonly Option<bool> CheckBeforeAdmissionOption = new(RunnerLegs.CheckBeforeAdmissionOption)
+    {
+        Description = "Check what the run would refuse of its legs before they wait for their slots, and run nothing.",
+        Hidden = true,
+    };
+
     private static readonly Option<bool> InPlaceOption = DispatchOptions.InPlace;
 
     internal static Command Create()
@@ -68,6 +79,7 @@ internal static class RunCommand
         command.Options.Add(DispatchOptions.KeepGoing);
         command.Options.Add(DispatchOptions.Here);
         command.Options.Add(DispatchOptions.SetUp);
+        command.Options.Add(CheckBeforeAdmissionOption);
         GlobalOptions.AddTo(command);
 
         CommandRunner.Wire(command, async (context, run, cancellationToken) =>
@@ -81,32 +93,33 @@ internal static class RunCommand
                 ? arguments.GetValue(ManualStepOption) ?? []
                 : null);
 
-            return (await context.Get<IRunnerLegs>()
-                .RunAsync(
-                    new RunnerLegsRequest
-                    {
-                        Directory = context.Directory,
-                        Runner = arguments.GetRequiredValue(RunnerArgument),
-                        LegNames = arguments.GetResult(LegsOption) is { Implicit: false }
-                            ? arguments.GetValue(LegsOption) ?? []
-                            : null,
-                        ForceLock = arguments.GetValue(ForceLockOption),
-                        Json = context.Json,
-                        UseStaged = arguments.GetValue(UseStagedOption),
-                        Time = arguments.GetValue(TimeOption),
-                        Here = arguments.GetValue(DispatchOptions.Here),
-                        SetUp = arguments.GetValue(DispatchOptions.SetUp),
-                        LocalCopy = arguments.GetValue(DispatchOptions.LocalCopy),
-                        InPlace = arguments.GetValue(DispatchOptions.InPlace),
-                        KeepGoing = arguments.GetValue(DispatchOptions.KeepGoing),
-                        Inputs = inputs,
-                        ManualSteps = manualSteps,
-                    },
-                    run!,
-                    cancellationToken)
-                .ConfigureAwait(false))
+            var request = new RunnerLegsRequest
+            {
+                Directory = context.Directory,
+                Runner = arguments.GetRequiredValue(RunnerArgument),
+                LegNames = arguments.GetResult(LegsOption) is { Implicit: false }
+                    ? arguments.GetValue(LegsOption) ?? []
+                    : null,
+                ForceLock = arguments.GetValue(ForceLockOption),
+                Json = context.Json,
+                UseStaged = arguments.GetValue(UseStagedOption),
+                Time = arguments.GetValue(TimeOption),
+                Here = arguments.GetValue(DispatchOptions.Here),
+                SetUp = arguments.GetValue(DispatchOptions.SetUp),
+                LocalCopy = arguments.GetValue(DispatchOptions.LocalCopy),
+                InPlace = arguments.GetValue(DispatchOptions.InPlace),
+                KeepGoing = arguments.GetValue(DispatchOptions.KeepGoing),
+                Inputs = inputs,
+                ManualSteps = manualSteps,
+            };
+
+            var legs = context.Get<IRunnerLegs>();
+
+            return (arguments.GetValue(CheckBeforeAdmissionOption)
+                    ? await legs.CheckBeforeAdmissionAsync(request, cancellationToken).ConfigureAwait(false)
+                    : await legs.RunAsync(request, run!, cancellationToken).ConfigureAwait(false))
                 .ToOutcome(context.Json, context.Get<IHarnessOutput>().Shown);
-        }, JsonAnswer.Ledger(JsonOption));
+        }, beginsRun: arguments => !arguments.GetValue(CheckBeforeAdmissionOption), JsonAnswer.Ledger(JsonOption));
 
         return command;
     }

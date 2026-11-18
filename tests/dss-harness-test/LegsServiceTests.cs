@@ -1,4 +1,6 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using NSubstitute;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -9,6 +11,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
+using DssHarness.Core.Secrets;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
@@ -240,6 +243,77 @@ public sealed class LegsServiceTests
         Assert.DoesNotContain("did not answer", outcome.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// legs names, for each host, what config.json never says of it: where it keeps the copy of the tree the command was
+    /// typed in for this machine and what set that - an item's REPOSITORY_PATH over config.json's repositoryPath - and a
+    /// WSL host's distribution, from its item, on WSL hosts alone; in text, and in --json.
+    /// </summary>
+    [Fact]
+    public async Task EachHost_IsNamedWithWhereItKeepsTheCopyAndWhatSetIt_AndAWslHostWithItsDistribution()
+    {
+        var secrets = Substitute.For<IHostSecretsStore>();
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), HostId.Wsl("Ubuntu")).Returns(new ItemFacts
+        {
+            File = ".harness-config/wslDistros/Ubuntu/.env",
+            Present = true,
+            Distribution = "Example-Linux",
+            RepositoryPath = "~/mine/repo",
+        });
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), HostId.Ssh("pi")).Returns(new ItemFacts { File = ".harness-config/sshItems/pi/.env", Present = true });
+        var fixture = Create(
+            new()
+            {
+                ["x64"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" },
+                ["arm"] = HostDoubles.Leg("linux", "arm64"),
+            },
+            items: HostItems.Reading(secrets, new HarnessLayout(Root, Root)));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
+        var text = LegsReports.Render(report, json: false).Details!;
+        using var json = JsonDocument.Parse(Assert.Single(LegsReports.Render(report, json: true).Data!));
+        var hosts = json.RootElement.GetProperty("hosts").EnumerateArray().ToDictionary(host => host.GetProperty("host").GetString()!);
+
+        Assert.Contains("wsl Ubuntu: distribution 'Example-Linux'", text);
+        Assert.Contains("wsl Ubuntu: keeps this tree's copy at '~/mine/repo', as REPOSITORY_PATH in '.harness-config/wslDistros/Ubuntu/.env' sets", text);
+        Assert.Contains("ssh pi: keeps this tree's copy at '/home/pi/repo', as repositoryPath in '.harness-config/config.json' sets", text);
+        Assert.DoesNotContain(text, line => line.StartsWith("ssh pi: distribution", StringComparison.Ordinal));
+
+        Assert.Equal("Example-Linux", hosts["wsl Ubuntu"].GetProperty("distribution").GetString());
+        Assert.Equal("~/mine/repo", hosts["wsl Ubuntu"].GetProperty("copy").GetString());
+        Assert.Equal("~/mine/repo", hosts["wsl Ubuntu"].GetProperty("repositoryPath").GetString());
+        Assert.Equal("REPOSITORY_PATH in '.harness-config/wslDistros/Ubuntu/.env'", hosts["wsl Ubuntu"].GetProperty("repositoryPathFrom").GetString());
+        Assert.False(hosts["ssh pi"].TryGetProperty("distribution", out _));
+        Assert.Equal("repositoryPath in '.harness-config/config.json'", hosts["ssh pi"].GetProperty("repositoryPathFrom").GetString());
+        Assert.False(hosts["local"].TryGetProperty("copy", out _));
+    }
+
+    /// <summary>
+    /// A host whose item cannot be read is never said to keep its copies where config.json says: legs says why where it
+    /// keeps them is not known, in text and as copyUnplaced in --json.
+    /// </summary>
+    [Fact]
+    public async Task AHostWhoseItemCannotBeRead_IsSaidNotToHaveItsCopyKnown_NeverPlacedWhereConfigJsonSays()
+    {
+        var secrets = Substitute.For<IHostSecretsStore>();
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), Arg.Any<HostId>()).Returns(new ItemFacts
+        {
+            File = ".harness-config/sshItems/pi/.env",
+            Present = true,
+            Problem = "REPOSITORY_PATH 'src/repo' in '.harness-config/sshItems/pi/.env' must be absolute, or start with ~/ for the home directory",
+        });
+        var fixture = Create(new() { ["arm"] = HostDoubles.Leg("linux", "arm64") }, items: HostItems.Reading(secrets, new HarnessLayout(Root, Root)));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
+        var unplaced = "Where host ssh pi keeps its copies for this machine is not known, since its item cannot be read: "
+            + "REPOSITORY_PATH 'src/repo' in '.harness-config/sshItems/pi/.env' must be absolute, or start with ~/ for the home directory";
+        using var json = JsonDocument.Parse(Assert.Single(LegsReports.Render(report, json: true).Data!));
+        var pi = json.RootElement.GetProperty("hosts").EnumerateArray().Single(host => host.GetProperty("host").GetString() == "ssh pi");
+
+        Assert.Contains($"ssh pi: {unplaced}", LegsReports.Render(report, json: false).Details!);
+        Assert.Equal(unplaced, pi.GetProperty("copyUnplaced").GetString());
+        Assert.False(pi.TryGetProperty("copy", out _));
+    }
+
     /// <summary>Every host answering is an unqualified OK, which is the whole point of the other one.</summary>
     [Fact]
     public void EveryHostAnswering_IsStillSuccess()
@@ -379,17 +453,21 @@ public sealed class LegsServiceTests
 
     /// <summary>
     /// A host running a leg another machine sent it measures a worktree copy's first build against the main checkout's copy
-    /// there, where the configuration says it keeps it: its own tree is a repository of its own, whose main checkout is
-    /// itself, and measured against itself the build needed nothing anyone said, and claimed no room.
+    /// there, the one its copy is kept beside: its own tree is a repository of its own, whose main checkout is itself, and
+    /// measured against itself the build needed nothing anyone said, and claimed no room. Never where config.json's
+    /// repositoryPath says - the machine that sent the leg may keep its copies where its own item's .env says.
     /// </summary>
     [Fact]
     public async Task AHostRunningALegItWasSent_MeasuresItAgainstTheMainCopyThere()
     {
+        var main = Path.Combine(Root, "repo");
+        var copy = main + ".worktree-o1--xa";
         var fixture = Create(
             new() { ["leg"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Ssh = "pi" } },
-            rooms: (_, path) => path.StartsWith("/home/pi/repo", StringComparison.Ordinal)
+            rooms: (_, path) => path.StartsWith(main, StringComparison.Ordinal) && !path.StartsWith(copy, StringComparison.Ordinal)
                 ? Room(path, exists: true, recorded: 6L << 30, free: 30)
-                : Room(path, exists: false, recorded: null, free: 30));
+                : Room(path, exists: false, recorded: null, free: 30),
+            root: copy);
 
         var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Ssh("pi"), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -765,10 +843,10 @@ public sealed class LegsServiceTests
 
         var asked = fixture.Inspector.RoomAsked.Single(entry => entry.Host == HostId.Ssh("pi")).Room;
 
-        // The leg's own build, and its first worker's, in its copy; the host's copy's build of the variant is asked only as
-        // what a build of it came to there.
+        // The leg's own build, and its first worker's - named by the variant's key, as the worker is - in its copy; the
+        // host's copy's build of the variant is asked only as what a build of it came to there.
         Assert.Contains(asked.Builds, build => Regex.IsMatch(build, @"^/home/pi/repo/\.legs/[0-9a-f]{7}/build/arm64-none-debug$"));
-        Assert.Contains(asked.Builds, build => Regex.IsMatch(build, @"^/home/pi/repo/\.legs/[0-9a-f]{7}/\.mutations/[0-9a-f]{7}w-1/build/arm64-none-debug$"));
+        Assert.Contains(asked.Builds, build => Regex.IsMatch(build, @"^/home/pi/repo/\.legs/[0-9a-f]{7}/\.m/(?<key>[0-9a-f]{7})w-1/build/\k<key>$"));
     }
 
     /// <summary>
@@ -807,7 +885,7 @@ public sealed class LegsServiceTests
     public async Task ASweep_IsPlacedByTheRoomItsFirstWorkersBuildStillNeeds()
     {
         // Kept in the copy of its own the sweep works in on the host, in the .legs of the host's copy.
-        const string Worker = "/home/pi/repo/.legs/aa1fa54/.mutations/aa1fa54w-1/build/arm64-none-debug";
+        const string Worker = "/home/pi/repo/.legs/aa1fa54/.m/aa1fa54w-1/build/aa1fa54";
 
         var fixture = Create(
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },
@@ -850,6 +928,71 @@ public sealed class LegsServiceTests
         Assert.Null(testing.Placements[0].Need);
     }
 
+    /// <summary>
+    /// The survey reads, for each host it reaches, the rule its heavy legs are admitted by from the settings file of the
+    /// machine that admits them as that machine answered - this one's for itself and for its WSL distribution, an ssh
+    /// host's own for it - over config.json's section for that machine and its defaults, saying where each field came
+    /// from; a host whose settings file could not be read is said to be, and each placed leg's host carries what was read.
+    /// </summary>
+    [Fact]
+    public async Task TheSurvey_ReadsEachHostsAdmission_FromTheSettingsFileOfTheMachineThatAdmitsIt_OverConfigJson()
+    {
+        var unread = "This machine's settings file '~/settings.json' could not be read: the disk is unwell.";
+        var fixture = Create(
+            new() { ["arm"] = HostDoubles.Leg("linux", "arm64") },
+            defaultsAdmission: new AdmissionSettings { MaxMemoryPercent = 80 },
+            localAdmission: new AdmissionSettings { HeavyLegs = 2, MinFreeGiB = 4 },
+            inspect: host => Measurements[host] with
+            {
+                MachineSettings = host.Kind == HostKind.Ssh
+                    ? new MachineSettingsAnswer("~/settings.json", Problem: unread)
+                    : new MachineSettingsAnswer("/u/settings.json", new AdmissionSettings { HeavyLegs = 3 }),
+            });
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
+        var hosts = report.Hosts.ToDictionary(host => host.Host);
+        var local = "heavyLegs 3 from the machine's settings file '/u/settings.json'; maxMemoryPercent 80 from config.json's defaults.admission; "
+            + "settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false built in; minFreeGiB 4 from config.json's hosts.local admission";
+
+        Assert.Equal(local, hosts[HostId.Local].Admission?.Describe());
+        Assert.Equal(local, hosts[HostId.Wsl("Ubuntu")].Admission?.Describe());
+        Assert.Null(hosts[HostId.Ssh("pi")].Admission);
+        Assert.Equal(unread, hosts[HostId.Ssh("pi")].AdmissionUnread);
+        Assert.Equal(unread, Assert.Single(report.Placements).Host?.AdmissionUnread);
+    }
+
+    /// <summary>
+    /// In a WSL distribution running legs another machine sent it, the rule this machine's legs are admitted by is the one a
+    /// run there admits them by: the sending machine's settings file, carried with them, under hosts.local - never the
+    /// distribution's own file, which is another machine's to them, unreadable or not.
+    /// </summary>
+    [Fact]
+    public async Task InADistributionServingSentLegs_TheRuleIsTheSendersSettingsFiles_AsTheRunAdmitsBy()
+    {
+        var fixture = Create(
+            new() { ["arm"] = HostDoubles.Leg("linux", "arm64") },
+            defaultsAdmission: new AdmissionSettings { MaxMemoryPercent = 80 },
+            localAdmission: new AdmissionSettings { MinFreeGiB = 4 },
+            inspect: host => Measurements[host] with
+            {
+                MachineSettings = new MachineSettingsAnswer("/home/dev/.local/share/dssharness/settings-d.json", Problem: "the distribution's own file is unwell"),
+            },
+            origin: CommandOrigin.Served(Dispatch.Of(new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Run,
+                MachineAdmission = new AdmissionSettings { HeavyLegs = 4 },
+            })));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Wsl("Ubuntu"), cancellationToken: TestContext.Current.CancellationToken);
+        var local = report.Hosts.Single(host => host.Host == HostId.Local);
+
+        Assert.Null(local.AdmissionUnread);
+        Assert.Equal(
+            "heavyLegs 4 from the settings file of the machine that sent the leg; maxMemoryPercent 80 from config.json's defaults.admission; "
+                + "settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false built in; minFreeGiB 4 from config.json's hosts.local admission",
+            local.Admission?.Describe());
+    }
+
     /// <summary>What a host answers about a build directory: whether it is there, what it recorded, the room on '/'.</summary>
     private static BuildDirectoryRoom Room(string path, bool exists, long? recorded, long free)
         => new(path, exists, recorded, new DiskSpace(free << 30, 48L << 30, "/"), null);
@@ -859,13 +1002,20 @@ public sealed class LegsServiceTests
         Action<HarnessConfig>? configure = null,
         Func<HostId, HostReport>? inspect = null,
         Func<HostId, string, BuildDirectoryRoom>? rooms = null,
-        KnownTrees? trees = null)
+        KnownTrees? trees = null,
+        AdmissionSettings? defaultsAdmission = null,
+        AdmissionSettings? localAdmission = null,
+        string? root = null,
+        HostItems? items = null,
+        CommandOrigin? origin = null)
     {
         var config = new HarnessConfig
         {
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Defaults = new HarnessDefaults { Admission = defaultsAdmission },
             Hosts = new HostsConfig
             {
+                Local = new LocalHostConfig { Admission = localAdmission },
                 Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
                 Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = "/home/pi/repo" } },
             },
@@ -883,11 +1033,12 @@ public sealed class LegsServiceTests
         var error = new StringWriter();
 
         var service = new LegsService(
-            HostDoubles.Loader(config, Root),
+            HostDoubles.Loader(config, root ?? Root, items: items),
             inspector,
             trees ?? new KnownTrees(),
             HostDoubles.Platform(),
-            new ConsoleHarnessOutput(output, error, verbose: false));
+            new ConsoleHarnessOutput(output, error, verbose: false),
+            origin);
 
         return new Fixture(service, inspector, output, error);
     }

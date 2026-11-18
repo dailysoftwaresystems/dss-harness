@@ -195,6 +195,18 @@ public sealed class FlowCoordinatorTests
         public void Updates(FlowUpdatesFile updates)
         {
         }
+
+        /// <summary>Each record of affected tests written, whole, in the order written.</summary>
+        public List<IReadOnlyList<FlowAffectedTests>> Affected { get; } = [];
+
+        /// <inheritdoc/>
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+        {
+            lock (_waits)
+            {
+                Affected.Add(entries);
+            }
+        }
     }
 
     /// <summary>Steps ready at once start in a fixed order: declaration order, then instance id.</summary>
@@ -228,8 +240,8 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
-    /// A test step's filterWhen, where it reads false, gives the step's runner no filter and fills no template: every
-    /// test of the step's legs runs. Where it reads true, the filter is given as written; absent, it is given too.
+    /// A test step's filterWhen, where it reads false, gives the step's runner no filter: every test of the step's legs
+    /// runs. Where it reads true, the filter's units are given as written; absent, they are given too.
     /// </summary>
     [Fact]
     public async Task ATestStepsFilterWhen_GivesTheRunnerNoFilterWhereItReadsFalse()
@@ -237,14 +249,14 @@ public sealed class FlowCoordinatorTests
         var definition = Parse("""
             name: flow
             inputs:
-              - name: affectedTests
-                options: ['on', 'off']
-                default: 'off'
+              - name: finalTests
+                options: [affected, all]
+                default: all
             steps:
               - name: verify
                 type: test
-                filter: 'fast-only'
-                filterWhen: "input.affectedTests == 'on'"
+                filter: [fast-only]
+                filterWhen: "input.finalTests == 'affected'"
             """);
 
         var off = new FakeRunner();
@@ -253,21 +265,126 @@ public sealed class FlowCoordinatorTests
         Assert.Null(off.Runs.Single().Step.Filter);
 
         var on = new FakeRunner();
-        _ = await new FlowCoordinator(definition, on, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["affectedTests"] = "on" }).RunAsync(TestContext.Current.CancellationToken);
+        _ = await new FlowCoordinator(definition, on, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["finalTests"] = "affected" }).RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("fast-only", on.Runs.Single().Step.Filter);
+        Assert.Equal(["fast-only"], on.Runs.Single().Step.Filter!.Written);
 
         var absent = Parse("""
             name: flow
             steps:
               - name: verify
                 type: test
-                filter: 'fast-only'
+                filter: [fast-only]
             """);
         var given = new FakeRunner();
         _ = await new FlowCoordinator(absent, given, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("fast-only", given.Runs.Single().Step.Filter);
+        Assert.Equal(["fast-only"], given.Runs.Single().Step.Filter!.Written);
+    }
+
+    /// <summary>
+    /// A test step's filter is read where it starts, each unit once: one that reads no unit runs no test - the step ends
+    /// skipped, saying its noTests, and its runner is never asked - and a unit that is blank fails the step 12, as an
+    /// unreadable expression does. A step that keeps its units (affected) writes them under the key it fills before its
+    /// runner is asked; run.affectedTests reads every entry's units, each once; and a step its when skips takes its key's
+    /// entry out.
+    /// </summary>
+    [Fact]
+    public async Task ATestStepsUnits_AreReadWhereItStarts_KeptUnderItsKeyBeforeItRuns_AndNoneRunNoTest()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: none
+                type: test
+                filter: 'run.affectedTests'
+                noTests: 'no step kept a unit yet'
+              - name: first
+                type: test
+                dependsOn: [none]
+                filter: [Alpha, Beta, Alpha]
+                affected: 'kept'
+              - name: other
+                type: test
+                dependsOn: [first]
+                filter: 'union(run.affectedTests, null, run.affectedTests)'
+                affected: 'other'
+              - name: gone
+                type: test
+                dependsOn: [other]
+                when: 'false'
+                filter: [Gamma]
+                affected: 'kept'
+              - name: think
+                type: orient
+                dependsOn: [gone]
+              - name: blank
+                type: test
+                dependsOn: [think]
+                filter: 'think.tests'
+                onFailure: continue
+            """);
+        var records = new Snapshots();
+        IReadOnlyList<string>? keptAtFirst = null;
+        var runner = new FakeRunner()
+            .On("first", _ =>
+            {
+                keptAtFirst = [.. records.Affected[^1].Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)} (by {entry.By})")];
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"tests": ["Alpha", " "]}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            (FlowInstanceState.Skipped, "its filter names no test: no step kept a unit yet"),
+            (coordinator.Instances["none"].State, coordinator.Instances["none"].SkippedBecause));
+        Assert.Equal(["first", "other", "think"], runner.Started);
+        Assert.Equal(["kept: Alpha, Beta (by first)"], keptAtFirst);
+        Assert.Equal(["Alpha", "Beta"], runner.Runs.Single(run => run.Instance == "first").Step.Filter!.Written);
+        Assert.Equal(["Alpha", "Beta"], runner.Runs.Single(run => run.Instance == "other").Step.Filter!.Written);
+        Assert.Equal(
+            ["other: Alpha, Beta (by other)"],
+            records.Affected[^1].Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)} (by {entry.By})"));
+        Assert.Equal(
+            (FlowInstanceState.Failed, HarnessExit.ConfigInvalid, "expression 'filter' of 'blank': 'think.tests' holds a unit that is empty, or spaces alone"),
+            (coordinator.Instances["blank"].State, coordinator.Instances["blank"].Exit, coordinator.Instances["blank"].Error));
+    }
+
+    /// <summary>
+    /// A test step its when skips takes its key's entry out of the run's record of affected tests before its skip is
+    /// recorded: a crash between the two writes leaves the record without the entry, where the other way round the entry
+    /// would stand for good - a skipped step is never drawn again - and a gate would filter on units nothing built.
+    /// </summary>
+    [Fact]
+    public async Task ATestStepItsWhenSkips_TakesItsUnitsOutBeforeItsSkipIsRecorded()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: test
+                filter: [Alpha]
+                affected: 'kept'
+              - name: gone
+                type: test
+                dependsOn: [first]
+                when: 'false'
+                filter: [Gamma]
+                affected: 'kept'
+            """);
+        var records = new Snapshots();
+        var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, to) => instance == "gone" && to == nameof(FlowInstanceState.Skipped));
+
+        _ = await new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), records: crashing).RunAsync(TestContext.Current.CancellationToken);
+
+        // The process ended as the skip was recorded: what reached the disk before it is the record a resume reads.
+        Assert.True(crashing.Ended);
+        Assert.Equal(
+            ["kept: Alpha (by first)", "nothing kept"],
+            records.Affected.Select(written => written.Count == 0 ? "nothing kept" : string.Join(" | ", written.Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)} (by {entry.By})"))));
     }
 
     /// <summary>
@@ -287,7 +404,7 @@ public sealed class FlowCoordinatorTests
             steps:
               - name: verify
                 type: test
-                filter: 'fast-only'
+                filter: [fast-only]
                 filterWhen: input.mode
                 onFailure: continue
               - name: drawn
@@ -3541,6 +3658,59 @@ public sealed class FlowCoordinatorTests
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
+    }
+
+    /// <summary>
+    /// A step's latest output is the newest of its own and of every step that goes on with its work, wherever that step
+    /// is declared: one inside a group, or a group within a loop's iteration, resolves its resume to the step around it
+    /// as the engine resolves whose conversation it takes on, so a read of the step - inside the group, in the loop's
+    /// until, and after the loop - reads what the step that went on with it said last, never the step's own first answer.
+    /// </summary>
+    [Fact]
+    public async Task AStepsLatest_ReadsTheNewestOfTheStepsThatGoOnWithItsWork_DeclaredInGroupsAroundAnywhere()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: fix
+                dependsOn: [think]
+                repeat:
+                  until: 'think.latest.n == 3'
+                  maxIterations: 3
+                steps:
+                  - name: revise
+                    steps:
+                      - name: again
+                        type: reason
+                        resume: think
+                        prompt: work.md
+                        outputs: work.json
+                      - name: seen
+                        type: orient
+                        dependsOn: [again]
+                        when: 'think.latest.n == again.n'
+              - name: after
+                type: orient
+                dependsOn: [fix]
+                when: 'think.latest.n == 3'
+            """);
+        var said = 1;
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"n": 1}""")))
+            .On("again", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["n"] = ++said }));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+
+        // The loop ends on the second iteration's answer, which only the step that went on with the work gave.
+        Assert.Equal(["think", "fix#1.revise.again", "fix#1.revise.seen", "fix#2.revise.again", "fix#2.revise.seen", "after"], runner.Started);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
     }
 

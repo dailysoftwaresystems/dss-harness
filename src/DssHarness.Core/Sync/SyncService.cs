@@ -820,9 +820,9 @@ public sealed class SyncService(
     /// <summary>Where <paramref name="host"/> keeps the copy of the tree the command runs in: see <see cref="HostCopies"/>.</summary>
     /// <param name="context">The tree, and the configuration that declares the host.</param>
     /// <param name="host">The host.</param>
-    /// <exception cref="HarnessException">The host declares no repository path.</exception>
+    /// <exception cref="HarnessException">Where the host keeps its copies is not known (<see cref="HostCopies.RepositoryOf"/>).</exception>
     private string CopyOf(HarnessContext context, Hosts.HostReport host)
-        => HostCopies.Of(context.Config, host.Host, context.Layout, context.Layout.RepositoryRoot, _platform.PathComparison);
+        => HostCopies.Of(context, host.Host, context.Layout.RepositoryRoot, _platform.PathComparison);
 
     /// <inheritdoc/>
     public async Task<SyncResult> SyncAsync(
@@ -873,11 +873,27 @@ public sealed class SyncService(
 
             if ((options.DryRun ? record.Holder(context.Layout, claim) : record.Claim(context.Layout, claim)) is { } holder)
             {
+                var opening = $"{transport.Host}: '{options.KeptIn ?? destinationRoot}' is the copy of the worktree at '{holder.Tree}', which is kept "
+                    + $"under the same name, '{name}', and ";
+                const string Taken = "A copy is taken over only from a tree seen to be gone: synced by both, each would replace the tree the other "
+                    + "put there.";
+
+                // The remedy as the cause allows it: a tree spelt for another system may be this very worktree, as that system
+                // spells it - deleting "the other" there would delete the worktree being synced.
                 throw new HarnessException(
                     HarnessExit.Refused,
-                    $"{transport.Host}: '{options.KeptIn ?? destinationRoot}' is the copy of the worktree at '{holder}', which is kept under "
-                    + $"the same name, '{name}', and still exists: synced by both, each would replace the tree the other "
-                    + "put there. Rename one of them, or delete the other. Nothing was changed.");
+                    holder.Look switch
+                    {
+                        { Presence: TreePresence.There } => $"{opening}still exists: synced by both, each would replace the tree the other "
+                            + "put there. Rename one of them, or delete the other. Nothing was changed.",
+                        { SpeltForAnotherSystem: true } => $"{opening}whether it is gone cannot be told: {holder.Look.Why.TrimEnd('.')}. The copy was "
+                            + "last synced from that system, and the tree it names there may be this same worktree, as that system spells it - "
+                            + $"one checkout used from Windows and from WSL. {Taken} Sync this worktree from that system, or, once the tree it "
+                            + $"names is really gone, run '{ToolPackage.Command} {Runs.CleanService.CommandName} {Runs.CleanService.GoneCopiesOption}' "
+                            + "there, which removes that copy and its entry. Nothing was changed.",
+                        _ => $"{opening}whether it is gone cannot be told: {holder.Look.Why.TrimEnd('.')}. {Taken} Rename this worktree, or "
+                            + "delete the other where it can be looked at. Nothing was changed.",
+                    });
             }
         }
 
@@ -1102,13 +1118,13 @@ public sealed class SyncService(
 
         if (adopting)
         {
-            await transport.MarkFinishedAsync(destinationRoot, reading, cancellationToken).ConfigureAwait(false);
+            await transport.MarkFinishedAsync(destinationRoot, reading, source.Read.Tree, cancellationToken).ConfigureAwait(false);
 
             _output.Info(CommandName, $"{transport.Host}: adopted '{destinationRoot}'");
         }
         else if (unfinished || held != reading)
         {
-            await transport.MarkFinishedAsync(destinationRoot, reading, cancellationToken).ConfigureAwait(false);
+            await transport.MarkFinishedAsync(destinationRoot, reading, source.Read.Tree, cancellationToken).ConfigureAwait(false);
         }
 
         return new SyncResult(transport.Host.ToString(), destinationRoot, plan, Verified: true, created);

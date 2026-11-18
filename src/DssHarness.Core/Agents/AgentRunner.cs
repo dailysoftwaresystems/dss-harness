@@ -1417,6 +1417,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         {
             Ground = step.Ground,
             Graph = step.Graph,
+            Measure = step.Measure,
             Codebase = step.Codebase,
             Map = step.Map,
             CodebaseChanges = step.CodebaseChanges,
@@ -1487,6 +1488,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             SessionId = session,
             Withheld = step.Withheld,
             Graph = step.Graph,
+            Measure = step.Measure,
             Codebase = step.Codebase,
             Map = step.Map,
             CodebaseChanges = step.CodebaseChanges,

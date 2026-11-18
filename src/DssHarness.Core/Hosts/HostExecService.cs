@@ -77,11 +77,11 @@ public sealed class HostExecService(
         var context = await _contextLoader.LoadAsync(directory, cancellationToken).ConfigureAwait(false);
         var hosts = context.Config.Hosts;
 
-        (HostId Host, string RepositoryPath) target;
+        HostId host;
 
         if (ssh is not null)
         {
-            target = Resolve(hosts.Ssh, "ssh", ssh, HostId.Ssh);
+            host = Resolve(hosts.Ssh, "ssh", ssh, HostId.Ssh);
         }
         else
         {
@@ -99,10 +99,8 @@ public sealed class HostExecService(
                 throw;
             }
 
-            target = Resolve(hosts.Wsl, "wsl", distribution, HostId.Wsl);
+            host = Resolve(hosts.Wsl, "wsl", distribution, HostId.Wsl);
         }
-
-        var host = target.Host;
 
         var report = await _inspector
             .InspectAsync(
@@ -129,7 +127,8 @@ public sealed class HostExecService(
         var request = new HostAgentRequest
         {
             Kind = HostAgentRequestKind.Run,
-            Directory = HostCopies.For(target.RepositoryPath, context.Layout, context.Layout.RepositoryRoot, context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root), _platform.PathComparison),
+            // Where the host keeps this tree's copy for this machine, as every reader of its copies asks it.
+            Directory = HostCopies.Of(context, host, context.Layout.RepositoryRoot, _platform.PathComparison),
             Arguments = [.. arguments],
 
             // As a sync's own requests carry it: a command run here is the host's work for as long as it
@@ -210,7 +209,7 @@ public sealed class HostExecService(
     /// declares it: its item is read from the directory of that name, which a case-sensitive file system
     /// finds only as spelt, and every record names the host the same way.
     /// </summary>
-    private static (HostId Host, string RepositoryPath) Resolve<THost>(
+    private static HostId Resolve<THost>(
         Dictionary<string, THost> hosts,
         string kind,
         string name,
@@ -222,7 +221,7 @@ public sealed class HostExecService(
             throw new HarnessException(HarnessExit.UsageError, $"--{kind} {name} is not declared under hosts.{kind}{Declared(hosts.Keys)}");
         }
 
-        return (toHost(declared), hosts[declared].RepositoryPath);
+        return toHost(declared);
     }
 
     /// <summary>WSL's default distribution, as that distribution itself reports it.</summary>

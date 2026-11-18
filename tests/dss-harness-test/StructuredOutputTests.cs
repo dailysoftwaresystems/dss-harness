@@ -37,15 +37,25 @@ public sealed class StructuredOutputTests
     public static TheoryData<string> ShippedSchemas() => [.. WorkflowTemplates.Files.Where(file => file.StartsWith("schemas/", StringComparison.Ordinal))];
 
     /// <summary>
+    /// A shipped schema read whole, as the engine reads one where a step names it: the definitions its references
+    /// share with the schema files beside it taken in, and the references made local.
+    /// </summary>
+    private static string Whole(string file)
+        => JsonSchemaSubset.Shared(
+            (JsonObject)JsonNode.Parse(WorkflowTemplates.TextOf(file)!)!,
+            beside => JsonNode.Parse(WorkflowTemplates.TextOf(DssHarness.Core.Orchestration.Flow.WorkflowFiles.Beside(file, beside)) ?? "null") as JsonObject).ToJsonString();
+
+    /// <summary>
     /// The envelope holds the step's schema whole as its output, null beside it, the step's definitions at its root where
-    /// its references find them; its notes and assumptions are required, and questions offered only while the step may
-    /// ask and has rounds left. Every envelope of every shipped schema is one the subset reads.
+    /// its references find them - the shared ones taken in, as the engine reads the schema; its notes and assumptions are
+    /// required, and questions offered only while the step may ask and has rounds left. Every envelope of every shipped
+    /// schema is one the subset reads.
     /// </summary>
     [Theory]
     [MemberData(nameof(ShippedSchemas))]
     public void TheEnvelope_HoldsTheStepsSchemaWhole_AndIsOneTheSubsetReads(string file)
     {
-        var schema = WorkflowTemplates.TextOf(file)!;
+        var schema = Whole(file);
 
         foreach (var rounds in new int?[] { null, 0, 2 })
         {
@@ -314,7 +324,7 @@ public sealed class StructuredOutputTests
     [MemberData(nameof(ShippedSchemas))]
     public void TheCopySentOfEachShippedSchema_DiffersByTheBoundsItMoved(string file)
     {
-        var envelope = JsonNode.Parse(AgentEnvelope.Schema(new AgentOutput("o", WorkflowTemplates.TextOf(file)!, AskRounds: 2)))!.AsObject();
+        var envelope = JsonNode.Parse(AgentEnvelope.Schema(new AgentOutput("o", Whole(file), AskRounds: 2)))!.AsObject();
         var sent = ClaudeApiRequest.Sent(envelope.ToJsonString());
 
         Assert.Empty(JsonSchemaSubset.SubsetProblems(sent));
@@ -347,11 +357,11 @@ public sealed class StructuredOutputTests
     [Fact]
     public void TheShippedBounds_AreEachMovedIntoWords()
     {
-        static string Sent(string file, int? rounds = null) => ClaudeApiRequest.Sent(AgentEnvelope.Schema(new AgentOutput("o", WorkflowTemplates.TextOf($"schemas/{file}.schema.json")!, AskRounds: rounds))).ToJsonString(new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        static string Sent(string file, int? rounds = null) => ClaudeApiRequest.Sent(AgentEnvelope.Schema(new AgentOutput("o", Whole($"schemas/{file}.schema.json"), AskRounds: rounds))).ToJsonString(new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
 
         Assert.Contains("The choices the person has, at least two, each a sentence that says what it leads to. At least 2 items.", Sent("triage"), StringComparison.Ordinal);
         Assert.Contains("The choices the person has, at least two, each a sentence that says what it leads to. At least 2 items.", Sent("priority"), StringComparison.Ordinal);
-        Assert.Contains("Each is shaped as a plan's item and sized to one builder's cycle. At most 4 items.", Sent("diagnosis"), StringComparison.Ordinal);
+        Assert.Contains("Each is shaped as a plan's item - the one definition the plan, a self-audit and a diagnosis share - and sized to one builder's cycle, each deciding item with its classes and each that decides none saying why in noClass. At most 4 items.", Sent("diagnosis"), StringComparison.Ordinal);
         Assert.Contains($"The choices the person has, at least {AgentEnvelope.FewestOptions}, each a sentence that says what it leads to. At least 2 items.", Sent("summary", rounds: 1), StringComparison.Ordinal);
         Assert.DoesNotContain("maxItems", Sent("diagnosis"), StringComparison.Ordinal);
         Assert.DoesNotContain("\"minItems\":2", Sent("triage"), StringComparison.Ordinal);

@@ -118,6 +118,7 @@ public sealed class FlowStepRunnerTests : IDisposable
                             Runner = "ctest",
                             Args = ["--output-on-failure", "-E", "slow", "--exclude-regex=gpu|net"],
                             FilterArg = "-R",
+                            FilterJoin = "|",
                             ExcludeArg = "-E",
                             ExcludeJoin = "|",
                             SuccessPattern = "passed",
@@ -308,9 +309,8 @@ public sealed class FlowStepRunnerTests : IDisposable
             StringComparison.Ordinal);
 
         // The README counts them in words and names each.
-        string[] words = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen", "Twenty"];
         var readme = Prose.Document("README.md");
-        var served = readme.IndexOf($"{words[FlowStepRunners.Served.Count]} steps are served so far:", StringComparison.Ordinal);
+        var served = readme.IndexOf($"{Spelled(FlowStepRunners.Served.Count)} steps are served so far:", StringComparison.Ordinal);
 
         Assert.True(served >= 0, "the README counts the steps served");
         var listed = readme[served..readme.IndexOf("A check that finds red", served, StringComparison.Ordinal)];
@@ -321,6 +321,15 @@ public sealed class FlowStepRunnerTests : IDisposable
             StringComparison.Ordinal);
         Assert.Equal(GhProcess.Limit, PublisherCommands.PushLimit);
         Assert.IsType<FlowStepRunners>(provider.GetRequiredService<IFlowStepRunner>());
+    }
+
+    /// <summary>A count below a hundred as the README writes it at a sentence's start: "Twenty-one".</summary>
+    private static string Spelled(int count)
+    {
+        string[] ones = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+        string[] tens = ["Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+        Assert.InRange(count, 0, 99);
+        return count < 20 ? ones[count] : count % 10 == 0 ? tens[(count / 10) - 2] : $"{tens[(count / 10) - 2]}-{ones[count % 10].ToLowerInvariant()}";
     }
 
     /// <summary>
@@ -461,6 +470,10 @@ public sealed class FlowStepRunnerTests : IDisposable
             ["reuses"] = reuses is null ? new JsonArray() : new JsonArray(new JsonObject { ["path"] = reuses, ["what"] = "it" }),
             ["creates"] = new JsonArray(),
             ["replaces"] = new JsonArray(),
+            ["tests"] = new JsonArray("OneTests"),
+            ["noTests"] = "",
+            ["classes"] = new JsonArray(),
+            ["noClass"] = "the item decides nothing: it carries a document",
         };
 
     private static async Task<IReadOnlyList<string>> CheckAsync(HarnessFactory harness, TempDirectory repository, params JsonNode?[] items)
@@ -816,6 +829,86 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal(
             [PlanValidator.MostItemsProblem(9)],
             [.. tooMany.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+    }
+
+    /// <summary>
+    /// A work item is known by its name across the run - its record of affected tests keeps an item's units under it, and
+    /// a plan update finds the item by it - so the check that opens a round refuses a round's own item under a name an
+    /// earlier round's item carries, and passes an owed one under it, for a changed or a removed piece names the item it
+    /// does again or takes back; a round that carries the owed work alone - one added to a work-item group with no loop
+    /// around it - builds none of its own items, which the round before built under those names, so none is refused;
+    /// and a plan update's added piece under such a name is refused, its changed one passed.
+    /// </summary>
+    [Fact]
+    public async Task ANameAnEarlierRoundCarries_IsRefusedToARoundsOwnItemAndToAnAddedPiece_AndPassedToAChangedOne()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var opening = new WorkflowStep { Name = "item-check", Type = "validate-plan", Items = "plan.items" };
+        const string Reused = "work item 'one' is named as a work item an earlier round of the run carries, and a work item is known by its name across the run - its tests and its updates are kept under it: a further item is named for what it settles, and one that does that item again is a changed piece of it";
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(WorkflowStep step, Dictionary<string, FlowValue> read)
+        {
+            var result = await runner.RunAsync(Run(step, repository.Path, read), Token);
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        Assert.Equal(
+            [Reused],
+            await ProblemsAsync(opening, new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("two", "src/two/**"))),
+                ["owed"] = FlowValue.Of(new JsonArray()),
+                ["carried"] = FlowValue.Of(new JsonArray("one", "three")),
+            }));
+
+        // An owed item under a carried name replaces the round's own one of it, and is the item a piece does again.
+        Assert.Empty(await ProblemsAsync(opening, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("two", "src/two/**"))),
+            ["owed"] = FlowValue.Of(new JsonArray(Item("one"))),
+            ["carried"] = FlowValue.Of(new JsonArray("one", "three")),
+        }));
+
+        // The round's own items, which a round carrying the owed work alone does not build, are held to no name; the
+        // same list opening a round that builds them is refused each.
+        Dictionary<string, FlowValue> Added(bool owedAlone) => new()
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("two", "src/two/**"))),
+            ["owed"] = FlowValue.Of(new JsonArray(Item("three", "src/three/**"))),
+            ["owedAlone"] = FlowValue.Of(owedAlone),
+            ["carried"] = FlowValue.Of(new JsonArray("one", "two")),
+        };
+
+        Assert.Empty(await ProblemsAsync(opening, Added(owedAlone: true)));
+        Assert.Equal([Reused, Reused.Replace("'one'", "'two'", StringComparison.Ordinal)], await ProblemsAsync(opening, Added(owedAlone: false)));
+
+        // A check that opens no round - its items are the plan's, which holds the items rounds built - refuses none.
+        var check = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+
+        Assert.Empty(await ProblemsAsync(check, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("two", "src/two/**"))),
+            ["carried"] = FlowValue.Of(new JsonArray("one")),
+        }));
+
+        Assert.Equal(
+            ["the piece for 'one' is 'added', and a work item a round of the run carries is named so, and a work item is known by its name across the run: name the new item for what it settles, or make the piece 'changed' to do that item again"],
+            await ProblemsAsync(check, new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one"))),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece("added", Item("one")))),
+                ["known"] = FlowValue.Of(new JsonArray()),
+                ["carried"] = FlowValue.Of(new JsonArray("one")),
+            }));
+        Assert.Empty(await ProblemsAsync(check, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one"))),
+            ["scope"] = FlowValue.Of(new JsonArray(Piece("changed", Item("one")))),
+            ["known"] = FlowValue.Of(new JsonArray("one")),
+            ["carried"] = FlowValue.Of(new JsonArray("one")),
+        }));
     }
 
     private static readonly WorkflowStep CreateStep = new() { Name = "make", Type = "create-agent", Agent = "worker.md" };

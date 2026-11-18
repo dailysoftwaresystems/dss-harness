@@ -13,7 +13,11 @@ namespace DssHarness.Core.Build;
 /// Why nothing the build stamped can be ordered, which the next build gives as its reason for starting
 /// from clean; <see langword="null"/> where nothing doubted it.
 /// </param>
-/// <param name="Variant">The variant's directory name, for whoever reads the file.</param>
+/// <param name="Variant">
+/// The variant's directory name (<see cref="VariantKey.DirectoryName"/>): which variant built here - in a mutation worker's
+/// build directory, named by a key two variants can share, what says whose its objects are; read by the next build, which
+/// starts from clean where it names another.
+/// </param>
 /// <param name="Newest">
 /// The newest file the build left in the directory, relative to it, and when it was written: read as the
 /// build finished, and <see langword="null"/> for a build that never finished, or whose directory could
@@ -122,6 +126,16 @@ internal sealed record BuildRecord(
     /// <param name="fileSystem">Reads the record.</param>
     /// <param name="buildDirectory">The build directory.</param>
     public static DateTime? NewestIn(IFileSystem fileSystem, string buildDirectory) => In(fileSystem, buildDirectory)?.Newest?.LastWriteTimeUtc;
+
+    /// <summary>
+    /// The variant the build that last ran in <paramref name="buildDirectory"/> recorded it built
+    /// (<see cref="VariantKey.DirectoryName"/>), or <see langword="null"/> where no record names one: none is there, it
+    /// cannot be read, or its variant's line is empty.
+    /// </summary>
+    /// <param name="fileSystem">Reads the record.</param>
+    /// <param name="buildDirectory">The build directory.</param>
+    public static string? VariantIn(IFileSystem fileSystem, string buildDirectory)
+        => In(fileSystem, buildDirectory)?.Variant is { Length: > 0 } variant ? variant : null;
 
     /// <summary>The record in <paramref name="buildDirectory"/>, or <see langword="null"/> where there is none, or it cannot be read.</summary>
     private static BuildRecord? In(IFileSystem fileSystem, string buildDirectory)

@@ -124,9 +124,11 @@ public sealed record FlowMadeAgent(string Name, string? Model);
     /// rebase's <c>merge</c>, each the names its expression yielded, under its key - <c>allow.new</c> and <c>allow.merge</c>
     /// spelt so - and none where one that may read nothing did; a <c>ci-wait</c> step's <c>commit</c> where it names none,
     /// the commit the run last pushed; a <c>commit</c> step's <c>folds</c>, the instances of the fold and delete-agent steps
-    /// upstream of it that fold; a <c>pull-request</c> step's <c>body</c>, the text of the file it names, filled; and a
+    /// upstream of it that fold; a <c>pull-request</c> step's <c>body</c>, the text of the file it names, filled; a
     /// <c>reason</c> step's <c>writes</c>, the names its expression yielded, narrowed as a written-out list narrows
-    /// before its runner is asked. Empty for every other step.
+    /// before its runner is asked; and a reason step's <c>classes</c>, where its prompt reads the classes of the work
+    /// item it is an instance of (<c>{input.item.classes}</c>): the classes as the item declares them, for its pack to be
+    /// seeded from (<see cref="FlowStepGraph"/>). Empty for every other step.
     /// </param>
 /// <param name="Made">The agent a <c>create-agent</c> step makes, as the engine named it; null for every other step.</param>
     /// <param name="WorksIn">

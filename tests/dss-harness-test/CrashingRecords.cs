@@ -63,4 +63,13 @@ internal sealed class CrashingRecords(IFlowRecords inner, Func<FlowUpdatesFile, 
 
         _ended = picked;
     }
+
+    /// <inheritdoc/>
+    public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+    {
+        if (!_ended)
+        {
+            inner.AffectedTests(entries);
+        }
+    }
 }

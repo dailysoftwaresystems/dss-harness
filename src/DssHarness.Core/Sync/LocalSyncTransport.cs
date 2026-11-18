@@ -49,22 +49,24 @@ public sealed class LocalSyncTransport(
 
     /// <inheritdoc/>
     public Task CreateRootAsync(string root, CopyMark mark = CopyMark.Complete, CancellationToken cancellationToken = default)
-        => MarkAsync(root, mark, reading: null);
+        => MarkAsync(root, mark, reading: null, tree: null);
 
     /// <inheritdoc/>
-    public Task MarkFinishedAsync(string root, CopyReading reading, CancellationToken cancellationToken = default)
+    public Task MarkFinishedAsync(string root, CopyReading reading, string? tree, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(reading);
 
-        return MarkAsync(root, CopyMark.Complete, reading);
+        return MarkAsync(root, CopyMark.Complete, reading, tree);
     }
 
     /// <summary>
     /// Creates the copy's root where it is not there and writes its marker: <paramref name="mark"/>, holding
     /// <paramref name="reading"/> where it is given - and no reading where it is not, since a copy a sync began writing,
-    /// or marked without saying, holds no reading anybody can name.
+    /// or marked without saying, holds no reading anybody can name - and the tree it is of: the one a finished sync names
+    /// (<paramref name="tree"/>, none where the build asking sends none), and otherwise the one the marker named before,
+    /// since a copy whose sync has begun is of the tree it was last made from until that sync finishes.
     /// </summary>
-    private Task MarkAsync(string root, CopyMark mark, CopyReading? reading)
+    private Task MarkAsync(string root, CopyMark mark, CopyReading? reading, string? tree)
     {
         // None is not a mark a copy can carry: it says there is no marker at all, and encoding it
         // would write one claiming the copy was both taken over and finished — the most permissive
@@ -117,7 +119,8 @@ public sealed class LocalSyncTransport(
                     Unfinished: mark == CopyMark.Unfinished,
                     ReadBy: reading?.ReadBy,
                     Commit: reading?.Commit,
-                    UncommittedChanges: reading?.UncommittedChanges),
+                    UncommittedChanges: reading?.UncommittedChanges,
+                    Tree: reading is null ? before?.Tree : tree),
                 MarkerOptions);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -578,10 +581,11 @@ public sealed class LocalSyncTransport(
     /// <para>
     /// Each worker is removed as a copy is, by its marker, so one a removal stopped in is still the harness's to remove
     /// when asked again. What a removal left aside (<see cref="RemovalAside"/>) was a worker a sync made, renamed with
-    /// nothing sweeping in it, and goes whatever it still holds. Only the tree's own slot is looked in, and the slot of
-    /// each copy kept in its .legs that a sync made: nothing of the harness's is kept beside a tree, and a sweep another
-    /// machine sent here works in a copy of its own kept there (<see cref="Legs.LegWorkload.CopyOnHosts"/>), with its
-    /// workers in it - so a removal of the tree meets each of them, and the claim on one a live sweep holds keeps it.
+    /// nothing sweeping in it, and goes whatever it still holds. Only the tree's own slots are looked in - its .m, and the
+    /// .mutations an earlier version kept them in - and those of each copy kept in its .legs that a sync made: nothing of
+    /// the harness's is kept beside a tree, and a sweep another machine sent here works in a copy of its own kept there
+    /// (<see cref="Legs.LegWorkload.CopyOnHosts"/>), with its workers in it - so a removal of the tree meets each of them,
+    /// and the claim on one a live sweep holds keeps it.
     /// </para>
     /// <para>
     /// Everything is listed before anything goes, so a listing that fails has removed nothing - and is raised naming
@@ -596,7 +600,8 @@ public sealed class LocalSyncTransport(
     {
         IReadOnlyList<HostCopyFound> copies;
 
-        // Listed before anything goes, as the workers of each are, so a listing that fails has removed nothing.
+        // Listed before anything goes, and the workers of the tree and of each copy with them, in one removal: so a listing
+        // that fails - a copy's slot among them - has removed nothing, and nothing that went goes unsaid.
         try
         {
             copies = await ListInSlotAsync(root, HarnessLayout.LegsDirectoryName, Legs.LegCopies.IsKey, cancellationToken).ConfigureAwait(false);
@@ -606,33 +611,37 @@ public sealed class LocalSyncTransport(
             throw WorktreeInspector.CouldNotBeLookedIn(Path.Combine(Home(root), HarnessLayout.LegsDirectoryName), ex);
         }
 
-        var removal = await RemoveWorkersInTreeAsync(root, measureOnly, cancellationToken).ConfigureAwait(false);
-
-        foreach (var copy in copies.Where(copy => copy.Origin == CopyOrigin.Made))
-        {
-            if (removal.Interrupted)
-            {
-                break;
-            }
-
-            var inCopy = await RemoveWorkersInTreeAsync(copy.Path, measureOnly, cancellationToken).ConfigureAwait(false);
-
-            removal = removal.And(inCopy);
-        }
-
-        return removal;
+        return await RemoveInAsync(
+                [.. new[] { root }.Concat(copies.Where(copy => copy.Origin == CopyOrigin.Made).Select(copy => copy.Path)).SelectMany(WorkerPlaces)],
+                _claims,
+                measureOnly,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Removes the mutation workers kept in the tree at <paramref name="root"/>'s own slot alone, as
-    /// <see cref="RemoveWorkersAsync"/> removes them - not those in the copies kept in its .legs: for a removal that removes
-    /// each of those copies whole, under the lock a sweep in one holds it by, rather than removing the tree's copy whole.
+    /// Removes the mutation workers kept in the tree at <paramref name="root"/> alone, as <see cref="RemoveWorkersAsync"/>
+    /// removes them - those in its own slot, and those an earlier version kept in its
+    /// <see cref="HarnessLayout.FormerMutationsDirectoryName"/>, both listed before any goes - not those in the copies kept
+    /// in its .legs: for a removal that removes each of those copies whole, under the lock a sweep in one holds it by,
+    /// rather than removing the tree's copy whole.
     /// </summary>
     /// <param name="root">The tree.</param>
     /// <param name="measureOnly">Whether to say what would be removed, and what left, and remove nothing.</param>
     /// <param name="cancellationToken">Stops the removal between workers.</param>
+    /// <remarks>
+    /// A former worker goes with its tree as a worker does, a claim that version's sweep still holds keeping it - and the
+    /// tree with it: removed with the tree, unasked, it would take a sweep's copy from under it.
+    /// </remarks>
     public Task<WorkersRemoval> RemoveWorkersInTreeAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
-        => RemoveInSlotAsync(root, HarnessLayout.MutationsDirectoryName, _claims, measureOnly, cancellationToken);
+        => RemoveInAsync(WorkerPlaces(root), _claims, measureOnly, cancellationToken);
+
+    /// <summary>
+    /// Where the mutation workers kept in the tree at <paramref name="tree"/> are: its own slot, and the one an earlier
+    /// version kept them in - each with the directory a listing that fails names.
+    /// </summary>
+    private IReadOnlyList<(CopyPlace? Place, string LookedIn)> WorkerPlaces(string tree)
+        => [PlaceInSlot(tree, HarnessLayout.MutationsDirectoryName), PlaceInSlot(tree, HarnessLayout.FormerMutationsDirectoryName)];
 
     /// <summary>
     /// Removes the copies kept in the slot <paramref name="slot"/> of the tree at <paramref name="tree"/>, with what an
@@ -646,31 +655,68 @@ public sealed class LocalSyncTransport(
     /// <param name="measureOnly">Whether to say what would be removed, and what left, and remove nothing.</param>
     /// <param name="cancellationToken">Stops the removal between copies.</param>
     public Task<WorkersRemoval> RemoveInSlotAsync(string tree, string slot, ICopyClaims claims, bool measureOnly = false, CancellationToken cancellationToken = default)
-        => RemoveInAsync(InSlot(tree, slot), Path.Combine(Home(tree), slot), claims, measureOnly, cancellationToken);
+        => RemoveInAsync([PlaceInSlot(tree, slot)], claims, measureOnly, cancellationToken);
 
     /// <summary>
-    /// Removes the workers an earlier version of this tool kept beside the tree at <paramref name="tree"/>, each named
-    /// <c>&lt;tree&gt;.mutation-&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c> (<see cref="Mutations.MutationWorkers.FormerFamily"/>), as
-    /// the workers kept in it are removed (<see cref="RemoveInSlotAsync"/>): each by its marker, one that version's sweep
-    /// still claims, by the claim file beside it that version wrote, left - or, asked only to measure, says what it would
-    /// remove and what it would leave.
+    /// Removes the former workers of each tree of <paramref name="trees"/> - those an earlier version of this tool kept
+    /// beside it, each named <c>&lt;tree&gt;.mutation-&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>
+    /// (<see cref="Mutations.MutationWorkers.FormerFamily"/>), and those a later one kept in its
+    /// <see cref="HarnessLayout.FormerMutationsDirectoryName"/> and in that of each copy kept in its .legs - as the workers
+    /// kept in a tree are removed (<see cref="RemoveInSlotAsync"/>): each by its marker, one that version's sweep still
+    /// claims, by the claim file beside it that version wrote, left - or, asked only to measure, says what it would remove
+    /// and what it would leave. Every place of every tree (<see cref="FormerWorkerPlaces"/>) is listed before any worker
+    /// goes, in one removal, so a listing that fails has removed nothing, and no worker that went is lost to a failure in
+    /// a tree after its own: the removal answers for every tree at once.
     /// </summary>
-    /// <param name="tree">The tree they were kept beside.</param>
+    /// <param name="trees">The trees they were kept beside, or in, each once; one gone since keeps none in it.</param>
     /// <param name="measureOnly">Whether to say what would be removed, and what left, and remove nothing.</param>
     /// <param name="cancellationToken">Stops the removal between workers.</param>
-    public Task<WorkersRemoval> RemoveFormerWorkersAsync(string tree, bool measureOnly = false, CancellationToken cancellationToken = default)
-        => RemoveInAsync(
-            Beside(tree, Mutations.MutationWorkers.FormerFamily),
-            Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Home(tree))) ?? Home(tree),
-            _claims,
-            measureOnly,
-            cancellationToken);
+    /// <exception cref="HarnessException">
+    /// A tree's .legs, or a place its former workers are kept in, could not be looked in, and nothing was removed.
+    /// </exception>
+    public async Task<WorkersRemoval> RemoveFormerWorkersAsync(IReadOnlyList<string> trees, bool measureOnly = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(trees);
+
+        return await RemoveInAsync([.. trees.SelectMany(FormerWorkerPlaces)], _claims, measureOnly, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Where the former workers of the tree at <paramref name="tree"/> are kept (<see cref="RemoveFormerWorkersAsync"/>):
+    /// beside it, in its <see cref="HarnessLayout.FormerMutationsDirectoryName"/>, and in that of each copy kept in its
+    /// .legs - each with the directory a listing that fails names. Its .legs is looked in here, and nothing is removed.
+    /// </summary>
+    /// <param name="tree">The tree they were kept beside, or in.</param>
+    /// <exception cref="HarnessException">Its .legs could not be looked in.</exception>
+    private IReadOnlyList<(CopyPlace? Place, string LookedIn)> FormerWorkerPlaces(string tree)
+    {
+        IReadOnlyList<(string Name, string Path, string Directory)> copies;
+
+        // Each copy by its name alone, never weighed: a worker in one is told by its own marker, and a copy no sync made
+        // holds none whose marker says a sync made it.
+        try
+        {
+            copies = CopiesInSlot(tree, HarnessLayout.LegsDirectoryName, Legs.LegCopies.IsKey);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw WorktreeInspector.CouldNotBeLookedIn(Path.Combine(Home(tree), HarnessLayout.LegsDirectoryName), ex);
+        }
+
+        return
+        [
+            (Beside(tree, Mutations.MutationWorkers.FormerFamily), Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Home(tree))) ?? Home(tree)),
+            .. new[] { tree }.Concat(copies.Select(copy => copy.Path)).Select(each => PlaceInSlot(each, HarnessLayout.FormerMutationsDirectoryName)),
+        ];
+    }
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Every tree beside which workers are kept there is listed before any worker goes, so a listing that fails has
-    /// removed nothing; the trees are found by the workers' own names (<see cref="FormerWorkerTrees"/>), so a copy
-    /// removed since - an agent's, deleted by a version that removed only the workers kept in it - is among them.
+    /// Every place of every tree whose former workers are there is listed before any of them goes, in one removal
+    /// (<see cref="RemoveFormerWorkersAsync"/>), so a listing that fails has removed nothing - and a host, which answers a
+    /// failure alone, never leaves a worker that went unsaid: the main copy and each worktree copy beside it, and each
+    /// tree the workers kept beside one name (<see cref="FormerWorkerTrees"/>), so a copy removed since - an agent's,
+    /// deleted by a version that removed only the workers kept in it - is among them; each once, by where it is.
     /// </remarks>
     public async Task<WorkersRemoval> RemoveFormerWorkersBesideCopiesAsync(string repositoryPath, bool measureOnly = false, CancellationToken cancellationToken = default)
     {
@@ -683,43 +729,46 @@ public sealed class LocalSyncTransport(
 
         try
         {
-            trees = Path.GetDirectoryName(main) is { Length: > 0 } parent
+            var besides = Path.GetDirectoryName(main) is { Length: > 0 } parent
                 ? FormerWorkerTrees(
                     parent,
                     tree => string.Equals(tree, name, _platform.PathComparison)
                         || (tree.StartsWith(worktrees, _platform.PathComparison) && HostCopies.IsCopyName(tree[worktrees.Length..])))
                 : [];
+
+            trees =
+            [
+                .. new[] { main }
+                    .Concat(CopiesBeside(repositoryPath, HostCopies.WorktreeSuffix, HostCopies.IsCopyName).Select(copy => copy.Directory))
+                    .Concat(besides)
+                    .Select(tree => Path.TrimEndingDirectorySeparator(tree))
+                    .Distinct(_platform.PathComparer()),
+            ];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw WorktreeInspector.CouldNotBeLookedIn(Path.GetDirectoryName(main) ?? main, ex);
         }
 
-        var removal = WorkersRemoval.None;
-
-        foreach (var tree in trees)
-        {
-            removal = removal.And(await RemoveFormerWorkersAsync(tree, measureOnly, cancellationToken).ConfigureAwait(false));
-
-            if (removal.Interrupted)
-            {
-                break;
-            }
-        }
-
-        return removal;
+        return await RemoveFormerWorkersAsync(trees, measureOnly, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Where the copies kept in the slot <paramref name="slot"/> of <paramref name="tree"/> are, with the directory a listing that fails names.</summary>
+    private (CopyPlace? Place, string LookedIn) PlaceInSlot(string tree, string slot) => (InSlot(tree, slot), Path.Combine(Home(tree), slot));
+
     /// <summary>
-    /// Removes the copies kept at <paramref name="place"/> whose names <paramref name="claims"/> takes, with what an
-    /// unfinished removal of one left aside - or measures them: the one removal of copies kept together, wherever that is.
+    /// Removes the copies kept at each of <paramref name="places"/> whose names <paramref name="claims"/> takes, with what
+    /// an unfinished removal of one left aside - or measures them: the one removal of copies kept together, wherever that
+    /// is. Every place is listed before any copy goes, so a listing that fails has removed nothing.
     /// </summary>
-    /// <param name="place">Where they are kept; <see langword="null"/> where that is not there, which keeps none.</param>
-    /// <param name="lookedIn">The directory, as a listing that fails names it.</param>
+    /// <param name="places">
+    /// Where they are kept - each <see langword="null"/> where that is not there, which keeps none - with the directory, as
+    /// a listing that fails names it.
+    /// </param>
     /// <param name="claims">The family's claims: what a copy of it is named, which run holds one, and how that is said.</param>
     /// <param name="measureOnly">Whether to say what would be removed, and what left, and remove nothing.</param>
     /// <param name="cancellationToken">Stops the removal between copies.</param>
-    private async Task<WorkersRemoval> RemoveInAsync(CopyPlace? place, string lookedIn, ICopyClaims claims, bool measureOnly, CancellationToken cancellationToken)
+    private async Task<WorkersRemoval> RemoveInAsync(IReadOnlyList<(CopyPlace? Place, string LookedIn)> places, ICopyClaims claims, bool measureOnly, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(claims);
 
@@ -728,17 +777,20 @@ public sealed class LocalSyncTransport(
 
         try
         {
-            IReadOnlyList<HostCopyFound> copies;
-            IReadOnlyList<string> asides;
+            var copies = new List<HostCopyFound>();
+            var asides = new List<string>();
 
-            try
+            foreach (var (place, lookedIn) in places)
             {
-                copies = Weighed(CopiesIn(place, claims.Names), cancellationToken);
-                asides = AsidesIn(place, claims.Names);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                throw WorktreeInspector.CouldNotBeLookedIn(lookedIn, ex);
+                try
+                {
+                    copies.AddRange(Weighed(CopiesIn(place, claims.Names), cancellationToken));
+                    asides.AddRange(AsidesIn(place, claims.Names));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw WorktreeInspector.CouldNotBeLookedIn(lookedIn, ex);
+                }
             }
 
             foreach (var copy in copies)
@@ -899,6 +951,7 @@ public sealed class LocalSyncTransport(
                 {
                     CreatedBy = marker.CreatedBy,
                     CreatedUtc = marker.CreatedUtc,
+                    Tree = marker.Tree,
                 },
             };
         }
@@ -1331,13 +1384,18 @@ public sealed class LocalSyncTransport(
     /// records, so its presence says the marker holds one. Each of the three spelt as a leg's <c>tree</c> spells it,
     /// and written only where set, so a copy marked without a reading carries none of them.
     /// </param>
+    /// <param name="Tree">
+    /// The tree the copy was last made from, as the machine whose sync finished it spells it: what a listing of the host's
+    /// copies says a copy is of where no record names it - a tree still on the machine asking, or one gone from it.
+    /// Written only where known, so a copy finished by a build from before it carries none.
+    /// </param>
     /// <remarks>
     /// Both strings are nullable because deserialising decides that, not this declaration: a file
     /// holding <c>{}</c> parses into a marker with neither, and that is one of the shapes that has
     /// to be told from a marker this tool wrote. Every marker it has ever written carries both.
     /// <para>
-    /// A build from before this one cannot read the marker of a copy this one finished: the reading it holds is a
-    /// member that build does not know, which it refuses as unreadable, as a build from before <c>Unfinished</c>
+    /// A build from before this one cannot read the marker of a copy this one finished: the reading and the tree it holds
+    /// are members that build does not know, which it refuses as unreadable, as a build from before <c>Unfinished</c>
     /// refuses an unfinished copy's. Only going back to such a build meets that - a host is brought to the build of
     /// the machine that asks it, and one ahead of that machine is refused - and the remedy is to update again, never
     /// to delete the marker, which would leave the copy one to take over.
@@ -1351,7 +1409,8 @@ public sealed class LocalSyncTransport(
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Unfinished = false,
         [property: JsonPropertyName("readBy"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ReadBy = null,
         [property: JsonPropertyName("commit"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Commit = null,
-        [property: JsonPropertyName("uncommittedChanges"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? UncommittedChanges = null);
+        [property: JsonPropertyName("uncommittedChanges"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? UncommittedChanges = null,
+        [property: JsonPropertyName("tree"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Tree = null);
 
     /// <summary>
     /// What the marker at <paramref name="root"/> says, or null where there is none.

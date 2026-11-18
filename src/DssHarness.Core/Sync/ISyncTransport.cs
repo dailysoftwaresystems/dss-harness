@@ -51,13 +51,18 @@ public interface ISyncTransport
     /// </summary>
     /// <param name="root">The copy's root.</param>
     /// <param name="reading">The reading the copy was made from, and the run that read it.</param>
+    /// <param name="tree">
+    /// The tree the copy was made from, as the machine that synced it spells it: recorded beside the reading, so a listing
+    /// of the host's copies tells which tree a copy is of where no record of that machine's names it; none where the build
+    /// asking sends none, as one from before the tree was carried does, and the marker then names none.
+    /// </param>
     /// <param name="cancellationToken">Stops the work.</param>
     /// <exception cref="Results.HarnessException">As <see cref="CreateRootAsync"/>.</exception>
     /// <remarks>
     /// One mark with the reading, rather than a mark and then the reading: between two, a copy marked finished would
     /// name the reading before this one.
     /// </remarks>
-    Task MarkFinishedAsync(string root, CopyReading reading, CancellationToken cancellationToken = default);
+    Task MarkFinishedAsync(string root, CopyReading reading, string? tree, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// What the harness has recorded about this copy. A directory it did not make is never taken
@@ -227,14 +232,18 @@ public interface ISyncTransport
     /// <c>&lt;repositoryPath&gt;.worktree-&lt;name&gt;</c> - with what each one's marker says and how many bytes its
     /// files hold, in the order of their names. None where the directory they would be kept in is not there.
     /// </summary>
-    /// <param name="repositoryPath">Where the host keeps the main checkout's copy, as the configuration declares it.</param>
+    /// <param name="repositoryPath">
+    /// The copy of the main checkout the copies are kept beside, as the host spells it: where the host keeps this machine's
+    /// copies now (<see cref="HostCopies.RepositoryPathOf"/>), or an earlier place a recorded copy names
+    /// (<see cref="HostCopyEntry.KeptBeside()"/>) - taken as it is given, never resolved again against what config.json declares.
+    /// </param>
     /// <param name="cancellationToken">Stops the listing between copies.</param>
     Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Removes the mutation workers kept in the tree at <paramref name="root"/> - each a copy of it a sweep made, of
-    /// whichever variant, at <c>&lt;root&gt;/.mutations/&lt;name&gt;-&lt;n&gt;</c> - with what an unfinished removal of one
-    /// left aside. A worker a sweep still running holds is left, as is one whose removal stops at something held, and a
+    /// whichever variant, at <c>&lt;root&gt;/.m/&lt;name&gt;-&lt;n&gt;</c>, or at <c>&lt;root&gt;/.mutations/&lt;name&gt;-&lt;n&gt;</c>
+    /// where an earlier version kept it - with what an unfinished removal of one left aside. A worker a sweep still running holds is left, as is one whose removal stops at something held, and a
     /// directory nothing says the harness made; each is answered for. A tree that is not there holds none.
     /// </summary>
     /// <param name="root">The tree the workers copy: a host's copy, or a tree on this machine.</param>
@@ -245,14 +254,18 @@ public interface ISyncTransport
     /// <summary>
     /// Removes the mutation workers an earlier version of this tool kept beside the copies of a repository kept together -
     /// beside the main checkout's copy at <paramref name="repositoryPath"/> and each worktree's copy beside it
-    /// (<c>&lt;repositoryPath&gt;.worktree-&lt;name&gt;</c>), whether that copy is there still or was removed since - with
-    /// what an unfinished removal of one left aside; a worker that version's sweep still claims is left, and answered for.
-    /// None where the directory the copies are kept in is not there.
+    /// (<c>&lt;repositoryPath&gt;.worktree-&lt;name&gt;</c>), whether that copy is there still or was removed since - or in
+    /// one there still, and in each copy in its .legs, in their <see cref="Repository.HarnessLayout.FormerMutationsDirectoryName"/>,
+    /// with what an unfinished removal of one left aside; a worker that version's sweep still claims is left, and answered
+    /// for. None where the directory the copies are kept in is not there.
     /// </summary>
     /// <param name="repositoryPath">Where the main checkout's copy is kept, as the configuration declares it.</param>
     /// <param name="measureOnly">Whether to say what would be removed, and remove nothing.</param>
     /// <param name="cancellationToken">Stops the removal between workers.</param>
-    /// <exception cref="HarnessException">The directory the copies are kept in could not be looked in; nothing was removed.</exception>
+    /// <exception cref="HarnessException">
+    /// The directory the copies are kept in, the .legs of one, or a place former workers are kept in could not be looked
+    /// in; nothing was removed.
+    /// </exception>
     Task<WorkersRemoval> RemoveFormerWorkersBesideCopiesAsync(string repositoryPath, bool measureOnly = false, CancellationToken cancellationToken = default);
 
     /// <summary>

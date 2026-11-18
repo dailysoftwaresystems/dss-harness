@@ -479,20 +479,20 @@ public sealed class InputFingerprintTests
     public async Task AWatch_NeverGoesIntoTheCopiesATreeKeepsInItsSlots()
     {
         using var temp = new TempDirectory();
-        string[] inputs = [".mutations/.gitkeep", ".legs/.gitkeep", "src/a.c"];
+        string[] inputs = [".m/.gitkeep", ".legs/.gitkeep", "src/a.c"];
 
         foreach (var input in inputs)
         {
             temp.WriteFile(input, string.Empty);
         }
 
-        Directory.CreateDirectory(temp.Combine(".mutations", "357e24cw-1", "build"));
+        Directory.CreateDirectory(temp.Combine(".m", "357e24cw-1", "build"));
         Directory.CreateDirectory(temp.Combine(".legs", "357e24c", "build"));
 
         using (var scripted = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, new ScriptedWatchKind()))
         {
             Assert.Equal(
-                [WatchTarget.NamesOnly(temp.Path), WatchTarget.Entries(temp.Combine(".legs")), WatchTarget.Entries(temp.Combine(".mutations")), WatchTarget.Entries(temp.Combine("src"))],
+                [WatchTarget.NamesOnly(temp.Path), WatchTarget.Entries(temp.Combine(".legs")), WatchTarget.Entries(temp.Combine(".m")), WatchTarget.Entries(temp.Combine("src"))],
                 scripted.Watched);
         }
 
@@ -502,7 +502,7 @@ public sealed class InputFingerprintTests
 
         using var watch = Watching(() => fingerprint.Watch(temp.Path, inputs, before, heard.Enqueue));
 
-        temp.WriteFile(".mutations/357e24cw-1/build/obj.o", "a worker's build");
+        temp.WriteFile(".m/357e24cw-1/build/357e24c/obj.o", "a worker's build");
         temp.WriteFile(".legs/357e24c/build/obj.o", "a leg's copy's build");
         temp.WriteFile("src/a.c", "edited");
         await WaitForAsync(watch, "src/a.c", TestContext.Current.CancellationToken);
@@ -512,7 +512,7 @@ public sealed class InputFingerprintTests
         // Heard in order: word of either write, had the watch been told of it, came before word of the edit after both.
         Assert.DoesNotContain(
             heard,
-            path => path.StartsWith(".mutations/357e24cw-1/", StringComparison.Ordinal) || path.StartsWith(".legs/357e24c/", StringComparison.Ordinal));
+            path => path.StartsWith(".m/357e24cw-1/", StringComparison.Ordinal) || path.StartsWith(".legs/357e24c/", StringComparison.Ordinal));
         Assert.Equal(["src/a.c"], watch.Changed);
         Assert.Equal(InputChange.Moved, InputFingerprint.Compare(before, after, watch).Change);
     }

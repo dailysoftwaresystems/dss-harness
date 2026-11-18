@@ -60,6 +60,33 @@ public static class LegsReports
                 details.Add($"{host.Host}: cannot run legs: {reason}");
             }
 
+            // The rule its heavy legs are admitted by and where each field came from, so a machine whose count a tree's
+            // config.json states otherwise is seen to: said wherever one is in force, and where it could not be read.
+            if (host.Admission is { } admission)
+            {
+                details.Add($"{host.Host}: admission: {admission.Describe()}");
+            }
+            else if (host.AdmissionUnread is { } unread)
+            {
+                details.Add($"{host.Host}: admission: {unread}");
+            }
+
+            // What config.json never says of a host: the distribution a WSL item names, which a repository's own program
+            // starting 'wsl.exe -d' needs, and where its copies are for this machine, which an item's .env may set.
+            if (host.Distribution is { } distribution)
+            {
+                details.Add($"{host.Host}: distribution '{distribution}'");
+            }
+
+            if (host.CopyPlace is { } place)
+            {
+                details.Add($"{host.Host}: {place.Describe()}");
+            }
+            else if (host.CopyUnplaced is { } unplaced)
+            {
+                details.Add($"{host.Host}: {unplaced}");
+            }
+
             // Asked for with -v: a host that is nearly full shows before a run that fills it, and before the
             // legs its builds would no longer fit are turned away.
             if (verbose && Room(host) is { } room)
@@ -113,6 +140,15 @@ public static class LegsReports
             host.Processor,
             host.ToolVersion,
             host.ToolPath,
+
+            // For a WSL distribution alone, the distribution its item names; and for a WSL or ssh host, where it keeps the
+            // copy of the tree the command was typed in for this machine, where the main checkout's is and what set that,
+            // or why none of it is known.
+            host.Distribution,
+            Copy = host.CopyPlace?.Copy,
+            RepositoryPath = host.CopyPlace?.Repository.Path,
+            RepositoryPathFrom = host.CopyPlace?.Repository.From,
+            host.CopyUnplaced,
             host.Actions,
 
             // The room where its copies are kept - the main checkout, for this machine -
@@ -123,6 +159,12 @@ public static class LegsReports
             // For a WSL distribution, the drive of this machine its disk grows on.
             host.DiskImageSpace,
             host.DiskImageUnmeasured,
+
+            // The settings file of the machine that admits its heavy legs - this one, for a WSL distribution - and the
+            // rule they are admitted by, each field with where it came from, or why that rule could not be read.
+            SettingsFile = host.MachineSettings?.Path,
+            Admission = host.Admission?.Fields,
+            host.AdmissionUnread,
         }),
     };
 

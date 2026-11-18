@@ -2025,7 +2025,47 @@ public sealed class WorkflowValidatorTests
                 steps:
                   - name: verify
                     type: test
+                    filter: [fast]
                     filterWhen: input.request
+                """), hasCommitTemplate: false, files: null, providers: null));
+    }
+
+    /// <summary>
+    /// A test step's filterWhen, affected and noTests each say what becomes of its filter's units, so a step that gives no
+    /// filter is refused each of them; and a filter's expression must yield a list, union's parts lists or null.
+    /// </summary>
+    [Fact]
+    public void ATestStepsUnitKeys_WithoutAFilter_AndAFilterThatIsNoList_AreRefused()
+    {
+        Assert.Equal(
+            [
+                "step 'verify' says filterWhen and gives no filter: filterWhen says what becomes of the filter's units, and a step with no filter runs every test of its legs",
+                "step 'verify' says affected and gives no filter: affected says what becomes of the filter's units, and a step with no filter runs every test of its legs",
+                "step 'verify' says noTests and gives no filter: noTests says what becomes of the filter's units, and a step with no filter runs every test of its legs",
+                "'listed.filter' yields a text, where a list is read: the key takes a list, written out or as an expression that yields one",
+                "'joined.filter' joins 'input.request', which is a text, with union; union joins lists",
+            ],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                inputs:
+                  - name: request
+                steps:
+                  - name: verify
+                    type: test
+                    filterWhen: 'true'
+                    affected: 'mine'
+                    noTests: 'nothing to test'
+                  - name: listed
+                    type: test
+                    filter: 'input.request'
+                  - name: joined
+                    type: test
+                    filter: 'union(run.affectedTests, input.request)'
+                  - name: fine
+                    type: test
+                    filter: 'union(run.affectedTests, run.affectedTests)'
+                    affected: 'fine'
+                    noTests: 'the run kept no unit'
                 """), hasCommitTemplate: false, files: null, providers: null));
     }
 
@@ -3115,6 +3155,44 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// A <c>class-closure</c> step reads its classes and its record where it starts, as expressions the engine resolves,
+    /// and the thresholds of its homes' touches are whole numbers from one up - a home touched by no other hand needs no
+    /// audit, and a hotspot of one touch is every home.
+    /// </summary>
+    [Fact]
+    public void AClassClosureStep_TakesItsClassesAndRecordAsExpressions_AndItsThresholdsFromOne()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: item-agent
+                type: create-agent
+                agent: implementer
+              - name: closing
+                type: class-closure
+                in: item-agent
+                dependsOn: [item-agent]
+                classes: 'plan.latest.classes'
+                record: 'implement.latest.closure'
+                touches: 0
+                hotspot: -1
+            """);
+
+        string[] expected =
+        [
+            "'closing.classes' reads 'plan.latest.classes', which no step before 'closing', no input and no param provides",
+            "'closing.record' reads 'implement.latest.closure', which no step before 'closing', no input and no param provides",
+            "step 'closing': touches is 0, and so not one or more",
+            "step 'closing': hotspot is -1, and so not one or more",
+        ];
+
+        Assert.Equal(
+            [.. expected.Order(StringComparer.Ordinal)],
+            [.. problems.Order(StringComparer.Ordinal)]);
+    }
+
+    /// <summary>
     /// A handler's keys are whole: it is raised by another step, by codes from 1 to 255 given once each and never beside
     /// a success, waits for nothing but its source, is never always, and is visited from 1 to 20 times; only a handler
     /// says then or maxVisits, and its then goes to a step it sees - outward too - never to itself. A group is held to
@@ -3485,7 +3563,7 @@ public sealed class WorkflowValidatorTests
         string[] reserved =
         [
             "run", "carried", "previous", "source", "item", "it", "index", "iteration", "visit", "input", "recover", "skill",
-            "recommendations", "text", "update", "piece", "status", "true", "false", "null", "empty", "any",
+            "recommendations", "text", "update", "piece", "status", "true", "false", "null", "empty", "any", "union",
             "outcome", "code", "error", "question", "latest", "assumptions",
             "worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os",
             "param", "issue",
@@ -4488,7 +4566,7 @@ public sealed class WorkflowValidatorTests
                 "'d.when' reads 'make.ready', and step 'make', a create-agent step, has no output to read",
                 "'e.when' reads 'check.code.x', and the engine's fact 'code' of step 'check' says 'check.code' is a whole number, which has no property 'x'",
                 "'f.when' reads 'input.request.x', and input 'request' says 'input.request' is a text, which has no property 'x'",
-                "'g.when' reads 'run.statuz', and the run has no 'statuz': an expression reads run.name, run.status, run.done, run.failed, run.paused, run.stopped, run.passedOver, and a template run.ran, run.notRun, run.red, run.leftover, run.assumptions, run.preExisting too",
+                "'g.when' reads 'run.statuz', and the run has no 'statuz': an expression reads run.name, run.status, run.done, run.failed, run.paused, run.stopped, run.passedOver, run.affectedTests, and a template run.ran, run.notRun, run.red, run.leftover, run.assumptions, run.preExisting too",
                 "'h.when' reads 'run.ran', which is text for a template, not a value for an expression: the engine writes it from its step records for a person to read",
                 "'items.inner.when' reads 'item.path', and the work item of group 'items' says 'item' is a text, which has no property 'path'",
                 "'i.when' reads 'checks.found', and group 'checks' holds no step 'found' and gathers none of that name",
@@ -5826,13 +5904,13 @@ public sealed class WorkflowValidatorTests
             """
             name: flow
             inputs:
-              - name: affectedTests
-                default: 'off'
+              - name: finalTests
+                default: all
             steps:
               - name: part
                 use: ./part/part.yml
                 with:
-                  focused: "input.affectedTests == 'on'"
+                  focused: "input.finalTests == 'affected'"
               - name: after
                 type: orient
                 dependsOn: [part]

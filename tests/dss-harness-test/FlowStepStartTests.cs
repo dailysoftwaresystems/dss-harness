@@ -81,6 +81,10 @@ public sealed class FlowStepStartTests
         {
         }
 
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+        {
+        }
+
         public string NameAgent(IReadOnlyCollection<string> recorded)
         {
             Asked.Add(recorded);
@@ -1112,8 +1116,9 @@ public sealed class FlowStepStartTests
 
     /// <summary>
     /// Every text a step hands on is filled where it starts, and the runner is given the step as it is to run: a test's
-    /// filter, exclusions and labels and a run's inputs, a filter, exclusion or label that fills to nothing not given; one
-    /// that reads nothing fails the step as an unreadable expression does, and its runner is never asked.
+    /// exclusions and labels and a run's inputs, an exclusion or label that fills to nothing not given, and a test's filter
+    /// as the units it reads; one that reads nothing fails the step as an unreadable expression does, and its runner is
+    /// never asked.
     /// </summary>
     [Fact]
     public async Task AStepsTemplates_AreFilledWhereItStarts_AndOneFilledToNothingIsNotGiven()
@@ -1128,12 +1133,11 @@ public sealed class FlowStepStartTests
             steps:
               - name: verify
                 type: test
-                filter: '{input.none}'
                 exclude: ['{input.slow}', '{input.none}', 'fixed']
                 labels: ['{input.none}']
               - name: verify-some
                 type: test
-                filter: 'only-{input.slow}'
+                filter: [only-slow-suite, only-fixed, only-slow-suite]
               - name: shape
                 type: run
                 runner: probe
@@ -1148,7 +1152,7 @@ public sealed class FlowStepStartTests
         Assert.Null(verify.Filter);
         Assert.Equal(["slow-suite", "fixed"], verify.Exclude);
         Assert.Empty(verify.Labels);
-        Assert.Equal("only-slow-suite", runner.Runs.Single(run => run.Instance == "verify-some").Step.Filter);
+        Assert.Equal(["only-slow-suite", "only-fixed"], runner.Runs.Single(run => run.Instance == "verify-some").Step.Filter!.Written);
         Assert.Equal("slow-suite-r1", runner.Runs.Single(run => run.Instance == "shape").Step.Inputs["target"]);
 
         var unreadable = Parse("""

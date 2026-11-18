@@ -174,6 +174,33 @@ public static class FlowInstanceId
     }
 
     /// <summary>
+    /// The work item <paramref name="id"/> is a step of: the id through its last item segment, everything after it that
+    /// belongs to the one <c>forEach</c> use - the pipeline one item of it runs - gone; the whole id where no item is
+    /// marked. <c>rounds#2.items[2].fix#3.review.correctness</c> is a step of <c>rounds#2.items[2]</c>, as every step of
+    /// that item's use is, folds and checkpoints among them; <c>notes-fold</c> is a step of itself, for no <c>forEach</c>
+    /// holds it. What asks is the count of a home's touches, which leaves out the item's own commits: the folds the
+    /// ledger attributes to instances of one item are that item's.
+    /// </summary>
+    /// <param name="id">An instance id, well formed.</param>
+    public static string ItemOf(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        var segments = id.Split('.');
+        var last = -1;
+
+        for (var at = 0; at < segments.Length; at++)
+        {
+            if (segments[at].Contains('[', StringComparison.Ordinal))
+            {
+                last = at;
+            }
+        }
+
+        return last < 0 ? id : string.Join(".", segments.Take(last + 1));
+    }
+
+    /// <summary>
     /// Whether two well-formed ids are visits of one step of one work item: the same, but for each visit and each
     /// iteration written after the innermost item - an iteration or a visit outside it may hold another item at the same
     /// place, so there they must match. <c>rounds#1.items[0].fix#2.revise.rework</c> and

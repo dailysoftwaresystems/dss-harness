@@ -182,7 +182,7 @@ public static class LegTrees
     /// <param name="host">The machine the work runs on.</param>
     /// <param name="treeRoot">The tree here.</param>
     /// <param name="comparison">How this machine compares paths.</param>
-    /// <exception cref="HarnessException">The host declares nowhere to keep a copy.</exception>
+    /// <exception cref="HarnessException">Where the host keeps its copies is not known (<see cref="HostCopies.RepositoryOf"/>).</exception>
     public static string On(HarnessContext context, HostId host, string treeRoot, StringComparison comparison)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -190,6 +190,6 @@ public static class LegTrees
 
         return host.Kind == HostKind.Local
             ? treeRoot
-            : HostCopies.Of(context.Config, host, context.Layout, treeRoot, comparison);
+            : HostCopies.Of(context, host, treeRoot, comparison);
     }
 }

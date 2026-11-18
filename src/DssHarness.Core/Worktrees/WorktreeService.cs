@@ -53,7 +53,7 @@ public interface IWorktreeService : IUseCase
     /// <paramref name="discardUncommitted"/> waives the uncommitted changes alone, which are then
     /// deleted with the worktree and counted in the outcome; every other check still runs. Once
     /// every check has passed, a worktree something holds part of is refused too, on Windows,
-    /// where git's removal would stop part way on it.
+    /// where its removal would stop part way on it.
     /// <paramref name="force"/> skips every check, and that look, and overrides a lock.
     /// The mutation workers kept in the worktree go first, and those kept in each host's copy of it: one a sweep still
     /// running holds keeps the worktree, nothing of it removed, unless <paramref name="force"/> deletes it with that
@@ -65,9 +65,31 @@ public interface IWorktreeService : IUseCase
     /// is refused even with <paramref name="force"/>, since deleting it would delete each of them; one whose worktrees
     /// git cannot list is not deleted either. A worktree's own submodules and nested repositories never count.
     /// An agent's repository of its own is weighed the same way but for its commits - those made in it that no ref of the
-    /// main checkout's reaches - and has no lock or record of git's; it is deleted as a directory. The records of the
-    /// commit a worktree stood on (<see cref="WorktreeKeepalive"/>) are forgotten once its directory is gone.
+    /// main checkout's reaches - and has no lock or record of git's; once its checks pass, git's status and its commits are
+    /// looked at once more, a change or a commit come since refusing it with nothing removed, and it is deleted as a
+    /// directory, its own git directory last. The records of the commit a worktree stood on (<see cref="WorktreeKeepalive"/>)
+    /// are forgotten once its directory is gone.
+    /// <para>
+    /// A checked removal of one of git's linked worktrees is reversible until its files are gone: once every check has
+    /// passed, git's status and the lock are looked at once more, then everything in it but its .git file is deleted
+    /// (<see cref="IFileSystem.EmptyDirectory"/>, which reaches a path past 260 characters), and only then is git asked to
+    /// remove it, with its record the one thing left for git to clear. Stopped part way, it is still a worktree git knows,
+    /// its .git file and git's record of it there.
+    /// </para>
+    /// <para>
+    /// The worktree of an orchestrator's live agent - one whose record names it at this address and is neither closed nor
+    /// deleted - is refused unless <paramref name="force"/> is set, naming delete-agent, which deletes it with the agent:
+    /// deleted here, the agent would be left naming a worktree that is gone. delete-agent itself asks with
+    /// <paramref name="asItsAgent"/>.
+    /// </para>
     /// </remarks>
+    /// <param name="startDirectory">A directory in the repository.</param>
+    /// <param name="name">The worktree's address.</param>
+    /// <param name="force">Whether every check is skipped.</param>
+    /// <param name="deleteEvidence">Whether the evidence roots it holds are deleted with it.</param>
+    /// <param name="discardUncommitted">Whether its uncommitted changes are deleted with it.</param>
+    /// <param name="asItsAgent">Whether delete-agent asks, deleting the worktree as part of deleting its agent.</param>
+    /// <param name="cancellationToken">Stops the deletion before its point of no return.</param>
     /// <exception cref="HarnessException">
     /// As for <see cref="CreateAsync"/>, or the path resolved outside the worktrees directory.
     /// </exception>
@@ -77,6 +99,7 @@ public interface IWorktreeService : IUseCase
         bool force,
         bool deleteEvidence,
         bool discardUncommitted = false,
+        bool asItsAgent = false,
         CancellationToken cancellationToken = default);
 
     /// <summary>Lists existing worktrees with the commit each was made from.</summary>
@@ -176,6 +199,12 @@ public sealed class WorktreeService(
     public const string ListCommand = "list-worktree";
 
     private const int GenerateAttempts = 10;
+
+    /// <summary>
+    /// What a worktree's .git file, and an agent's repository's own git directory, are called: what its removal leaves for
+    /// last, so one stopped part way is still a worktree, or a repository, until its files are gone.
+    /// </summary>
+    private const string GitDirectoryName = ".git";
 
     /// <summary>
     /// How long the command line lets a deletion run after an interruption before it ends the process.
@@ -497,6 +526,7 @@ public sealed class WorktreeService(
         bool force,
         bool deleteEvidence,
         bool discardUncommitted = false,
+        bool asItsAgent = false,
         CancellationToken cancellationToken = default)
     {
         // Only the shape is checked, not the length: a worktree created under a longer
@@ -520,6 +550,14 @@ public sealed class WorktreeService(
             throw new HarnessException(
                 HarnessExit.Refused,
                 $"Refusing to delete '{path}': it is not inside '{worktreesDirectory}'.");
+        }
+
+        // A live agent's worktree is deleted with the agent, by delete-agent, which keeps its evidence, its transcripts and
+        // its records: deleted here, the agent would be left naming a worktree that is gone. Asked before anything else, so
+        // nothing of it is ever looked through or removed for want of that one command.
+        if (address.IsNested && !force && !asItsAgent && RefuseALiveAgentsWorktree(layout, address, path) is { } agents)
+        {
+            return agents;
         }
 
         var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
@@ -623,8 +661,10 @@ public sealed class WorktreeService(
             return kept;
         }
 
+        IReadOnlyList<WorktreeChange> discarded = [];
+
+        // Whether git counts the worktree as holding submodules, whose files a checkout of its index alone never puts back.
         var holdsSubmodules = false;
-        IReadOnlyList<string> discarded = [];
 
         if (!force)
         {
@@ -652,6 +692,8 @@ public sealed class WorktreeService(
                 return Unchecked(worktreeName, ex.Message);
             }
 
+            holdsSubmodules = findings.HoldsSubmodules;
+
             // Waived, the uncommitted changes are left out of what is weighed, and nothing else is:
             // every other finding still refuses, and a refusal never names what was to be discarded.
             if (discardUncommitted)
@@ -664,18 +706,16 @@ public sealed class WorktreeService(
             {
                 return Refused(Describe(worktreeName, path, layout.MainCheckoutRoot, findings));
             }
-
-            holdsSubmodules = findings.HoldsSubmodules;
         }
 
         // Read while the worktree is still there: its branch may declare a host the configuration
         // this command runs in does not, and its copy there is reached through it.
         var treeConfig = await OwnConfigurationAsync(layout, path, cancellationToken).ConfigureAwait(false);
 
-        // On Windows, git's removal stops at the first entry another program holds, with the worktree's .git
-        // file and git's record of it already gone, and only --force finishes it then. So each entry is opened
-        // first as the removal will open it, and a worktree anything holds is refused whole, with nothing
-        // removed. Forced, nothing is asked: the removal goes as far as it can, and says what it left.
+        // On Windows, the removal stops at the first entry another program holds, with some of the worktree's files
+        // already gone. So each entry is opened first as the removal will open it, and a worktree anything holds is
+        // refused whole, with nothing removed. Forced, nothing is asked: the removal goes as far as it can, and says
+        // what it left.
         if (!force)
         {
             IReadOnlyList<HeldEntry> held;
@@ -754,15 +794,19 @@ public sealed class WorktreeService(
         {
             try
             {
+                var removal = new TreeRemoval(layout, worktreeName, path, identity, discarded, holdsSubmodules, inspector);
+
                 outcome = identity.Membership == WorktreeMembership.AgentRepository
-                    ? RemoveRepository(worktreeName, path, checksRan: !force)
+                    ? await RemoveRepositoryAsync(removal, checksRan: !force, stopping.Token).ConfigureAwait(false)
                     : force
                     ? await RemoveForcedAsync(layout, worktreeName, path, identity.AdministrativeDirectory, inspector, stopping.Token).ConfigureAwait(false)
-                    : await RemoveCheckedAsync(layout, worktreeName, path, identity.AdministrativeDirectory!, holdsSubmodules, discarded.Count > 0, stopping.Token).ConfigureAwait(false);
+                    : await RemoveCheckedAsync(removal, stopping.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stopping.IsCancellationRequested)
             {
-                outcome = Stopped(worktreeName, path, identity.AdministrativeDirectory, checksRan: !force);
+                // The forced removal's, or an agent's repository's second look's: a checked removal of a linked worktree says
+                // what it reached itself, knowing whether its files had begun to go.
+                outcome = Stopped(worktreeName, path, identity.AdministrativeDirectory, checksRan: !force, filesBegun: false);
             }
         }
 
@@ -787,7 +831,7 @@ public sealed class WorktreeService(
             {
                 Outcome = outcome.Outcome with
                 {
-                    Details = [.. outcome.Outcome.Details ?? [], $"discarded {ReportText.Counted(discarded.Count, "uncommitted change")}: {ReportText.Listed(discarded)}"],
+                    Details = [.. outcome.Outcome.Details ?? [], $"discarded {ReportText.Counted(discarded.Count, "uncommitted change")}: {ReportText.Listed([.. discarded.Select(change => change.Shown)])}"],
                 },
             };
         }
@@ -1129,6 +1173,45 @@ public sealed class WorktreeService(
         => _fileSystem.DirectoryExists(Orchestration.OrchestratorLayout.Of(layout, name).Directory);
 
     /// <summary>
+    /// The refusal of an address that is a live agent's worktree, or that may be; <see langword="null"/> where it is no
+    /// live agent's. Live is as the agent's own record says it, read by the one reader of orchestrators' records
+    /// (<see cref="Orchestration.OrchestrationStore"/>): an agent of the orchestrator the address names, of the name it
+    /// names, neither closed nor deleted (<see cref="Orchestration.AgentStates.Live"/>), working in a worktree of its own
+    /// whose path is this one - under the worktrees root its record names, whatever the configuration says now. A
+    /// closed agent's worktree is not refused, since its removal is what delete-agent's own remedies name; nor is a
+    /// directory at the address of an agent made under another root. A record that cannot be read refuses as well: whether
+    /// the worktree is a live agent's cannot be told, and "cannot tell" never reads as "it is not".
+    /// </summary>
+    /// <param name="layout">The repository.</param>
+    /// <param name="address">The address, an agent's: <c>orchestrator/agent</c>.</param>
+    /// <param name="path">The worktree's directory at that address.</param>
+    private WorktreeOutcome? RefuseALiveAgentsWorktree(HarnessLayout layout, WorktreeAddress address, string path)
+    {
+        var (orchestrator, agent) = (address.Segments[0], address.Segments[1]);
+        Orchestration.AgentRecord? record;
+
+        try
+        {
+            record = new Orchestration.OrchestrationStore(_fileSystem, _output).ReadAgent(Orchestration.OrchestratorLayout.Of(layout, orchestrator), agent);
+        }
+        catch (HarnessException ex)
+        {
+            return Refused(
+                $"Whether worktree '{address.Name}' is the worktree of a live agent of orchestrator '{orchestrator}' cannot be told: {ex.Message.TrimEnd('.')}. "
+                + $"Nothing was deleted: a live agent's worktree is deleted with the agent, by {Orchestration.OrchestrationReports.DeleteAgentLine(orchestrator, agent, string.Empty)}; "
+                + "put its record right, or pass --force to delete the worktree anyway.");
+        }
+
+        return record is { State: Orchestration.AgentStates.Live, Reads: false } && record.WorktreePath(layout) is { } at && PathsEqual(at, path)
+            ? Refused(
+                $"Worktree '{address.Name}' is the worktree of agent '{agent}' of orchestrator '{orchestrator}', which is live, and is deleted with the agent: "
+                + $"{Orchestration.OrchestrationReports.DeleteAgentLine(orchestrator, agent, string.Empty)} says what deleting it keeps and removes, and with --apply "
+                + "deletes it, its evidence and transcripts kept. Nothing was deleted; --force deletes the worktree anyway, leaving the agent's record naming a "
+                + "worktree that is gone.")
+            : null;
+    }
+
+    /// <summary>
     /// The refusal for a directory under the root that is not a worktree git can find, which names the way back only
     /// where there is one: <c>git worktree repair</c> rebuilds a lost .git file or a moved worktree from git's record,
     /// and has nothing to rebuild from once the record is gone too - which is what a removal that stopped part way
@@ -1231,11 +1314,37 @@ public sealed class WorktreeService(
         });
 
     /// <summary>A deletion stopped because the command line was about to stop waiting for it.</summary>
-    private WorktreeOutcome Stopped(string name, string path, string? administrativeDirectory, bool checksRan)
+    /// <param name="name">The worktree's address.</param>
+    /// <param name="path">Its directory.</param>
+    /// <param name="administrativeDirectory">Its record's directory, where git named one.</param>
+    /// <param name="checksRan">Whether every check passed before removal began.</param>
+    /// <param name="filesBegun">Whether the harness had begun deleting its files, before git was asked to clear its record.</param>
+    /// <param name="holdsSubmodules">Whether git counts it as holding submodules, whose files a checkout of its index never puts back.</param>
+    /// <param name="unlinked">The directory junctions removed from it before it stopped, as links, which nothing puts back.</param>
+    private WorktreeOutcome Stopped(
+        string name,
+        string path,
+        string? administrativeDirectory,
+        bool checksRan,
+        bool filesBegun,
+        bool holdsSubmodules = false,
+        IReadOnlyList<string>? unlinked = null)
         => WorktreeOutcome.Failed(CommandOutcome.Failed(
             HarnessExit.Cancelled,
             $"Deleting worktree '{name}' was stopped part way, before the interruption ended the command. "
-            + DescribeWhatRemains(name, path, administrativeDirectory, checksRan)));
+            + DescribeWhatRemains(name, path, administrativeDirectory, checksRan, filesBegun, holdsSubmodules)
+            + Unlinked(unlinked ?? [])));
+
+    /// <summary>
+    /// What is said, after what a removal that failed or was stopped left, of the directory junctions it had removed from
+    /// the worktree first: each went as a link, and neither a checkout nor anything else of git's puts one back. Nothing
+    /// where none was removed.
+    /// </summary>
+    /// <param name="unlinked">The junctions removed, in the order they were.</param>
+    private static string Unlinked(IReadOnlyList<string> unlinked)
+        => unlinked.Count == 0
+            ? string.Empty
+            : $" Its {ReportText.Counted(unlinked.Count, "directory junction")} had been removed first, as links: {ReportText.Listed(unlinked)}.";
 
     /// <summary>
     /// Clearing a record stopped the same way. Its worktree's directory was already gone before the
@@ -1247,27 +1356,96 @@ public sealed class WorktreeService(
             $"Clearing git's record of worktree '{name}', whose directory was already gone, was stopped before the interruption "
             + $"ended the command; run '{ToolPackage.Command} {DeleteCommand} {name}' again to finish clearing it."));
 
+    /// <summary>What a removal works from once its checks have passed, or once --force skipped them.</summary>
+    /// <param name="Layout">The repository.</param>
+    /// <param name="Name">The worktree's address.</param>
+    /// <param name="Path">Its directory.</param>
+    /// <param name="Identity">What git made of it: one of its linked worktrees, with the git directory that holds its record, or an agent's repository.</param>
+    /// <param name="Discarded">The uncommitted changes being discarded, which the second look lets through by their paths.</param>
+    /// <param name="HoldsSubmodules">Whether git counts it as holding submodules, whose files a checkout of its index never puts back.</param>
+    /// <param name="Inspector">Asks git.</param>
+    private sealed record TreeRemoval(
+        HarnessLayout Layout,
+        string Name,
+        string Path,
+        WorktreeIdentity Identity,
+        IReadOnlyList<WorktreeChange> Discarded,
+        bool HoldsSubmodules,
+        WorktreeInspector Inspector);
+
     /// <summary>
-    /// Removes an agent's repository: its directory and everything in it, its own git directory and the objects only it
-    /// holds among them, which no record of git's in the main checkout names. git has no removal of its own for one, so the
-    /// directory is deleted as a whole - its read-only object files with it, a link or junction in it as the link it is,
-    /// never what it leads to - and then looked for. Once begun it is never stopped part way by an interruption.
+    /// The look a checked removal takes just before any file of the worktree goes (<see cref="WorktreeInspector.LookAgainAsync"/>):
+    /// what came since the checks that would be lost - a change, beyond those being discarded, told by its path as git's
+    /// status gives it, never by how a line names it; a lock, for one of git's linked worktrees; a commit made in it, for an
+    /// agent's repository of its own - refuses the removal with nothing of the worktree removed, as does a git that cannot
+    /// answer. Null where nothing came since.
     /// </summary>
-    /// <param name="name">The worktree's address.</param>
-    /// <param name="path">Its directory.</param>
-    /// <param name="checksRan">Whether every check passed before it began, which makes finishing it with --force safe.</param>
-    private WorktreeOutcome RemoveRepository(string name, string path, bool checksRan)
+    /// <param name="removal">The worktree, and what its checks let through.</param>
+    /// <param name="stopping">Stops the look, just before the command line stops waiting.</param>
+    private async Task<WorktreeOutcome?> RefusedSinceTheChecksAsync(TreeRemoval removal, CancellationToken stopping)
     {
-        var finish = $"{(checksRan ? "Every check passed before removal began, so run" : "Run")} '{ToolPackage.Command} {DeleteCommand} {name} --force' to finish deleting it";
+        WorktreeFindings late;
 
         try
         {
+            late = await removal.Inspector.LookAgainAsync(removal.Path, removal.Identity, stopping).ConfigureAwait(false);
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            return Failed(
+                $"{ex.Message} Nothing of worktree '{removal.Name}' was removed: whether anything changed in it since it was checked could not be told. "
+                + "Fix the cause and try again; --force would delete it unchecked.");
+        }
+
+        // What was being discarded was weighed and counted already: only what came since stops it.
+        late = late with
+        {
+            Changes = [.. late.Changes.Where(change => !removal.Discarded.Any(discarded => string.Equals(discarded.Path, change.Path, StringComparison.Ordinal)))],
+        };
+
+        return late.StopsDeletion
+            ? Refused($"{Describe(removal.Name, removal.Path, removal.Layout.MainCheckoutRoot, late)} It changed since it was checked, and nothing of it was removed.")
+            : null;
+    }
+
+    /// <summary>
+    /// Removes an agent's repository: its directory and everything in it, its own git directory and the objects only it
+    /// holds among them, which no record of git's in the main checkout names. Where its checks ran, git is asked once more
+    /// what changed in it and what was committed in it since (<see cref="RefusedSinceTheChecksAsync"/>) - a file an agent
+    /// still running wrote meanwhile refuses it, nothing removed - as a linked worktree's removal asks. git has no removal
+    /// of its own for one, so the directory is deleted - everything in it but its own git directory first, then the rest,
+    /// so one stopped part way is still a repository, every commit made in it still there; its read-only object files with
+    /// it, a link or junction in it as the link it is, never what it leads to, however far past 260 characters a path in it
+    /// runs - and then looked for. Once its files begin to go it is never stopped part way by an interruption.
+    /// </summary>
+    /// <param name="removal">The repository, and what its checks let through.</param>
+    /// <param name="checksRan">Whether every check passed before it began, which makes finishing it with --force safe.</param>
+    /// <param name="stopping">Stops the look before its files go, just before the command line stops waiting.</param>
+    private async Task<WorktreeOutcome> RemoveRepositoryAsync(TreeRemoval removal, bool checksRan, CancellationToken stopping)
+    {
+        var (name, path) = (removal.Name, removal.Path);
+
+        if (checksRan && await RefusedSinceTheChecksAsync(removal, stopping).ConfigureAwait(false) is { } refused)
+        {
+            return refused;
+        }
+
+        var finish = $"{(checksRan ? "Every check passed before removal began, so run" : "Run")} '{ToolPackage.Command} {DeleteCommand} {name} --force' to finish deleting it";
+        var files = true;
+
+        try
+        {
+            _fileSystem.EmptyDirectory(path, [GitDirectoryName]);
+            files = false;
             _fileSystem.DeleteDirectory(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return Failed(
-                $"Worktree '{name}', an agent's repository, was not deleted whole: {ex.Message.TrimEnd('.')}. Part of it may already be gone. "
+                $"Worktree '{name}', an agent's repository, was not deleted whole: {ex.Message.TrimEnd('.')}. "
+                + (files
+                    ? "Some of its files may already be gone, and its own git directory, every commit made in it with it, is still there. "
+                    : "Its files are gone, and part of its own git directory may be. ")
                 + $"Close whatever holds its files open, then {char.ToLowerInvariant(finish[0])}{finish[1..]}.");
         }
 
@@ -1277,124 +1455,191 @@ public sealed class WorktreeService(
     }
 
     /// <summary>
-    /// Removes a worktree whose checks passed. Plain removal runs git's own check as well, which still
-    /// catches a file changed since ours, a file added unless status.showUntrackedFiles is no, or a
-    /// lock. git refuses every worktree that holds submodules, so for those it is told to go ahead,
-    /// skipping that check: their work, and the lock, were checked already. So it is for one whose
-    /// uncommitted changes are being discarded, which git's check would refuse; once forced, git still
-    /// keeps a lock, which only forcing twice overrides.
+    /// Removes a worktree whose checks passed, every step reversible until its files are gone. git's own removal deletes
+    /// the worktree's .git file and git's record of it as soon as anything, and then stops at the first file it cannot
+    /// delete - one another program holds, or, on Windows, one past 260 characters - leaving a directory no check can run
+    /// on again. So the removal is the harness's, in this order: the look git's removal took before it deleted anything,
+    /// taken again here (<see cref="RefusedSinceTheChecksAsync"/>) - a file changed or added since the checks, beyond the
+    /// changes being discarded, or a lock - refuses with nothing of the worktree removed; each directory junction goes as
+    /// the link it is; then everything in it but its .git file, through the file system's own deletion, which reaches any
+    /// path, however long; and only then is git asked to remove the worktree, with its record the one thing left for it to
+    /// clear, forced once, since the files it would weigh are gone - a lock still stops it. Stopped or failing anywhere
+    /// before git clears the record, it is still a worktree git knows, its .git file and record there, and what is said of
+    /// it says so, the junctions that went before naming among it.
     /// </summary>
-    private async Task<WorktreeOutcome> RemoveCheckedAsync(
-        HarnessLayout layout,
-        string name,
-        string path,
-        string administrativeDirectory,
-        bool holdsSubmodules,
-        bool discardsChanges,
-        CancellationToken stopping)
+    /// <param name="removal">The worktree, one of git's linked worktrees, and what its checks let through.</param>
+    /// <param name="stopping">Stops the removal, just before the command line stops waiting.</param>
+    private async Task<WorktreeOutcome> RemoveCheckedAsync(TreeRemoval removal, CancellationToken stopping)
     {
-        // git for Windows leaves every directory junction when it removes a worktree, and every directory above one,
-        // reporting the worktree removed with its .git file and its record already gone. So each junction is removed
-        // first, as the link it is, never what it leads to: one that cannot be removed stops the deletion here, before
-        // git has touched anything. Not interrupted part way: the links go together, before git starts.
-        IReadOnlyList<string> unlinked;
+        var (layout, name, path) = (removal.Layout, removal.Name, removal.Path);
+        var administrativeDirectory = removal.Identity.AdministrativeDirectory!;
+        var filesBegun = false;
+
+        // Kept out here, so a stop once they went says so: nothing puts a junction back.
+        IReadOnlyList<string> unlinked = [];
 
         try
         {
-            unlinked = _fileSystem.RemoveJunctions(path);
+            return await RemoveAsync().ConfigureAwait(false);
         }
-        catch (JunctionRemovalException ex)
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
         {
-            var before = ex.Removed.Count == 0
-                ? "Nothing of it was removed"
-                : $"Only the {ReportText.Counted(ex.Removed.Count, "junction")} before it were removed, as links, and what each led to is untouched: {ReportText.Listed(ex.Removed)}";
-
-            return Failed(
-                $"Worktree '{name}' was not deleted: its directory junction {ex.Message.TrimEnd('.')}. {before}; git was not run. "
-                + $"Deal with that junction, then run '{ToolPackage.Command} {DeleteCommand} {name}' again.");
+            return Stopped(name, path, administrativeDirectory, checksRan: true, filesBegun, removal.HoldsSubmodules, unlinked);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+
+        async Task<WorktreeOutcome> RemoveAsync()
         {
-            return Failed(
-                $"Worktree '{name}' was not deleted: '{ReportText.Printable(path)}' could not be looked through for its directory junctions, "
-                + $"which git would leave: {ex.Message.TrimEnd('.')}. Nothing of it was removed; git was not run.");
-        }
-
-        string[] arguments = holdsSubmodules || discardsChanges
-            ? ["worktree", "remove", "--force", path]
-            : ["worktree", "remove", path];
-
-        var removal = await _gitClient
-            .RunAsync(layout.MainCheckoutRoot, arguments, cancellationToken: stopping)
-            .ConfigureAwait(false);
-
-        var junctions = unlinked.Count == 0
-            ? string.Empty
-            : $" Its {ReportText.Counted(unlinked.Count, "directory junction")} had been removed first, as links: {ReportText.Listed(unlinked)}.";
-
-        // Nothing more is deleted here when git fails: git's refusal is the second check, and
-        // deleting past it would undo the point of running it.
-        if (!removal.Succeeded)
-        {
-            return Failed(
-                $"git could not remove worktree '{name}': {removal.FailureMessage.TrimEnd('.')}. "
-                + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true)
-                + junctions);
-        }
-
-        if (_fileSystem.DirectoryExists(path))
-        {
-            return Failed(
-                $"git reported worktree '{name}' removed, but '{path}' still exists. "
-                + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true)
-                + junctions);
-        }
-
-        var verified = Verified(name, path, administrativeDirectory, gitFailure: null);
-
-        return unlinked.Count == 0 || !verified.Succeeded
-            ? verified
-            : verified with
+            if (await RefusedSinceTheChecksAsync(removal, stopping).ConfigureAwait(false) is { } refused)
             {
-                Outcome = verified.Outcome with
+                return refused;
+            }
+
+            // Each junction goes first, as the link it is, never what it leads to: one that cannot be removed, or a volume
+            // mounted in the worktree, stops the deletion here, before any file of it has gone. Not interrupted part way:
+            // the links go together.
+            try
+            {
+                unlinked = _fileSystem.RemoveJunctions(path);
+            }
+            catch (JunctionRemovalException ex)
+            {
+                var before = ex.Removed.Count == 0
+                    ? "Nothing of it was removed"
+                    : $"Only the {ReportText.Counted(ex.Removed.Count, "junction")} before it were removed, as links, and what each led to is untouched: {ReportText.Listed(ex.Removed)}";
+
+                return Failed(
+                    $"Worktree '{name}' was not deleted: its directory junction {ex.Message.TrimEnd('.')}. {before}; git was not run. "
+                    + $"Deal with that junction, then run '{ToolPackage.Command} {DeleteCommand} {name}' again.");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Failed(
+                    $"Worktree '{name}' was not deleted: '{ReportText.Printable(path)}' could not be looked through for its directory junctions, "
+                    + $"which go first, as links: {ex.Message.TrimEnd('.')}. Nothing of it was removed; git was not run.");
+            }
+
+            filesBegun = true;
+
+            try
+            {
+                _fileSystem.EmptyDirectory(path, [GitDirectoryName], stopping);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Failed(
+                    $"Worktree '{name}' was not deleted whole: {ex.Message.TrimEnd('.')}; git was not run. "
+                    + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true, filesBegun: true, removal.HoldsSubmodules)
+                    + Unlinked(unlinked));
+            }
+
+            // Its files are gone; git is left its record to clear, and the .git file naming it, which goes with the directory.
+            var gitRemoval = await _gitClient
+                .RunAsync(layout.MainCheckoutRoot, ["worktree", "remove", "--force", path], cancellationToken: stopping)
+                .ConfigureAwait(false);
+
+            if (!gitRemoval.Succeeded)
+            {
+                return Failed(
+                    $"git could not remove worktree '{name}': {gitRemoval.FailureMessage.TrimEnd('.')}. "
+                    + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true, filesBegun: true, removal.HoldsSubmodules)
+                    + Unlinked(unlinked));
+            }
+
+            if (_fileSystem.DirectoryExists(path))
+            {
+                return Failed(
+                    $"git reported worktree '{name}' removed, but '{path}' still exists. "
+                    + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true, filesBegun: true, removal.HoldsSubmodules)
+                    + Unlinked(unlinked));
+            }
+
+            var verified = Verified(name, path, administrativeDirectory, gitFailure: null);
+
+            return unlinked.Count == 0 || !verified.Succeeded
+                ? verified
+                : verified with
                 {
-                    Details = [.. verified.Outcome.Details ?? [], $"removed {ReportText.Counted(unlinked.Count, "directory junction")} first, as links, never what they lead to: {ReportText.Listed(unlinked)}"],
-                },
-            };
+                    Outcome = verified.Outcome with
+                    {
+                        Details = [.. verified.Outcome.Details ?? [], $"removed {ReportText.Counted(unlinked.Count, "directory junction")} first, as links, never what they lead to: {ReportText.Listed(unlinked)}"],
+                    },
+                };
+        }
     }
 
     /// <summary>
-    /// What a removal git gave up on, or that was stopped, left behind, and how to finish. git deletes
-    /// a worktree's .git file and its record even when it fails to delete a file under it, after which
-    /// no check can run again, and it can delete files before failing at all, so a removal once
-    /// started is never reported as having deleted nothing. Finishing with --force is only called safe
-    /// where the checks ran, since a forced removal never made any.
+    /// What a removal that failed, or was stopped, left behind, and how to finish - as it is found, never as it was meant
+    /// to go. Where the harness began deleting the worktree's files itself (<paramref name="filesBegun"/>), its .git file
+    /// and git's record of it were left for last, and while both are there it is still a worktree: one whose files are
+    /// gone, or may be, is said with the checkout that puts back what its index holds - and, where it holds submodules,
+    /// whose directories and .git files a checkout never makes again, the submodule update that does - beside the --force
+    /// that finishes it. Where git deleted it (a forced removal), git deletes the .git file and the record even when it
+    /// fails on a file under it, and can delete files before failing at all, so a removal once started is never reported
+    /// as having deleted nothing. Finishing with --force is only called safe where the checks ran, since a forced removal
+    /// never made any.
     /// </summary>
-    private string DescribeWhatRemains(string name, string path, string? administrativeDirectory, bool checksRan)
+    /// <param name="name">The worktree's address.</param>
+    /// <param name="path">Its directory.</param>
+    /// <param name="administrativeDirectory">Its record's directory, where git named one.</param>
+    /// <param name="checksRan">Whether every check passed before removal began.</param>
+    /// <param name="filesBegun">Whether the harness had begun deleting its files, before git was asked to clear its record.</param>
+    /// <param name="holdsSubmodules">Whether git counts it as holding submodules.</param>
+    private string DescribeWhatRemains(string name, string path, string? administrativeDirectory, bool checksRan, bool filesBegun, bool holdsSubmodules = false)
     {
         var finish = $"'{ToolPackage.Command} {DeleteCommand} {name} --force'";
+        var safe = checksRan ? "Every check passed before removal began, so run" : "Run";
+        var directory = _fileSystem.DirectoryExists(path);
+        var gitFile = directory && WorktreeInspector.HoldsOwnGit(_fileSystem, path);
+        var record = administrativeDirectory is not null && _fileSystem.DirectoryExists(administrativeDirectory);
         var gone = new List<string>();
 
-        if (!_fileSystem.DirectoryExists(path))
+        if (!directory)
         {
             gone.Add("its directory");
         }
-        else if (!WorktreeInspector.HoldsOwnGit(_fileSystem, path))
+        else
         {
-            gone.Add("its .git file");
+            if (filesBegun && HoldsNothingBut(path, GitDirectoryName))
+            {
+                gone.Add("its files");
+            }
+
+            if (!gitFile)
+            {
+                gone.Add("its .git file");
+            }
         }
 
-        if (administrativeDirectory is not null && !_fileSystem.DirectoryExists(administrativeDirectory))
+        if (administrativeDirectory is not null && !record)
         {
             gone.Add("git's record of it");
         }
 
+        // The .git file and the record both there: still a worktree, whose files git can put back - those its index holds by a
+        // checkout, and its submodules' by their update, since a checkout never makes a submodule's directory or .git again.
+        var stillAWorktree = filesBegun && gitFile && record
+            ? $", and its .git file and git's record of it are still there, so it is still a worktree: 'git -C {ReportText.Printable(path)} checkout -- .' "
+                + "puts back the files its index holds"
+                + (holdsSubmodules ? $", and 'git -C {ReportText.Printable(path)} submodule update --init --recursive' those of its submodules" : string.Empty)
+            : string.Empty;
+
         if (gone.Count > 0)
         {
-            var safe = checksRan ? "Every check passed before removal began, so run" : "Run";
+            var listed = gone.Count == 1 ? gone[0] : $"{string.Join(", ", gone[..^1])} and {gone[^1]}";
 
-            return $"It stopped part way: {string.Join(" and ", gone)} {(gone.Count == 1 ? "is" : "are")} already gone. "
-                + $"{safe} {finish} to finish deleting it.";
+            return $"It stopped part way: {listed} {(gone is ["its files"] || gone.Count > 1 ? "are" : "is")} already gone{stillAWorktree}. {safe} {finish} to finish deleting it.";
+        }
+
+        if (stillAWorktree.Length > 0)
+        {
+            return $"Some of its files may already be gone{stillAWorktree}. Close whatever holds its files open; {char.ToLowerInvariant(safe[0])}{safe[1..]} {finish} "
+                + "to finish deleting it.";
+        }
+
+        // Stopped before any file of it went, as the last look was asked: what the deletion removed is its copies alone.
+        if (checksRan && !filesBegun && directory && gitFile && (administrativeDirectory is null || record))
+        {
+            return $"No file of it was removed: run '{ToolPackage.Command} {DeleteCommand} {name}' again to delete it.";
         }
 
         var remaining = administrativeDirectory is null
@@ -1403,6 +1648,23 @@ public sealed class WorktreeService(
 
         return $"{remaining} still there, but git may already have deleted some files, which would now stop a checked delete as changes. "
             + $"Close whatever holds its files open, look at what is left with 'git -C {ReportText.Printable(path)} status', then run {finish} to finish deleting it.";
+    }
+
+    /// <summary>
+    /// Whether <paramref name="directory"/> holds no entry but the one named <paramref name="kept"/>; false where it holds
+    /// another, or cannot be looked in - what cannot be seen is never said to be gone.
+    /// </summary>
+    private bool HoldsNothingBut(string directory, string kept)
+    {
+        try
+        {
+            return _fileSystem.EnumerateDirectories(directory).Concat(_fileSystem.EnumerateFiles(directory, recursive: false))
+                .All(entry => string.Equals(Path.GetFileName(Path.TrimEndingDirectorySeparator(entry)), kept, StringComparison.Ordinal));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -1663,7 +1925,7 @@ public sealed class WorktreeService(
         if (findings.Changes.Count > 0)
         {
             reasons.Add(
-                $"it has {ReportText.Counted(findings.Changes.Count, "uncommitted change")} that would be lost: {ReportText.Listed(findings.Changes)} "
+                $"it has {ReportText.Counted(findings.Changes.Count, "uncommitted change")} that would be lost: {ReportText.Listed([.. findings.Changes.Select(change => change.Shown)])} "
                 + (findings.OwnRepository
                     ? "(fold-agent brings them into the main tree, or pass --discard-uncommitted to delete them with the worktree)"
                     : "(commit them to a branch, run 'git stash -u', or pass --discard-uncommitted to delete them with the worktree)"));
@@ -1714,7 +1976,7 @@ public sealed class WorktreeService(
 
     /// <summary>
     /// Why a worktree something holds part of was refused before anything of it was removed: what is held, why that
-    /// would stop git part way, and what to do. Run from inside the worktree, this command holds it itself, which
+    /// would stop the removal part way, and what to do. Run from inside the worktree, this command holds it itself, which
     /// nothing another program closes lets go, so that is said, with running it from outside.
     /// </summary>
     private string DescribeHeld(string name, IReadOnlyList<HeldEntry> held)
@@ -1727,8 +1989,8 @@ public sealed class WorktreeService(
 
         return $"Worktree '{name}' was not deleted, and nothing of it was removed: something holds "
             + $"{ReportText.Listed([.. held.Select(entry => $"'{ReportText.Printable(entry.Path)}'")])} - a process whose current directory is in "
-            + "the worktree, a program with a file of it open, or a program running from it. Windows would not let git "
-            + "delete what is held, so git would stop part way, with the worktree's .git file and git's record of it "
+            + "the worktree, a program with a file of it open, or a program running from it. Windows would not let what "
+            + "is held be deleted, so the removal would stop part way, with some of the worktree's files "
             + $"already gone. {remedy} "
             + $"Windows said: {string.Join(" ", held.Select(entry => entry.Reason).Distinct(StringComparer.Ordinal))}";
     }

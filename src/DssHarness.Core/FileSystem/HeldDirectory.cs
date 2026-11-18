@@ -20,13 +20,16 @@ namespace DssHarness.Core.FileSystem;
 /// </remarks>
 public sealed class HeldDirectory : IDisposable
 {
-    /// <summary>This system's way of acting relative to a held directory.</summary>
-    private static readonly IHeldNative Native = OperatingSystem.IsWindows() ? new WindowsHeld() : new UnixHeld();
+    /// <summary>This system's way of acting relative to a held directory: what every directory is held by but a test's.</summary>
+    internal static readonly IHeldNative SystemNative = OperatingSystem.IsWindows() ? new WindowsHeld() : new UnixHeld();
 
+    // How this directory, and every one held below it, is acted on: the system's, or what a test stands in for it.
+    private readonly IHeldNative _native;
     private readonly SafeFileHandle _handle;
 
-    private HeldDirectory(SafeFileHandle handle, string path)
+    private HeldDirectory(IHeldNative native, SafeFileHandle handle, string path)
     {
+        _native = native;
         _handle = handle;
         Path = path;
     }
@@ -49,7 +52,21 @@ public sealed class HeldDirectory : IDisposable
     /// <exception cref="IOException">A directory could not be opened or made.</exception>
     /// <exception cref="UnauthorizedAccessException">This process may not open or make one.</exception>
     internal static HeldDirectory Hold(string anchor, string directory, bool make, string? asked = null)
+        => Hold(SystemNative, anchor, directory, make, asked);
+
+    /// <summary>
+    /// <see cref="Hold(string, string, bool, string?)"/>, the directory and every one held below it acted on through
+    /// <paramref name="native"/>: the seam a test stands an answer of the system's in on - a volume mounted on a directory,
+    /// which no test may mount, and whose contents a removal that went into it would destroy.
+    /// </summary>
+    /// <param name="native">How the directories are acted on.</param>
+    /// <param name="anchor">The anchor, absolute: a place no isolated process moves or replaces.</param>
+    /// <param name="directory">The directory, absolute, the anchor itself or below it.</param>
+    /// <param name="make">Whether a directory missing on the way is made.</param>
+    /// <param name="asked">The path the caller asked about, as a refusal names it; <paramref name="directory"/> where none is given.</param>
+    internal static HeldDirectory Hold(IHeldNative native, string anchor, string directory, bool make, string? asked = null)
     {
+        ArgumentNullException.ThrowIfNull(native);
         ArgumentException.ThrowIfNullOrWhiteSpace(anchor);
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
 
@@ -59,7 +76,7 @@ public sealed class HeldDirectory : IDisposable
         }
 
         var root = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(anchor));
-        var held = new HeldDirectory(Native.OpenAnchor(root), root);
+        var held = new HeldDirectory(native, native.OpenAnchor(root), root);
 
         try
         {
@@ -114,16 +131,16 @@ public sealed class HeldDirectory : IDisposable
     public HeldDirectory Below(string name, bool make, string? asked = null)
     {
         var path = Child(name);
-        var opened = Native.OpenDirectory(_handle, name, path);
+        var opened = _native.OpenDirectory(_handle, name, path);
 
         if (opened.Handle is { } handle)
         {
-            return new HeldDirectory(handle, path);
+            return new HeldDirectory(_native, handle, path);
         }
 
         if (opened.Kind == PathKind.None && make)
         {
-            return new HeldDirectory(Native.MakeDirectory(_handle, name, path), path);
+            return new HeldDirectory(_native, _native.MakeDirectory(_handle, name, path), path);
         }
 
         throw NotADirectory(opened.Kind, path, asked ?? path);
@@ -131,11 +148,11 @@ public sealed class HeldDirectory : IDisposable
 
     /// <summary>What the entry <paramref name="name"/> of this directory is, itself: a link is never followed to say.</summary>
     /// <param name="name">One name.</param>
-    public PathKind KindOf(string name) => Native.KindOf(_handle, name, Child(name));
+    public PathKind KindOf(string name) => _native.KindOf(_handle, name, Child(name));
 
     /// <summary>Every entry of this directory, each name with what it is itself, in no order.</summary>
     /// <exception cref="IOException">It could not be listed.</exception>
-    public IReadOnlyList<HeldName> Entries() => Native.Entries(_handle, Path);
+    public IReadOnlyList<HeldName> Entries() => _native.Entries(_handle, Path);
 
     /// <summary>
     /// Opens the file <paramref name="name"/> of this directory to read: opened as itself - a link refused, and anything but
@@ -146,7 +163,7 @@ public sealed class HeldDirectory : IDisposable
     /// <exception cref="FileNotFoundException">Nothing is there.</exception>
     /// <exception cref="IOException">It is no regular file, or could not be opened.</exception>
     public Stream OpenRead(string name)
-        => new FileStream(Native.OpenFile(_handle, name, Child(name)), FileAccess.Read, 4096);
+        => new FileStream(_native.OpenFile(_handle, name, Child(name)), FileAccess.Read, 4096);
 
     /// <summary>
     /// Writes the file <paramref name="name"/> of this directory whole: <paramref name="write"/> writes a file made new
@@ -168,7 +185,7 @@ public sealed class HeldDirectory : IDisposable
 
         var path = Child(name);
         var temporary = Checked(name) + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
-        var stream = new FileStream(Native.CreateFile(_handle, temporary, Child(temporary)), FileAccess.Write, 4096);
+        var stream = new FileStream(_native.CreateFile(_handle, temporary, Child(temporary)), FileAccess.Write, 4096);
         var placed = false;
 
         try
@@ -178,7 +195,7 @@ public sealed class HeldDirectory : IDisposable
 
             if (check is not null)
             {
-                using var back = new FileStream(Native.OpenFile(_handle, temporary, Child(temporary)), FileAccess.Read, 4096);
+                using var back = new FileStream(_native.OpenFile(_handle, temporary, Child(temporary)), FileAccess.Read, 4096);
                 check(back);
             }
 
@@ -188,10 +205,10 @@ public sealed class HeldDirectory : IDisposable
             }
             else
             {
-                Native.KeepMode(_handle, name, stream.SafeFileHandle);
+                _native.KeepMode(_handle, name, stream.SafeFileHandle);
             }
 
-            Native.Replace(_handle, temporary, stream.SafeFileHandle, name, path);
+            _native.Replace(_handle, temporary, stream.SafeFileHandle, name, path);
             placed = true;
         }
         finally
@@ -209,7 +226,7 @@ public sealed class HeldDirectory : IDisposable
     /// <param name="name">One name.</param>
     /// <exception cref="FileNotFoundException">Nothing is there.</exception>
     /// <exception cref="HeldIsADirectoryException">A directory is there.</exception>
-    public void DeleteFile(string name) => Native.Remove(_handle, Checked(name), directory: false, Child(name));
+    public void DeleteFile(string name) => _native.Remove(_handle, Checked(name), directory: false, Child(name));
 
     /// <summary>
     /// Removes the directory <paramref name="name"/> of this directory and everything in it, each entry relative to the
@@ -218,7 +235,17 @@ public sealed class HeldDirectory : IDisposable
     /// </summary>
     /// <param name="name">One name.</param>
     /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
-    public void DeleteDirectory(string name)
+    public void DeleteDirectory(string name) => DeleteDirectory(name, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="DeleteDirectory(string)"/>, stopped between one entry and the next where <paramref name="cancellationToken"/>
+    /// asks: what was removed before stays removed, and the rest stays.
+    /// </summary>
+    /// <param name="name">One name.</param>
+    /// <param name="cancellationToken">Stops the removal between entries.</param>
+    /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
+    /// <exception cref="OperationCanceledException">It was stopped; what was removed before stays removed.</exception>
+    public void DeleteDirectory(string name, CancellationToken cancellationToken)
     {
         switch (KindOf(name))
         {
@@ -244,20 +271,74 @@ public sealed class HeldDirectory : IDisposable
 
         using (below)
         {
-            below.Empty();
+            RefuseAMount(below);
+            below.Empty([], cancellationToken);
         }
 
-        Native.Remove(_handle, Checked(name), directory: true, Child(name));
+        _native.Remove(_handle, Checked(name), directory: true, Child(name));
     }
 
-    /// <summary>Removes everything in this directory, each entry as <see cref="DeleteDirectory"/> removes it, and leaves it standing.</summary>
-    public void Empty()
+    /// <summary>
+    /// Whether a volume is mounted on the directory <paramref name="name"/> of this one, which a removal never goes into: on
+    /// Windows one is a reparse point, never held as a directory here, and is refused as itself when it is removed; on Linux
+    /// a directory the system marks the root of a mount, a bind mount of a directory on the same volume among them, or one
+    /// on another device where the system cannot say; on macOS one on another device.
+    /// </summary>
+    /// <param name="name">One name, a directory of this one.</param>
+    /// <exception cref="LinkOnTheWayException">It is a link.</exception>
+    /// <exception cref="DirectoryNotFoundException">It is not there, or it is a file.</exception>
+    /// <exception cref="IOException">What it is could not be read.</exception>
+    public bool IsMountedOn(string name)
     {
+        using var below = Below(name, make: false);
+
+        return _native.IsMountedOn(_handle, below._handle, below.Path);
+    }
+
+    /// <summary>
+    /// Refuses to go into <paramref name="below"/>, a directory of this one a removal is about to empty, where a volume is
+    /// mounted on it (<see cref="IsMountedOn"/>): emptied, everything on that volume would go, and it is never unmounted.
+    /// </summary>
+    /// <exception cref="JunctionRemovalException">A volume is mounted on it; nothing of it has been removed.</exception>
+    private void RefuseAMount(HeldDirectory below)
+    {
+        if (_native.IsMountedOn(_handle, below._handle, below.Path))
+        {
+            throw new JunctionRemovalException(below.Path, MountedThere, []);
+        }
+    }
+
+    /// <summary>Why a removal does not go into a directory a volume is mounted on, as a refusal says it, on every system.</summary>
+    internal const string MountedThere = "a volume is mounted there, and it is never unmounted here";
+
+    /// <summary>Removes everything in this directory, each entry as <see cref="DeleteDirectory(string)"/> removes it, and leaves it standing.</summary>
+    public void Empty() => Empty([], CancellationToken.None);
+
+    /// <summary>
+    /// Removes everything in this directory but the entries <paramref name="keeping"/> names, each as
+    /// <see cref="DeleteDirectory(string)"/> removes it, and leaves it standing with them; stopped between one entry and
+    /// the next, at any depth, where <paramref name="cancellationToken"/> asks.
+    /// </summary>
+    /// <param name="keeping">The names of the entries that stay, as they are spelt here.</param>
+    /// <param name="cancellationToken">Stops the removal between entries.</param>
+    /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
+    /// <exception cref="OperationCanceledException">It was stopped; what was removed before stays removed.</exception>
+    public void Empty(IReadOnlyCollection<string> keeping, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(keeping);
+
         foreach (var entry in Entries())
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (keeping.Contains(entry.Name, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
             if (entry.Kind == PathKind.Directory)
             {
-                DeleteDirectory(entry.Name);
+                DeleteDirectory(entry.Name, cancellationToken);
             }
             else
             {
@@ -273,7 +354,7 @@ public sealed class HeldDirectory : IDisposable
     {
         try
         {
-            Native.Remove(_handle, Checked(name), directory: true, Child(name));
+            _native.Remove(_handle, Checked(name), directory: true, Child(name));
             return true;
         }
         catch (Exception ex) when (ex is HeldNotEmptyException or HeldNotADirectoryException or FileNotFoundException)
@@ -295,7 +376,7 @@ public sealed class HeldDirectory : IDisposable
     {
         ArgumentNullException.ThrowIfNull(into);
 
-        Native.Rename(_handle, Checked(name), into._handle, Checked(newName), replace, Child(name), into.Child(newName));
+        _native.Rename(_handle, Checked(name), into._handle, Checked(newName), replace, Child(name), into.Child(newName));
     }
 
     /// <summary>Where the directory held stands, as the system names it by its handle (<see cref="OpenedFiles"/>).</summary>
@@ -364,7 +445,7 @@ public sealed class HeldDirectory : IDisposable
         try
         {
             stream.Dispose();
-            Native.Remove(_handle, temporary, directory: false, Child(temporary));
+            _native.Remove(_handle, temporary, directory: false, Child(temporary));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -466,4 +547,7 @@ internal interface IHeldNative
 
     /// <summary>Removes the entry <paramref name="name"/> of <paramref name="parent"/> as itself: an empty directory where <paramref name="directory"/>, else anything else.</summary>
     void Remove(SafeFileHandle parent, string name, bool directory, string path);
+
+    /// <summary>Whether a volume is mounted on <paramref name="child"/>, a directory held in <paramref name="parent"/> (<see cref="HeldDirectory.IsMountedOn"/>).</summary>
+    bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path);
 }

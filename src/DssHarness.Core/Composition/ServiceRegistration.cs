@@ -186,6 +186,7 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, SweepStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, AnchorBalanceStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, AnchorCitationsStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, ClassClosureStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, CiReadStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, CiWaitStepRunner>();
         services.AddSingleton<FoldLedger>();
@@ -413,11 +414,18 @@ public static class ServiceRegistration
         // Heavy legs are admitted onto a machine across every command this user runs there, so their slots are kept
         // among this user's own state rather than in any one tree.
         services.AddSingleton<IMemoryGauge, MemoryGauge>();
+
+        // What the machine declares of itself - the heavy legs it holds among it - read beside those records, whichever
+        // tree a command runs in: every tree's config.json is the copy of its last commit.
+        services.AddSingleton(provider => new MachineSettingsFile(
+            provider.GetRequiredService<IFileSystem>(),
+            () => MachineSettingsFile.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>())));
         services.AddSingleton(provider => new HeavyLegSlots(
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHarnessOutput>(),
             provider.GetRequiredService<IProcessIdentity>(),
-            () => HeavyLegSlots.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>())));
+            () => HeavyLegSlots.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>()),
+            () => provider.GetRequiredService<MachineSettingsFile>().Read().Admission?.HeavyLegs));
         services.AddSingleton(provider => new TreeHolders(
             provider.GetRequiredService<RunLock>(),
             provider.GetRequiredService<HeavyLegSlots>(),

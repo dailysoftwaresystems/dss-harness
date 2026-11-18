@@ -16,6 +16,20 @@ What its builder was asked to do:
 - What it was to replace because the request asked for it to be rebuilt, and what was to become of the old one:
   {input.item.replaces}
 
+## The tests it runs
+
+The engine tests the item on these units alone - the plan's, then those its builder added:
+
+{input.item.tests}
+
+{implement.latest.tests}
+
+Where both lists are empty, this item runs no tests: {input.item.noTests}
+
+That reason is for the `tests` aspect to judge, where it is given and both lists are empty: where the change reaches
+code a test reads, or adds a behaviour no test pins, the reason does not hold, and that is a `tests` finding naming
+the tests the item should run. Other aspects leave it.
+
 ## The change
 
 It is what this run changed under the item's paths since commit `{input.orient.startCommit}`, as it now stands in the main
