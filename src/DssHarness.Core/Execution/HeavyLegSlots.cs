@@ -36,11 +36,87 @@ public sealed record SlotEntry(
     string Tree,
     int Slots,
     string? ProcessStamp = null,
-    string? Variant = null)
+    string? Variant = null) : IHeldByProcess
 {
     /// <summary>The entry as a waiting leg names who holds a slot: its tree, as a lock names it, then the process.</summary>
     public string Describe()
         => $"{RunLock.TreeNamed(Host, Tree, Variant)} (leg '{Leg}', {Command}, {ProcessHolders.Describe(ProcessId, RunId, AskedUtc)})";
+}
+
+/// <summary>
+/// An entry of one of a machine's heavy-leg records, held by a process of that machine until it gives it back or ends: told
+/// standing by that process alone, every entry of those records being the machine's whatever name it carries.
+/// </summary>
+internal interface IHeldByProcess
+{
+    /// <summary>The process holding it.</summary>
+    int ProcessId { get; }
+
+    /// <summary>What tells that process from a later holder of its id, where the platform said.</summary>
+    string? ProcessStamp { get; }
+
+    /// <summary>The entry as a line names its holder.</summary>
+    string Describe();
+}
+
+/// <summary>
+/// A leg making room on one filesystem of its machine from other trees' idle builds, held for as long as it lists and
+/// removes them (<see cref="HeavyLegSlots.MakeRoomOn"/>).
+/// </summary>
+/// <param name="Machine">The machine it runs on, by the name it had then, for whoever reads the entry.</param>
+/// <param name="ProcessId">The process making the room, which holds the entry until it gives it back or ends.</param>
+/// <param name="RunId">The run the leg is part of.</param>
+/// <param name="SinceUtc">When it began making the room, for display.</param>
+/// <param name="For">Whom the room is made for, as a line names the leg: <c>leg 'linux' of the main checkout</c>.</param>
+/// <param name="Filesystem">The filesystem it makes room on, as this machine names it.</param>
+/// <param name="ProcessStamp">What tells that process from a later holder of its id; left out where the platform would not say.</param>
+public sealed record RoomMaking(string Machine, int ProcessId, string RunId, DateTimeOffset SinceUtc, string For, string Filesystem, string? ProcessStamp = null)
+    : IHeldByProcess
+{
+    /// <summary>The leg making the room, as a line names it: <c>leg 'linux' of the main checkout (pid 12, run R, since ...)</c>.</summary>
+    public string Describe() => $"{For} ({ProcessHolders.Describe(ProcessId, RunId, SinceUtc)})";
+}
+
+/// <summary>
+/// What asking to make room on a filesystem of this machine came to: the making held, until disposed, or the leg already
+/// making it there.
+/// </summary>
+public sealed class RoomMakingHold : IDisposable
+{
+    private readonly HeavyLegSlots? _slots;
+    private readonly RoomMaking? _entry;
+    private bool _left;
+
+    private RoomMakingHold(HeavyLegSlots? slots, RoomMaking? entry, RoomMaking? by)
+    {
+        _slots = slots;
+        _entry = entry;
+        By = by;
+    }
+
+    /// <summary>The leg already making room there, where one was, and nothing was held; <see langword="null"/> where this one holds it.</summary>
+    public RoomMaking? By { get; }
+
+    /// <summary>Whether this leg holds the making of room there.</summary>
+    public bool Held => _entry is not null;
+
+    /// <summary>The making held, given back once disposed.</summary>
+    internal static RoomMakingHold Taken(HeavyLegSlots slots, RoomMaking entry) => new(slots, entry, null);
+
+    /// <summary>Nothing held, another leg making room there.</summary>
+    internal static RoomMakingHold Behind(RoomMaking by) => new(null, null, by);
+
+    /// <summary>Gives the making of room back. Calling it twice is not an error; the second call does nothing.</summary>
+    public void Dispose()
+    {
+        if (_left || _entry is null)
+        {
+            return;
+        }
+
+        _left = true;
+        _slots!.StopMaking(_entry);
+    }
 }
 
 /// <summary>One of the heavy legs in line, and whether it holds a slot: what a dry run reads to say where a holder's leg stands.</summary>
@@ -148,6 +224,11 @@ internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holde
 /// Kept in a record of its own beside the slots', which a build from before it never reads: one that found a member it
 /// does not know in the slots' record would refuse that record.
 /// </para>
+/// <para>
+/// And, in a third record beside them, the leg making room on each filesystem from other trees' idle builds, held while it
+/// lists and removes them and, like a slot, by its process: one leg at a time on a filesystem
+/// (<see cref="MakeRoomOn"/>), so the next reads the room the one before made.
+/// </para>
 /// </remarks>
 /// <param name="fileSystem">Reads and writes the record.</param>
 /// <param name="output">Says what was reclaimed, and what could not be given back.</param>
@@ -170,6 +251,10 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 
     private const string RoomConsequence = "Until it can be, no heavy leg whose build's need is known is admitted onto this machine.";
 
+    private const string MakingSubject = "The record of the legs making room on this machine from other trees' idle builds";
+
+    private const string MakingConsequence = "Until it can be, no leg makes room on this machine from other trees' idle builds.";
+
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
     private readonly IProcessIdentity _identity = identity;
@@ -179,6 +264,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     // Named beside the slots' record as that was named, never by naming it again: where the machine is told only by its
     // name, naming it again says so a second time.
     private Lazy<MachineWideList<RoomClaim>>? _claims;
+    private Lazy<MachineWideList<RoomMaking>>? _making;
 
     /// <summary>Slots kept in the record at <paramref name="path"/>.</summary>
     /// <param name="fileSystem">Reads and writes the record.</param>
@@ -213,6 +299,13 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <param name="slots">The slots' record.</param>
     public static string RoomPathFor(string slots) => Path.ChangeExtension(slots, ".room.json");
 
+    /// <summary>
+    /// The record of the legs making room on this machine from other trees' idle builds, beside the slots' record at
+    /// <paramref name="slots"/>: one of its own, which a build before it never reads.
+    /// </summary>
+    /// <param name="slots">The slots' record.</param>
+    public static string MakingPathFor(string slots) => Path.ChangeExtension(slots, ".making.json");
+
     /// <summary>The slots' record, as a refusal names it for whoever must look at what it holds.</summary>
     /// <exception cref="HarnessException">No directory of this user's own could be named to keep it in.</exception>
     public string Location => File.Path;
@@ -225,6 +318,75 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 
     private MachineWideList<RoomClaim> Claims
         => (_claims ??= new(() => Record<RoomClaim>(_fileSystem, () => RoomPathFor(File.Path), RoomSubject, RoomConsequence))).Value;
+
+    private MachineWideList<RoomMaking> Making
+        => (_making ??= new(() => Record<RoomMaking>(_fileSystem, () => MakingPathFor(File.Path), MakingSubject, MakingConsequence))).Value;
+
+    /// <summary>
+    /// Holds the making of room on <paramref name="filesystem"/> from other trees' idle builds for <paramref name="forLeg"/>,
+    /// where no other leg of this machine makes room there now; where one does, holds nothing and names it. One leg at a
+    /// time on a filesystem, across every command this user runs on the machine: two legs short of room there would each
+    /// read the room before the other's removals gave it back, each remove what it was short of, and meet in one build.
+    /// So the next leg reads the room once the one before has made it, and makes only what it still lacks.
+    /// </summary>
+    /// <param name="runId">The run the leg is part of.</param>
+    /// <param name="forLeg">The leg, as a line names it: <c>leg 'linux' of the main checkout</c>.</param>
+    /// <param name="filesystem">The filesystem, as this machine names it.</param>
+    /// <exception cref="HarnessException">The record could not be named, read or written.</exception>
+    internal RoomMakingHold MakeRoomOn(string runId, string forLeg, string filesystem)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(forLeg);
+        ArgumentException.ThrowIfNullOrWhiteSpace(filesystem);
+
+        var entry = new RoomMaking(_identity.CurrentMachine, _identity.CurrentId, runId, DateTimeOffset.UtcNow, forLeg, filesystem, _identity.Current);
+
+        var by = Making.Update<RoomMaking?>((entries, afterwards) =>
+        {
+            var live = Live(entries, making => making, "the making of room on this machine", afterwards);
+
+            // Another leg's making of room on the same filesystem, this process's own other legs among them: nothing written
+            // then, beyond what was reclaimed.
+            if (live.FirstOrDefault(making => string.Equals(making.Filesystem, filesystem, StringComparison.Ordinal)) is { } other)
+            {
+                return (live.SequenceEqual(entries) ? null : live, other);
+            }
+
+            return ([.. live, entry], null);
+        });
+
+        return by is null ? RoomMakingHold.Taken(this, entry) : RoomMakingHold.Behind(by);
+    }
+
+    /// <summary>
+    /// Gives a leg's making of room back. One that cannot be is said and fails nothing: it leaves the record with the next
+    /// change this process makes to it, or is reclaimed as a dead holder's is once this process has ended.
+    /// </summary>
+    internal void StopMaking(RoomMaking entry)
+        => Making.GiveBack(
+            kept => kept == entry,
+            ex => _output.Warn(
+                CommandName,
+                $"{entry.For} could not give its making of room back: {ex.Message} This process's other legs no longer count it; it "
+                + "leaves the record with the next change this process makes to it, or once this process has ended."));
+
+    /// <summary>
+    /// The count of heavy legs this machine's settings file declares, read now, or <see langword="null"/> where it declares
+    /// none - a file that cannot be read refused as every reader of this record handles a refusal: as the record's own
+    /// could not be read, with the settings file's words, and the exit of a configuration that is wrong.
+    /// </summary>
+    /// <exception cref="HarnessException">This machine's settings file could not be read.</exception>
+    private int? MachineSlots()
+    {
+        try
+        {
+            return _machineSlots();
+        }
+        catch (Configuration.ConfigException ex)
+        {
+            throw new HarnessException(HarnessExit.ConfigInvalid, ex.Message, ex);
+        }
+    }
 
     /// <summary>
     /// Records a leg as asking for a slot, last in line, and returns its place; given back when the place is disposed.
@@ -265,15 +427,14 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// </summary>
     /// <param name="place">The place a leg was given, and has not given back.</param>
     /// <exception cref="ObjectDisposedException">The place was given back: a leg that gave its place back asks again.</exception>
-    /// <exception cref="HarnessException">The record could not be read or written.</exception>
-    /// <exception cref="Configuration.ConfigException">This machine's settings file could not be read.</exception>
+    /// <exception cref="HarnessException">The record, or this machine's settings file, could not be read, or the record written.</exception>
     internal SlotStanding Look(SlotPlace place)
     {
         ArgumentNullException.ThrowIfNull(place);
         ObjectDisposedException.ThrowIf(place.Left, place);
 
         // Read before the record is taken, and at each look: a machine whose count is raised while legs wait takes them by it.
-        var machine = _machineSlots();
+        var machine = MachineSlots();
 
         return File.Update((entries, afterwards) =>
         {
@@ -410,11 +571,10 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// written: what a dry run reads to say where a holder's leg stands, and where in the line it is. An entry whose
     /// process has ended is passed over without a word, and stays until a leg asks or looks again.
     /// </summary>
-    /// <exception cref="HarnessException">The record could not be named, read or written.</exception>
-    /// <exception cref="Configuration.ConfigException">This machine's settings file could not be read.</exception>
+    /// <exception cref="HarnessException">The record could not be named, read or written, or this machine's settings file could not be read.</exception>
     public IReadOnlyList<SlotInLine> Line()
     {
-        var machine = _machineSlots();
+        var machine = MachineSlots();
 
         return File.Update<IReadOnlyList<SlotInLine>>((entries, _) =>
         {
@@ -434,7 +594,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// Told by the process alone: every entry of these records is this machine's, whatever name it carries, so one whose
     /// id and stamp no process here carries has ended.
     /// </remarks>
-    private List<T> Live<T>(IReadOnlyList<T> entries, Func<T, SlotEntry> holder, string what, Action<Action>? afterwards)
+    private List<T> Live<T>(IReadOnlyList<T> entries, Func<T, IHeldByProcess> holder, string what, Action<Action>? afterwards)
     {
         var kept = new List<T>();
 

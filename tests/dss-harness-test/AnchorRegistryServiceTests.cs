@@ -1567,8 +1567,8 @@ public sealed class AnchorRegistryServiceTests
     }
 
     /// <summary>
-    /// A declaration that states two verdicts itself is no one decision to take: its cells are weighed on their own and the
-    /// row is refused for the two verdicts, as any row stating two is, with no consent asked that could not mend it.
+    /// A declaration that states two verdicts itself is no one decision to take: the row is refused for the two verdicts
+    /// before any cell of it is weighed, with no consent asked that could not mend it.
     /// </summary>
     [Fact]
     public async Task ApplyAsync_RefusesADeclarationThatStatesTwoVerdictsItself_AskingNoConsent()
@@ -1589,14 +1589,46 @@ public sealed class AnchorRegistryServiceTests
             AnchorBatchMode.Check,
             cancellationToken);
 
-        Assert.Equal(
-            [
-                $"{One}: The row would state two verdicts: the Trigger opens with the closed mark, {AnchorStatus.ClosedMark}, and the Status does not read closed. "
-                    + $"anchors.triggerCarriesVerdict holds a row's Trigger to the verdict its Status states: open a closed row's Trigger with {AnchorStatus.ClosedMark}, "
-                    + "and no other row's, or set the status the Trigger means.",
-            ],
-            checkedOnly.Problems);
+        Assert.Equal([DeclaresTwo], checkedOnly.Problems);
     }
+
+    /// <summary>
+    /// A declaration that states two verdicts is refused whatever the row taken one from each side would state: here the
+    /// registries closed the row since the earlier fold and the agent, its status still declared open, opened its trigger
+    /// with the closed mark - weighed cell by cell, the status kept and the trigger the agent's, the row would state one
+    /// verdict by chance, and a consent of its trigger would have written it. Refused alike, the consent named for it no
+    /// typo, and nothing is written.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_RefusesADeclarationThatStatesTwoVerdicts_ThoughTheRowTakenOneFromEachWouldStateOne()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, triggerCarriesVerdict: true);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "closed", Trigger = $"{AnchorStatus.ClosedMark} closed by hand" }, dryRun: false, cancellationToken);
+        var earlier = Declared(One, "open", "work");
+        var declared = new AnchorBatchRequest([earlier with { Trigger = $"{AnchorStatus.ClosedMark} fixed by the lane" }])
+        {
+            Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = earlier },
+        };
+        var (pending, done) = (File.ReadAllBytes(PendingPath(temp)), File.ReadAllBytes(DonePath(temp)));
+
+        var planned = await harness.AnchorRegistryService.ApplyAsync(temp.Path, declared, AnchorBatchMode.Plan, cancellationToken);
+        var consented = await harness.AnchorRegistryService.ApplyAsync(temp.Path, declared with { AcceptOver = [new(One, "trigger")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.Equal([DeclaresTwo], planned.Problems);
+        Assert.Empty(planned.UnacceptedOver);
+        Assert.Equal([DeclaresTwo], consented.Problems);
+        Assert.Equal(pending, File.ReadAllBytes(PendingPath(temp)));
+        Assert.Equal(done, File.ReadAllBytes(DonePath(temp)));
+    }
+
+    /// <summary>The refusal of a declaration of row One that states two verdicts: its trigger closed, its status not.</summary>
+    private static readonly string DeclaresTwo =
+        $"{One}: The agent declares two verdicts: the Trigger opens with the closed mark, {AnchorStatus.ClosedMark}, and the Status does not read closed. "
+            + $"anchors.triggerCarriesVerdict holds a row's Trigger to the verdict its Status states: open a closed row's Trigger with {AnchorStatus.ClosedMark}, "
+            + "and no other row's, or set the status the Trigger means.";
 
     /// <summary>
     /// Where a Trigger carries no verdict, the status alone states it and is weighed as any cell: a status the agent's file

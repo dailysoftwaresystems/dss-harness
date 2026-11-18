@@ -108,6 +108,13 @@ public sealed record PlacedLeg(
     public RoomNeed? Need { get; init; }
 
     /// <summary>
+    /// The rule the machine that runs the leg's work admits it by, read once as that work began - its slot, its floor, and
+    /// the page cache dropped as it ends all answer to this one reading - or why it could not be read; <see langword="null"/>
+    /// until then.
+    /// </summary>
+    public AdmissionReading? AdmittedBy { get; init; }
+
+    /// <summary>
     /// The least room the leg's builds leave free on each filesystem they fill, on the machine that runs them, below which
     /// each is stopped; <see langword="null"/> until its work starts there, and where nothing stops them for room.
     /// </summary>

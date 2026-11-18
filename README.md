@@ -224,9 +224,12 @@ under it, read every 15 seconds and again as a build or a write of its fails, st
 `stopped`, what it built left for `clean`; a build under it as it starts writes nothing. With
 `reclaimIdleBuilds` true, a leg short of room - waiting for it, or under `minFreeGiB` - first removes
 the build directories the repository's other trees keep on that filesystem that no run or sweep
-holds, the least recently built first and only as many as it is short of, as `clean --legs` removes
-one; its line says what it removed, whose tree it was and the room before and after, and that tree's
-next build says its directory was removed as it starts from nothing.
+holds, the least recently built first and only as many as it is short of - as it is admitted, what
+the disk itself lacks of its need, never the room the other legs claim - and none where all of them
+would not cover it, as `clean --legs` removes one; one leg makes room on a filesystem at a time, the
+next reading the room once it has. Its line says what it removed, whose tree it was and the room
+before and after, and that tree's next build says its directory was removed as it starts from
+nothing.
 
 What a machine can hold is the machine's, while `config.json` is tracked and each worktree holds the
 copy of its last commit: so the machine's own settings file,
@@ -238,8 +241,9 @@ and `defaults.admission` staying the rule for each field it leaves out. A count 
 leg's in line, so a worktree committed before the count was raised no longer holds the machine to the
 old one. Every command this user runs there reads it; an ssh host reads its own. A file that cannot
 be read, or holds what `config.json` would refuse, is refused naming it, and no heavy leg is admitted
-until it is put right. `dssharness legs` says, for each host it reaches, the rule in force and where
-each field came from. Run `dssharness help admission` for the rules.
+until it is put right; a leg's rule is read once, as its work begins, so a file put wrong while a run
+goes on never fails a leg that has run. `dssharness legs` says, for each host it reaches, the rule in
+force and where each field came from. Run `dssharness help admission` for the rules.
 
 ## Design
 

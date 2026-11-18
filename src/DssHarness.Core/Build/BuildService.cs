@@ -375,6 +375,9 @@ public sealed class BuildService(
         // say its directory was built from a tree no phase of it read - and is stopped before its first phase.
         if (floor?.Why is null)
         {
+            // Where the floor's readings stood as the record began: a failure to write it is judged by every reading since.
+            var recording = floor?.Mark ?? 0;
+
             try
             {
                 Record(buildDirectory, recorded);
@@ -386,7 +389,7 @@ public sealed class BuildService(
                 // leaves nothing else behind to be read as a build nobody recorded.
                 asked = adapter is CMakeAdapter ? _toolchainReader.Ask(buildDirectory) : null;
             }
-            catch (IOException) when (floor?.Now() is not null)
+            catch (IOException) when (floor?.Now(recording) is not null)
             {
                 // Filled since the room was read: the floor has stopped the build, and its first turn below ends it.
             }
@@ -395,6 +398,11 @@ public sealed class BuildService(
         foreach (var phase in adapter.Phases(config, request, buildDirectory, overlay, environment))
         {
             PhaseResult result;
+
+            // Where the floor's readings stood as the phase began: a failure of it is judged by every reading since, so one
+            // that found a filesystem under the floor while it ran says it failed for want of room, though room was made
+            // there since.
+            var readings = floor?.Mark ?? 0;
 
             try
             {
@@ -415,7 +423,7 @@ public sealed class BuildService(
             {
                 return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, why), null).ConfigureAwait(false);
             }
-            catch (IOException) when (floor?.Now() is { } full)
+            catch (IOException) when (floor?.Now(readings) is { } full)
             {
                 // What the phase wrote - its log - failing on a filesystem under its floor, filled between two readings,
                 // failed for want of room: stopped, as the next reading would have stopped it.
@@ -434,7 +442,7 @@ public sealed class BuildService(
                 {
                     Record(buildDirectory, recorded);
                 }
-                catch (IOException) when (floor?.Now() is { } full)
+                catch (IOException) when (floor?.Now(readings) is { } full)
                 {
                     return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, full), null).ConfigureAwait(false);
                 }
@@ -457,8 +465,9 @@ public sealed class BuildService(
             if (!result.Passed)
             {
                 // A phase that failed while a filesystem the build fills stood under its floor - filled between two readings,
-                // or as one stopped it - failed for want of room: stopped, as the next reading would have stopped it.
-                if (floor?.Now() is { } full)
+                // as one stopped it, or at one that made room there since - failed for want of room: stopped, as the next
+                // reading would have stopped it.
+                if (floor?.Now(readings) is { } full)
                 {
                     return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, full), null).ConfigureAwait(false);
                 }
@@ -585,6 +594,7 @@ public sealed class BuildService(
         // nothing watched.
         async Task<BuildResult> FinishAsync(ReachedVerdict reached, NinjaDependencyReport? dependencies, FailedUnits? failedUnits = null)
         {
+            var finishing = floor?.Mark ?? 0;
             var seen = await guards.CloseAsync(cancellationToken).ConfigureAwait(false);
             var verdict = seen.Decide(request.Leg, [reached]);
             var dead = await ReadDeadOutputsAsync(request, buildDirectory, environment, cancellationToken).ConfigureAwait(false);
@@ -619,7 +629,7 @@ public sealed class BuildService(
                         Bytes = ranThrough ? left.Bytes : cameTo is { } whole && left.Bytes is { } part ? Math.Max(whole, part) : null,
                     });
                 }
-                catch (IOException ex) when (floor?.Now() is not null)
+                catch (IOException ex) when (floor?.Now(finishing) is not null)
                 {
                     // A build stopped for want of room may have none left for its record: the one it wrote as it began
                     // stands, as it does for a build stopped part way any other way.

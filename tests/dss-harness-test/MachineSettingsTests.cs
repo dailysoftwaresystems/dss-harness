@@ -4,6 +4,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
 
@@ -186,6 +187,28 @@ public sealed class MachineSettingsTests
         Assert.False(refused.Fact.Admitted);
         Assert.StartsWith("waits for one of this machine's 3 heavy-leg slot(s), 3 leg(s) ahead; held by '/src/first'", said[0], StringComparison.Ordinal);
         Assert.Equal([true, true, true], slots.Line().Select(inLine => inLine.HoldsSlot));
+    }
+
+    /// <summary>
+    /// A settings file that cannot be read as the slots' line is read is that record's own refusal - a configuration's exit,
+    /// in the file's words - so every reader of the line handles it as it handles the record's: a dry run naming who holds
+    /// a tree says where that holder's leg stands could not be told, rather than ending with a configuration error.
+    /// </summary>
+    [Fact]
+    public void ASettingsFileThatCannotBeReadAtTheLine_IsTheRecordsRefusal_AndAHoldersStandingIsSaidUnread()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        const string Unread = "This machine's settings file '/u/settings.json' could not be read: a key it does not know.";
+        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, temp.Combine("admission.json"), () => throw new ConfigException(Unread));
+        var holder = new LockEntry("local", "/src/tree", LockScope.TreeShared, new LockHolder(harness.Identity.CurrentMachine, harness.Identity.CurrentId, RunId.New().Value, DateTimeOffset.UtcNow, "test"), "debug");
+        var wanted = new LockRequest { Host = "local", Tree = "/src/tree", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "delete-agent" };
+
+        var refused = Assert.Throws<HarnessException>(() => slots.Line());
+        var held = new TreeHolders(harness.RunLock, slots, harness.Identity).Refused(wanted, holder).Held;
+
+        Assert.Equal((HarnessExit.ConfigInvalid, Unread), (refused.ExitCode, refused.Message));
+        Assert.Equal(Unread.TrimEnd('.'), held.StandingUnread);
     }
 
     /// <summary>

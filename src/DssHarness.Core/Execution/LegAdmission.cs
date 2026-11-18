@@ -75,7 +75,14 @@ public sealed record AdmissionFact(
 /// <summary>What a heavy leg short of room made of it from other trees' idle builds on its machine.</summary>
 /// <param name="Bytes">What was removed; nothing where no idle build could be.</param>
 /// <param name="Said">What was done, or why nothing was, as the leg's line says it.</param>
-public sealed record MadeRoom(long Bytes, string Said);
+public sealed record MadeRoom(long Bytes, string Said)
+{
+    /// <summary>
+    /// Whether another leg was making room on that filesystem already, so this one removed nothing beside it: the room is to
+    /// be read again once that one has made it, and nothing decided on the reading before.
+    /// </summary>
+    public bool Behind { get; init; }
+}
 
 /// <summary>What asking a machine to take a heavy leg came to: its place there, held until disposed, or why it was not taken.</summary>
 public sealed class Admission : IDisposable
@@ -153,9 +160,11 @@ public sealed record AdmissionRequest(
 
     /// <summary>
     /// Makes room for the leg, where its machine says so (<see cref="Configuration.AdmissionSettings.ReclaimIdleBuilds"/>),
-    /// from other trees' idle builds on the filesystem whose room it read short - given what it is short of there and that
-    /// room - before it waits for room, at each look that finds it short: what was made, or <see langword="null"/> where no
-    /// tree keeps a build there. <see langword="null"/> where nothing is made for it.
+    /// from other trees' idle builds on the filesystem whose room it read short - given what that filesystem lacks of its
+    /// need and that room - before it waits for room, at each look that finds the disk itself short: what was made, or
+    /// <see langword="null"/> where no tree keeps a build there. Never for the room the other admitted legs claim: what their
+    /// builds have still to write is not known, and their claims end with their work, so removing for them would remove
+    /// what their builds already fill a second time. <see langword="null"/> where nothing is made for it.
     /// </summary>
     public Func<long, DiskSpace, CancellationToken, Task<MadeRoom?>>? MakeRoom { get; init; }
 }
@@ -210,6 +219,9 @@ public sealed class LegAdmission(
 
     private readonly HeavyLegSlots _slots = slots;
     private readonly IMemoryGauge _gauge = gauge;
+
+    /// <summary>The machine's heavy-leg records it admits by: what a leg making room on the machine is held to one at a time by.</summary>
+    internal HeavyLegSlots Records => _slots;
     private readonly TimeProvider _clock = clock;
     private readonly Func<TimeSpan, CancellationToken, Task> _wait = wait;
     private readonly Func<TimeSpan, TimeSpan, TimeSpan> _settle = settle;
@@ -516,12 +528,16 @@ public sealed class LegAdmission(
 
             var claim = _slots.Claim(place, room, takeUnread: lastRoom is null);
 
+            // Made only for what the disk itself lacks of the leg's need: the other legs' claims count what their builds have
+            // written already as well as what they have still to write, and end with their work, leaving their builds behind.
             if (!claim.Fits
                 && claim.Disk is { } lacking
+                && room.Bytes - lacking.FreeBytes is > 0 and var lacks
                 && request.MakeRoom is { } makeRoom
-                && await makeRoom(room.Bytes - (lacking.FreeBytes - claim.Claimed), lacking, cancellationToken).ConfigureAwait(false) is { } made)
+                && await makeRoom(lacks, lacking, cancellationToken).ConfigureAwait(false) is { } made)
             {
-                // Said whenever it removed something, and otherwise only where it says something new: why nothing could be.
+                // Said whenever it removed something, and otherwise only where it says something new: why nothing could be,
+                // or the leg making room there already.
                 if (made.Bytes > 0 || made.Said != madeSaid)
                 {
                     Say(made.Said);
@@ -531,6 +547,12 @@ public sealed class LegAdmission(
                 if (made.Bytes > 0)
                 {
                     reclaimed.Add(made.Said);
+                }
+
+                // Claimed again on the room as it is now - what another leg made before this one held the making counts -
+                // where it was not made behind another, which this look decides nothing on.
+                if (!made.Behind)
+                {
                     claim = _slots.Claim(place, room, takeUnread: false);
                 }
             }

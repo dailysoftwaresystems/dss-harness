@@ -5446,7 +5446,8 @@ public sealed partial class HelpTests
             + "are weighed as both changed, each line of the dry run saying why, and written, the agent's together, only where "
             + "--accept-over <ID>:status and --accept-over <ID>:trigger name them; until both are named nothing of the row is "
             + "written, and the registries' verdict stands. A row the agent declares with two verdicts itself is refused for "
-            + "them, no consent asked. Where the setting does not hold, the status alone carries the verdict and is weighed as "
+            + "them before any cell of it is weighed, whatever the row taken one from each would state, no consent asked. Where "
+            + "the setting does not hold, the status alone carries the verdict and is weighed as "
             + "any cell is: one the agent's file holds as it declared it then is kept, whatever its trigger says.",
             text,
             StringComparison.Ordinal);

@@ -41,11 +41,12 @@ public sealed record RoomFloor
 
     /// <summary>
     /// Makes room for the build, where its machine says so (<see cref="Configuration.AdmissionSettings.ReclaimIdleBuilds"/>),
-    /// from other trees' idle builds on a filesystem it fills that is under the floor - given a path there, the room read
-    /// there and what the build is short of - before the build is stopped for it: what was made, or <see langword="null"/>
-    /// where no tree keeps a build there. <see langword="null"/> where nothing is made for it.
+    /// from other trees' idle builds on a filesystem it fills that is under the floor - given the room read there, the least
+    /// to make, which brings it back to the floor, and the most, which adds the build's need beyond it - before the build is
+    /// stopped for it: what was made, or <see langword="null"/> where nothing was to be removed. <see langword="null"/> where
+    /// nothing is made for it.
     /// </summary>
-    public Func<string, FileSystem.DiskSpace, long, MadeRoom?>? MakeRoom { get; init; }
+    public Func<FileSystem.DiskSpace, long, long, MadeRoom?>? MakeRoom { get; init; }
 
     /// <summary>
     /// What the leg's build still needed as it was admitted, where something said (<see cref="Legs.RoomNeed"/>): the room

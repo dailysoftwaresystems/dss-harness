@@ -71,12 +71,22 @@ public sealed record LegsReport(IReadOnlyList<LegPlacement> Placements, IReadOnl
 /// that provides its operating system, its processor and its emulator - turning it away there when
 /// that host lacks a program the command requires.
 /// </summary>
+/// <param name="contextLoader">Reads the repository and its configuration.</param>
+/// <param name="inspector">Measures each host.</param>
+/// <param name="trees">Lists the repository's trees each host holds.</param>
+/// <param name="platform">How this machine compares paths.</param>
+/// <param name="output">Says what cannot run, and why.</param>
+/// <param name="origin">
+/// Who the command runs for: in a WSL distribution running legs another machine sent it, that machine, whose settings file
+/// came with them and admits them.
+/// </param>
 public sealed class LegsService(
     IHarnessContextLoader contextLoader,
     IHostInspector inspector,
     IRepositoryTrees trees,
     IHostPlatform platform,
-    IHarnessOutput output)
+    IHarnessOutput output,
+    CommandOrigin? origin = null)
 {
     /// <summary>The command's name, which prefixes what it reports.</summary>
     public const string CommandName = "legs";
@@ -86,6 +96,7 @@ public sealed class LegsService(
     private readonly IRepositoryTrees _trees = trees;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
+    private readonly CommandOrigin _origin = origin ?? CommandOrigin.Typed;
 
     /// <summary>
     /// Checks the legs <paramref name="legNames"/> selects, or every leg when <c>--legs</c> was left out and
@@ -156,7 +167,7 @@ public sealed class LegsService(
         // placed, so each placed leg's host carries it.
         foreach (var host in reports.Keys.ToList())
         {
-            reports[host] = WithAdmission(config, reports[host], here);
+            reports[host] = WithAdmission(config, reports[host], here, _origin.Dispatched);
         }
 
         // A leg is refused a host without the room its build needs before it starts, as it is one without the
@@ -191,38 +202,20 @@ public sealed class LegsService(
     }
 
     /// <summary>
-    /// <paramref name="report"/>, with the rule its heavy legs are admitted by - each field from the settings file of the
-    /// machine that admits them, as it answered, else from the section config.json declares for that machine, else from
-    /// its defaults - or why that rule could not be read; as it was where the host was not reached, and said nothing.
+    /// <paramref name="report"/>, with the rule its heavy legs are admitted by - read from the sections
+    /// <see cref="AdmissionSection.For"/> names for its host, the one owner of which, in which order, that a run's legs are
+    /// admitted by too - or why that rule could not be read; as it was where the host was not reached, and said nothing.
     /// </summary>
-    /// <remarks>
-    /// The section is the one the legs' admission reads: <c>hosts.local</c> for this machine and its WSL distributions,
-    /// which run on it, an ssh host's own for that host, and on a host running legs another machine sent it, the one that
-    /// machine knows it by.
-    /// </remarks>
-    private static HostReport WithAdmission(HarnessConfig config, HostReport report, HostId? here)
+    private static HostReport WithAdmission(HarnessConfig config, HostReport report, HostId? here, Dispatch? dispatched)
     {
         if (report.MachineSettings is not { } settings)
         {
             return report;
         }
 
-        if (settings.Problem is { } problem)
-        {
-            return report with { AdmissionUnread = problem };
-        }
-
-        var named = report.Host.Kind == HostKind.Local && here is not null ? here : report.Host;
-
         try
         {
-            return report with
-            {
-                Admission = AdmissionSettings.InForce(
-                    AdmissionSection.SettingsFile(settings.Admission, settings.Path ?? "nowhere"),
-                    AdmissionSection.Host((named.Kind == HostKind.Wsl ? config.Hosts.Local : config.Hosts.SettingsFor(named)).Admission, named),
-                    AdmissionSection.Defaults(config.Defaults.Admission)),
-            };
+            return report with { Admission = AdmissionSettings.InForce(AdmissionSection.For(report.Host, here, () => settings, dispatched, config)) };
         }
         catch (ConfigException ex)
         {

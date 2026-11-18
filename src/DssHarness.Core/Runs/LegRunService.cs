@@ -275,8 +275,11 @@ public sealed class LegRunService(
     /// <summary>What this machine declares of itself, which wins over what config.json declares for it.</summary>
     private readonly MachineSettingsFile _machineSettings = machineSettings;
 
-    /// <summary>The other trees' idle builds a leg short of room removes, where its machine says so.</summary>
-    private readonly IdleBuilds _idleBuilds = new(runLock, fileSystem, TimeProvider.System);
+    /// <summary>
+    /// The other trees' idle builds a leg short of room removes, where its machine says so: one leg at a time on a
+    /// filesystem, as the machine's heavy-leg records the admission reads hold it.
+    /// </summary>
+    private readonly IdleBuilds _idleBuilds = new(runLock, fileSystem, admission.Records, TimeProvider.System);
 
     /// <summary>Who the command runs for: on a host, the run of the machine that asked, which its legs' slots are recorded under.</summary>
     private readonly CommandOrigin _origin = origin ?? CommandOrigin.Typed;
@@ -956,6 +959,11 @@ public sealed class LegRunService(
                 }
             }
 
+            // The rule its machine admits it by, read once as its work begins, and carried with it: its slot, its floor and
+            // the page cache dropped as it ends all answer to this reading, and nothing reads the machine's settings file
+            // again after its work - a file edited meanwhile would else fail a leg that had run.
+            leg = leg with { AdmittedBy = AdmittedBy(context, leg, request.Here) };
+
             // Whether the leg's work starts at all, decided before it is checked and before it waits for its slot: the
             // isolation a run's step holds it inside - a WSL distribution's, which refuses the leg under required, among it -
             // and the developer environment its toolchain names. A leg whose work would never start ends with its own line,
@@ -1069,7 +1077,7 @@ public sealed class LegRunService(
         RunId runId,
         LegLedger ledger,
         CancellationToken cancellationToken)
-        => WaitsForASlotHere(context, leg, request)
+        => WaitsForASlotHere(leg, request)
             ? await AskAsync(context, leg, request, runId, ledger, leg.Name, leg.Need, settle: true, cancellationToken).ConfigureAwait(false)
             : null;
 
@@ -1078,14 +1086,14 @@ public sealed class LegRunService(
     /// machine, the machine declares admission, and the leg is heavy - or runs in a WSL distribution under a workload
     /// admitting each unit of its work, which this machine takes whole, its units asking nothing there.
     /// </summary>
-    private bool WaitsForASlotHere(HarnessContext context, PlacedLeg leg, LegRunRequest request)
+    private static bool WaitsForASlotHere(PlacedLeg leg, LegRunRequest request)
     {
         // Heavy as it is on this leg's system: a heavy step limited by runOn, or one that builds, makes the legs of those
         // systems alone heavy. A workload admitting each unit of its work holds no slot for the leg - but for a leg in a
         // WSL distribution, which this machine takes whole, its units asking nothing there.
         var workload = request.Workload.On(leg.Leg.Os);
 
-        return (workload.Heavy || (workload.AdmitsEachUnit && leg.Named.Kind == HostKind.Wsl)) && AdmissionHere(context, leg, request) is not null;
+        return (workload.Heavy || (workload.AdmitsEachUnit && leg.Named.Kind == HostKind.Wsl)) && AdmissionHere(leg, request) is not null;
     }
 
     /// <summary>
@@ -1114,7 +1122,7 @@ public sealed class LegRunService(
         LegLedger ledger,
         CancellationToken cancellationToken)
     {
-        if (request.AdmissionCheck is not { } check || !WaitsForASlotHere(context, leg, request))
+        if (request.AdmissionCheck is not { } check || !WaitsForASlotHere(leg, request))
         {
             return HostCheck.Passed;
         }
@@ -1137,10 +1145,10 @@ public sealed class LegRunService(
     /// this process runs a leg in a WSL distribution for the machine it runs on, which asked; or the machine declares no
     /// admission.
     /// </summary>
-    private AdmissionRule? AdmissionHere(HarnessContext context, PlacedLeg leg, LegRunRequest request)
+    private static AdmissionRule? AdmissionHere(PlacedLeg leg, LegRunRequest request)
         => (request.Here is null && leg.Host.Host.Kind == HostKind.Ssh) || request.Here is { Kind: HostKind.Wsl }
             ? null
-            : AdmissionRuleOf(context, leg, request.Here);
+            : RuleOf(leg);
 
     /// <summary>
     /// Asks the machine <paramref name="leg"/>'s work runs on to take <paramref name="asking"/> - the leg, or a unit of its
@@ -1159,7 +1167,7 @@ public sealed class LegRunService(
         bool settle,
         CancellationToken cancellationToken)
     {
-        if (AdmissionHere(context, leg, request) is not { } rule)
+        if (AdmissionHere(leg, request) is not { } rule)
         {
             return null;
         }
@@ -1189,8 +1197,9 @@ public sealed class LegRunService(
                     // listed at each look, a worktree made or a run ended since counted.
                     MakeRoom = rule.ReclaimIdleBuilds
                         ? async (shortfall, read, token) => MadeRoom(_idleBuilds.MakeRoom(
-                            IdleScope(context, leg, request.Here, await _trees.HereAsync(context, request.Here, token).ConfigureAwait(false)),
-                            read.Filesystem,
+                            IdleScope(context, leg, request.Here, runId, await _trees.HereAsync(context, request.Here, token).ConfigureAwait(false)),
+                            read,
+                            shortfall,
                             shortfall))
                         : null,
                 },
@@ -1212,12 +1221,13 @@ public sealed class LegRunService(
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="leg">The leg.</param>
     /// <param name="request">The run.</param>
+    /// <param name="runId">The run.</param>
     /// <param name="trees">The repository's trees on the machine the build runs on, as they were listed as its work began.</param>
-    private RoomFloor? FloorOf(HarnessContext context, PlacedLeg leg, LegRunRequest request, RepositoryTreesFound trees)
+    private RoomFloor? FloorOf(HarnessContext context, PlacedLeg leg, LegRunRequest request, RunId runId, RepositoryTreesFound trees)
     {
         var workload = request.Workload.On(leg.Leg.Os);
 
-        if (!(workload.Heavy || workload.AdmitsEachUnit) || AdmissionRuleOf(context, leg, request.Here) is not { MinFreeBytes: > 0 } rule)
+        if (!(workload.Heavy || workload.AdmitsEachUnit) || RuleOf(leg) is not { MinFreeBytes: > 0 } rule)
         {
             return null;
         }
@@ -1225,9 +1235,10 @@ public sealed class LegRunService(
         return Floor() with
         {
             // Room made from the other trees' idle builds on the machine the build runs on, where it says so, before the
-            // build is stopped: as many as it is short of beneath the floor, and its need as it was admitted beyond it.
+            // build is stopped: none where all of them would not bring it back to the floor, and else as many as it is short
+            // of beneath the floor and its need as it was admitted beyond it.
             MakeRoom = rule.ReclaimIdleBuilds
-                ? (_, read, shortfall) => MadeRoom(_idleBuilds.MakeRoom(IdleScope(context, leg, request.Here, trees), read.Filesystem, shortfall))
+                ? (read, least, most) => MadeRoom(_idleBuilds.MakeRoom(IdleScope(context, leg, request.Here, runId, trees), read, least, most))
                 : null,
             Need = leg.Need?.Bytes ?? 0,
         };
@@ -1266,37 +1277,42 @@ public sealed class LegRunService(
     /// that holds each one's builds is: <paramref name="context"/>'s, for this machine's trees, and each copy's own, for a
     /// host's, each of which is a repository of its own.
     /// </summary>
-    private IdleBuildsScope IdleScope(HarnessContext context, PlacedLeg leg, HostId? here, RepositoryTreesFound trees)
+    private IdleBuildsScope IdleScope(HarnessContext context, PlacedLeg leg, HostId? here, RunId runId, RepositoryTreesFound trees)
         => IdleBuildsScope.Beside(
             trees,
             leg.TreeRoot,
             leg.HostTreeRoot,
             leg.Name,
             HostCopies.KeptAs(here) is null ? context.Layout : null,
+            runId.Value,
             _platform.PathComparison);
 
     /// <summary>What making room came to, as admission and the floor read it; <see langword="null"/> where nothing was there to remove.</summary>
-    private static MadeRoom? MadeRoom(ReclaimedRoom? room) => room is null ? null : new MadeRoom(room.Bytes, room.Describe());
+    private static MadeRoom? MadeRoom(ReclaimedRoom? room) => room is null ? null : new MadeRoom(room.Bytes, room.Describe()) { Behind = room.Behind is not null };
 
     /// <summary>
-    /// The admission rule of the machine <paramref name="leg"/>'s work runs on, or <see langword="null"/> where it declares
-    /// none: for a WSL distribution's leg, the Windows machine it runs on, whose memory its virtual machine takes and whose
-    /// drive its disk grows on. Its slots, its floor and its page cache all answer to that one rule. Each field is the one
-    /// that machine's settings file declares, else the one config.json declares for it, else its defaults'.
+    /// The admission rule of the machine <paramref name="leg"/>'s work runs on, read now, as that work begins, or why it
+    /// could not be: for a WSL distribution's leg, the Windows machine it runs on, whose memory its virtual machine takes and
+    /// whose drive its disk grows on. Its slots, its floor and its page cache all answer to that one reading. Each field is
+    /// the one that machine's settings file declares, else the one config.json declares for it, else its defaults', from the
+    /// sections <see cref="AdmissionSection.For"/> names - what <c>legs</c> says of the host too.
     /// </summary>
     /// <remarks>
     /// The settings file is read by the process on that machine: this one's own, and on a host the host's own. In a WSL
     /// distribution a leg was sent to (<paramref name="here"/>), it is the file of the machine that sent it, carried with
     /// the leg (<see cref="Dispatch.MachineAdmission"/>): the distribution's own is another machine's to it.
     /// </remarks>
-    /// <exception cref="ConfigException">This machine's settings file could not be read, or the rule is out of its bounds.</exception>
-    private AdmissionRule? AdmissionRuleOf(HarnessContext context, PlacedLeg leg, HostId? here)
-        => AdmissionSettings.InForce(
-            here is { Kind: HostKind.Wsl }
-                ? new AdmissionSection(_origin.Dispatched?.MachineAdmission, "the settings file of the machine that sent the leg")
-                : AdmissionSection.SettingsFile(_machineSettings.Read().Admission, _machineSettings.Location ?? "nowhere"),
-            AdmissionSection.Host((leg.Named.Kind == HostKind.Wsl ? context.Config.Hosts.Local : leg.HostSettings).Admission, leg.Named),
-            AdmissionSection.Defaults(context.Config.Defaults.Admission))?.Rule;
+    private AdmissionReading AdmittedBy(HarnessContext context, PlacedLeg leg, HostId? here)
+        => AdmissionReading.Of(() => AdmissionSection.For(leg.Host.Host, here, () => _machineSettings.Answer(path => path), _origin.Dispatched, context.Config));
+
+    /// <summary>
+    /// The admission rule <paramref name="leg"/> carries, as it was read as its work began, or <see langword="null"/> where
+    /// its machine declares none.
+    /// </summary>
+    /// <exception cref="HarnessException">The rule could not be read then: a configuration's refusal, which ends the run.</exception>
+    /// <exception cref="InvalidOperationException">The leg's work has not begun: nothing read its rule yet.</exception>
+    private static AdmissionRule? RuleOf(PlacedLeg leg)
+        => (leg.AdmittedBy ?? throw new InvalidOperationException($"Leg '{leg.Name}' carries no admission rule: it is read as its work begins.")).RuleInForce();
 
     /// <summary>The trees of <paramref name="trees"/> but the one <paramref name="leg"/> works in: the repository's other trees here.</summary>
     private RepositoryTreesFound Beside(RepositoryTreesFound trees, PlacedLeg leg)
@@ -1513,7 +1529,13 @@ public sealed class LegRunService(
             // this machine admits its heavy legs by the memory. Not waited for: what comes back is the next wait's to read.
             // Nothing to drop is said too: the leg had just run in a distribution a host reaches, so WSL listing none of them
             // running leaves its cache where it was.
-            if (leg.Named.Kind == HostKind.Wsl && AdmissionRuleOf(context, leg, request.Here) is not null)
+            if (leg.Named.Kind == HostKind.Wsl && leg.AdmittedBy is { Unread: { } unread })
+            {
+                // Never refused here, its verdict in hand: a light leg is admitted by no rule, and runs whatever the machine's
+                // settings file says - a heavy one was refused before its work for want of it.
+                ledger.Transition(leg.Name, $"as the leg ended, WSL's page cache was not dropped: whether this machine admits its heavy legs by the memory could not be read as the leg began: {unread}");
+            }
+            else if (leg.Named.Kind == HostKind.Wsl && RuleOf(leg) is not null)
             {
                 try
                 {
@@ -1547,7 +1569,7 @@ public sealed class LegRunService(
         var treesHere = await _trees.HereAsync(context, request.Here, cancellationToken).ConfigureAwait(false);
         var working = leg with
         {
-            Floor = FloorOf(context, leg, request, treesHere),
+            Floor = FloorOf(context, leg, request, runId, treesHere),
             Beside = Beside(treesHere, leg),
         };
 

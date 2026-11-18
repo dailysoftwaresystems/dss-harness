@@ -961,6 +961,38 @@ public sealed class LegsServiceTests
         Assert.Equal(unread, Assert.Single(report.Placements).Host?.AdmissionUnread);
     }
 
+    /// <summary>
+    /// In a WSL distribution running legs another machine sent it, the rule this machine's legs are admitted by is the one a
+    /// run there admits them by: the sending machine's settings file, carried with them, under hosts.local - never the
+    /// distribution's own file, which is another machine's to them, unreadable or not.
+    /// </summary>
+    [Fact]
+    public async Task InADistributionServingSentLegs_TheRuleIsTheSendersSettingsFiles_AsTheRunAdmitsBy()
+    {
+        var fixture = Create(
+            new() { ["arm"] = HostDoubles.Leg("linux", "arm64") },
+            defaultsAdmission: new AdmissionSettings { MaxMemoryPercent = 80 },
+            localAdmission: new AdmissionSettings { MinFreeGiB = 4 },
+            inspect: host => Measurements[host] with
+            {
+                MachineSettings = new MachineSettingsAnswer("/home/dev/.local/share/dssharness/settings-d.json", Problem: "the distribution's own file is unwell"),
+            },
+            origin: CommandOrigin.Served(Dispatch.Of(new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Run,
+                MachineAdmission = new AdmissionSettings { HeavyLegs = 4 },
+            })));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Wsl("Ubuntu"), cancellationToken: TestContext.Current.CancellationToken);
+        var local = report.Hosts.Single(host => host.Host == HostId.Local);
+
+        Assert.Null(local.AdmissionUnread);
+        Assert.Equal(
+            "heavyLegs 4 from the settings file of the machine that sent the leg; maxMemoryPercent 80 from config.json's defaults.admission; "
+                + "settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false built in; minFreeGiB 4 from config.json's hosts.local admission",
+            local.Admission?.Describe());
+    }
+
     /// <summary>What a host answers about a build directory: whether it is there, what it recorded, the room on '/'.</summary>
     private static BuildDirectoryRoom Room(string path, bool exists, long? recorded, long free)
         => new(path, exists, recorded, new DiskSpace(free << 30, 48L << 30, "/"), null);
@@ -974,7 +1006,8 @@ public sealed class LegsServiceTests
         AdmissionSettings? defaultsAdmission = null,
         AdmissionSettings? localAdmission = null,
         string? root = null,
-        HostItems? items = null)
+        HostItems? items = null,
+        CommandOrigin? origin = null)
     {
         var config = new HarnessConfig
         {
@@ -1004,7 +1037,8 @@ public sealed class LegsServiceTests
             inspector,
             trees ?? new KnownTrees(),
             HostDoubles.Platform(),
-            new ConsoleHarnessOutput(output, error, verbose: false));
+            new ConsoleHarnessOutput(output, error, verbose: false),
+            origin);
 
         return new Fixture(service, inspector, output, error);
     }

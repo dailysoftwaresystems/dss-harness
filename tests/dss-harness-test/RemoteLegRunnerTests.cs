@@ -297,16 +297,18 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
-    /// A WSL distribution's leg is sent with the admission this machine's settings file declares - the distribution runs
-    /// on this machine, and holds its build to the floor this machine keeps - beside its command; an ssh host's leg is sent
-    /// none, a host reading its own file, and a WSL leg whose machine declares nothing is sent nothing.
+    /// A WSL distribution's leg is sent with the admission this machine's settings file declared as the leg's work began -
+    /// the distribution runs on this machine, and holds its build to the floor this machine keeps, by the one reading its
+    /// slot was admitted by, never the survey's - beside its command; an ssh host's leg is sent none, a host reading its own
+    /// file, and a WSL leg whose machine declares nothing is sent nothing.
     /// </summary>
     [Fact]
     public async Task AWslLeg_IsSentWithThisMachinesSettingsFileAdmission_AndNoOtherLegIs()
     {
         var sent = new List<HostCommand>();
         var settings = new MachineSettingsAnswer("C:\\Users\\u\\AppData\\Local\\dssharness\\settings-m.json", new AdmissionSettings { MinFreeGiB = 6, ReclaimIdleBuilds = true });
-        var wsl = Leg();
+        var surveyed = new MachineSettingsAnswer(settings.Path, new AdmissionSettings { MinFreeGiB = 1 });
+        var wsl = Leg() with { Host = Leg().Host with { MachineSettings = surveyed } };
         var ssh = wsl with
         {
             Host = wsl.Host with
@@ -324,8 +326,8 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        await Runner(hosts).RunAsync("build", wsl with { Host = wsl.Host with { MachineSettings = settings } }, [], cancellationToken: TestContext.Current.CancellationToken);
-        await Runner(hosts).RunAsync("build", ssh, [], cancellationToken: TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", wsl with { AdmittedBy = new AdmissionReading(null, settings.Admission, null) }, [], cancellationToken: TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", ssh with { AdmittedBy = new AdmissionReading(null, settings.Admission, null) }, [], cancellationToken: TestContext.Current.CancellationToken);
         await Runner(hosts).RunAsync("build", wsl, [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal<(double?, bool?)?>(

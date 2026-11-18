@@ -124,8 +124,9 @@ public sealed record AnchorCellWeighed(string Cell, AnchorCellResolution Resolut
 /// the agent's one verdict once both are, and nothing of it is written while either is not: the registries' verdict
 /// stands, never a row stating two. A row the registries reopened that the agent closes again with its trigger, its status
 /// file closed as it was, is the case this is for, and its mirror, a row the registries closed that the agent keeps open.
-/// Where the agent's declaration states two verdicts itself, there is no one decision to take: its cells are weighed on
-/// their own and the row is refused, as any row stating two is. Where a Trigger carries no verdict, the status alone states
+/// Where the agent's declaration states two verdicts itself, there is no one decision to take: its cells are weighed here on
+/// their own, and the command that applies it refuses the row before weighing it at all, whatever the row taken one from
+/// each side would state. Where a Trigger carries no verdict, the status alone states
 /// it and is weighed as any cell is: a status the agent's file holds as it declared it at its earlier fold is no decision
 /// of the agent's, so the registries' change of it is kept, whatever the agent's trigger says.
 /// </para>

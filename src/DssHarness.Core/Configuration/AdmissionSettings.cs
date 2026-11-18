@@ -98,8 +98,8 @@ public sealed class AdmissionSettings
     /// <summary>
     /// Whether a heavy leg short of room - waiting for it as it is admitted, or under <see cref="MinFreeGiB"/> as it
     /// builds - first removes the build directories other trees of its repository keep on the same filesystem of its
-    /// machine that no run or sweep holds, the least recently built first, as many as its need takes. Off where nothing
-    /// says.
+    /// machine that no run or sweep holds, the least recently built first: none where all of them would not cover what the
+    /// disk lacks, and else as many as that takes, one leg at a time on a filesystem. Off where nothing says.
     /// </summary>
     public bool? ReclaimIdleBuilds { get; init; }
 
@@ -227,6 +227,98 @@ public sealed record AdmissionSection(AdmissionSettings? Settings, string From)
     /// <summary>The section config.json declares for every machine.</summary>
     /// <param name="settings">Its <c>admission</c>, or <see langword="null"/>.</param>
     public static AdmissionSection Defaults(AdmissionSettings? settings) => new(settings, "config.json's defaults.admission");
+
+    /// <summary>
+    /// The sections the rule the legs placed on <paramref name="host"/> are admitted by is read from, the one that wins
+    /// first, as a process to which the machine that sent it legs knows it as <paramref name="here"/> reads them: the
+    /// settings file of the machine that admits them - the one <paramref name="settings"/> answers, or, for a distribution's
+    /// own legs a machine sent it, that machine's, carried with them (<paramref name="dispatched"/>), since a distribution's
+    /// own file is another machine's to them - then the section config.json declares for that machine
+    /// (<see cref="Host"/>), then <c>defaults.admission</c>. The one owner of which sections, in which order, for which host:
+    /// what <c>legs</c> says is the rule a run's legs are admitted by.
+    /// </summary>
+    /// <param name="host">The host the legs were placed on, as this process names it.</param>
+    /// <param name="here">The host this process is to the machine that sent it legs, or <see langword="null"/>.</param>
+    /// <param name="settings">
+    /// Reads what the settings file of the machine that runs the legs says - asked only where that file is the one they are
+    /// admitted by.
+    /// </param>
+    /// <param name="dispatched">What the machine that sent this process its legs carried beside them, where one did.</param>
+    /// <param name="config">The configuration, whose sections follow the settings file's.</param>
+    /// <exception cref="ConfigException">The settings file the legs are admitted by could not be read: refused, with its words.</exception>
+    public static IReadOnlyList<AdmissionSection> For(
+        Hosts.HostId host,
+        Hosts.HostId? here,
+        Func<MachineSettingsAnswer> settings,
+        Hosts.Dispatch? dispatched,
+        HarnessConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(config);
+
+        // Read under the name the machine that sent the legs knows this one by, as their settings are: 'local' in the
+        // configuration the two share is that machine.
+        var named = host.Kind == Hosts.HostKind.Local && here is not null ? here : host;
+
+        var file = here is { Kind: Hosts.HostKind.Wsl } && host.Kind == Hosts.HostKind.Local
+            ? new AdmissionSection(dispatched?.MachineAdmission, "the settings file of the machine that sent the leg")
+            : settings() is var answer && answer.Problem is { } problem
+                ? throw new ConfigException(problem)
+                : SettingsFile(answer.Admission, answer.Path ?? "nowhere");
+
+        return
+        [
+            file,
+
+            // This machine's section for it and for its WSL distributions, which run on it; an ssh host's own for that host.
+            Host((named.Kind == Hosts.HostKind.Wsl ? config.Hosts.Local : config.Hosts.SettingsFor(named)).Admission, named),
+            Defaults(config.Defaults.Admission),
+        ];
+    }
+}
+
+/// <summary>
+/// The rule the machine that runs a leg's work admits it by, read once as that work begins and carried with the leg
+/// (<see cref="Runs.PlacedLeg.AdmittedBy"/>): its slot, its floor - in a WSL distribution too, where the leg carries what
+/// it was admitted by - and the page cache dropped as it ends all answer to that one reading, never to one taken after the
+/// leg's work, which a settings file edited meanwhile would turn into a failure of a leg that had run.
+/// </summary>
+/// <param name="InForce">
+/// The rule, and where each field came from; <see langword="null"/> where no section declares one, or where it could not be
+/// read.
+/// </param>
+/// <param name="SettingsFile">What the settings file the leg is admitted by declared of admission, as it was read.</param>
+/// <param name="Unread">
+/// Why the rule could not be read, where it could not: a heavy leg is refused then, as its admission asks for the rule, and a
+/// light one, which asks for none, runs.
+/// </param>
+public sealed record AdmissionReading(AdmissionInForce? InForce, AdmissionSettings? SettingsFile, string? Unread)
+{
+    /// <summary>The rule read from <paramref name="sections"/>, or why it could not be.</summary>
+    /// <param name="sections">Names the sections, the one that wins first (<see cref="AdmissionSection.For"/>).</param>
+    public static AdmissionReading Of(Func<IReadOnlyList<AdmissionSection>> sections)
+    {
+        ArgumentNullException.ThrowIfNull(sections);
+
+        try
+        {
+            var read = sections();
+
+            return new AdmissionReading(AdmissionSettings.InForce(read), read.Count > 0 ? read[0].Settings : null, null);
+        }
+        catch (ConfigException ex)
+        {
+            return new AdmissionReading(null, null, ex.Message);
+        }
+    }
+
+    /// <summary>The rule, or <see langword="null"/> where no section declares one, and every leg is admitted at once.</summary>
+    /// <exception cref="Results.HarnessException">
+    /// The rule could not be read as the leg's work began: refused with the words it was refused in then, as a configuration
+    /// that is wrong - the same fact for every heavy leg of the machine, so it ends the run rather than one leg's verdict.
+    /// </exception>
+    public AdmissionRule? RuleInForce() => Unread is { } why ? throw new Results.HarnessException(Results.HarnessExit.ConfigInvalid, why) : InForce?.Rule;
 }
 
 /// <summary>One field of the rule a machine admits heavy legs by, and where it came from.</summary>

@@ -137,6 +137,12 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
     private readonly ConcurrentDictionary<string, MachineWideList<LockEntry>> _files = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// This process, and how the liveness of another is told: what a removal that keeps a run out by this lock's mutex
+    /// names its asides by, and tells another's by, as this lock tells its holders.
+    /// </summary>
+    internal IProcessIdentity Identity => _identity;
+
+    /// <summary>
     /// The lock file of <paramref name="layout"/>, read and changed by the rules every such list keeps. A shape this build
     /// does not recognise is refused; the one field an older build wrote and this one no longer uses is declared on the
     /// holder, so upgrading reads its own lock file rather than refusing it. A lock already held is refused at once: only

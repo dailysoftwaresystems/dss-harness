@@ -333,9 +333,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             // The drive a WSL distribution's disk grows on, which the leg's build fills, and which only this machine sees.
             DiskImageDrive = leg.Host.Host.Kind == HostKind.Wsl ? leg.Host.DiskImageSpace?.Filesystem : null,
 
-            // What this machine's settings file declares of its admission, which holds a WSL leg's build to its floor: the
-            // distribution's own file is another machine's.
-            MachineAdmission = leg.Host.Host.Kind == HostKind.Wsl ? leg.Host.MachineSettings?.Admission : null,
+            // What this machine's settings file declared of its admission as the leg's work began, which holds a WSL leg's
+            // build to its floor: the one reading its slot was admitted by, and the distribution's own file another machine's.
+            MachineAdmission = leg.Host.Host.Kind == HostKind.Wsl ? leg.AdmittedBy?.SettingsFile : null,
 
             // The distribution each WSL item read here names, which the leg's run lines may name there, where no item is.
             Distributions = leg.Distributions

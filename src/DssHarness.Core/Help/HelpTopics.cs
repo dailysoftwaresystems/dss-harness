@@ -1662,7 +1662,10 @@ public static class HelpTopics
         builder.AppendLine("slots' record, holding { \"admission\": { ... } } in the keys above, read as strictly");
         builder.AppendLine("as config.json: a key it does not know, a key written twice or a value out of its");
         builder.AppendLine("bounds is refused, naming the file, and no heavy leg is admitted by it, nor by a");
-        builder.AppendLine("tree's config.json in its place, until it is put right. It is the machine's: every");
+        builder.AppendLine("tree's config.json in its place, until it is put right. A leg's rule is read once,");
+        builder.AppendLine("as its work begins: its slot, its floor and the page cache dropped as it ends all");
+        builder.AppendLine("answer to that reading, so a file put wrong while a run goes on refuses the heavy");
+        builder.AppendLine("legs that begin after it, and never a leg that has run. It is the machine's: every");
         builder.AppendLine("command this user runs there reads it, whichever tree it runs in, and an ssh host");
         builder.AppendLine("reads its own as it admits the legs sent to it. config.json is tracked, so each");
         builder.AppendLine("worktree holds the copy of its last commit, and a count raised there leaves the");
@@ -1686,10 +1689,17 @@ public static class HelpTopics
         builder.AppendLine("admitted, or under minFreeGiB as it builds - first removes the build directories the");
         builder.AppendLine("repository's other trees keep on that filesystem of its machine that no run or");
         builder.AppendLine("sweep holds: the least recently built first, and only as many as it is short of -");
-        builder.AppendLine("its need beside the other legs' claims as it is admitted, and at the floor what");
-        builder.AppendLine("falls under it with its need as it was admitted beyond it. Each is removed as clean");
-        builder.AppendLine("--legs removes one, under the lock a build of it takes; one a run's lock names, or");
-        builder.AppendLine("a sweep of its variant in that tree holds, is left and said, and the leg's own tree");
+        builder.AppendLine("as it is admitted, what the disk itself lacks of its need, never the room the other");
+        builder.AppendLine("admitted legs claim, which ends with their work and counts what their builds have");
+        builder.AppendLine("written already; at the floor, what falls under it with its need as it was admitted");
+        builder.AppendLine("beyond it - and none at all where every one that could be removed would not cover");
+        builder.AppendLine("what it lacks, or bring it back to the floor. One leg makes room on a filesystem at");
+        builder.AppendLine("a time, across every command this user runs on the machine: a leg that finds another");
+        builder.AppendLine("making room there removes nothing beside it, is not stopped for it, and reads the");
+        builder.AppendLine("room again once that one has. Each is removed as clean --legs removes one, under the");
+        builder.AppendLine("lock a build of it takes, into an aside of its process's own that only that process");
+        builder.AppendLine("deletes; one a run's lock names, a sweep of its variant in that tree holds, or whose");
+        builder.AppendLine("tree's lock cannot be read, is left and said, and the leg's own tree");
         builder.AppendLine("and the copies its legs work in are never touched, nor a sweep's workers. A build");
         builder.AppendLine("directory is one below a tree's build holding the record a build of this tool");
         builder.AppendLine("writes, whatever variant it is. The trees are the machine's: here the main checkout,");
@@ -5109,7 +5119,8 @@ public static class HelpTopics
             + "closed that the agent keeps open - both are weighed as both changed, each line of the dry run saying why, and "
             + "written, the agent's together, only where --accept-over <ID>:status and --accept-over <ID>:trigger name them; "
             + "until both are named nothing of the row is written, and the registries' verdict stands. A row the agent declares "
-            + "with two verdicts itself is refused for them, no consent asked. Where the setting does not hold, the status alone "
+            + "with two verdicts itself is refused for them before any cell of it is weighed, whatever the row taken one from each "
+            + "would state, no consent asked. Where the setting does not hold, the status alone "
             + "carries the verdict and is weighed as any cell is: one the agent's file holds as it declared it then is kept, "
             + "whatever its trigger says. An --accept-over naming a cell not both changed is refused, as is one naming "
             + "a row the agent did not file, and one naming a row declared as its earlier fold recorded it is let stand; a row an "

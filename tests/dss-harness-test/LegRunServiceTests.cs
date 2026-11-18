@@ -3129,9 +3129,10 @@ public sealed class LegRunServiceTests
 
     /// <summary>
     /// A heavy leg short of room as it is admitted, on a machine that says reclaimIdleBuilds, removes another tree's idle
-    /// build there before it waits - never one of its own tree's - and its line and its admission in --json say what it
-    /// removed, whose tree it was and the room before and after, though it then waited out its time for the rest; the
-    /// note left where the build was is that tree's next build's to say.
+    /// build there before it waits - never one of its own tree's - for what the disk lacks of its need, beside another
+    /// leg's claim it does not count, and its line and its admission in --json say what it removed, whose tree it was and
+    /// the room before and after, though it then waited out its time for the rest; the note left where the build was is
+    /// that tree's next build's to say.
     /// </summary>
     [Fact]
     public async Task AHeavyLegShortOfRoom_RemovesAnotherTreesIdleBuild_BeforeItWaits_AndSaysSo()
@@ -3139,7 +3140,8 @@ public sealed class LegRunServiceTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var record = AdmissionRecord(temp);
-        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var free = (8 * AdmissionKit.Gibibyte) - 10;
+        var room = new ScriptedRoom(harness.FileSystem, free);
         var other = temp.Combine("trees", "other");
         var idle = Path.Combine(other, "build", "x86_64-gcc-debug");
         var own = Path.Combine(temp.Path, "build", "x86_64-gcc-debug");
@@ -3190,7 +3192,7 @@ public sealed class LegRunServiceTests
 
         Assert.Equal(
             $"removed ~{DiskSpace.Size(23)} of other trees' idle builds on '/data' to make room: worktree o1/other's at '{idle}', last built "
-            + "2026-11-01 08:00 UTC; 40 GiB free before, 40 GiB after",
+            + $"2026-11-01 08:00 UTC; {DiskSpace.Size(free)} free before, {DiskSpace.Size(free)} after",
             removed);
         Assert.Contains($"native: {removed}", harness.StandardError.ToString() + harness.StandardOutput.ToString(), StringComparison.Ordinal);
     }
@@ -3282,6 +3284,127 @@ public sealed class LegRunServiceTests
 
         Assert.Equal(((long?)(sent ? 3L << 30 : 1L << 29), sent), (held?.Bytes, held?.MakeRoom is not null));
     }
+
+    /// <summary>
+    /// A leg's admission rule is read once, as its work begins, and carried with it: this machine's settings file put wrong
+    /// while a WSL leg runs - heavy or light - never fails the leg once it has run, and its page cache is dropped as it ends
+    /// by the rule read then. Read again after the leg's work, the file failed the run with a configuration error and lost
+    /// the leg's verdict.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ASettingsFilePutWrongWhileAWslLegRuns_NeverFailsTheLegOnceItRan(bool heavy)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var cache = new ScriptedPageCache(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), AdmissionKit.Gibibyte));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "heavyLegs": 3 } }""", TestContext.Current.CancellationToken);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            // Put wrong while the leg runs there: a count of no leg at all, out of its bounds.
+            File.WriteAllText(settings.Location!, """{ "admission": { "heavyLegs": 0 } }""");
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            WslLeg(),
+            WslInspector(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = heavy ? Heavy : LegWorkload.Copy },
+            hosts: hosts,
+            pageCache: cache,
+            machineSettings: settings);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Equal("passed", Verdicts(outcome)["remote"].Verdict);
+        Assert.Single(cache.Asked);
+    }
+
+    /// <summary>
+    /// A settings file that cannot be read as a WSL leg's work begins refuses a heavy leg, which asks for the rule, before
+    /// anything of it is sent - a configuration's refusal, which ends the run in the file's words, as every heavy leg of the
+    /// machine would meet it, never one leg's defect; a light one asks for none and runs, its page cache left as it ends and
+    /// its line saying why.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ASettingsFileUnreadAsAWslLegBegins_RefusesAHeavyLeg_AndLetsALightOneRun(bool heavy)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var cache = new ScriptedPageCache(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), AdmissionKit.Gibibyte));
+        var sent = 0;
+        var unread = $"This machine's settings file '{settings.Location}' could not be read: admission heavyLegs must be at least 1, found 0. ";
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "heavyLegs": 0 } }""", TestContext.Current.CancellationToken);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent++;
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            WslLeg(),
+            WslInspector(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = heavy ? Heavy : LegWorkload.Copy },
+            hosts: hosts,
+            pageCache: cache,
+            machineSettings: settings);
+        var printed = harness.StandardOutput.ToString() + harness.StandardError.ToString();
+
+        Assert.Empty(cache.Asked);
+
+        if (heavy)
+        {
+            Assert.Equal((HarnessExit.ConfigInvalid, 0), (outcome.ExitCode, sent));
+            Assert.StartsWith(unread, outcome.Message, StringComparison.Ordinal);
+            return;
+        }
+
+        Assert.Equal((0, 1), (outcome.ExitCode, sent));
+        Assert.Contains(
+            "remote: as the leg ended, WSL's page cache was not dropped: whether this machine admits its heavy legs by the memory could not be read as "
+                + $"the leg began: {unread}",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>A WSL leg of this machine, which declares admission under hosts.local.</summary>
+    private static HarnessConfig WslLeg() => new()
+    {
+        BuildConfigs = { ["debug"] = new BuildConfiguration() },
+        Hosts = new HostsConfig
+        {
+            Local = new LocalHostConfig { Admission = new AdmissionSettings() },
+            Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+        },
+        Legs = { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+    };
+
+    /// <summary>This machine, and its WSL distribution reached through a session.</summary>
+    private static RecordingInspector WslInspector(HarnessFactory harness) => new(host => new HostReport
+    {
+        Host = host,
+        Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+        Processor = host.Kind == HostKind.Local ? harness.Platform.Processor : "x86_64",
+        Session = host.Kind == HostKind.Local ? null : Session(host),
+    });
 
     /// <summary>The real file system, except that what is mounted reads as <paramref name="mounts"/> says.</summary>
     private sealed class MountsListing(IFileSystem inner, string mounts) : PassThroughFileSystem(inner)

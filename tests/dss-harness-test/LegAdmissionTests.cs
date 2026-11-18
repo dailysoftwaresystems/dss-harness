@@ -1635,9 +1635,8 @@ public sealed class LegAdmissionTests
 
     /// <summary>
     /// A leg short of room, on a machine that makes room from other trees' idle builds, makes it before it waits - told
-    /// what it is short of beside the other legs' claims, and the room as it read it - says what was removed, claims again,
-    /// and starts on the room made, its line and its fact keeping what it removed. Without it, the leg waits out the other
-    /// leg's claim.
+    /// what the disk itself lacks of its need, and the room as it read it - says what was removed, claims again, and
+    /// starts on the room made, its line and its fact keeping what it removed.
     /// </summary>
     [Fact]
     public async Task ALegShortOfRoom_MakesItFromIdleBuildsFirst_AndStartsOnIt()
@@ -1645,13 +1644,11 @@ public sealed class LegAdmissionTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var record = temp.Combine("admission.json");
-        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var room = new ScriptedRoom(harness.FileSystem, 4 * AdmissionKit.Gibibyte);
         var said = new List<string>();
         var asked = new List<(long Shortfall, string Filesystem, long Free)>();
         const string Removed = "removed ~6 GiB of other trees' idle builds on '/data' to make room: worktree o1/xa's at '/src/xa/build/x86_64-gcc-debug', "
-            + "last built 2026-11-01 08:00 UTC; 40 GiB free before, 46 GiB after";
-
-        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), 35 * AdmissionKit.Gibibyte, "/data"));
+            + "last built 2026-11-01 08:00 UTC; 4 GiB free before, 10 GiB after";
 
         using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room)
             .AdmitAsync(
@@ -1669,13 +1666,51 @@ public sealed class LegAdmissionTests
 
         Assert.True(admitted.Fact.Admitted);
         Assert.Equal(0, admitted.Fact.WaitedSeconds);
-        Assert.Equal([(5 * AdmissionKit.Gibibyte, "/data", 40 * AdmissionKit.Gibibyte)], asked);
+        Assert.Equal([(6 * AdmissionKit.Gibibyte, "/data", 4 * AdmissionKit.Gibibyte)], asked);
         Assert.Equal([Removed], admitted.Fact.Reclaimed!);
         Assert.Equal(
-            "admitted at once, memory 30.0% in use (30 of 100 by the test), and its build needs ~10 GiB; 46 GiB free on '/data', beside ~35 GiB "
-            + $"other legs claim; it {Removed}",
+            $"admitted at once, memory 30.0% in use (30 of 100 by the test), and its build needs ~10 GiB; 10 GiB free on '/data'; it {Removed}",
             admitted.Fact.Describe());
         Assert.Equal([Removed, admitted.Fact.Describe()!], said);
+    }
+
+    /// <summary>
+    /// Room is made only for what the disk itself lacks of the leg's need, never for what the other admitted legs claim: a
+    /// claim is a leg's whole need while the disk already shows gone what its build has written, and ends with its work,
+    /// leaving that build behind. A leg short only of what another leg claims removes nothing and waits; one the disk lacks 2
+    /// GiB for, beside 35 another claims, is told 2, never 37.
+    /// </summary>
+    [Theory]
+    [InlineData(20, null)]
+    [InlineData(8, 2L)]
+    public async Task RoomIsMadeOnlyForWhatTheDiskLacks_NeverForWhatOtherLegsClaim(long freeGibibytes, long? lacksGibibytes)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var room = new ScriptedRoom(harness.FileSystem, freeGibibytes * AdmissionKit.Gibibyte);
+        var said = new List<string>();
+        var asked = new List<long>();
+
+        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), 35 * AdmissionKit.Gibibyte, "/data"));
+
+        using var refused = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room)
+            .AdmitAsync(
+                AdmissionKit.Request(AdmissionKit.Rule(settleLeast: 0, settleMost: 0, maxWaitMinutes: 1), said, room: AdmissionKit.Room(10)) with
+                {
+                    MakeRoom = (shortfall, _, _) =>
+                    {
+                        asked.Add(shortfall);
+                        return Task.FromResult<MadeRoom?>(null);
+                    },
+                },
+                TestContext.Current.CancellationToken);
+
+        Assert.False(refused.Fact.Admitted);
+        long[] expected = lacksGibibytes is { } lacks ? [lacks * AdmissionKit.Gibibyte, lacks * AdmissionKit.Gibibyte, lacks * AdmissionKit.Gibibyte] : [];
+
+        Assert.Equal(expected, asked);
+        Assert.Null(refused.Fact.Reclaimed);
     }
 
     /// <summary>
@@ -1688,12 +1723,10 @@ public sealed class LegAdmissionTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var record = temp.Combine("admission.json");
-        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var room = new ScriptedRoom(harness.FileSystem, 4 * AdmissionKit.Gibibyte);
         var said = new List<string>();
         var asked = 0;
         const string Nothing = "no other tree's idle build on '/data' could be removed to make room; worktree o1/xa's build at '/src/xa/build' was left, as a run holds it: it";
-
-        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), 35 * AdmissionKit.Gibibyte, "/data"));
 
         using var refused = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room)
             .AdmitAsync(

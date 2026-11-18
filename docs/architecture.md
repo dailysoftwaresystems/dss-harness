@@ -1641,8 +1641,9 @@ set-anchor would move it: a row the orchestrator reopened that the agent closes 
 closed as it was, goes back to the done registry, and its mirror, a row the orchestrator closed that the agent keeps
 open, to the pending one. Until both are named nothing of the row is written, so the registries' verdict stands and no
 row of two verdicts is ever written; a fold step of a run asks for them as for any cell both changed. A declaration
-that states two verdicts itself is no one decision to take: its cells are weighed on their own and the row is refused
-for the two verdicts, no consent asked that could not mend it. Where the setting does not hold, the trigger carries no
+that states two verdicts itself is no one decision to take: the row is refused for the two verdicts before any cell
+of it is weighed - whatever the row taken one from each side would state, which may agree by chance - with no
+consent asked that could not mend it. Where the setting does not hold, the trigger carries no
 verdict and the status alone states it, weighed as any cell is: a status the agent's file holds as it declared it at
 its earlier fold is no decision of the agent's, so the registries' change of it is kept, whatever the agent's trigger
 says, and an `--accept-over` naming it is refused as naming a cell not both changed. The row the registries are to hold (`AnchorRowOutcome.Effective`) is composed and judged by the same code
@@ -5760,15 +5761,29 @@ one per machine and per user (`MachineSettingsFile`). It holds `{ "admission": {
 `config.json`'s `admission` takes, read by the same options and the same rules
 (`HarnessConfigValidator.ValidateAdmission`): a key it does not know, a key written twice or a value
 out of its bounds is refused, naming the file, and no heavy leg is admitted by it - nor by a tree's
-`config.json` in its place - until it is put right; a file that is not there declares nothing. Each
+`config.json` in its place - until it is put right; a file that is not there declares nothing. A leg's
+rule is read once, as its work begins, and carried with it (`PlacedLeg.AdmittedBy`, an
+`AdmissionReading`): its slot, its floor - in a WSL distribution too, which is sent that reading - and
+the page cache dropped as it ends all answer to it, and nothing reads the file again after the leg's
+work, so a file put wrong while a run goes on refuses the heavy legs that begin after it, and never a
+leg that has run. Its refusal is a configuration's, which ends the run in the file's words as every
+heavy leg of the machine would meet it (`AdmissionReading.RuleInForce`), never one leg's defect; a light
+leg asks no rule, and runs, its page cache left where the rule could not be read, saying why. Only the
+count of slots is read again at each look of the slots' record, which turns a refusal of the file into
+that record's own (`HeavyLegSlots`), so every reader of the line - a dry run naming a tree's holders
+among them - says it could not be read rather than failing. Each
 field it declares wins over the machine's section in every tree's `config.json`, which wins over
 `defaults.admission`, which wins over the built-in value (`AdmissionSettings.InForce`), so a field it
 leaves out is still the repository's to say. Every command this user runs on the machine reads it,
 whichever tree it runs in; an ssh host reads its own, as it admits the legs sent to it; a WSL leg is
 admitted by this machine's, which is sent with it for its floor (`HostAgentRequest.MachineAdmission`,
-since protocol 14), since the distribution's own is another machine's to it. `legs` says, for each host
-it reaches, the rule in force and where each field came from, or why the settings file could not be
-read: an ssh host answers its own file in the survey's answer (`HostAgentInfo.MachineSettings`), its
+since protocol 14), since the distribution's own is another machine's to it. Which sections, in which
+order, for which host has one owner (`AdmissionSection.For`), which a run's legs and `legs` both read
+the rule through: the settings file of the machine that admits them - for a distribution's legs sent
+to it, the sender's, carried with them - then `hosts.local` for this machine and its distributions, or
+an ssh host's own section, then `defaults.admission`. `legs` says, for each host it reaches, the rule
+in force and where each field came from, or why the settings file could not be read: an ssh host
+answers its own file in the survey's answer (`HostAgentInfo.MachineSettings`), its
 home written `~`, and `--json` gives each host's `settingsFile`, its `admission` fields (`key`,
 `value`, `from`) and `admissionUnread`.
 
@@ -5851,7 +5866,10 @@ again every 15 seconds, and the build is stopped once one has less free than its
 naming what was free and where, and what it built left for `clean`, as any build stopped part way
 leaves it. A build that fails between two readings - a disk filled faster than the next came - is
 read again as it fails, and is `stopped`, not `failed`, where a filesystem it fills is under the
-floor then: a full disk says nothing of its code. So is a build whose own write fails then - a
+floor then, or was at any reading since the phase that failed began - room made there since or not:
+a full disk says nothing of its code. Judging a failure never makes room (`RoomFloorWatch.Now`): only
+the watch's own readings do, so the one question meant to tell a failure for want of room is never
+answered by first removing the want. So is a build whose own write fails then - a
 phase's log, its record - which would otherwise end every leg of its run. The floor is read before
 the build writes anything: one under it as it starts is stopped writing nothing, not its record,
 which would say its directory was built from a tree no phase of it read; and a record of what it
@@ -5874,15 +5892,33 @@ idle tree's build by hand made the room. With `reclaimIdleBuilds` true, a heavy 
 first removes the build directories the repository's other trees keep on that filesystem of its
 machine that no run or sweep holds (`IdleBuilds`), the least recently built first - by when a build
 last wrote its record there - one at a time, until what it removed covers what it is short of: as it
-is admitted, its need less what is free beside the other legs' claims, and then it claims again; under
-the floor, what it falls short of the floor plus its need as it was admitted, and then the room is
-read again, the build stopped only where it is still under. A build directory is one below a tree's
+is admitted, what the disk itself lacks of its need, and then it claims again; under the floor, what it
+falls short of the floor plus its need as it was admitted, and then the room is read again, the build
+stopped only where it is still under. Never for the room the other admitted legs claim: a claim is a
+leg's whole need, held until its work ends, while the disk already shows gone what its build has
+written, so removing for it would remove that room a second time - and the claim's end gives no room
+back, its build staying. What each build holds is weighed first, by what its last finished build
+recorded or else by what it holds, and none is removed where all that could be comes to less than the
+least the leg lacks - at the floor, what brings it back to it: destroying every one would not let the
+leg go on. One leg makes room on a filesystem at a time, across every command this user runs on the
+machine (`HeavyLegSlots.MakeRoomOn`, a third record beside the slots',
+`admission-<machine id>.making.json`, held by its process as a slot is): two legs short of room there would each read the room before the
+other's removals gave it back, each remove the whole of what it lacked, and meet in one build. A leg
+that finds another making room there removes nothing beside it and is told so - at admission it waits
+for room and looks again; under the floor its build is not stopped for that reading, and is read again
+at the next - and the one that holds the making reads the room again first, so what another made since
+it read it counts as made. A build directory is one below a tree's
 `build` holding the record a build of this tool writes as it begins, whatever variant it is and
 whatever the tree's configuration says now; a link there is left. Each is removed as `clean --legs`
-removes a leg's own, by the one owner of that removal (`BuildDirectoryRemoval`): what an earlier
-removal left aside first, then the directory renamed aside under the mutex a run needs to take the
-lock a build of it takes, so none starts in between, and removed from there. One a run's lock names,
-or a sweep of its variant in that tree holds, is left and said; the leg's own tree, and the copies
+removes a leg's own, by the one owner of that removal (`BuildDirectoryRemoval`): the directory renamed
+aside under the mutex a run needs to take the lock a build of it takes, so none starts in between, into
+an aside named by the removing process (`.<variant>.removing-<pid>`, `RemovalAside.Of`), and removed
+from there by that process alone - so a clean of a build and another tree's leg making room, removing
+it at once, never delete one aside together, nor count what the other freed. What an earlier removal
+left aside - one that stopped part way, named by a process no longer running, or a build's before this
+one, named by none - is finished by the next removal of the directory, taken first into its own aside
+by a rename only one removal can make. One a run's lock names, a sweep of its variant in that tree
+holds, or whose tree's lock cannot be read, is left and said; the leg's own tree, and the copies
 its legs work in, are never among them, nor a sweep's workers, which are the sweep's to reuse. The
 trees are the ones the leg's process has on its machine (`IRepositoryTrees.HereAsync`): here the main
 checkout, each worktree and agent's repository and each copy one keeps in `.legs`, their builds held

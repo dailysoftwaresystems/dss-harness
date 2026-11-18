@@ -606,7 +606,9 @@ public sealed class CleanService(
     private LegEntry CleanHere(HarnessLayout layout, PlacedLeg leg, LockRequest building, bool dryRun)
     {
         var directory = leg.BuildDirectory;
-        var aside = RemovalAside.Of(directory);
+
+        // Where this clean moves the directory to remove it, and where what it could not finish is left.
+        var aside = _removal.AsideOf(directory);
 
         try
         {
@@ -620,14 +622,16 @@ public sealed class CleanService(
             if (dryRun)
             {
                 var holds = _fileSystem.DirectorySize(directory);
-                var left = _fileSystem.DirectorySize(aside);
+                var asides = _removal.LeftAside(directory);
+                var left = asides.Sum(_fileSystem.DirectorySize);
                 var (room, unmeasured) = DiskSpace.Measure(_fileSystem, directory);
 
                 var said = _fileSystem.DirectoryExists(directory) ? $"{DiskSpace.Size(holds)} in '{directory}'" : $"nothing at '{directory}'";
 
                 if (left > 0)
                 {
-                    said += $", and {DiskSpace.Size(left)} a removal that did not finish left at '{aside}'";
+                    said += $", and {DiskSpace.Size(left)} {(asides.Count == 1 ? "a removal" : "removals")} that did not finish left at "
+                        + string.Join(", ", asides.Select(found => $"'{found}'"));
                 }
 
                 said += $"; {room?.Describe() ?? Unmeasured(unmeasured)}";
@@ -647,7 +651,7 @@ public sealed class CleanService(
             {
                 return leg.Entry(
                     LegVerdict.RefusedLocked,
-                    removal.Bytes > 0 ? $"{holder} What an earlier removal had left at '{aside}' was removed: {DiskSpace.Size(removal.Bytes)}." : holder);
+                    removal.Bytes > 0 ? $"{holder} What earlier removals of it had left aside was removed: {DiskSpace.Size(removal.Bytes)}." : holder);
             }
 
             var (after, why) = DiskSpace.Measure(_fileSystem, directory);
