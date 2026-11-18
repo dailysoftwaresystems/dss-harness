@@ -90,7 +90,8 @@ public sealed record TestRequest
 
     /// <summary>
     /// The filter units the caller asked for, passed through the invocation's <c>filterArg</c> - joined by its
-    /// <c>filterJoin</c> where it declares one; none for every test.
+    /// <c>filterJoin</c>, or by its runner's own where it declares none and the harness knows that runner
+    /// (<see cref="FilterUnits.JoinOf"/>); none for every test.
     /// </summary>
     public IReadOnlyList<string> Filters { get; init; } = [];
 

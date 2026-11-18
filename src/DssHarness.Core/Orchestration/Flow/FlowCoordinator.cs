@@ -11883,8 +11883,9 @@ public sealed class FlowCoordinator
             // What the pieces of a plan update are checked with, and what they owe: the items of the round they join,
             // where the run has one - and the names of the work items the plan had, which a piece that changes or
             // withdraws one names; the names every instance of the work-item group carries, over every round, which no
-            // work item a round opens with or an added piece makes may take, for the run knows a work item by its name
-            // alone; and, where this check opens the round, the items updates owe it, which join its own as one list.
+            // work item a round builds or an added piece makes may take, for the run knows a work item by its name
+            // alone; and, where this check opens the round, the items updates owe it, which join its own as one list,
+            // and whether the round carries them alone.
             if (CurrentRound() is { } round)
             {
                 read["round"] = FlowValue.Of(new JsonArray([.. LiveItemsOf(round).Select(item => item.Item.ToNode()?.DeepClone())]));
@@ -11904,6 +11905,12 @@ public sealed class FlowCoordinator
             if (OpensTheRound(instance, groupPath) is not null)
             {
                 read["owed"] = FlowValue.Of(new JsonArray([.. OwedItems()]));
+
+                // A round an update added to the group with no loop around it carries the owed work alone (OpenGroup):
+                // its own items, the plan's the check reads again, are those the group's round before built, under the
+                // very names it carries, and are not built again. A loop's later round is a visit of its own, and
+                // builds every item it opens with.
+                read["owedAlone"] = FlowValue.Of(PendingAddedRound() is not null);
             }
         }
 

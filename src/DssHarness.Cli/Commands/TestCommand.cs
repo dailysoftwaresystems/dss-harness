@@ -14,7 +14,7 @@ internal static class TestCommand
 
     private static readonly Option<string[]> FilterOption = new("--filter")
     {
-        Description = "Run only tests the invocation's filterArg selects with these units: the tests any of them names, joined by its filterJoin where it declares one, each after a filterArg of its own where it does not.",
+        Description = "Run only tests the invocation's filterArg selects with these units: the tests any of them names, joined by its filterJoin - by '|' for ctest, dotnet test and dart test where it declares none - each after a filterArg of its own where nothing joins them.",
         AllowMultipleArgumentsPerToken = true,
     };
 

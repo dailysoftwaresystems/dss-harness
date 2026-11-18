@@ -45,7 +45,8 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// The names of the work items earlier rounds of the run carry, which no item of the list may take: a work item is
     /// known by its name across the run - its record of affected tests, its plan updates and its account are kept under
     /// it - so a later item under an earlier one's name would stand in that item's place. None where the list opens no
-    /// round, or the run has none before it.
+    /// round, the run has none before it, or the round builds none of the list's own items: one added to a work-item
+    /// group with no loop around it carries the owed work alone, its own items built by the round before.
     /// </param>
     /// <returns>Every problem of the plan, in the order of its items; none where it passes.</returns>
     public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, bool mostItems = true, bool noItems = true, IReadOnlyCollection<string>? carried = null)

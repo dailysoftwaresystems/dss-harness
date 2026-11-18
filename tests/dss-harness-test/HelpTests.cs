@@ -3068,12 +3068,14 @@ public sealed partial class HelpTests
             "so, unless --no-tests=ignore keeps ctest quiet. A label beside labels the args or a",
             "When the file is read, ctest is also refused an invocation that would pass an option",
             "'|', which ctest would read as part of one pattern that leaves out nothing. And ctest,",
-            "refused a filterArg with no filterJoin, which would give them several units apart, and",
+            "refused an empty filterJoin, which would give them several units apart, and a",
             "neither way, and is refused for --name. Each is refused a filter beside the same",
             "'test --filter' may be given more than once, each value a unit that names tests, and",
             "its filter option apart - ctest keeps only the last -R, dotnet test refuses a second",
-            "--filter, and dart test runs only a test every --name matches - so each declares",
-            "section declares. A workflow's test step gives its filter's units the same way.",
+            "--filter, and dart test runs only a test every --name matches - so the units reach",
+            "each as one value joined by '|', the join the harness knows each of the three reads",
+            "as alternatives, where its invocation declares no filterJoin; init writes none.",
+            "declares. A workflow's test step gives its filter's units the same way.",
             "given - of several filter units, where it is so of every one. With excludeArg '-LE',",
         })
         {
@@ -3198,8 +3200,9 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "A test step's filter names the tests it runs as units - a list, or an expression read where it starts - each given after "
-                + "the invocation's filterArg, all joined into one value by its filterJoin where it declares one; a filter that reads no "
-                + "unit runs no test, and the step ends skipped, saying its noTests. Its filterWhen switches the filter: where it reads "
+                + "the invocation's filterArg, all joined into one value by its filterJoin - by '|' for ctest, dotnet test and dart test "
+                + "where it declares none; a filter that reads no unit runs no test, and the step ends skipped, saying its noTests. Its "
+                + "filterWhen switches the filter: where it reads "
                 + "false every test of its legs runs, as the shipped gate does where the run's input finalTests is all. Its affected keeps "
                 + "the units it runs in the run's affected-tests.json under the key it fills, before the step runs: a later step under "
                 + "that key replaces them, and one for a work item a plan update takes back, or one its when skips, removes them. "

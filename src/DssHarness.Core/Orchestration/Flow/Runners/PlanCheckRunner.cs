@@ -11,7 +11,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// plan update its <c>scope</c> yields are checked with them, and with the items of the round they join; where it opens
 /// a round, it checks one list - its own items and every work item plan updates owe it - and its output <c>items</c> is
 /// that list, so nothing joins a round unchecked. A work item is known by its name across the run, so no item a round
-/// opens with but an owed one, and no added piece, takes a name an instance of the work-item group carries already.
+/// builds but an owed one, and no added piece, takes a name an instance of the work-item group carries already: a round
+/// added to a work-item group with no loop around it builds the owed work alone, and its own items, which the group's
+/// round before built under those names, are held to none.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -49,6 +51,10 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         List<JsonNode?>? owed = null;
         var opening = false;
 
+        // Whether the round this check opens carries the owed work alone: one added to a work-item group with no loop
+        // around it, whose own items the group's round before built, so it builds none of them again.
+        var owedAlone = read.TryGetValue("owedAlone", out var alone) && alone.ToNode() is JsonValue flag && flag.TryGetValue<bool>(out var only) && only;
+
         if (read.TryGetValue("owed", out var owing) && !owing.IsMissing && owing.ToNode() is JsonArray owingList)
         {
             owed = [.. owingList.Where(item => item is JsonObject && FlowWorkItems.NameOf(item) is not null)];
@@ -71,14 +77,15 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
                  .. owed!.Select(item => item?.DeepClone())]);
 
             // An owed item may bear the name of one an earlier round carries: a changed or a removed piece names the item
-            // it changes or takes back. The round's own items may not.
+            // it changes or takes back. The round's own items may not, where the round builds them: a round that carries
+            // the owed work alone builds none of them, for the round before built them under those very names.
             problems.AddRange(validator.Check(
                 [.. checkedItems],
                 context,
                 place.Run,
                 place.Definition,
                 mostItems: false,
-                carried: [.. carried.Where(name => !owedNames.Contains(name, StringComparer.Ordinal))]));
+                carried: owedAlone ? [] : [.. carried.Where(name => !owedNames.Contains(name, StringComparer.Ordinal))]));
         }
         else
         {

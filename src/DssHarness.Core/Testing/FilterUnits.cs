@@ -12,8 +12,10 @@ namespace DssHarness.Core.Testing;
 /// runs only a test whose name matches every <c>--name</c>, as its own help says. Each reads one value joined by
 /// <c>|</c> as the tests any unit names - a regular expression's alternatives, and a filter expression's - save dart's
 /// <c>--plain-name</c>, which reads its value as plain text, and so takes several units neither way. The one owner of
-/// that rule: the file's reader refuses such an invocation that declares no filterJoin, or another join
-/// (<see cref="Misread"/>), and the command line refuses several units it would give apart (<see cref="RefuseApart"/>)
+/// that rule: such an invocation that declares no filterJoin is given its units joined by the one its runner reads
+/// (<see cref="JoinOf"/>), so a file an earlier init wrote, which seeded none, runs the tests any unit names; the file's
+/// reader refuses one that declares another join, an empty one among them, and dart's <c>--plain-name</c>
+/// (<see cref="Misread"/>); and the command line refuses several units it would give apart (<see cref="RefuseApart"/>)
 /// and a filter beside the same option its args give (<see cref="RefuseGivenInArgs"/>). A runner it does not know reads
 /// its option given twice as its own, and is given each unit after a filterArg of its own where it declares no join.
 /// </summary>
@@ -74,9 +76,26 @@ internal static class FilterUnits
     }
 
     /// <summary>
+    /// What joins several filter units into the one value <paramref name="invocation"/>'s runner is given after its
+    /// filterArg: the filterJoin it declares; where it declares none, the one its runner reads as the tests any of them
+    /// names, where this knows that runner (<see cref="Reading.Joins"/>) - a key left out reads as the one value that
+    /// works, so no file that leaves it out, as every one an earlier init wrote does, is refused for it. Null where
+    /// nothing joins them - an empty filterJoin, a runner this does not know that declares none, and dart test's
+    /// <c>--plain-name</c> - and each unit is given after a filterArg of its own.
+    /// </summary>
+    /// <param name="invocation">A merged test invocation.</param>
+    public static string? JoinOf(ResolvedTestInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(invocation);
+
+        return (invocation.FilterJoin ?? Of(invocation)?.Joins) is { Length: > 0 } join ? join : null;
+    }
+
+    /// <summary>
     /// What is wrong with how <paramref name="invocation"/> would give a runner this knows several filter units, as the
-    /// file's reader says it: a filterArg with no filterJoin, which would give each apart; a filterJoin other than the one
-    /// its runner reads as alternatives; and dart test's <c>--plain-name</c>, which takes several neither way.
+    /// file's reader says it: an empty filterJoin, which would give each apart; a filterJoin other than the one its runner
+    /// reads as alternatives; and dart test's <c>--plain-name</c>, which takes several neither way. A filterJoin left out
+    /// is none of them: the runner's own is used (<see cref="JoinOf"/>).
     /// </summary>
     /// <param name="invocation">The invocation, merged for one operating system.</param>
     public static IEnumerable<string> Misread(ResolvedTestInvocation invocation)
@@ -86,38 +105,37 @@ internal static class FilterUnits
             yield break;
         }
 
-        var join = invocation.FilterJoin is { Length: > 0 } declared ? declared : null;
+        var join = JoinOf(invocation);
 
         if (reading.Joins is null)
         {
             yield return $"filterArg '{invocation.FilterArg}' gives {reading.Runner} plain text, so several filter units would reach it "
                 + $"neither apart, where it {reading.Twice}, nor joined, where it would look for the join as text; declare "
-                + $"'{DartNames[0]}', which reads a regular expression, with \"filterJoin\": \"{Alternatives}\"";
+                + $"'{DartNames[0]}', which reads a regular expression, and they reach it joined by '{Alternatives}'";
         }
         else if (join is null)
         {
-            yield return $"filterArg '{invocation.FilterArg}' would reach {reading.Runner} once for each filter unit, no filterJoin "
-                + $"joining them, and of {invocation.FilterArg} it {reading.Twice} - never the tests any unit names; declare "
-                + $"\"filterJoin\": \"{reading.Joins}\", so they reach it as {reading.Reads}";
+            yield return $"filterArg '{invocation.FilterArg}' would reach {reading.Runner} once for each filter unit, an empty "
+                + $"filterJoin joining none of them, and of {invocation.FilterArg} it {reading.Twice} - never the tests any unit "
+                + $"names; leave filterJoin out, and they reach it as {reading.Reads}, joined by '{reading.Joins}'";
         }
         else if (!string.Equals(join, reading.Joins, StringComparison.Ordinal))
         {
             yield return $"filterJoin '{join}' joins nothing to {reading.Runner}, which reads what it joins as {reading.Reads} "
-                + $"holding '{join}', so joined filter units would not choose the tests any of them names; declare "
-                + $"\"filterJoin\": \"{reading.Joins}\"";
+                + $"holding '{join}', so joined filter units would not choose the tests any of them names; leave filterJoin "
+                + $"out, and they reach it joined by '{reading.Joins}'";
         }
     }
 
     /// <summary>
     /// Refuses <paramref name="units"/> filter units where <paramref name="invocation"/>'s runner is one this knows and they
-    /// would not reach it as the tests any of them names: given apart, where <paramref name="join"/> is null, or to dart
-    /// test's <c>--plain-name</c> at all. One unit, or a runner this does not know, passes.
+    /// would not reach it as the tests any of them names: given apart, where nothing joins them (<see cref="JoinOf"/>) -
+    /// an empty filterJoin - or to dart test's <c>--plain-name</c> at all. One unit, or a runner this does not know, passes.
     /// </summary>
     /// <param name="invocation">The resolved invocation.</param>
     /// <param name="units">How many filter units were given.</param>
-    /// <param name="join">The join the invocation declares, or null where it declares none.</param>
     /// <exception cref="HarnessException">The units would not choose what they name (<see cref="HarnessExit.UsageError"/>).</exception>
-    public static void RefuseApart(ResolvedTestInvocation invocation, int units, string? join)
+    public static void RefuseApart(ResolvedTestInvocation invocation, int units)
     {
         if (units < 2 || Of(invocation) is not { } reading)
         {
@@ -132,17 +150,17 @@ internal static class FilterUnits
                 HarnessExit.UsageError,
                 $"{count} filter units would reach {reading.Runner} after {invocation.FilterArg}, which reads its value as plain text: "
                 + $"given apart it {reading.Twice}, and joined it would look for the join as text - never the tests any of them "
-                + $"names. Declare filterArg '{DartNames[0]}' with \"filterJoin\": \"{Alternatives}\" in the test settings, so they reach "
-                + "it as one regular expression.");
+                + $"names. Declare filterArg '{DartNames[0]}' in the test settings, so they reach it as one regular expression, "
+                + $"joined by '{Alternatives}'.");
         }
 
-        if (join is null)
+        if (JoinOf(invocation) is null)
         {
             throw new HarnessException(
                 HarnessExit.UsageError,
-                $"{count} filter units would reach {reading.Runner} apart, each after {invocation.FilterArg}, of which it "
-                + $"{reading.Twice} - never the tests any of them names. Declare \"filterJoin\": \"{reading.Joins}\" in the test "
-                + $"settings, so they reach it as {reading.Reads}.");
+                $"{count} filter units would reach {reading.Runner} apart, the test settings' filterJoin being empty: each after "
+                + $"{invocation.FilterArg}, of which it {reading.Twice} - never the tests any of them names. Leave filterJoin out "
+                + $"of the test settings, so they reach it as {reading.Reads}, joined by '{reading.Joins}'.");
         }
     }
 

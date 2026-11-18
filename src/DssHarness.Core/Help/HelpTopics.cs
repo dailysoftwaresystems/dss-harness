@@ -5812,14 +5812,15 @@ public static class HelpTopics
         builder.AppendLine("against the configuration's providers ('help agent-clients'), and validate-workflow says");
         builder.AppendLine("every step's models and levels under the line that says it holds. A test step's filter names");
         builder.AppendLine("the tests it runs as units - a list, or an expression read where it starts - each given after");
-        builder.AppendLine("the invocation's filterArg, all joined into one value by its filterJoin where it declares");
-        builder.AppendLine("one; a filter that reads no unit runs no test, and the step ends skipped, saying its noTests.");
-        builder.AppendLine("Its filterWhen switches the filter: where it reads false every test of its legs runs, as the");
-        builder.AppendLine("shipped gate does where the run's input finalTests is all. Its affected keeps the units it");
-        builder.AppendLine("runs in the run's affected-tests.json under the key it fills, before the step runs: a later");
-        builder.AppendLine("step under that key replaces them, and one for a work item a plan update takes back, or one");
-        builder.AppendLine("its when skips, removes them. run.affectedTests reads every unit kept, each once: the shipped");
-        builder.AppendLine("verify steps test each item on its own units alone, and the gate on run.affectedTests.");
+        builder.AppendLine("the invocation's filterArg, all joined into one value by its filterJoin - by '|' for ctest,");
+        builder.AppendLine("dotnet test and dart test where it declares none; a filter that reads no unit runs no test,");
+        builder.AppendLine("and the step ends skipped, saying its noTests. Its filterWhen switches the filter: where it");
+        builder.AppendLine("reads false every test of its legs runs, as the shipped gate does where the run's input");
+        builder.AppendLine("finalTests is all. Its affected keeps the units it runs in the run's affected-tests.json");
+        builder.AppendLine("under the key it fills, before the step runs: a later step under that key replaces them, and");
+        builder.AppendLine("one for a work item a plan update takes back, or one its when skips, removes them.");
+        builder.AppendLine("run.affectedTests reads every unit kept, each once: the shipped verify steps test each item");
+        builder.AppendLine("on its own units alone, and the gate on run.affectedTests.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -5899,9 +5900,10 @@ public static class HelpTopics
             + "what it kept, read, reused and removed and what it could not read ('help codebase-graph'). "
             + $"validate-plan checks the work items its items yields and answers ok, problems and the items, never a failure: at "
             + $"least one item and at most {PlanValidator.MostItems}; each with a name in lowercase letters, digits and single "
-            + "hyphens, used once - and, where the list opens a round, none a work item of an earlier round carries but an owed "
-            + "one's, for the run knows a work item by its name alone - ownedPaths, forbiddenPaths and the lists reuses, creates "
-            + "and replaces - an item without them is of "
+            + "hyphens, used once - and, where the list opens a round, no item the round builds but an owed one under the name "
+            + "of a work item of an earlier round, for the run knows a work item by its name alone; a round added to a group "
+            + "with no loop around it builds the owed work alone, its own items being those the round before built - "
+            + "ownedPaths, forbiddenPaths and the lists reuses, creates and replaces - an item without them is of "
             + "the wrong shape; no path owned by two items, and none an item owns that it must not touch; the path budget of the "
             + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
@@ -6908,11 +6910,12 @@ public static class HelpTopics
         builder.AppendLine("'test --filter' may be given more than once, each value a unit that names tests, and");
         builder.AppendLine("the tests any unit names run. None of ctest, dotnet test and dart test runs them given");
         builder.AppendLine("its filter option apart - ctest keeps only the last -R, dotnet test refuses a second");
-        builder.AppendLine("--filter, and dart test runs only a test every --name matches - so each declares");
-        builder.AppendLine("filterJoin, and the units reach it as one value joined by it: '|' for each of the");
-        builder.AppendLine("three, which init seeds. Another runner without one is given each unit after a");
-        builder.AppendLine("filterArg of its own, and an empty filterJoin does that over a join the shared");
-        builder.AppendLine("section declares. A workflow's test step gives its filter's units the same way.");
+        builder.AppendLine("--filter, and dart test runs only a test every --name matches - so the units reach");
+        builder.AppendLine("each as one value joined by '|', the join the harness knows each of the three reads");
+        builder.AppendLine("as alternatives, where its invocation declares no filterJoin; init writes none.");
+        builder.AppendLine("Another runner is given each unit after a filterArg of its own where it declares no");
+        builder.AppendLine("filterJoin, and an empty filterJoin does that over a join the shared section");
+        builder.AppendLine("declares. A workflow's test step gives its filter's units the same way.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -6999,8 +7002,8 @@ public static class HelpTopics
         builder.AppendLine("chooses them by name, an excludeArg that chooses them, and an excludeJoin other than");
         builder.AppendLine("'|', which ctest would read as part of one pattern that leaves out nothing. And ctest,");
         builder.AppendLine("dotnet test and dart test - dotnet or dart run with test as its command - are");
-        builder.AppendLine("refused a filterArg with no filterJoin, which would give them several units apart, and");
-        builder.AppendLine("a filterJoin other than '|', which each would read as part of one pattern or filter");
+        builder.AppendLine("refused an empty filterJoin, which would give them several units apart, and a");
+        builder.AppendLine("filterJoin other than '|', which each would read as part of one pattern or filter");
         builder.AppendLine("expression; dart test's --plain-name, which reads plain text, takes several units");
         builder.AppendLine("neither way, and is refused for --name. Each is refused a filter beside the same");
         builder.AppendLine("option its args give, as a run starts.");

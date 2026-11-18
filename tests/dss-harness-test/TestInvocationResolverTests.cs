@@ -948,10 +948,11 @@ public sealed class TestInvocationResolverTests
 
     /// <summary>
     /// Several filter units reach a runner that declares filterJoin as one value joined by it, so the tests any of them
-    /// names run, and one unit as itself; a runner without one is given each after a filterArg of its own, an empty
-    /// filterJoin doing that over the join the shared section declares, which an operating system's own replaces as
-    /// every other field is; and ctest, which given -R twice keeps only the last, is refused several apart, naming the
-    /// join.
+    /// names run, and one unit as itself; a runner the harness does not know without one is given each after a filterArg
+    /// of its own, an empty filterJoin doing that over the join the shared section declares, which an operating system's
+    /// own replaces as every other field is; ctest without one is given them joined by '|', the join the harness owns for
+    /// it; and ctest, which given -R twice keeps only the last, is refused several apart where its filterJoin is empty,
+    /// naming the join a filterJoin left out gives.
     /// </summary>
     [Fact]
     public void SeveralFilterUnits_AreJoinedWhereTheInvocationSaysHow_AndGivenApartWhereItDoesNot()
@@ -984,20 +985,23 @@ public sealed class TestInvocationResolverTests
             ["-R", "parser|lexer"],
             TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(settings, PlatformNames.Windows), cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
 
-        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(Invocation(filterArg: "-R"), cores: 6, filters: ["parser", "lexer"], excludes: null));
+        Assert.Equal(["-R", "parser|lexer"], TestInvocationResolver.CommandFor(Invocation(filterArg: "-R"), cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
+
+        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(Invocation(filterArg: "-R", filterJoin: string.Empty), cores: 6, filters: ["parser", "lexer"], excludes: null));
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Equal(
-            "2 filter units would reach ctest apart, each after -R, of which it keeps only the last - never the tests any of them names. Declare \"filterJoin\": \"|\" in the test settings, so they reach it as one regular expression.",
+            "2 filter units would reach ctest apart, the test settings' filterJoin being empty: each after -R, of which it keeps only the last - never the tests any of them names. Leave filterJoin out of the test settings, so they reach it as one regular expression, joined by '|'.",
             refusal.Message);
-        Assert.Equal(["-R", "parser"], TestInvocationResolver.CommandFor(Invocation(filterArg: "-R"), cores: 6, filters: ["parser"], excludes: null).Arguments);
+        Assert.Equal(["-R", "parser"], TestInvocationResolver.CommandFor(Invocation(filterArg: "-R", filterJoin: string.Empty), cores: 6, filters: ["parser"], excludes: null).Arguments);
     }
 
     /// <summary>
-    /// dotnet test and dart test are refused several filter units apart as ctest is, each naming what it makes of its
-    /// option given twice and the join to declare - dotnet test refuses a second --filter, dart test runs only a test
-    /// every --name matches - and dart's --plain-name, which reads plain text, is refused several either way, naming
-    /// --name; joined by '|' they reach dotnet test and dart test as one value, and one unit reaches each as itself.
+    /// Several filter units reach dotnet test and dart test as one value joined by '|' - declared, or the harness's own
+    /// join where none is - and one unit reaches each as itself; each is refused them apart as ctest is, where its
+    /// filterJoin is empty, naming what it makes of its option given twice and the join a filterJoin left out gives -
+    /// dotnet test refuses a second --filter, dart test runs only a test every --name matches - and dart's --plain-name,
+    /// which reads plain text, is refused several either way, naming --name.
     /// </summary>
     [Fact]
     public void SeveralFilterUnits_ReachDotnetTestAndDartTestJoined_AndAreRefusedApart()
@@ -1007,19 +1011,22 @@ public sealed class TestInvocationResolverTests
         var plain = Invocation(args: ["test"], filterArg: "-N", runner: "dart", filterJoin: "|");
 
         Assert.Equal(
-            "2 filter units would reach dotnet test apart, each after --filter, of which it takes one alone, refusing a command line that gives it twice - never the tests any of them names. Declare \"filterJoin\": \"|\" in the test settings, so they reach it as one filter expression.",
-            Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(dotnet, cores: 6, filters: ["ReportTests", "FrameTests"], excludes: null)).Message);
+            "2 filter units would reach dotnet test apart, the test settings' filterJoin being empty: each after --filter, of which it takes one alone, refusing a command line that gives it twice - never the tests any of them names. Leave filterJoin out of the test settings, so they reach it as one filter expression, joined by '|'.",
+            Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(dotnet with { FilterJoin = string.Empty }, cores: 6, filters: ["ReportTests", "FrameTests"], excludes: null)).Message);
         Assert.Equal(
-            "3 filter units would reach dart test apart, each after --name, of which it runs only a test whose name matches every one - never the tests any of them names. Declare \"filterJoin\": \"|\" in the test settings, so they reach it as one regular expression.",
-            Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(dart, cores: 6, filters: ["parser", "lexer", "frame"], excludes: null)).Message);
+            "3 filter units would reach dart test apart, the test settings' filterJoin being empty: each after --name, of which it runs only a test whose name matches every one - never the tests any of them names. Leave filterJoin out of the test settings, so they reach it as one regular expression, joined by '|'.",
+            Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(dart with { FilterJoin = string.Empty }, cores: 6, filters: ["parser", "lexer", "frame"], excludes: null)).Message);
 
         var refused = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(plain, cores: 6, filters: ["parser", "lexer"], excludes: null));
 
         Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
         Assert.Equal(
-            "2 filter units would reach dart test after -N, which reads its value as plain text: given apart it runs only a test whose name holds every one, and joined it would look for the join as text - never the tests any of them names. Declare filterArg '--name' with \"filterJoin\": \"|\" in the test settings, so they reach it as one regular expression.",
+            "2 filter units would reach dart test after -N, which reads its value as plain text: given apart it runs only a test whose name holds every one, and joined it would look for the join as text - never the tests any of them names. Declare filterArg '--name' in the test settings, so they reach it as one regular expression, joined by '|'.",
             refused.Message);
+        Assert.Equal(refused.Message, Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(plain with { FilterJoin = null }, cores: 6, filters: ["parser", "lexer"], excludes: null)).Message);
 
+        Assert.Equal(["test", "--no-build", "--filter", "ReportTests|FrameTests"], TestInvocationResolver.CommandFor(dotnet, cores: 6, filters: ["ReportTests", "FrameTests"], excludes: null).Arguments);
+        Assert.Equal(["test", "--name", "parser|lexer"], TestInvocationResolver.CommandFor(dart, cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
         Assert.Equal(["test", "--no-build", "--filter", "ReportTests|FrameTests"], TestInvocationResolver.CommandFor(dotnet with { FilterJoin = "|" }, cores: 6, filters: ["ReportTests", "FrameTests"], excludes: null).Arguments);
         Assert.Equal(["test", "--name", "parser|lexer"], TestInvocationResolver.CommandFor(dart with { FilterJoin = "|" }, cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
         Assert.Equal(["test", "--no-build", "--filter", "ReportTests"], TestInvocationResolver.CommandFor(dotnet, cores: 6, filters: ["ReportTests"], excludes: null).Arguments);

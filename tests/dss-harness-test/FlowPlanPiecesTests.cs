@@ -2127,6 +2127,7 @@ public sealed class FlowPlanPiecesTests
     /// The check that opens a round is handed the names every instance of the work-item group carries, over every round -
     /// none as the first round opens, the first round's items as the second does - beside the names the plan had: the run
     /// knows a work item by its name alone, so the check refuses a round's own item under one an earlier round carries.
+    /// A loop's later round builds every item it opens with, so neither round is one that carries the owed work alone.
     /// </summary>
     [Fact]
     public async Task TheCheckThatOpensARound_IsHandedTheNamesTheEarlierRoundsItemsCarry()
@@ -2134,7 +2135,7 @@ public sealed class FlowPlanPiecesTests
         using var temp = new TempDirectory();
         var definition = Parse(TwoRoundsFlow);
         var (harness, layout, records) = Records("r1", temp.Path, definition);
-        var handed = new List<(IReadOnlyList<string> Carried, IReadOnlyList<string> Known)>();
+        var handed = new List<(IReadOnlyList<string> Carried, IReadOnlyList<string> Known, bool OwedAlone)>();
 
         static IReadOnlyList<string> NamesOf(FlowStepRun run, string key)
             => [.. run.Read![key].ToNode()!.AsArray().Select(name => name!.GetValue<string>())];
@@ -2145,7 +2146,7 @@ public sealed class FlowPlanPiecesTests
             {
                 lock (handed)
                 {
-                    handed.Add((NamesOf(run, "carried"), NamesOf(run, "known")));
+                    handed.Add((NamesOf(run, "carried"), NamesOf(run, "known"), run.Read!["owedAlone"].ToNode()!.GetValue<bool>()));
                 }
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
@@ -2168,8 +2169,8 @@ public sealed class FlowPlanPiecesTests
         }
 
         Assert.Equal(
-            ["carried [] known []", "carried [one, two] known [one, two]"],
-            handed.Select(visit => $"carried [{string.Join(", ", visit.Carried)}] known [{string.Join(", ", visit.Known)}]"));
+            ["carried [] known [] owedAlone False", "carried [one, two] known [one, two] owedAlone False"],
+            handed.Select(visit => $"carried [{string.Join(", ", visit.Carried)}] known [{string.Join(", ", visit.Known)}] owedAlone {visit.OwedAlone}"));
     }
 
     /// <summary>

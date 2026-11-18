@@ -138,11 +138,10 @@ public static class DefaultConfigFactory
             {
                 Runner = Ctest.Program,
                 Args = ["--output-on-failure", "--no-tests=error"],
-                FilterArg = Ctest.FilterArg,
 
-                // ctest keeps only the last -R it is given, and one regular expression joined by | chooses what any of
-                // the filter's units names.
-                FilterJoin = Ctest.FilterJoin,
+                // Several filter units reach ctest - and dotnet test and dart test below - joined by the one join each
+                // reads as alternatives, which the harness owns (FilterUnits.JoinOf), so no filterJoin is written.
+                FilterArg = Ctest.FilterArg,
                 ExcludeArg = Ctest.ExcludeArg,
 
                 // ctest leaves out only a test matching every -LE it is given, and one regular expression
@@ -161,9 +160,6 @@ public static class DefaultConfigFactory
                 Args = ["test"],
                 FilterArg = "--filter",
 
-                // dotnet test takes one --filter, refusing a second, and its filter expression joins alternatives by |.
-                FilterJoin = FilterUnits.Alternatives,
-
                 // The summary is matched as text, and dotnet otherwise translates it into the
                 // machine's language: the same run would be witnessed on one host and not another.
                 Env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -179,10 +175,6 @@ public static class DefaultConfigFactory
                 Runner = "dart",
                 Args = ["test"],
                 FilterArg = "--name",
-
-                // dart test runs only a test every --name matches, and --name takes a regular expression, whose | makes
-                // one that matches what any of the filter's units names.
-                FilterJoin = FilterUnits.Alternatives,
                 CoresArgs = ["--concurrency={cores}"],
                 SuccessPattern = "All tests passed!",
                 CountPattern = @"\+(?<total>\d+)(?: ~\d+)?: All tests passed!",

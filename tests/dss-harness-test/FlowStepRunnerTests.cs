@@ -835,7 +835,9 @@ public sealed class FlowStepRunnerTests : IDisposable
     /// A work item is known by its name across the run - its record of affected tests keeps an item's units under it, and
     /// a plan update finds the item by it - so the check that opens a round refuses a round's own item under a name an
     /// earlier round's item carries, and passes an owed one under it, for a changed or a removed piece names the item it
-    /// does again or takes back; and a plan update's added piece under such a name is refused, its changed one passed.
+    /// does again or takes back; a round that carries the owed work alone - one added to a work-item group with no loop
+    /// around it - builds none of its own items, which the round before built under those names, so none is refused;
+    /// and a plan update's added piece under such a name is refused, its changed one passed.
     /// </summary>
     [Fact]
     public async Task ANameAnEarlierRoundCarries_IsRefusedToARoundsOwnItemAndToAnAddedPiece_AndPassedToAChangedOne()
@@ -868,6 +870,19 @@ public sealed class FlowStepRunnerTests : IDisposable
             ["owed"] = FlowValue.Of(new JsonArray(Item("one"))),
             ["carried"] = FlowValue.Of(new JsonArray("one", "three")),
         }));
+
+        // The round's own items, which a round carrying the owed work alone does not build, are held to no name; the
+        // same list opening a round that builds them is refused each.
+        Dictionary<string, FlowValue> Added(bool owedAlone) => new()
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("two", "src/two/**"))),
+            ["owed"] = FlowValue.Of(new JsonArray(Item("three", "src/three/**"))),
+            ["owedAlone"] = FlowValue.Of(owedAlone),
+            ["carried"] = FlowValue.Of(new JsonArray("one", "two")),
+        };
+
+        Assert.Empty(await ProblemsAsync(opening, Added(owedAlone: true)));
+        Assert.Equal([Reused, Reused.Replace("'one'", "'two'", StringComparison.Ordinal)], await ProblemsAsync(opening, Added(owedAlone: false)));
 
         // A check that opens no round - its items are the plan's, which holds the items rounds built - refuses none.
         var check = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };

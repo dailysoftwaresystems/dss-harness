@@ -131,7 +131,8 @@ public static class TestInvocationResolver
     /// <param name="cores">The core count this leg runs with.</param>
     /// <param name="filters">
     /// The filter units the caller asked for - each a value the invocation's filterArg takes - or none: joined into one
-    /// value by its filterJoin where it declares one, each given a filterArg of its own where it does not.
+    /// value by its filterJoin, or by its runner's own where it declares none and the harness knows that runner, each
+    /// given a filterArg of its own where nothing joins them (<see cref="FilterUnits.JoinOf"/>).
     /// </param>
     /// <param name="excludes">Exclusions to give the runner: the caller's, and any remoteExcludes beside them.</param>
     /// <param name="paths">
@@ -198,11 +199,11 @@ public static class TestInvocationResolver
                     + "how to pass one to this runner.");
             }
 
-            var join = invocation.FilterJoin is { Length: > 0 } declared ? declared : null;
+            var join = FilterUnits.JoinOf(invocation);
 
             RefuseBeside(invocation, preset, Ctest.SelectionOf(invocation.Runner, invocation.FilterArg), "A filter", sameFilterRefuses: true);
             FilterUnits.RefuseGivenInArgs(invocation);
-            FilterUnits.RefuseApart(invocation, filters.Count, join);
+            FilterUnits.RefuseApart(invocation, filters.Count);
 
             foreach (var value in join is null ? filters : [string.Join(join, filters)])
             {
@@ -370,7 +371,7 @@ public static class TestInvocationResolver
         if (filters.Count > 0 && Ctest.SelectionOf(invocation.Runner, invocation.FilterArg) is { Excludes: false } filterOption)
         {
             // One value, its units joined - several reach ctest no other way - choosing what any unit names.
-            chosen.Add(new Choice(filterOption, invocation.FilterArg!, string.Join(invocation.FilterJoin ?? string.Empty, filters), "filter") { Units = filters });
+            chosen.Add(new Choice(filterOption, invocation.FilterArg!, string.Join(FilterUnits.JoinOf(invocation) ?? string.Empty, filters), "filter") { Units = filters });
         }
 
         if (Ctest.SelectionOf(invocation.Runner, invocation.LabelArg) is { Excludes: false, Narrows: true } labelOption)
@@ -775,7 +776,11 @@ public static class TestInvocationResolver
 /// <param name="SetUp">The set-ups a leg running it brings up around its work, where the run is asked to set up.</param>
 /// <param name="KeepOnFailure">What a run keeping evidence copies out of the build directory when it does not pass.</param>
 /// <param name="KeepOnFailureCapBytes">The most to keep in all, in bytes, or null for the default cap.</param>
-/// <param name="FilterJoin">What joins several filter units into one value after <paramref name="FilterArg"/>; null or empty to give each its own.</param>
+/// <param name="FilterJoin">
+/// What joins several filter units into one value after <paramref name="FilterArg"/>, as the settings declare it: empty to
+/// give each its own, and null where they declare none - the runner's own join then, where the harness knows the runner
+/// (<see cref="FilterUnits.JoinOf"/>), and each its own for any other.
+/// </param>
 public sealed record ResolvedTestInvocation(
     string Runner,
     IReadOnlyList<string> Args,

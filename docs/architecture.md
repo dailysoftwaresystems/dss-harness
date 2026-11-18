@@ -2165,15 +2165,18 @@ through `IFlowRecords.AffectedTests`) before its runner is asked - replaced by a
 for a work item a plan update takes back and for a step its `when` skips - and `run.affectedTests` reads every
 entry's units, each once (`FlowAffectedTestsFile.UnitsOf`), restored at a resume from the record alone; and a filter
 that reads no unit ends the step skipped with its `noTests`, its runner never asked. The runner gives the units to
-`TestService` as a list (`TestRequest.Filters`), and `TestInvocationResolver.CommandFor` joins them by the
-invocation's `filterJoin` into one value after `filterArg` where it declares one and gives each its own `filterArg`
-where it does not. `FilterUnits` owns what the runners `init` seeds make of several units: none of ctest,
-`dotnet test` and `dart test` runs the tests any of them names given its filter option apart - ctest keeps the last
-`-R`, `dotnet test` refuses a second `--filter` (measured with the .NET SDK 11.0.100, and Microsoft.Testing.Platform's
-frameworks declare the option one value in all), `dart test` runs only a test every `--name` matches, as its own help
-says - so the file's reader refuses each a `filterArg` with no `filterJoin`, and a join but `|`
-(`TestInvocationResolver.Misread`), and dart's `--plain-name`, which reads plain text and takes several units neither
-way, for `--name`; and `CommandFor` refuses several units apart and a filter beside the same option the args give. How the run stands without its `always` steps (`run.status`, `run.done` and the
+`TestService` as a list (`TestRequest.Filters`), and `TestInvocationResolver.CommandFor` joins them into one value
+after `filterArg` by the join `FilterUnits.JoinOf` says and gives each its own `filterArg` where nothing joins them.
+`FilterUnits` owns what the runners `init` seeds make of several units: none of ctest, `dotnet test` and `dart test`
+runs the tests any of them names given its filter option apart - ctest keeps the last `-R`, `dotnet test` refuses a
+second `--filter` (measured with the .NET SDK 11.0.100, and Microsoft.Testing.Platform's frameworks declare the option
+one value in all), `dart test` runs only a test every `--name` matches, as its own help says - so it owns the join of
+each, `|`: an invocation that declares no `filterJoin` is given its units joined by it (`FilterUnits.JoinOf`), a key
+left out reading as the one value that works, so no `config.json` an earlier `init` wrote - each seeded a `filterArg`
+and no join - is refused for it, and `init` writes none; the file's reader refuses an empty `filterJoin` and a join but
+`|` (`TestInvocationResolver.Misread`), and dart's `--plain-name`, which reads plain text and takes several units
+neither way, for `--name`; and `CommandFor` refuses several units apart and a filter beside the same option the args
+give. How the run stands without its `always` steps (`run.status`, `run.done` and the
 rest) is read by an `always` step alone; a placeholder stands in a key that is a template and is
 refused in any other where the file is read; a pull request's `base` reads nothing but the run's
 inputs and `run.name`, one base for every pull request; and a prompt's own placeholders - a reason
@@ -3673,7 +3676,10 @@ the round they join as one list, only the bound of eight not carried over. A wor
 the run - `ItemInstanceNamed`, its tests' key in `affected-tests.json`, its updates - so the check that opens a round
 is handed the names every instance of the group carries (`carried`, read where it starts) and refuses a round's own
 item under one of them (`PlanValidator.Check`'s `carried`), an owed item excepted: a changed or a removed piece names
-the item it does again or takes back.
+the item it does again or takes back. The rule holds the items the round builds: a round added to a group with no loop
+around it carries the owed work alone (`owedAlone`, read where its check starts), and its own items, which the check
+reads again from the plan, are those the round before built under those very names, so none of them is refused; a
+loop's later round is a visit of its own and builds every item it opens with.
 The pieces are told as they are placed: every `told` piece's message is sent through the attempt's own
 telling (`FlowTelling`, made where a reason attempt starts and handed to the runner - `ReasonStepRunner` wires its
 messages channel and its handoff signal into the agent run) - a reason step in flight that a piece names, by its own
