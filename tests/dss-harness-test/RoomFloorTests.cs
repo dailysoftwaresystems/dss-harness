@@ -84,6 +84,53 @@ public sealed class RoomFloorTests
         await watch.DisposeAsync();
     }
 
+    /// <summary>
+    /// A build under its floor, on a machine that makes room from other trees' idle builds, makes it first - told what it is
+    /// short of beneath the floor, with its need as it was admitted beyond it - says what was done, and is stopped only
+    /// where the room read again is still under: one made room for builds on; one that could not be is stopped as before.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ABuildUnderItsFloor_MakesRoomFromIdleBuildsFirst_AndIsStoppedOnlyWhereItIsStillUnder(bool made)
+    {
+        using var temp = new TempDirectory();
+        var room = new Room(new HarnessFactory().FileSystem) { Free = 1L << 30 };
+        var said = new List<string>();
+        var asked = new List<(string Path, long Free, long Shortfall)>();
+        var saidMade = made
+            ? "removed ~7 GiB of other trees' idle builds on '/data' to make room: worktree o1/xa's at '/src/xa/build/x86_64-gcc-debug', last built "
+                + "2026-11-01 08:00 UTC; 1 GiB free before, 8 GiB after"
+            : "no other tree's idle build on '/data' could be removed to make room; worktree o1/xa's build at '/src/xa/build' was left, as a run holds it: it";
+        var floor = RoomFloor.Of("native", 2L << 30) with
+        {
+            Need = 3L << 30,
+            MakeRoom = (path, read, shortfall) =>
+            {
+                asked.Add((path, read.FreeBytes, shortfall));
+
+                if (made)
+                {
+                    room.Free = 8L << 30;
+                }
+
+                return new MadeRoom(made ? 7L << 30 : 0, saidMade);
+            },
+        };
+
+        await using var watch = RoomFloorWatch.Start(room, floor, temp.Path, (_, cancel) => Task.Delay(Timeout.Infinite, cancel), said.Add, TestContext.Current.CancellationToken);
+
+        Assert.Equal([(temp.Path, 1L << 30, 4L << 30)], asked);
+        Assert.Equal([saidMade], said);
+        Assert.Equal(
+            made
+                ? null
+                : "stopped with 1 GiB free on '/data', under the 2 GiB admission.minFreeGiB keeps free for every leg there; what it built is left for "
+                    + "'dssharness clean --legs native'",
+            watch.Why);
+        Assert.Equal(!made, watch.Stopping.IsCancellationRequested);
+    }
+
     /// <summary>A file system whose every filesystem has <see cref="Free"/> bytes free, counting how often it was asked.</summary>
     private sealed class Room(IFileSystem inner) : PassThroughFileSystem(inner)
     {

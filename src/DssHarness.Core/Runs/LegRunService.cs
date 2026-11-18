@@ -221,6 +221,7 @@ public sealed class LegRunService(
     IHostPlatform platform,
     IHarnessOutput output,
     RunStops stops,
+    MachineSettingsFile machineSettings,
     CommandOrigin? origin = null,
     LegSetUps? setUps = null)
 {
@@ -243,6 +244,12 @@ public sealed class LegRunService(
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
+
+    /// <summary>What this machine declares of itself, which wins over what config.json declares for it.</summary>
+    private readonly MachineSettingsFile _machineSettings = machineSettings;
+
+    /// <summary>The other trees' idle builds a leg short of room removes, where its machine says so.</summary>
+    private readonly IdleBuilds _idleBuilds = new(runLock, fileSystem, TimeProvider.System);
 
     /// <summary>Who the command runs for: on a host, the run of the machine that asked, which its legs' slots are recorded under.</summary>
     private readonly CommandOrigin _origin = origin ?? CommandOrigin.Typed;
@@ -983,7 +990,7 @@ public sealed class LegRunService(
             return null;
         }
 
-        if (AdmissionRuleOf(context, leg) is not { } rule)
+        if (AdmissionRuleOf(context, leg, request.Here) is not { } rule)
         {
             return null;
         }
@@ -1008,6 +1015,15 @@ public sealed class LegRunService(
                     // What this machine counts as in use and could have back: the page cache of WSL's virtual machine, which
                     // holds what every distribution's builds read and wrote until it idles for minutes.
                     DropPageCache = token => _pageCache.DropAsync(context, token),
+
+                    // Room made from the other trees' idle builds on this machine, where it says so: the trees as they are
+                    // listed at each look, a worktree made or a run ended since counted.
+                    MakeRoom = rule.ReclaimIdleBuilds
+                        ? async (shortfall, read, token) => MadeRoom(_idleBuilds.MakeRoom(
+                            IdleScope(context, leg, request.Here, await _trees.HereAsync(context, request.Here, token).ConfigureAwait(false)),
+                            read.Filesystem,
+                            shortfall))
+                        : null,
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -1024,49 +1040,94 @@ public sealed class LegRunService(
     /// the distribution, where the machine that sent the leg named it - the distribution's own room is its virtual disk's,
     /// which a full drive does not shrink - and where it was not, or is mounted nowhere here, the build is told why.
     /// </remarks>
-    private RoomFloor? FloorOf(HarnessContext context, PlacedLeg leg, LegRunRequest request)
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="leg">The leg.</param>
+    /// <param name="request">The run.</param>
+    /// <param name="trees">The repository's trees on the machine the build runs on, as they were listed as its work began.</param>
+    private RoomFloor? FloorOf(HarnessContext context, PlacedLeg leg, LegRunRequest request, RepositoryTreesFound trees)
     {
         var workload = request.Workload.On(leg.Leg.Os);
 
-        if (!(workload.Heavy || workload.AdmitsEachUnit) || AdmissionRuleOf(context, leg) is not { MinFreeBytes: > 0 } rule)
+        if (!(workload.Heavy || workload.AdmitsEachUnit) || AdmissionRuleOf(context, leg, request.Here) is not { MinFreeBytes: > 0 } rule)
         {
             return null;
         }
 
-        if (request.Here is not { Kind: HostKind.Wsl })
+        return Floor() with
         {
-            return RoomFloor.Of(leg.Name, rule.MinFreeBytes);
-        }
+            // Room made from the other trees' idle builds on the machine the build runs on, where it says so, before the
+            // build is stopped: as many as it is short of beneath the floor, and its need as it was admitted beyond it.
+            MakeRoom = rule.ReclaimIdleBuilds
+                ? (_, read, shortfall) => MadeRoom(_idleBuilds.MakeRoom(IdleScope(context, leg, request.Here, trees), read.Filesystem, shortfall))
+                : null,
+            Need = leg.Need?.Bytes ?? 0,
+        };
 
-        if (_origin.Dispatched?.DiskImageDrive is not { } drive)
+        RoomFloor Floor()
         {
-            return RoomFloor.Unwatching(
-                leg.Name,
-                rule.MinFreeBytes,
-                "the machine that sent this leg named no drive where WSL keeps this distribution's disk, so only the distribution's "
-                + "own room is held to admission.minFreeGiB");
+            if (request.Here is not { Kind: HostKind.Wsl })
+            {
+                return RoomFloor.Of(leg.Name, rule.MinFreeBytes);
+            }
+
+            if (_origin.Dispatched?.DiskImageDrive is not { } drive)
+            {
+                return RoomFloor.Unwatching(
+                    leg.Name,
+                    rule.MinFreeBytes,
+                    "the machine that sent this leg named no drive where WSL keeps this distribution's disk, so only the distribution's "
+                    + "own room is held to admission.minFreeGiB");
+            }
+
+            var (mount, why) = WindowsDriveMounts.Of(_fileSystem, drive);
+
+            return mount is not null
+                ? RoomFloor.Beside(leg.Name, rule.MinFreeBytes, mount, ", where WSL keeps its disk")
+                : RoomFloor.Unwatching(
+                    leg.Name,
+                    rule.MinFreeBytes,
+                    $"the drive where WSL keeps this distribution's disk, {drive}, could not be found here, so only the distribution's own "
+                    + $"room is held to admission.minFreeGiB: {why}");
         }
-
-        var (mount, why) = WindowsDriveMounts.Of(_fileSystem, drive);
-
-        return mount is not null
-            ? RoomFloor.Beside(leg.Name, rule.MinFreeBytes, mount, ", where WSL keeps its disk")
-            : RoomFloor.Unwatching(
-                leg.Name,
-                rule.MinFreeBytes,
-                $"the drive where WSL keeps this distribution's disk, {drive}, could not be found here, so only the distribution's own "
-                + $"room is held to admission.minFreeGiB: {why}");
     }
+
+    /// <summary>
+    /// The trees whose idle builds <paramref name="leg"/> may remove to make room on the machine whose trees
+    /// <paramref name="trees"/> lists - every one but the leg's own and the copies of it its legs work in - and where the lock
+    /// that holds each one's builds is: <paramref name="context"/>'s, for this machine's trees, and each copy's own, for a
+    /// host's, each of which is a repository of its own.
+    /// </summary>
+    private IdleBuildsScope IdleScope(HarnessContext context, PlacedLeg leg, HostId? here, RepositoryTreesFound trees)
+        => IdleBuildsScope.Beside(
+            trees,
+            leg.TreeRoot,
+            leg.HostTreeRoot,
+            leg.Name,
+            HostCopies.KeptAs(here) is null ? context.Layout : null,
+            _platform.PathComparison);
+
+    /// <summary>What making room came to, as admission and the floor read it; <see langword="null"/> where nothing was there to remove.</summary>
+    private static MadeRoom? MadeRoom(ReclaimedRoom? room) => room is null ? null : new MadeRoom(room.Bytes, room.Describe());
 
     /// <summary>
     /// The admission rule of the machine <paramref name="leg"/>'s work runs on, or <see langword="null"/> where it declares
     /// none: for a WSL distribution's leg, the Windows machine it runs on, whose memory its virtual machine takes and whose
-    /// drive its disk grows on. Its slots, its floor and its page cache all answer to that one rule.
+    /// drive its disk grows on. Its slots, its floor and its page cache all answer to that one rule. Each field is the one
+    /// that machine's settings file declares, else the one config.json declares for it, else its defaults'.
     /// </summary>
-    private static AdmissionRule? AdmissionRuleOf(HarnessContext context, PlacedLeg leg)
-        => AdmissionSettings.RuleFor(
-            (leg.Named.Kind == HostKind.Wsl ? context.Config.Hosts.Local : leg.HostSettings).Admission,
-            context.Config.Defaults.Admission);
+    /// <remarks>
+    /// The settings file is read by the process on that machine: this one's own, and on a host the host's own. In a WSL
+    /// distribution a leg was sent to (<paramref name="here"/>), it is the file of the machine that sent it, carried with
+    /// the leg (<see cref="Dispatch.MachineAdmission"/>): the distribution's own is another machine's to it.
+    /// </remarks>
+    /// <exception cref="ConfigException">This machine's settings file could not be read, or the rule is out of its bounds.</exception>
+    private AdmissionRule? AdmissionRuleOf(HarnessContext context, PlacedLeg leg, HostId? here)
+        => AdmissionSettings.InForce(
+            here is { Kind: HostKind.Wsl }
+                ? new AdmissionSection(_origin.Dispatched?.MachineAdmission, "the settings file of the machine that sent the leg")
+                : AdmissionSection.SettingsFile(_machineSettings.Read().Admission, _machineSettings.Location ?? "nowhere"),
+            AdmissionSection.Host((leg.Named.Kind == HostKind.Wsl ? context.Config.Hosts.Local : leg.HostSettings).Admission, leg.Named),
+            AdmissionSection.Defaults(context.Config.Defaults.Admission))?.Rule;
 
     /// <summary>The trees of <paramref name="trees"/> but the one <paramref name="leg"/> works in: the repository's other trees here.</summary>
     private RepositoryTreesFound Beside(RepositoryTreesFound trees, PlacedLeg leg)
@@ -1169,7 +1230,7 @@ public sealed class LegRunService(
             // this machine admits its heavy legs by the memory. Not waited for: what comes back is the next wait's to read.
             // Nothing to drop is said too: the leg had just run in a distribution a host reaches, so WSL listing none of them
             // running leaves its cache where it was.
-            if (leg.Named.Kind == HostKind.Wsl && AdmissionRuleOf(context, leg) is not null)
+            if (leg.Named.Kind == HostKind.Wsl && AdmissionRuleOf(context, leg, request.Here) is not null)
             {
                 try
                 {
@@ -1220,10 +1281,12 @@ public sealed class LegRunService(
 
         // The repository's other trees here, whose build directory a process found beside the leg works in is told by,
         // listed as its work begins: a worktree made since the run began - an agent's, by its orchestrator - is among them.
+        // The floor makes room from their idle builds, where the machine says so.
+        var treesHere = await _trees.HereAsync(context, request.Here, cancellationToken).ConfigureAwait(false);
         var working = leg with
         {
-            Floor = FloorOf(context, leg, request),
-            Beside = Beside(await _trees.HereAsync(context, request.Here, cancellationToken).ConfigureAwait(false), leg),
+            Floor = FloorOf(context, leg, request, treesHere),
+            Beside = Beside(treesHere, leg),
         };
 
         // A leg that works in a copy of its tree runs by the configuration and the actions of the reading: a context made

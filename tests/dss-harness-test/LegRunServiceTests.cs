@@ -2635,6 +2635,112 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// The machine's own settings file wins over config.json field by field: the floor it declares is the leg's though the
+    /// tree's config.json declares another, and a machine whose config.json declares no admission at all is held to the floor
+    /// its settings file declares. Where it says reclaimIdleBuilds, the floor makes room from other trees' idle builds, with
+    /// the leg's need beyond it; where it does not, it makes none.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task ALegsFloor_IsTheOneItsMachinesSettingsFileDeclares_OverWhatConfigJsonDeclares(bool configAdmits, bool reclaims)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        RoomFloor? held = null;
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var config = configAdmits ? Admitting(OneLeg(harness), local: new AdmissionSettings { MinFreeGiB = 0.5, ReclaimIdleBuilds = !reclaims }) : OneLeg(harness);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(
+            settings.Location!,
+            $$"""{ "admission": { "minFreeGiB": 3, "reclaimIdleBuilds": {{(reclaims ? "true" : "false")}} } }""",
+            TestContext.Current.CancellationToken);
+
+        await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = Heavy },
+            ran: leg => held = leg.BuildRequestFor(config, temp.Path, new ProjectConfig { Name = "app", Type = "cmake" }).Floor,
+            machineSettings: settings);
+
+        Assert.Equal(3L << 30, held?.Bytes);
+        Assert.Equal(reclaims, held?.MakeRoom is not null);
+        Assert.Equal(0, held?.Need);
+    }
+
+    /// <summary>
+    /// A heavy leg short of room as it is admitted, on a machine that says reclaimIdleBuilds, removes another tree's idle
+    /// build there before it waits - never one of its own tree's - and its line and its admission in --json say what it
+    /// removed, whose tree it was and the room before and after, though it then waited out its time for the rest; the
+    /// note left where the build was is that tree's next build's to say.
+    /// </summary>
+    [Fact]
+    public async Task AHeavyLegShortOfRoom_RemovesAnotherTreesIdleBuild_BeforeItWaits_AndSaysSo()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var other = temp.Combine("trees", "other");
+        var idle = Path.Combine(other, "build", "x86_64-gcc-debug");
+        var own = Path.Combine(temp.Path, "build", "x86_64-gcc-debug");
+
+        foreach (var build in new[] { idle, own })
+        {
+            Directory.CreateDirectory(build);
+            await File.WriteAllTextAsync(Path.Combine(build, Core.Build.BuildRecord.FileName), "clean\nx86_64-gcc-debug\n", TestContext.Current.CancellationToken);
+            File.SetLastWriteTimeUtc(Path.Combine(build, Core.Build.BuildRecord.FileName), new DateTime(2026, 11, 1, 8, 0, 0, DateTimeKind.Utc));
+        }
+
+        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), 35 * AdmissionKit.Gibibyte, "/data"));
+
+        var config = Admitting(
+            new HarnessConfig
+            {
+                BuildConfigs = { ["debug"] = new BuildConfiguration() },
+                Legs = { ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", BuildSpaceGiB = 8 } },
+            },
+            local: new AdmissionSettings { MaxWaitMinutes = 1, SettleSeconds = [0, 0], ReclaimIdleBuilds = true });
+
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor })
+        {
+            BuildRooms = (_, path) => new BuildDirectoryRoom(path, Exists: false, RecordedBytes: null, new DiskSpace(40L << 30, 100L << 30, "/data"), Unmeasured: null),
+        };
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildAndTest },
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock(), fileSystem: room),
+            fileSystem: room,
+            trees: new KnownTrees { Beside = _ => [new RepositoryTree(other, "worktree o1/other")] });
+
+        Assert.Equal(LegExit.NotAdmitted, outcome.ExitCode);
+        Assert.False(Directory.Exists(idle));
+        Assert.True(Directory.Exists(own));
+        Assert.EndsWith(
+            "to make room for leg 'native' of the main checkout\n",
+            await File.ReadAllTextAsync(Core.Build.ReclaimedBuildNote.PathOf(idle), TestContext.Current.CancellationToken),
+            StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var admission = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("admission");
+        var removed = Assert.Single(admission.GetProperty("reclaimed").EnumerateArray()).GetString();
+
+        Assert.Equal(
+            $"removed ~{DiskSpace.Size(23)} of other trees' idle builds on '/data' to make room: worktree o1/other's at '{idle}', last built "
+            + "2026-11-01 08:00 UTC; 40 GiB free before, 40 GiB after",
+            removed);
+        Assert.Contains($"native: {removed}", harness.StandardError.ToString() + harness.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A WSL distribution's leg holds its builds to the floor on the drive its disk grows on as well, through that drive's
     /// mount in the distribution, as the machine that sent it named the drive: the distribution's own room is its virtual
     /// disk's, which a full drive does not shrink. Where that machine named none, or the drive is mounted nowhere there,
@@ -2682,6 +2788,44 @@ public sealed class LegRunServiceTests
         Assert.Equal(2L << 30, held.Bytes);
         Assert.Equal(mount is null ? Array.Empty<(string, string)>() : [(mount, ", where WSL keeps its disk")], held.Also);
         Assert.Equal(unwatched, held.Unwatched);
+    }
+
+    /// <summary>
+    /// A WSL distribution runs on the machine that sent its leg, so its build is held to the floor that machine's settings
+    /// file declares, as it was sent beside the leg - over config.json, and over any settings file of the distribution's
+    /// own, which is not the machine's - and makes room as that file says; a leg sent with none is held as config.json says.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWslLegsFloor_IsTheOneTheSendingMachinesSettingsFileDeclares(bool sent)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        RoomFloor? held = null;
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var config = Admitting(OneLeg(harness), local: new AdmissionSettings { MinFreeGiB = 0.5 });
+
+        config.Hosts.Wsl["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" };
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "minFreeGiB": 9 } }""", TestContext.Current.CancellationToken);
+
+        await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true, Here: HostId.Wsl("Ubuntu")) { Workload = Heavy },
+            ran: leg => held = leg.Floor,
+            origin: CommandOrigin.Served(Dispatch.Of(new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Run,
+                RunId = RunId.New().Value,
+                MachineAdmission = sent ? new AdmissionSettings { MinFreeGiB = 3, ReclaimIdleBuilds = true } : null,
+            })),
+            machineSettings: settings);
+
+        Assert.Equal(((long?)(sent ? 3L << 30 : 1L << 29), sent), (held?.Bytes, held?.MakeRoom is not null));
     }
 
     /// <summary>The real file system, except that what is mounted reads as <paramref name="mounts"/> says.</summary>
@@ -5149,7 +5293,8 @@ public sealed class LegRunServiceTests
         LegSetUps? setUps = null,
         IProcessRunner? versionProbes = null,
         IHarnessOutput? output = null,
-        RunStops? stops = null)
+        RunStops? stops = null,
+        MachineSettingsFile? machineSettings = null)
     {
         var loading = loader ?? HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
         var run = runId ?? RunId.New();
@@ -5180,6 +5325,9 @@ public sealed class LegRunServiceTests
             harness.Platform,
             output ?? harness.Output,
             stops ?? new RunStops(harness.FileSystem, harness.Identity, harness.Output, claims),
+
+            // Never this machine's own settings file: a test's machine declares what the test writes, and nothing else.
+            machineSettings ?? HostDoubles.MachineSettings(harness.FileSystem),
             origin,
             setUps);
 

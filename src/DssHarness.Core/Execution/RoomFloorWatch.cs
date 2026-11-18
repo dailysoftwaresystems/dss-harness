@@ -11,7 +11,9 @@ namespace DssHarness.Core.Execution;
 /// <remarks>
 /// Each filesystem is read as the watch starts, and again every <see cref="Every"/>: the room is the filesystem's own
 /// count, so a reading costs nothing a build would notice. A room that cannot be read stops nothing - it is said once,
-/// with why - as a leg is admitted without a room it could not read.
+/// with why - as a leg is admitted without a room it could not read. Where its machine says so, a filesystem found under
+/// the floor first has room made on it from other trees' idle builds (<see cref="RoomFloor.MakeRoom"/>), said, and is read
+/// again: the build is stopped only where it is still under.
 /// </remarks>
 public sealed class RoomFloorWatch : IAsyncDisposable
 {
@@ -28,6 +30,7 @@ public sealed class RoomFloorWatch : IAsyncDisposable
     private readonly Action<string> _say;
     private Task _watching = Task.CompletedTask;
     private string? _why;
+    private string? _madeSaid;
     private bool _disposed;
 
     private RoomFloorWatch(IFileSystem fileSystem, RoomFloor floor, string buildDirectory, Action<string> say, CancellationToken cancellationToken)
@@ -185,6 +188,11 @@ public sealed class RoomFloorWatch : IAsyncDisposable
                     continue;
                 }
 
+                if (space.FreeBytes < _floor.Bytes && Made(path, space) is { } read)
+                {
+                    space = read;
+                }
+
                 if (space.FreeBytes < _floor.Bytes)
                 {
                     _why = $"stopped with {DiskSpace.Size(space.FreeBytes)} free on '{space.Filesystem}'{where}, under the {DiskSpace.Size(_floor.Bytes)} "
@@ -197,5 +205,27 @@ public sealed class RoomFloorWatch : IAsyncDisposable
 
             return false;
         }
+    }
+
+    /// <summary>
+    /// The room on the filesystem <paramref name="path"/> is on read again once room was made there from other trees' idle
+    /// builds, where the floor makes any - as many as the build is short of beneath the floor and its need beyond it - and
+    /// what was made said; <see langword="null"/> where nothing was removed, or the room could not be read again.
+    /// </summary>
+    private DiskSpace? Made(string path, DiskSpace read)
+    {
+        if (_floor.MakeRoom?.Invoke(path, read, _floor.Bytes - read.FreeBytes + _floor.Need) is not { } made)
+        {
+            return null;
+        }
+
+        // Said whenever it removed something, and otherwise only where it says something new: why nothing could be.
+        if (made.Bytes > 0 || made.Said != _madeSaid)
+        {
+            _say(made.Said);
+            _madeSaid = made.Said;
+        }
+
+        return made.Bytes > 0 ? DiskSpace.Measure(_fileSystem, path).Space : null;
     }
 }

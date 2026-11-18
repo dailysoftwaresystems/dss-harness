@@ -62,7 +62,19 @@ public sealed record VariantKey(string Processor, string Toolchain, string Confi
     /// and builds in its own variant's directory within it, and a sweep of one holds off the other's, saying whose it is.
     /// </para>
     /// </remarks>
-    public string CopyKey => FileContentHash.Of(Encoding.UTF8.GetBytes(DirectoryName))[..CopyKeyLength];
+    public string CopyKey => CopyKeyOf(DirectoryName);
+
+    /// <summary>
+    /// The copy key (<see cref="CopyKey"/>) of the variant whose build directory is named <paramref name="directoryName"/>:
+    /// what a build directory found in a tree, whose configuration is not read, is keyed by.
+    /// </summary>
+    /// <param name="directoryName">The variant's directory name (<see cref="DirectoryName"/>).</param>
+    public static string CopyKeyOf(string directoryName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directoryName);
+
+        return FileContentHash.Of(Encoding.UTF8.GetBytes(directoryName))[..CopyKeyLength];
+    }
 
     /// <summary>
     /// Whether <paramref name="key"/> is spelt as a copy key is: <see cref="CopyKeyLength"/> hexadecimal digits, in lower

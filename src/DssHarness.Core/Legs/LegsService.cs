@@ -152,6 +152,13 @@ public sealed class LegsService(
             reports[report.Host] = report;
         }
 
+        // The rule each host's heavy legs are admitted by, as the machine that admits them reads it: before the legs are
+        // placed, so each placed leg's host carries it.
+        foreach (var host in reports.Keys.ToList())
+        {
+            reports[host] = WithAdmission(config, reports[host], here);
+        }
+
         // A leg is refused a host without the room its build needs before it starts, as it is one without the
         // programs: started, it died with the disk full half way through, and took any other leg building there
         // with it.
@@ -176,6 +183,46 @@ public sealed class LegsService(
         }
 
         return new LegsReport(placements, [.. reports.Values], selection.Named) { Here = here, LocalTrees = local, CopyOnHosts = workload.CopyOnHosts };
+    }
+
+    /// <summary>
+    /// <paramref name="report"/>, with the rule its heavy legs are admitted by - each field from the settings file of the
+    /// machine that admits them, as it answered, else from the section config.json declares for that machine, else from
+    /// its defaults - or why that rule could not be read; as it was where the host was not reached, and said nothing.
+    /// </summary>
+    /// <remarks>
+    /// The section is the one the legs' admission reads: <c>hosts.local</c> for this machine and its WSL distributions,
+    /// which run on it, an ssh host's own for that host, and on a host running legs another machine sent it, the one that
+    /// machine knows it by.
+    /// </remarks>
+    private static HostReport WithAdmission(HarnessConfig config, HostReport report, HostId? here)
+    {
+        if (report.MachineSettings is not { } settings)
+        {
+            return report;
+        }
+
+        if (settings.Problem is { } problem)
+        {
+            return report with { AdmissionUnread = problem };
+        }
+
+        var named = report.Host.Kind == HostKind.Local && here is not null ? here : report.Host;
+
+        try
+        {
+            return report with
+            {
+                Admission = AdmissionSettings.InForce(
+                    AdmissionSection.SettingsFile(settings.Admission, settings.Path ?? "nowhere"),
+                    AdmissionSection.Host((named.Kind == HostKind.Wsl ? config.Hosts.Local : config.Hosts.SettingsFor(named)).Admission, named),
+                    AdmissionSection.Defaults(config.Defaults.Admission)),
+            };
+        }
+        catch (ConfigException ex)
+        {
+            return report with { AdmissionUnread = ex.Message };
+        }
     }
 
     /// <summary>

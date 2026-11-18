@@ -242,15 +242,26 @@ public sealed class BuildService(
             ? (replaced, null)
             : await DecideCleanRebuildAsync(request, buildDirectory, watched, unmeasurable, cancellationToken).ConfigureAwait(false);
 
+        // What another tree's leg left where it removed this build directory to make room, taken before anything here
+        // removes the directory, so a note of a removal since built over is never read as one of this build's.
+        var reclaimed = ReclaimedBuildNote.Take(_fileSystem, buildDirectory);
+
         if (rebuilt is not null)
         {
             _output.Info(CommandName, $"{request.Leg}: rebuilding from clean, because {rebuilt}");
             UnfollowedFiles.DeleteDirectory(_fileSystem, request.TreeRoot, buildDirectory);
         }
 
+        // A build directory another tree's leg removed to make room is said once, as the build that starts it again from
+        // nothing begins: a build of hours, run again where one stood, is never left for its reader to wonder at.
+        if (reclaimed is not null)
+        {
+            _output.Info(CommandName, $"{request.Leg}: {reclaimed}, so this build starts from nothing");
+        }
+
         // Nothing is built in a copy that holds no build directory yet: said, because a copy is expected to keep a warm
         // build, and this one starts cold - every path of it made new.
-        if (rebuilt is null && request.CopyOf is not null && !_fileSystem.DirectoryExists(buildDirectory))
+        else if (rebuilt is null && request.CopyOf is not null && !_fileSystem.DirectoryExists(buildDirectory))
         {
             _output.Info(CommandName, $"{request.Leg}: nothing is built in its copy yet, so this build starts from nothing");
         }

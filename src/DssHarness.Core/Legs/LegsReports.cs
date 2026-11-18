@@ -60,6 +60,17 @@ public static class LegsReports
                 details.Add($"{host.Host}: cannot run legs: {reason}");
             }
 
+            // The rule its heavy legs are admitted by and where each field came from, so a machine whose count a tree's
+            // config.json states otherwise is seen to: said wherever one is in force, and where it could not be read.
+            if (host.Admission is { } admission)
+            {
+                details.Add($"{host.Host}: admission: {admission.Describe()}");
+            }
+            else if (host.AdmissionUnread is { } unread)
+            {
+                details.Add($"{host.Host}: admission: {unread}");
+            }
+
             // Asked for with -v: a host that is nearly full shows before a run that fills it, and before the
             // legs its builds would no longer fit are turned away.
             if (verbose && Room(host) is { } room)
@@ -123,6 +134,12 @@ public static class LegsReports
             // For a WSL distribution, the drive of this machine its disk grows on.
             host.DiskImageSpace,
             host.DiskImageUnmeasured,
+
+            // The settings file of the machine that admits its heavy legs - this one, for a WSL distribution - and the
+            // rule they are admitted by, each field with where it came from, or why that rule could not be read.
+            SettingsFile = host.MachineSettings?.Path,
+            Admission = host.Admission?.Fields,
+            host.AdmissionUnread,
         }),
     };
 

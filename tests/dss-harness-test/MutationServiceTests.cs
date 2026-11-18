@@ -2074,7 +2074,8 @@ public sealed class MutationServiceTests
             harness.FileSystem,
             harness.Platform,
             harness.Output,
-            new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity)));
+            new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity)),
+            HostDoubles.MachineSettings(harness.FileSystem));
 
         return new MutationService(
             loader,

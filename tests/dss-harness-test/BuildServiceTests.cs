@@ -2513,6 +2513,47 @@ public sealed class BuildServiceTests
         Assert.DoesNotContain("starts from nothing", treeFactory.StandardOutput.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A build whose directory another tree's leg removed to make room says so as it starts again from nothing - in a copy
+    /// in place of the copy's own first-build line - and only once: the note is taken by that build, and one left where a
+    /// build has stood again since is dropped unsaid.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ABuildAnotherTreesLegRemoved_SaysSoOnce_AsItStartsFromNothing(bool copy, bool builtSince)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var request = copy ? Request(temp, outputs: ["bin/app.dll"]) with { CopyOf = temp.Path } : Request(temp, outputs: ["bin/app.dll"]);
+        var (service, factory) = await TrackedWithFactoryAsync(temp, token, leaves: [Path.Combine("bin", "app.dll")]);
+        var buildDirectory = request.Variant.DirectoryUnder(temp.Path);
+        var said = "its build directory was removed 2026-11-15 10:02 UTC, to make room for leg 'linux' of worktree o1/xa";
+
+        if (builtSince)
+        {
+            Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
+            factory.StandardOutput.GetStringBuilder().Clear();
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(buildDirectory)!);
+        ReclaimedBuildNote.Write(new PhysicalFileSystem(FilePermissionsFactory.Create()), buildDirectory, said);
+
+        Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
+
+        var output = factory.StandardOutput.ToString();
+
+        Assert.Equal(builtSince ? 0 : 1, output.Split("starts from nothing").Length - 1);
+        Assert.True(builtSince || output.Contains($"{request.Leg}: {said}, so this build starts from nothing", StringComparison.Ordinal), output);
+        Assert.False(File.Exists(ReclaimedBuildNote.PathOf(buildDirectory)));
+
+        factory.StandardOutput.GetStringBuilder().Clear();
+
+        Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
+        Assert.DoesNotContain("starts from nothing", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
     private static BuildRequest Request(TempDirectory temp, IReadOnlyList<string> outputs)
         => Request(temp, [.. outputs.Select(output => (BuildOutput)output)], "windows");
 

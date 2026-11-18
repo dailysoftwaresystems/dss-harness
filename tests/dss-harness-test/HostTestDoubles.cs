@@ -612,6 +612,15 @@ internal static class HostDoubles
     public static ProgramFloors Floors(IHostPlatform platform, IProcessRunner processRunner, IFilePermissions? permissions = null)
         => new(new LocalProgramResolver(platform, permissions ?? FilePermissionsFactory.Create()), processRunner, platform);
 
+    /// <summary>
+    /// A machine's settings file, read from <paramref name="fileSystem"/> or the real one, at a scratch place of its own -
+    /// so no test reads the machine's real one - that holds nothing until a test writes it: a machine declaring nothing.
+    /// </summary>
+    public static MachineSettingsFile MachineSettings(Core.FileSystem.IFileSystem? fileSystem = null)
+        => new(
+            fileSystem ?? new Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create()),
+            Path.Combine(TestHost.TemporaryRoot, "machine-settings", Guid.NewGuid().ToString("N"), MachineSettingsFile.FileNameFor("tests")));
+
     /// <summary>A machine that runs <paramref name="current"/> on <paramref name="processor"/>.</summary>
     public static IHostPlatform Platform(PlatformId current = PlatformId.Linux, string processor = "x86_64", string? home = null)
     {

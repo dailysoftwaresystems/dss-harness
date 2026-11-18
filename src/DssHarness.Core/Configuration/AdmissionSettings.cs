@@ -7,17 +7,20 @@ namespace DssHarness.Core.Configuration;
 /// How heavy legs are admitted onto one physical machine: at most <see cref="HeavyLegs"/> at once across every
 /// DssHarness this user runs there, each started only once the machine's memory in use is below
 /// <see cref="MaxMemoryPercent"/> and, where its build's need is known, only where that need fits beside the room the
-/// other admitted legs claim. Declared under <c>defaults</c>, or under a host that is a machine of its own - this one, or
-/// an ssh host - whose fields replace the defaults' one by one. A machine where neither declares one admits every leg at
-/// once.
+/// other admitted legs claim. Declared in the machine's own settings file (<see cref="MachineSettingsFile"/>), under
+/// <c>defaults</c>, or under a host that is a machine of its own - this one, or an ssh host - each field taken from the
+/// first of them that declares it (<see cref="InForce"/>). A machine where none declares one admits every leg at once.
 /// </summary>
 /// <remarks>
 /// For a machine that several separate commands build on at once - worktrees each running a gate of their own -
 /// where <c>maxParallelLegs</c>, which one command counts, cannot see the others: four such builds drove one
 /// machine's committed memory to 81 of 113.7 GiB, and the process that had started them died. What a command's own
-/// configuration declares is the rule its legs are admitted by: a repository that declares none never joins the line,
-/// and where the commands of repositories that declare different counts share a machine, each leg starts only while
-/// every count up to it in line allows it.
+/// configuration declares is the rule its legs are admitted by where the machine's settings file says nothing: a
+/// repository that declares none never joins the line, and where the commands of repositories that declare different
+/// counts share a machine, each leg starts only while every count up to it in line allows it. config.json is tracked, so
+/// each worktree holds the copy of its last commit: a consumer's main checkout raised its machine's count to 3 while
+/// agents' worktrees made before still said 2, and every leg of the main checkout waited on "one of this machine's 2
+/// heavy-leg slot(s)". What a machine can hold is the machine's, so its settings file wins over every tree's.
 /// </remarks>
 public sealed class AdmissionSettings
 {
@@ -93,6 +96,14 @@ public sealed class AdmissionSettings
     public double? MinFreeGiB { get; init; }
 
     /// <summary>
+    /// Whether a heavy leg short of room - waiting for it as it is admitted, or under <see cref="MinFreeGiB"/> as it
+    /// builds - first removes the build directories other trees of its repository keep on the same filesystem of its
+    /// machine that no run or sweep holds, the least recently built first, as many as its need takes. Off where nothing
+    /// says.
+    /// </summary>
+    public bool? ReclaimIdleBuilds { get; init; }
+
+    /// <summary>
     /// The rule a machine admits heavy legs by: each field its own section declares, or else the defaults' section's,
     /// or else the built-in value; <see langword="null"/> where neither section is declared, and every leg is
     /// admitted at once.
@@ -104,20 +115,59 @@ public sealed class AdmissionSettings
     /// sections no file was read into is refused rather than waited by.
     /// </exception>
     public static AdmissionRule? RuleFor(AdmissionSettings? machine, AdmissionSettings? defaults)
+        => InForce(new AdmissionSection(machine, "the machine's own section"), new AdmissionSection(defaults, "defaults.admission"))?.Rule;
+
+    /// <summary>
+    /// The rule a machine admits heavy legs by, and where each of its fields came from: each field from the first of
+    /// <paramref name="sections"/> that declares it, or else the built-in value; <see langword="null"/> where none of them
+    /// is declared, and every leg is admitted at once.
+    /// </summary>
+    /// <param name="sections">The sections it may be declared in, the one that wins first.</param>
+    /// <exception cref="ConfigException">
+    /// The rule is one no machine could admit by: checked by the rules a configuration file is, so a rule built from
+    /// sections no file was read into is refused rather than waited by.
+    /// </exception>
+    public static AdmissionInForce? InForce(params IReadOnlyList<AdmissionSection> sections)
     {
-        if (machine is null && defaults is null)
+        ArgumentNullException.ThrowIfNull(sections);
+
+        if (sections.All(section => section.Settings is null))
         {
             return null;
         }
 
+        var fields = new List<AdmissionField>();
+
+        // Each field from the first section declaring it, saying which; the built-in value where none does.
+        T Taken<T>(string key, Func<AdmissionSettings, T?> read, T builtIn, Func<T, string> said)
+            where T : class
+        {
+            var from = sections.FirstOrDefault(section => section.Settings is { } settings && read(settings) is not null);
+            var value = from is null ? builtIn : read(from.Settings!)!;
+
+            fields.Add(new AdmissionField(key, said(value), from?.From ?? BuiltIn));
+            return value;
+        }
+
+        TValue Value<TValue>(string key, Func<AdmissionSettings, TValue?> read, TValue builtIn, Func<TValue, string> said)
+            where TValue : struct
+        {
+            var from = sections.FirstOrDefault(section => section.Settings is { } settings && read(settings) is not null);
+            var value = from is null ? builtIn : read(from.Settings!)!.Value;
+
+            fields.Add(new AdmissionField(key, said(value), from?.From ?? BuiltIn));
+            return value;
+        }
+
         var merged = new AdmissionSettings
         {
-            HeavyLegs = machine?.HeavyLegs ?? defaults?.HeavyLegs ?? DefaultHeavyLegs,
-            MaxMemoryPercent = machine?.MaxMemoryPercent ?? defaults?.MaxMemoryPercent ?? DefaultMaxMemoryPercent,
-            SettleSeconds = machine?.SettleSeconds ?? defaults?.SettleSeconds ?? [.. DefaultSettleSeconds],
-            PollSeconds = machine?.PollSeconds ?? defaults?.PollSeconds ?? DefaultPollSeconds,
-            MaxWaitMinutes = machine?.MaxWaitMinutes ?? defaults?.MaxWaitMinutes ?? DefaultMaxWaitMinutes,
-            MinFreeGiB = machine?.MinFreeGiB ?? defaults?.MinFreeGiB ?? DefaultMinFreeGiB,
+            HeavyLegs = Value("heavyLegs", settings => settings.HeavyLegs, DefaultHeavyLegs, count => Number(count)),
+            MaxMemoryPercent = Value("maxMemoryPercent", settings => settings.MaxMemoryPercent, DefaultMaxMemoryPercent, Number),
+            SettleSeconds = Taken("settleSeconds", settings => settings.SettleSeconds, [.. DefaultSettleSeconds], settle => $"[{string.Join(", ", settle)}]"),
+            PollSeconds = Value("pollSeconds", settings => settings.PollSeconds, DefaultPollSeconds, seconds => Number(seconds)),
+            MaxWaitMinutes = Value("maxWaitMinutes", settings => settings.MaxWaitMinutes, DefaultMaxWaitMinutes, Number),
+            MinFreeGiB = Value("minFreeGiB", settings => settings.MinFreeGiB, DefaultMinFreeGiB, Number),
+            ReclaimIdleBuilds = Value("reclaimIdleBuilds", settings => settings.ReclaimIdleBuilds, false, reclaim => reclaim ? "true" : "false"),
         };
 
         var problems = new List<string>();
@@ -129,15 +179,79 @@ public sealed class AdmissionSettings
             throw new ConfigException($"The heavy-leg admission rule has {ReportText.Counted(problems.Count, "problem")}: {string.Join("; ", problems)}");
         }
 
-        return new AdmissionRule(
-            merged.HeavyLegs.Value,
-            merged.MaxMemoryPercent.Value,
-            TimeSpan.FromSeconds(merged.SettleSeconds[0]),
-            TimeSpan.FromSeconds(merged.SettleSeconds[1]),
-            TimeSpan.FromSeconds(merged.PollSeconds.Value),
-            TimeSpan.FromMinutes(merged.MaxWaitMinutes.Value),
-            (long)Math.Round(merged.MinFreeGiB.Value * DiskSpace.Gibibyte));
+        return new AdmissionInForce(
+            new AdmissionRule(
+                merged.HeavyLegs.Value,
+                merged.MaxMemoryPercent.Value,
+                TimeSpan.FromSeconds(merged.SettleSeconds[0]),
+                TimeSpan.FromSeconds(merged.SettleSeconds[1]),
+                TimeSpan.FromSeconds(merged.PollSeconds.Value),
+                TimeSpan.FromMinutes(merged.MaxWaitMinutes.Value),
+                (long)Math.Round(merged.MinFreeGiB.Value * DiskSpace.Gibibyte))
+            {
+                ReclaimIdleBuilds = merged.ReclaimIdleBuilds.Value,
+            },
+            fields);
     }
+
+    /// <summary>Where a field no section declares comes from, as a line says it.</summary>
+    public const string BuiltIn = "built in";
+
+    /// <summary>A number as a line says it, the same on every machine.</summary>
+    private static string Number(double value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+}
+
+/// <summary>A section a machine's admission may be declared in, and where it is, as a line says it.</summary>
+/// <param name="Settings">The section, or <see langword="null"/> where it is not declared.</param>
+/// <param name="From">Where it is: <c>config.json's defaults.admission</c>.</param>
+public sealed record AdmissionSection(AdmissionSettings? Settings, string From)
+{
+    /// <summary>The section a machine's settings file at <paramref name="path"/> declares.</summary>
+    /// <param name="settings">Its <c>admission</c>, or <see langword="null"/>.</param>
+    /// <param name="path">The file, as a line shows it.</param>
+    public static AdmissionSection SettingsFile(AdmissionSettings? settings, string path) => new(settings, $"the machine's settings file '{path}'");
+
+    /// <summary>The section config.json declares for the machine <paramref name="host"/> runs on.</summary>
+    /// <param name="settings">Its <c>admission</c>, or <see langword="null"/>.</param>
+    /// <param name="host">
+    /// The host as the command line names it: an ssh host's own section, and for this machine and its WSL distributions,
+    /// which run on it, <c>hosts.local</c>.
+    /// </param>
+    public static AdmissionSection Host(AdmissionSettings? settings, Hosts.HostId host)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+
+        return new(settings, host.Kind == Hosts.HostKind.Ssh ? $"config.json's hosts.ssh '{host.Name}' admission" : "config.json's hosts.local admission");
+    }
+
+    /// <summary>The section config.json declares for every machine.</summary>
+    /// <param name="settings">Its <c>admission</c>, or <see langword="null"/>.</param>
+    public static AdmissionSection Defaults(AdmissionSettings? settings) => new(settings, "config.json's defaults.admission");
+}
+
+/// <summary>One field of the rule a machine admits heavy legs by, and where it came from.</summary>
+/// <param name="Key">The key, as a section spells it: <c>heavyLegs</c>.</param>
+/// <param name="Value">Its value, as a section spells it.</param>
+/// <param name="From">The section it came from, or <see cref="AdmissionSettings.BuiltIn"/>.</param>
+public sealed record AdmissionField(string Key, string Value, string From);
+
+/// <summary>The rule a machine admits heavy legs by, and where each of its fields came from.</summary>
+/// <param name="Rule">The rule.</param>
+/// <param name="Fields">Each field, in the order a section's keys are listed.</param>
+public sealed record AdmissionInForce(AdmissionRule Rule, IReadOnlyList<AdmissionField> Fields)
+{
+    /// <summary>
+    /// The rule as a line says it, each field with its value, grouped by where they came from in the order each first
+    /// does: <c>heavyLegs 3 from the machine's settings file '...'; minFreeGiB 4 from config.json's defaults.admission;
+    /// maxMemoryPercent 76, ... built in</c>.
+    /// </summary>
+    public string Describe()
+        => string.Join(
+            "; ",
+            Fields
+                .GroupBy(field => field.From, StringComparer.Ordinal)
+                .Select(group => $"{string.Join(", ", group.Select(field => $"{field.Key} {field.Value}"))} "
+                    + (group.Key == AdmissionSettings.BuiltIn ? AdmissionSettings.BuiltIn : $"from {group.Key}")));
 }
 
 /// <summary>The rule one machine admits heavy legs by, every field decided and within its bounds.</summary>
@@ -155,4 +269,11 @@ public sealed record AdmissionRule(
     TimeSpan SettleMost,
     TimeSpan Poll,
     TimeSpan MaxWait,
-    long MinFreeBytes);
+    long MinFreeBytes)
+{
+    /// <summary>
+    /// Whether a heavy leg short of room first removes other trees' idle builds on the same filesystem
+    /// (<see cref="AdmissionSettings.ReclaimIdleBuilds"/>).
+    /// </summary>
+    public bool ReclaimIdleBuilds { get; init; }
+}

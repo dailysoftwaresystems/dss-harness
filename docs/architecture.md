@@ -5608,9 +5608,10 @@ sync (when the host needs it)  →  lock  →  admission (a heavy leg, where dec
 `maxParallelLegs` is counted by one command. Separate commands - worktrees each running a gate of
 their own - share a machine that no one of them can see the others on: four such builds drove one
 Windows machine's committed memory to 81 of 113.7 GiB, and the process that had started them died.
-Where a machine declares **admission** - `defaults.admission`, or its own section under
-`hosts.local` or an ssh host, whose fields replace the defaults' one by one - each heavy leg, its
-tree synced and its lock taken, waits for the machine to take it:
+Where a machine declares **admission** - in its own settings file, `defaults.admission`, or its own
+section under `hosts.local` or an ssh host, each field taken from the first of them that declares
+it (*The machine declares what it holds* below) - each heavy leg, its tree synced and its lock
+taken, waits for the machine to take it:
 
 1. **One of the machine's `heavyLegs` slots** (2, at least 1), shared by every command this user
    runs there, given in the order legs asked for one. The slots are kept in
@@ -5639,12 +5640,38 @@ tree synced and its lock taken, waits for the machine to take it:
    its slot. A leg waiting for room keeps its slot, so the legs behind it wait too; see *Room is
    claimed as a leg is admitted* below.
 
-What a command's own configuration declares is the rule its legs are admitted by: a repository that
-declares none never joins the line. Each entry of the record carries the count its command allows,
-since commands of repositories that declare different counts share one record, and a leg starts
-only while it is fewer legs from the front than the fewest any leg up to it allows: the legs holding
-slots are always the front of the line, no leg runs beside more legs than its own configuration
-allows, and none passes a leg that asked before it.
+Where the machine's settings file says nothing, what a command's own configuration declares is the
+rule its legs are admitted by: a repository that declares none never joins the line. Each entry of
+the record carries the count its command's rule allows, since commands of repositories that declare
+different counts share one record, and a leg starts only while it is fewer legs from the front than
+the fewest any leg up to it allows: the legs holding slots are always the front of the line, no leg
+runs beside more legs than its own configuration allows, and none passes a leg that asked before it.
+Where the settings file declares `heavyLegs`, that count is every leg's in line, whatever count its
+entry carries, read again at each look - so a machine whose count is raised while legs wait takes them
+by it. The entries keep the members a build before this one reads, which refuses a record holding a
+member it does not know; such a build still weighs each entry's own count.
+
+**The machine declares what it holds.** `config.json` is tracked, so every worktree holds the copy of
+its last commit: a consumer's main checkout raised `hosts.local.admission.heavyLegs` to 3 while the
+agents' worktrees made before still said 2, and since a leg starts only while every count up to it in
+line allows it, the main checkout's legs waited on "one of this machine's 2 heavy-leg slot(s)". What a
+machine can hold is the machine's, so it is declared once, for the machine, in its settings file:
+`<user data>/dssharness/settings-<machine id>.json`, beside the slots' record and named the same way,
+one per machine and per user (`MachineSettingsFile`). It holds `{ "admission": { ... } }` in the keys
+`config.json`'s `admission` takes, read by the same options and the same rules
+(`HarnessConfigValidator.ValidateAdmission`): a key it does not know, a key written twice or a value
+out of its bounds is refused, naming the file, and no heavy leg is admitted by it - nor by a tree's
+`config.json` in its place - until it is put right; a file that is not there declares nothing. Each
+field it declares wins over the machine's section in every tree's `config.json`, which wins over
+`defaults.admission`, which wins over the built-in value (`AdmissionSettings.InForce`), so a field it
+leaves out is still the repository's to say. Every command this user runs on the machine reads it,
+whichever tree it runs in; an ssh host reads its own, as it admits the legs sent to it; a WSL leg is
+admitted by this machine's, which is sent with it for its floor (`HostAgentRequest.MachineAdmission`,
+since protocol 13), since the distribution's own is another machine's to it. `legs` says, for each host
+it reaches, the rule in force and where each field came from, or why the settings file could not be
+read: an ssh host answers its own file in the survey's answer (`HostAgentInfo.MachineSettings`), its
+home written `~`, and `--json` gives each host's `settingsFile`, its `admission` fields (`key`,
+`value`, `from`) and `admissionUnread`.
 
 A waiting leg says where it stands as it starts each wait - who holds the slots, the memory in use, or
 the room and who claims it - again whenever the holders or the claimants change, and again, as it reads
@@ -5741,13 +5768,45 @@ by the drive, or by the `path=` its options name, where an older WSL lists what 
 distribution's own room is held. A room that cannot be read stops nothing, and is said once, as a
 leg is admitted without a room it could not read.
 
+**Room is made from idle builds, where the machine says so.** A consumer's arm64 host of 47 GiB kept
+five trees' copies - the main checkout's and four worktrees' - and a full build took about 16 GiB:
+with other trees' idle builds there, two legs were stopped at the floor mid-build, and removing an
+idle tree's build by hand made the room. With `reclaimIdleBuilds` true, a heavy leg short of room
+first removes the build directories the repository's other trees keep on that filesystem of its
+machine that no run or sweep holds (`IdleBuilds`), the least recently built first - by when a build
+last wrote its record there - one at a time, until what it removed covers what it is short of: as it
+is admitted, its need less what is free beside the other legs' claims, and then it claims again; under
+the floor, what it falls short of the floor plus its need as it was admitted, and then the room is
+read again, the build stopped only where it is still under. A build directory is one below a tree's
+`build` holding the record a build of this tool writes as it begins, whatever variant it is and
+whatever the tree's configuration says now; a link there is left. Each is removed as `clean --legs`
+removes a leg's own, by the one owner of that removal (`BuildDirectoryRemoval`): what an earlier
+removal left aside first, then the directory renamed aside under the mutex a run needs to take the
+lock a build of it takes, so none starts in between, and removed from there. One a run's lock names,
+or a sweep of its variant in that tree holds, is left and said; the leg's own tree, and the copies
+its legs work in, are never among them, nor a sweep's workers, which are the sweep's to reuse. The
+trees are the ones the leg's process has on its machine (`IRepositoryTrees.HereAsync`): here the main
+checkout, each worktree and agent's repository and each copy one keeps in `.legs`, their builds held
+by the main checkout's lock; on an ssh host, or in a WSL distribution a leg was sent to, its copy of
+the main checkout and each worktree's copy beside it, each a repository whose lock is its own. Only
+directories on the filesystem that is short count, since removing one elsewhere gives it nothing: a
+WSL leg is admitted here, so it makes room here on the drive its disk grows on, and nothing removed
+inside a distribution gives that drive any room back. The leg's line says what it removed, whose tree
+it was, when it was last built and the room before and after - again whenever it removes more, and
+once where it found builds there and none could be removed, saying why - and the leg's `admission` in
+`--json` keeps what it removed as `reclaimed`.
+Each removal leaves a note beside where the directory was (`ReclaimedBuildNote`): that tree's next
+build says the directory was removed, when and for which leg, as it starts from nothing, and removes
+the note; a note whose directory is there again is removed unsaid.
+
 **The machine is the physical one.** A WSL distribution runs on this machine, so this machine's
-command takes its heavy legs - by `hosts.local`'s rule, against this machine's slots and memory -
-before it sends them there, and the distribution takes nothing again; a section under `hosts.wsl`
-is refused. A command typed inside a distribution, rather than sent there, is the distribution's
-own: it keeps a record there and reads the distribution's memory, and cannot see the legs commands
-typed on Windows run, nor they its. An ssh host is a machine of its own: the DssHarness there takes
-the legs sent to it by its own section, and the line it answers with names how.
+command takes its heavy legs - by this machine's settings file and `hosts.local`'s rule, against this
+machine's slots and memory - before it sends them there, and the distribution takes nothing again; a
+section under `hosts.wsl` is refused. A command typed inside a distribution, rather than sent there,
+is the distribution's own: it keeps a record there, reads a settings file there and reads the
+distribution's memory, and cannot see the legs commands typed on Windows run, nor they its. An ssh
+host is a machine of its own: the DssHarness there takes the legs sent to it by its own settings file
+and its own section, and the line it answers with names how.
 
 **The memory in use is each system's own count** of what it can no longer give, as a share of what
 it could: on Windows the commit charge against the commit limit, read with `GetPerformanceInfo` for

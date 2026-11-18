@@ -15,7 +15,11 @@ namespace DssHarness.Core.Execution;
 /// <param name="Leg">The leg.</param>
 /// <param name="Host">The host its tree is on, as the command line names it.</param>
 /// <param name="Tree">The tree it works in, on that host.</param>
-/// <param name="Slots">How many heavy legs the configuration of the command that asked lets this machine run at once.</param>
+/// <param name="Slots">
+/// How many heavy legs the rule of the command that asked lets this machine run at once: the machine's own count where its
+/// settings file declares one, else what that command's config.json declares. Weighed by every reader where the machine
+/// declares no count of its own, as the builds before it weigh it; where it does, the machine's count is every leg's.
+/// </param>
 /// <param name="ProcessStamp">
 /// What tells that process from a later holder of its id; see <see cref="IProcessIdentity"/>. Left out where the
 /// platform would not say.
@@ -43,7 +47,8 @@ public sealed record SlotEntry(
 /// <param name="Entry">The leg's entry in the record, in the order it asked.</param>
 /// <param name="HoldsSlot">
 /// Whether it holds one of the machine's slots - the front of the line, each fewer legs from the front than the fewest
-/// any leg up to it allows at once, as the record's own reading of a place is weighed by.
+/// any leg up to it allows at once, or than the machine's own count where it declares one, as the record's own reading of
+/// a place is weighed by.
 /// </param>
 public sealed record SlotInLine(SlotEntry Entry, bool HoldsSlot);
 
@@ -91,7 +96,8 @@ internal sealed record RoomStanding(bool Fits, DiskSpace? Disk, long Claimed, IR
 /// <param name="Holders">The legs holding the machine's slots, first in line first: itself among them where it holds one.</param>
 /// <param name="InLineAhead">The legs ahead of it in line, first first: those holding slots, then those waiting.</param>
 /// <param name="Slots">
-/// How many heavy legs may run at once while it waits: the fewest any leg up to it in line allows, its own included.
+/// How many heavy legs may run at once while it waits: the machine's own count where its settings file declares one, else
+/// the fewest any leg up to it in line allows, its own included.
 /// </param>
 internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holders, IReadOnlyList<SlotEntry> InLineAhead, int Slots)
 {
@@ -113,11 +119,15 @@ internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holde
 /// a record there, and cannot see the legs commands typed on Windows run.
 /// </para>
 /// <para>
-/// Each entry carries the count its own command's configuration allows, since commands of repositories that declare
-/// different counts share one record: a leg starts only while it is fewer legs from the front than the fewest any leg
-/// up to it allows, so the legs holding slots are always the front of the line, no leg ever runs beside more legs than
-/// its own configuration allows, and none passes a leg that asked before it. A command whose configuration declares no
-/// admission never joins the line.
+/// Each entry carries the count its own command's rule allows, since commands of repositories that declare different
+/// counts share one record: a leg starts only while it is fewer legs from the front than the fewest any leg up to it
+/// allows, so the legs holding slots are always the front of the line, no leg ever runs beside more legs than its own
+/// configuration allows, and none passes a leg that asked before it. A command whose rule declares no admission never
+/// joins the line. Where the machine's settings file declares its own count (<see cref="Configuration.MachineSettings"/>),
+/// that count is every leg's, read again at each look: what a machine can hold is the machine's, and a worktree whose
+/// config.json was committed before the machine's count was raised would else hold every leg behind it to the old one.
+/// The entries keep the members a build before this one reads - one that found a member it does not know would refuse
+/// the record - and such a build still weighs each entry's own count.
 /// </para>
 /// <para>
 /// Named by what tells this machine from every other, never by its name, which a Mac takes from each network it joins:
@@ -143,7 +153,11 @@ internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holde
 /// <param name="output">Says what was reclaimed, and what could not be given back.</param>
 /// <param name="identity">This process, and how the liveness of another is told.</param>
 /// <param name="path">Names the slots' record, asked the first time a leg asks for a slot; the room's is named beside it.</param>
-public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, Func<string> path)
+/// <param name="machineSlots">
+/// The count of heavy legs this machine's settings file declares, read at each look, or <see langword="null"/> where it
+/// declares none; none is read where left out.
+/// </param>
+public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, Func<string> path, Func<int?>? machineSlots = null)
 {
     /// <summary>The command name this reports under.</summary>
     public const string CommandName = "admission";
@@ -159,6 +173,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
     private readonly IProcessIdentity _identity = identity;
+    private readonly Func<int?> _machineSlots = machineSlots ?? (() => null);
     private readonly Lazy<MachineWideList<SlotEntry>> _record = new(() => Record<SlotEntry>(fileSystem, path, Subject, Consequence));
 
     // Named beside the slots' record as that was named, never by naming it again: where the machine is told only by its
@@ -170,11 +185,11 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <param name="output">Says what was reclaimed, and what could not be given back.</param>
     /// <param name="identity">This process, and how the liveness of another is told.</param>
     /// <param name="path">The record.</param>
-    public HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, string path)
-        : this(fileSystem, output, identity, () => path)
+    /// <param name="machineSlots">The count this machine's settings file declares, read at each look; none where left out.</param>
+    public HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, string path, Func<int?>? machineSlots = null)
+        : this(fileSystem, output, identity, () => path, machineSlots)
     {
     }
-
 
 
     /// <summary>
@@ -251,21 +266,25 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <param name="place">The place a leg was given, and has not given back.</param>
     /// <exception cref="ObjectDisposedException">The place was given back: a leg that gave its place back asks again.</exception>
     /// <exception cref="HarnessException">The record could not be read or written.</exception>
+    /// <exception cref="Configuration.ConfigException">This machine's settings file could not be read.</exception>
     internal SlotStanding Look(SlotPlace place)
     {
         ArgumentNullException.ThrowIfNull(place);
         ObjectDisposedException.ThrowIf(place.Left, place);
+
+        // Read before the record is taken, and at each look: a machine whose count is raised while legs wait takes them by it.
+        var machine = _machineSlots();
 
         return File.Update((entries, afterwards) =>
         {
             var live = Live(entries, entry => entry, "a heavy-leg slot", afterwards);
             var line = live.Contains(place.Entry) ? live : [.. live, place.Entry];
             var ahead = line.IndexOf(place.Entry);
-            var holders = Holding(line);
+            var holders = Holding(line, machine);
 
             return (
                 line.SequenceEqual(entries) ? null : line,
-                new SlotStanding(ahead < holders.Count, holders, [.. line.Take(ahead)], line.Take(ahead + 1).Min(entry => entry.Slots)));
+                new SlotStanding(ahead < holders.Count, holders, [.. line.Take(ahead)], machine ?? line.Take(ahead + 1).Min(entry => entry.Slots)));
         });
     }
 
@@ -362,16 +381,17 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 
     /// <summary>
     /// The legs holding slots: the front of the line, each fewer legs from the front than the fewest any leg up to it
-    /// allows at once.
+    /// allows at once - or, where the machine declares its own count (<paramref name="machine"/>), than that count, whatever
+    /// any entry's command allowed.
     /// </summary>
-    private static List<SlotEntry> Holding(IReadOnlyList<SlotEntry> line)
+    private static List<SlotEntry> Holding(IReadOnlyList<SlotEntry> line, int? machine)
     {
         var holding = new List<SlotEntry>();
         var fewest = int.MaxValue;
 
         foreach (var entry in line)
         {
-            fewest = Math.Min(fewest, entry.Slots);
+            fewest = machine ?? Math.Min(fewest, entry.Slots);
 
             if (holding.Count >= fewest)
             {
@@ -391,14 +411,19 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// process has ended is passed over without a word, and stays until a leg asks or looks again.
     /// </summary>
     /// <exception cref="HarnessException">The record could not be named, read or written.</exception>
+    /// <exception cref="Configuration.ConfigException">This machine's settings file could not be read.</exception>
     public IReadOnlyList<SlotInLine> Line()
-        => File.Update<IReadOnlyList<SlotInLine>>((entries, _) =>
+    {
+        var machine = _machineSlots();
+
+        return File.Update<IReadOnlyList<SlotInLine>>((entries, _) =>
         {
             var live = Live(entries, entry => entry, "a heavy-leg slot", afterwards: null);
-            var holding = new HashSet<SlotEntry>(Holding(live));
+            var holding = new HashSet<SlotEntry>(Holding(live, machine));
 
             return ((IReadOnlyList<SlotEntry>?)null, (IReadOnlyList<SlotInLine>)[.. live.Select(entry => new SlotInLine(entry, holding.Contains(entry)))]);
         });
+    }
 
     /// <summary>
     /// The entries still standing, each whose holder's process has ended reclaimed - as <paramref name="what"/> - and said

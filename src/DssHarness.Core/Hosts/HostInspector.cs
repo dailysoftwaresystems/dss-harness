@@ -120,6 +120,22 @@ public sealed record HostReport
     public IReadOnlyList<BuildDirectoryRoom> Builds { get; init; } = [];
 
     /// <summary>
+    /// What the settings file of the machine that admits its heavy legs says: its own, for this machine and an ssh host,
+    /// and this machine's for a WSL distribution, which runs on it; <see langword="null"/> where it was not reached.
+    /// </summary>
+    public MachineSettingsAnswer? MachineSettings { get; init; }
+
+    /// <summary>
+    /// The rule its heavy legs are admitted by, each field with where it came from, as the survey reads it from
+    /// <see cref="MachineSettings"/> and the configuration; <see langword="null"/> where none is in force, or it could not be
+    /// read (<see cref="AdmissionUnread"/>).
+    /// </summary>
+    public AdmissionInForce? Admission { get; init; }
+
+    /// <summary>Why the rule its heavy legs are admitted by could not be read, where it could not; every such leg is refused then.</summary>
+    public string? AdmissionUnread { get; init; }
+
+    /// <summary>
     /// How long it is to be held awake as a command finishes with it, until the next command's own keepAwake
     /// takes over, as its <c>holdAwakeSeconds</c> says; zero for none.
     /// </summary>
@@ -642,6 +658,12 @@ public sealed class HostInspector(
                 })],
                 SpaceUnmeasured = Said(info.SpaceUnmeasured, connection),
                 Builds = [.. info.Builds.Select(room => room with { Unmeasured = Said(room.Unmeasured, connection) })],
+
+                // A WSL distribution runs on this machine, which admits its heavy legs by its own settings file: the
+                // distribution's is another machine's to them.
+                MachineSettings = connection.Host.Kind == HostKind.Wsl
+                    ? _agent.MachineSettings()
+                    : info.MachineSettings is { } settings ? settings with { Problem = Said(settings.Problem, connection) } : null,
             }, new HostSession(connection, toolPath));
     }
 
@@ -796,6 +818,7 @@ public sealed class HostInspector(
         Space = info.Space,
         SpaceUnmeasured = info.SpaceUnmeasured,
         Builds = info.Builds,
+        MachineSettings = info.MachineSettings,
         Session = session,
     };
 

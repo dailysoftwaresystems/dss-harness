@@ -202,8 +202,9 @@ run at once *on any one machine*, so a busy laptop is not asked for more than it
 remote hosts sit idle, and `defaults.maxParallelLegsTotal` caps the whole fleet for what it shares
 even when its machines do not — a license server, a network share, a sync's bandwidth.
 
-Both are counted by one command. Where a machine declares `admission` — under `defaults`, or its own
-under `hosts.local` or an ssh host — its heavy legs (a build, a test, a runner that requires the build
+Both are counted by one command. Where a machine declares `admission` — in its own settings file
+(below), under `defaults`, or its own under `hosts.local` or an ssh host — its heavy legs (a build, a
+test, a runner that requires the build
 or says `"heavy": true`, a run of an action step or a runner's own phase that names `{product}`,
 `{buildDir}` or one of the leg's compilers — which builds its leg first — or of a step that says
 `heavy: true`) share it across every
@@ -220,8 +221,25 @@ most once a minute - and reads the memory again once what was dropped has come b
 at the most; a WSL leg drops it as it ends. While a heavy leg builds, each filesystem it fills - for a
 WSL leg, the Windows drive its disk grows on too - is held to `minFreeGiB` (2 GiB): one that falls
 under it, read every 15 seconds and again as a build or a write of its fails, stops the build,
-`stopped`, what it built left for `clean`; a build under it as it starts writes nothing. Run
-`dssharness help admission` for the rules.
+`stopped`, what it built left for `clean`; a build under it as it starts writes nothing. With
+`reclaimIdleBuilds` true, a leg short of room - waiting for it, or under `minFreeGiB` - first removes
+the build directories the repository's other trees keep on that filesystem that no run or sweep
+holds, the least recently built first and only as many as it is short of, as `clean --legs` removes
+one; its line says what it removed, whose tree it was and the room before and after, and that tree's
+next build says its directory was removed as it starts from nothing.
+
+What a machine can hold is the machine's, while `config.json` is tracked and each worktree holds the
+copy of its last commit: so the machine's own settings file,
+`<user data>/dssharness/settings-<machine id>.json` - the user data being `LOCALAPPDATA` on Windows,
+`~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on Linux - holds
+`{ "admission": { ... } }` in the same keys, read as strictly as `config.json`, and each field it
+declares wins over what any tree's `config.json` says for that machine, `hosts.<machine>.admission`
+and `defaults.admission` staying the rule for each field it leaves out. A count it declares is every
+leg's in line, so a worktree committed before the count was raised no longer holds the machine to the
+old one. Every command this user runs there reads it; an ssh host reads its own. A file that cannot
+be read, or holds what `config.json` would refuse, is refused naming it, and no heavy leg is admitted
+until it is put right. `dssharness legs` says, for each host it reaches, the rule in force and where
+each field came from. Run `dssharness help admission` for the rules.
 
 ## Design
 

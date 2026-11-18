@@ -1537,7 +1537,8 @@ public sealed class ToolProvisionServiceTests
                 new HoldAwakeStore(fileSystem, Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
                 new RecordingLauncher(),
                 HomeShorthand.Of(platform, fileSystem),
-                new RecordingLastResort());
+                new RecordingLastResort(),
+                HostDoubles.MachineSettings(fileSystem));
             var inspector = new HostInspector(
                 commands,
                 connector,

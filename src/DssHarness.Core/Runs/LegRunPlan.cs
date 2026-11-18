@@ -265,14 +265,31 @@ public sealed record PlacedLeg(
     /// <param name="command">The command taking it.</param>
     public static LockRequest BuildLock(HostId host, string hostTreeRoot, VariantKey variant, RunId runId, string command)
     {
-        ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(variant);
+
+        return BuildLock(host, hostTreeRoot, variant.DirectoryName, runId, command);
+    }
+
+    /// <summary>
+    /// The lock a build of the variant whose build directory is named <paramref name="variantDirectory"/> in
+    /// <paramref name="hostTreeRoot"/> on <paramref name="host"/> takes: what whatever finds a build directory in a tree,
+    /// whose configuration it does not read, asks the lock.
+    /// </summary>
+    /// <param name="host">The host the leg builds on.</param>
+    /// <param name="hostTreeRoot">The tree it builds in there.</param>
+    /// <param name="variantDirectory">Its variant's directory name (<see cref="VariantKey.DirectoryName"/>).</param>
+    /// <param name="runId">The run taking it.</param>
+    /// <param name="command">The command taking it.</param>
+    public static LockRequest BuildLock(HostId host, string hostTreeRoot, string variantDirectory, RunId runId, string command)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentException.ThrowIfNullOrWhiteSpace(variantDirectory);
 
         return new LockRequest
         {
             Host = host.ToString(),
             Tree = hostTreeRoot,
-            Variant = variant.DirectoryName,
+            Variant = variantDirectory,
             Scope = LockScope.TreeShared,
             RunId = runId,
             Command = command,

@@ -850,6 +850,39 @@ public sealed class LegsServiceTests
         Assert.Null(testing.Placements[0].Need);
     }
 
+    /// <summary>
+    /// The survey reads, for each host it reaches, the rule its heavy legs are admitted by from the settings file of the
+    /// machine that admits them as that machine answered - this one's for itself and for its WSL distribution, an ssh
+    /// host's own for it - over config.json's section for that machine and its defaults, saying where each field came
+    /// from; a host whose settings file could not be read is said to be, and each placed leg's host carries what was read.
+    /// </summary>
+    [Fact]
+    public async Task TheSurvey_ReadsEachHostsAdmission_FromTheSettingsFileOfTheMachineThatAdmitsIt_OverConfigJson()
+    {
+        var unread = "This machine's settings file '~/settings.json' could not be read: the disk is unwell.";
+        var fixture = Create(
+            new() { ["arm"] = HostDoubles.Leg("linux", "arm64") },
+            defaultsAdmission: new AdmissionSettings { MaxMemoryPercent = 80 },
+            localAdmission: new AdmissionSettings { HeavyLegs = 2, MinFreeGiB = 4 },
+            inspect: host => Measurements[host] with
+            {
+                MachineSettings = host.Kind == HostKind.Ssh
+                    ? new MachineSettingsAnswer("~/settings.json", Problem: unread)
+                    : new MachineSettingsAnswer("/u/settings.json", new AdmissionSettings { HeavyLegs = 3 }),
+            });
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
+        var hosts = report.Hosts.ToDictionary(host => host.Host);
+        var local = "heavyLegs 3 from the machine's settings file '/u/settings.json'; maxMemoryPercent 80 from config.json's defaults.admission; "
+            + "settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false built in; minFreeGiB 4 from config.json's hosts.local admission";
+
+        Assert.Equal(local, hosts[HostId.Local].Admission?.Describe());
+        Assert.Equal(local, hosts[HostId.Wsl("Ubuntu")].Admission?.Describe());
+        Assert.Null(hosts[HostId.Ssh("pi")].Admission);
+        Assert.Equal(unread, hosts[HostId.Ssh("pi")].AdmissionUnread);
+        Assert.Equal(unread, Assert.Single(report.Placements).Host?.AdmissionUnread);
+    }
+
     /// <summary>What a host answers about a build directory: whether it is there, what it recorded, the room on '/'.</summary>
     private static BuildDirectoryRoom Room(string path, bool exists, long? recorded, long free)
         => new(path, exists, recorded, new DiskSpace(free << 30, 48L << 30, "/"), null);
@@ -859,13 +892,17 @@ public sealed class LegsServiceTests
         Action<HarnessConfig>? configure = null,
         Func<HostId, HostReport>? inspect = null,
         Func<HostId, string, BuildDirectoryRoom>? rooms = null,
-        KnownTrees? trees = null)
+        KnownTrees? trees = null,
+        AdmissionSettings? defaultsAdmission = null,
+        AdmissionSettings? localAdmission = null)
     {
         var config = new HarnessConfig
         {
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Defaults = new HarnessDefaults { Admission = defaultsAdmission },
             Hosts = new HostsConfig
             {
+                Local = new LocalHostConfig { Admission = localAdmission },
                 Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
                 Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = "/home/pi/repo" } },
             },

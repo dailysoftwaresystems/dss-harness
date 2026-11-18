@@ -73,7 +73,7 @@ public sealed partial class HelpTests
             .Select(property => JsonNamingPolicy.CamelCase.ConvertName(property.Name))
             .ToList();
 
-        Assert.Equal(["heavyLegs", "maxMemoryPercent", "settleSeconds", "pollSeconds", "maxWaitMinutes", "minFreeGiB"], keys);
+        Assert.Equal(["heavyLegs", "maxMemoryPercent", "settleSeconds", "pollSeconds", "maxWaitMinutes", "minFreeGiB", "reclaimIdleBuilds"], keys);
 
         foreach (var key in keys)
         {

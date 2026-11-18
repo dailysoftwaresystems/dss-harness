@@ -113,6 +113,7 @@ public sealed class CleanService(
     private readonly LocalSyncTransport _localTransport = localTransport;
     private readonly IRepositoryTrees _trees = trees;
     private readonly WorkerCopies _workers = new(syncService, localTransport, fileSystem, output, identity, CommandName);
+    private readonly BuildDirectoryRemoval _removal = new(runLock, fileSystem);
 
     /// <summary>Removes, or measures, every selected leg's build directory, and reports the ledger.</summary>
     /// <param name="request">What the command was asked to do.</param>
@@ -476,37 +477,21 @@ public sealed class CleanService(
                     : leg.Entry(LegVerdict.Passed, said) with { Space = space };
             }
 
-            // Removed first, and outside the lock: nothing builds in a directory an earlier removal moved aside.
-            var removed = Remove(layout.RepositoryRoot, aside);
+            var removal = _removal.Remove(layout, layout.RepositoryRoot, directory, building);
 
-            var moved = false;
-            var holder = _runLock.HeldBy(layout, building, () =>
-            {
-                if (_fileSystem.DirectoryExists(directory))
-                {
-                    UnfollowedFiles.Move(_fileSystem, layout.RepositoryRoot, directory, aside, replace: false);
-                    moved = true;
-                }
-            });
-
-            if (holder is not null)
+            if (removal.HeldBy is { } holder)
             {
                 return leg.Entry(
                     LegVerdict.RefusedLocked,
-                    removed > 0 ? $"{holder} What an earlier removal had left at '{aside}' was removed: {DiskSpace.Size(removed)}." : holder);
-            }
-
-            if (moved)
-            {
-                removed += Remove(layout.RepositoryRoot, aside);
+                    removal.Bytes > 0 ? $"{holder} What an earlier removal had left at '{aside}' was removed: {DiskSpace.Size(removal.Bytes)}." : holder);
             }
 
             var (after, why) = DiskSpace.Measure(_fileSystem, directory);
-            var done = moved || removed > 0 ? $"removed {DiskSpace.Size(removed)} from '{directory}'" : $"nothing to remove at '{directory}'";
+            var done = removal.Removed ? $"removed {DiskSpace.Size(removal.Bytes)} from '{directory}'" : $"nothing to remove at '{directory}'";
 
             return leg.Entry(LegVerdict.Passed, $"{done}; {after?.Describe() ?? Unmeasured(why)}") with
             {
-                Space = new BuildSpace(directory, removed, Removed: moved || removed > 0, after),
+                Space = new BuildSpace(directory, removal.Bytes, Removed: removal.Removed, after),
             };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -874,14 +859,7 @@ public sealed class CleanService(
     /// Removes <paramref name="directory"/>, and says what it held: counted only once it is gone, so one that could not
     /// be removed is never among what a clean says it freed - it is still there, for the next clean to count.
     /// </summary>
-    private long Remove(string root, string directory)
-    {
-        var held = _fileSystem.DirectorySize(directory);
-
-        UnfollowedFiles.DeleteDirectory(_fileSystem, root, directory);
-
-        return held;
-    }
+    private long Remove(string root, string directory) => BuildDirectoryRemoval.Delete(_fileSystem, root, directory);
 
 
     /// <summary>

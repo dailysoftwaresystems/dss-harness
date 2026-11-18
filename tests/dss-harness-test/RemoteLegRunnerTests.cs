@@ -297,6 +297,43 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// A WSL distribution's leg is sent with the admission this machine's settings file declares - the distribution runs
+    /// on this machine, and holds its build to the floor this machine keeps - beside its command; an ssh host's leg is sent
+    /// none, a host reading its own file, and a WSL leg whose machine declares nothing is sent nothing.
+    /// </summary>
+    [Fact]
+    public async Task AWslLeg_IsSentWithThisMachinesSettingsFileAdmission_AndNoOtherLegIs()
+    {
+        var sent = new List<HostCommand>();
+        var settings = new MachineSettingsAnswer("C:\\Users\\u\\AppData\\Local\\dssharness\\settings-m.json", new AdmissionSettings { MinFreeGiB = 6, ReclaimIdleBuilds = true });
+        var wsl = Leg();
+        var ssh = wsl with
+        {
+            Host = wsl.Host with
+            {
+                Host = HostId.Ssh("pi"),
+                MachineSettings = settings,
+                Session = new HostSession(new HostConnection { Host = HostId.Ssh("pi"), Address = "192.0.2.10" }, ".dotnet/tools/dssharness"),
+            },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent.Add(command);
+            Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+            return HostResults.Finished(command, 0);
+        });
+
+        await Runner(hosts).RunAsync("build", wsl with { Host = wsl.Host with { MachineSettings = settings } }, [], cancellationToken: TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", ssh, [], cancellationToken: TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", wsl, [], cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal<(double?, bool?)?>(
+            [(6.0, true), null, null],
+            sent.Select(command => Request(command).MachineAdmission is { } carried ? (carried.MinFreeGiB, carried.ReclaimIdleBuilds) : ((double?, bool?)?)null));
+    }
+
+    /// <summary>
     /// A host runs the leg under a run of its own, and says where that run keeps its records: the
     /// leg's line carries it, so the caller is told where its records are as for a leg run here. A
     /// host that says nothing about it names nothing.
