@@ -50,6 +50,20 @@ public sealed record CodeGraphManifest(
     public IReadOnlyList<string>? Languages { get; init; }
 
     /// <summary>
+    /// The naming policies the workflow's <c>codebaseGraph.keyNaming</c> declared when it was synced, which the keys'
+    /// join is made by; <see langword="null"/> where it declared none, and the default holds. The join is derived whole
+    /// at every link, so a change of them links again and reads no file again.
+    /// </summary>
+    public IReadOnlyList<string>? KeyNaming { get; init; }
+
+    /// <summary>
+    /// The file name endings the workflow's <c>codebaseGraph.claims</c> mapped to implementations when it was synced;
+    /// <see langword="null"/> where it mapped none. An ending's claimant reads the file, so a change of them reads such
+    /// files again.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>>? Claims { get; init; }
+
+    /// <summary>
     /// The digest of a manifest of <paramref name="extractors"/> and <paramref name="files"/>: each implementation and every
     /// file's whole entry - its time, its size and its why among it, so a file that was only looked at again moves it too -
     /// and nothing else: not when it was synced, not the tool that synced it. The linker that links them is the link

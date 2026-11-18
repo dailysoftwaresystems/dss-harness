@@ -44,7 +44,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     public string Language => "csharp";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".cs");
@@ -337,6 +337,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 BodyStart = LineOf(declared.OpenBraceToken),
                 Summary = Summary(declared),
                 Modifiers = Modifiers(declared.Modifiers),
+                Part = declared.Modifiers.Any(SyntaxKind.PartialKeyword),
             });
 
             Scope(qualified, scope, open: !local);

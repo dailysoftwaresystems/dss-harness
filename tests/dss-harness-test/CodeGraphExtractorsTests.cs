@@ -156,6 +156,30 @@ public sealed class CodeGraphExtractorsTests
         Assert.Equal(["byname"], registry.ClaimantsOf("package.json").Select(claimed => claimed.Extractor.Language));
     }
 
+    /// <summary>
+    /// Where a repository maps file name endings to implementations, the longest ending a file's name ends with is
+    /// claimed between the registry's exact names and its extensions: an exact name still wins, and an ending wins over
+    /// an extension, the longest ending over a shorter one.
+    /// </summary>
+    [Fact]
+    public void AMappedEndingIsClaimedBetweenExactNamesAndExtensions_TheLongestFirst()
+    {
+        var registry = new CodeGraphExtractors([Fake("byext", ".json"), Fake("byname", names: ["package.json"]), Fake("mapper", ".map"), Fallback()]);
+
+        Assert.Equal("byname", registry.Route("web/Package.JSON", string.Empty).Extractor?.Language);
+
+        var claims = new Dictionary<string, IReadOnlyList<string>> { ["byext"] = [".target.json"], ["mapper"] = [".values.map", ".map"] };
+
+        Assert.Equal("byext", registry.Route("app/settings.target.json", string.Empty, claims).Extractor?.Language);
+        Assert.Equal("mapper", registry.Route("app/values.map", string.Empty, claims).Extractor?.Language);
+        Assert.Equal("byext", registry.Route("app/settings.json", string.Empty, claims).Extractor?.Language);
+        Assert.Equal("listed", registry.Route("app/other.yml", string.Empty, claims).Extractor?.Language);
+        Assert.Equal([("mapper", ".map")], registry.ClaimantsOf("app/values.map", claims).Select(claimed => (claimed.Extractor.Language, claimed.Claim.Value)));
+
+        // An implementation the build holds none of is left out, as its workflow's check refuses one before any run.
+        Assert.Equal("byext", registry.Route("app/settings.target.json", string.Empty, new Dictionary<string, IReadOnlyList<string>> { ["gone"] = [".target.json"] }).Extractor?.Language);
+    }
+
     /// <summary>Where no claimant's test says yes, or several do, no implementation reads the file, and the route says why.</summary>
     [Fact]
     public void WhereNoneOrSeveralContentTestsSayYes_TheFileIsAmbiguous_WithWhy()

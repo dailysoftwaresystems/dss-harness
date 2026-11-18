@@ -2994,6 +2994,55 @@ public static class WorkflowValidator
             {
                 _problems.Add($"{lead}codebaseGraph.generated is '{generated}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.GeneratedValues.Select(value => $"'{value}'"))}: generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed");
             }
+
+            foreach (var twice in (graph.KeyNaming ?? []).GroupBy(naming => naming, StringComparer.Ordinal).Where(group => group.Count() > 1))
+            {
+                _problems.Add($"{lead}codebaseGraph.keyNaming names '{twice.Key}' more than once");
+            }
+
+            foreach (var unknown in (graph.KeyNaming ?? []).Where(naming => !Codebase.CodebaseGraphShape.NamingValues.Contains(naming, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal))
+            {
+                _problems.Add($"{lead}codebaseGraph.keyNaming names '{unknown}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.NamingValues.Select(value => $"'{value}'"))}: how a configuration key's last segment is written in the code that reads it");
+            }
+
+            if (graph.Claims is { } claims)
+            {
+                if (claims.Count == 0)
+                {
+                    _problems.Add($"{lead}codebaseGraph.claims is given empty, which is never read as no ending claimed: name the endings, or leave the key out");
+                }
+
+                foreach (var (language, endings) in claims)
+                {
+                    if (string.IsNullOrWhiteSpace(language))
+                    {
+                        _problems.Add($"{lead}codebaseGraph.claims holds a key that is no implementation's name");
+                    }
+
+                    if (_languages is { } extractors && !extractors.Contains(language, StringComparer.Ordinal))
+                    {
+                        _problems.Add($"{lead}codebaseGraph.claims maps endings to '{language}', which this tool has no extractor for; it extracts: {string.Join(", ", extractors)}");
+                    }
+
+                    if (endings.Count == 0)
+                    {
+                        _problems.Add($"{lead}codebaseGraph.claims.{language} is given empty, which is never read as none claimed: name its endings, or leave the implementation out");
+                    }
+
+                    foreach (var ending in endings)
+                    {
+                        if (ending is not { Length: > 1 } || !ending.StartsWith('.') || ending.EndsWith('.') || ending.IndexOfAny(['/', '\\']) >= 0 || ending.Any(char.IsWhiteSpace))
+                        {
+                            _problems.Add($"{lead}codebaseGraph.claims.{language} names the ending '{ending}', which is not a file name's ending: a dot, what follows it, and no separator");
+                        }
+                    }
+                }
+
+                foreach (var twice in claims.SelectMany(pair => pair.Value.Select(ending => (pair.Key, ending))).GroupBy(mapped => mapped.ending, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+                {
+                    _problems.Add($"{lead}codebaseGraph.claims maps the ending '{twice.Key}' to {string.Join(" and ", twice.Select(mapped => $"'{mapped.Key}'"))}, and a file is never given to one by order");
+                }
+            }
         }
 
         /// <summary>
@@ -3009,10 +3058,17 @@ public static class WorkflowValidator
             static bool Same(IReadOnlyList<string>? first, IReadOnlyList<string>? second)
                 => first is null ? second is null : second is not null && first.SequenceEqual(second, StringComparer.Ordinal);
 
+            static bool SameClaims(IReadOnlyDictionary<string, IReadOnlyList<string>>? first, IReadOnlyDictionary<string, IReadOnlyList<string>>? second)
+                => first is null ? second is null
+                : second is not null
+                && first.Count == second.Count
+                && first.All(pair => second.TryGetValue(pair.Key, out var endings) && Same(pair.Value, endings));
+
             if (!Readable(one) || !Readable(other))
             {
                 return Same(one.Include, other.Include) && Same(one.Exclude, other.Exclude) && Same(one.Languages, other.Languages)
-                    && one.MaxFileBytes == other.MaxFileBytes && one.Generated == other.Generated && one.MapTokens == other.MapTokens;
+                    && one.MaxFileBytes == other.MaxFileBytes && one.Generated == other.Generated && one.MapTokens == other.MapTokens
+                    && Same(one.KeyNaming, other.KeyNaming) && SameClaims(one.Claims, other.Claims);
             }
 
             var (first, second) = (one.Shape, other.Shape);
@@ -3022,7 +3078,9 @@ public static class WorkflowValidator
                 && Same(first.Languages, second.Languages)
                 && first.MaxFileBytes == second.MaxFileBytes
                 && first.ExcludeGenerated == second.ExcludeGenerated
-                && first.MapTokens == second.MapTokens;
+                && first.MapTokens == second.MapTokens
+                && Same(first.KeyNaming, second.KeyNaming)
+                && SameClaims(first.Claims, second.Claims);
         }
 
         /// <summary>Refuses <paramref name="value"/> outside <paramref name="least"/> to <paramref name="most"/>; whether it holds, absent among them.</summary>

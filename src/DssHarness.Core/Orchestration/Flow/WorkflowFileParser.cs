@@ -274,6 +274,8 @@ public static class WorkflowFileParser
         int? maxFileBytes = null;
         string? generated = null;
         int? mapTokens = null;
+        IReadOnlyList<string>? keyNaming = null;
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? claims = null;
 
         foreach (var (key, value) in keys)
         {
@@ -303,12 +305,47 @@ public static class WorkflowFileParser
                     mapTokens = RequireInt(value, "codebaseGraph.mapTokens", problems);
                     break;
 
+                case "keyNaming":
+                    keyNaming = RequireStringList(value, "codebaseGraph.keyNaming", problems);
+                    break;
+
+                case "claims":
+                    claims = ReadClaims(value, problems);
+                    break;
+
                 default:
                     throw Unread(key);
             }
         }
 
-        return new FlowCodebaseGraph(include, exclude, languages, maxFileBytes, generated, mapTokens);
+        return new FlowCodebaseGraph(include, exclude, languages, maxFileBytes, generated, mapTokens, keyNaming, claims);
+    }
+
+    /// <summary>
+    /// Reads the <c>codebaseGraph.claims</c> mapping: each key an implementation's name, its value the file name endings,
+    /// each with its dot, it claims.
+    /// </summary>
+    private static IReadOnlyDictionary<string, IReadOnlyList<string>>? ReadClaims(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(YamlReading.At(node, "'codebaseGraph.claims' is not a mapping of an implementation's name to the endings it claims."));
+            return null;
+        }
+
+        var claims = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+        foreach (var (key, value) in mapping.Children)
+        {
+            if (YamlReading.KeyOf(key, problems) is not { } language)
+            {
+                continue;
+            }
+
+            claims[language] = RequireStringList(value, $"codebaseGraph.claims.{language}", problems) ?? [];
+        }
+
+        return claims;
     }
 
     private static FlowRecover? ReadRecover(YamlNode node, List<string> problems)

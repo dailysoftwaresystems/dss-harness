@@ -57,7 +57,7 @@ public static class YamlReading
     }
 
     /// <summary>
-    /// Loads <paramref name="text"/> as <see cref="Root"/> does, and says where and why it is no such document where it is
+    /// Loads <paramref name="text"/> as <see cref="Load"/> does, and says where and why it is no such document where it is
     /// not - for a reader that marks the line a file stops reading at, as a graph's does.
     /// </summary>
     /// <param name="text">The file's contents.</param>
@@ -65,6 +65,32 @@ public static class YamlReading
     /// <param name="bounds">What the text is held to before it is read into nodes, or <see langword="null"/>.</param>
     /// <param name="stop">Where and why it is no such document; <see langword="null"/> where it is one.</param>
     public static YamlMappingNode? Load(string text, string oneDocument, YamlBounds? bounds, out YamlStop? stop)
+    {
+        var root = LoadDocument(text, oneDocument, bounds, out stop);
+
+        if (root is YamlMappingNode mapping)
+        {
+            return mapping;
+        }
+
+        if (root is not null && stop is null)
+        {
+            stop = new YamlStop(Line(root.Start.Line), Line(root.Start.Column), "the file's top level is not a mapping of keys.");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Loads <paramref name="text"/> as one document of any root kind - a mapping, a sequence, a scalar - with its anchors
+    /// and aliases resolved as the representation model resolves them, or says where and why it is no such document: what
+    /// a data file's reader takes, which no configuration shape is held to. A root that is no mapping is no stop.
+    /// </summary>
+    /// <param name="text">The file's contents.</param>
+    /// <param name="oneDocument">How a refusal says the file holds one document (<see cref="Root"/>).</param>
+    /// <param name="bounds">What the text is held to before it is read into nodes, or <see langword="null"/>.</param>
+    /// <param name="stop">Where and why it is no such document; <see langword="null"/> where it is one.</param>
+    public static YamlNode? LoadDocument(string text, string oneDocument, YamlBounds? bounds, out YamlStop? stop)
     {
         ArgumentNullException.ThrowIfNull(text);
 
@@ -80,9 +106,10 @@ public static class YamlReading
         {
             stream.Load(new StringReader(text));
         }
-        catch (YamlException exception)
+        catch (Exception exception) when (exception is YamlException or InvalidOperationException or ArgumentException)
         {
-            stop = new YamlStop(Line(exception.Start.Line), Line(exception.Start.Column), $"the file is not valid YAML ({exception.Message}).");
+            var where = exception is YamlException yaml ? (yaml.Start.Line, yaml.Start.Column) : (1, 1);
+            stop = new YamlStop(Line(where.Item1), Line(where.Item2), $"the file is not valid YAML ({exception.Message}).");
             return null;
         }
 
@@ -98,15 +125,8 @@ public static class YamlReading
             return null;
         }
 
-        if (stream.Documents[0].RootNode is YamlMappingNode mapping)
-        {
-            stop = null;
-            return mapping;
-        }
-
-        var node = stream.Documents[0].RootNode;
-        stop = new YamlStop(Line(node.Start.Line), Line(node.Start.Column), "the file's top level is not a mapping of keys.");
-        return null;
+        stop = null;
+        return stream.Documents[0].RootNode;
     }
 
     /// <summary>A line or a column YamlDotNet counts, as an <see cref="int"/>.</summary>
@@ -190,6 +210,44 @@ public static class YamlReading
         }
 
         problems.Add(At(node, $"'{key}' is not a {what}. Known: '{string.Join("', '", known)}'."));
+        return null;
+    }
+
+    /// <summary>
+    /// Where <paramref name="text"/> nests mappings and lists deeper than <paramref name="most"/> levels, read as events
+    /// before anything is read into nodes - an alias allowed, unlike <see cref="YamlBounds"/> - as a data file's reader
+    /// asks of one whose shared parts it follows; <see langword="null"/> where it nests no deeper, or does not read.
+    /// </summary>
+    public static YamlStop? TooDeepBy(string text, int most)
+    {
+        var parser = new Parser(new StringReader(text));
+        var depth = 0;
+
+        try
+        {
+            while (parser.MoveNext())
+            {
+                switch (parser.Current)
+                {
+                    case MappingStart or SequenceStart:
+                        if (++depth > most)
+                        {
+                            return new YamlStop(Line(parser.Current.Start.Line), Line(parser.Current.Start.Column), $"the file nests more than {most} levels deep.");
+                        }
+
+                        break;
+
+                    case MappingEnd or SequenceEnd:
+                        depth--;
+                        break;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is YamlException or InvalidOperationException or ArgumentException)
+        {
+            return null;
+        }
+
         return null;
     }
 

@@ -75,6 +75,12 @@ public static class CodeEdgeKinds
     /// <summary>A member to a member it reads or writes without calling it: a field, a property, a constant or an enum member, and a name a <c>nameof</c> names.</summary>
     public const string Uses = "uses";
 
+    /// <summary>
+    /// One part of a declaration to another: a XAML view and the C# type its <c>x:Class</c> names, a Blazor component and
+    /// its code-behind partial - derived when linking, never asked for by an extract.
+    /// </summary>
+    public const string PartOf = "partOf";
+
     /// <summary>A declaration with no body to the one with a body and the same qualified name: derived when linking.</summary>
     public const string Declares = "declares";
 
@@ -101,6 +107,7 @@ public static class CodeEdgeKinds
         (Instantiates, "a member to a type it makes"),
         (References, "a member or a type to a type it names"),
         (Uses, "a member to a member it reads or writes without calling it"),
+        (PartOf, "one part of a declaration to another: a view and the type its x:Class names"),
         (Declares, "a declaration with no body to the one with a body"),
         (Tests, "a test to a member it calls directly"),
         (ProjectReference, "a project to a project it names"),

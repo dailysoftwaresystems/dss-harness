@@ -64,11 +64,18 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int LiteralsBeyond { get; init; }
 
+    /// <summary>How many configuration keys the file holds past the <see cref="MostKeys"/> an extract keeps.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int KeysBeyond { get; init; }
+
     /// <summary>The shortest a kept string literal is, in characters: a shorter one is not data a search asks for.</summary>
     public const int LeastLiteral = 3;
 
     /// <summary>The most string literals an extract keeps of one file; the rest are counted, not kept.</summary>
     public const int MostLiterals = 2000;
+
+    /// <summary>The most configuration keys an extract keeps of one file; the rest are counted, not kept.</summary>
+    public const int MostKeys = 5000;
 
     /// <summary>
     /// What is wrong with this extract of a file of <paramref name="lineCount"/> lines made by
@@ -163,6 +170,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 : null).FirstOrDefault(found => found is not null)
             ?? (Literals is { Count: > MostLiterals } ? $"it keeps {Literals.Count.ToString(CultureInfo.InvariantCulture)} literals, past the {MostLiterals.ToString(CultureInfo.InvariantCulture)} an extract keeps" : null)
             ?? (LiteralsBeyond < 0 ? "it counts fewer than no literals past its own" : null)
+            ?? (KeysBeyond < 0 ? "it counts fewer than no keys past its own" : null)
             ?? (Texts().FirstOrDefault(text => !IsWhole(text)) is { } cut ? $"it holds text that is no whole UTF-16, a surrogate cut from its pair: '{cut}'" : null);
     }
 
@@ -280,6 +288,14 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     /// <summary>Whether it is a test, which linking gives a <c>tests</c> edge to each member it calls.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Test { get; init; }
+
+    /// <summary>
+    /// Whether it says it is one part of a declaration another file holds the rest of - a XAML view whose
+    /// <c>x:Class</c> names a C# partial type, a Blazor component and its code-behind - which the linker joins as
+    /// <see cref="CodeEdgeKinds.PartOf"/> to every other part of the same qualified name that says so.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Part { get; init; }
 
     /// <summary>
     /// The type a value of it is declared with - a field's, a property's, an event's - as a type qualifier names it, where

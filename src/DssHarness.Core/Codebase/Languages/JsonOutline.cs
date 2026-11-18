@@ -33,6 +33,27 @@ internal static class JsonOutline
     /// <param name="stop">Where and why it is no object, where it is none.</param>
     public static JsonOutlineValue? Load(string text, bool lenient, out JsonOutlineStop? stop)
     {
+        var value = LoadAny(text, lenient, out stop);
+
+        if (value is not null && value.Kind != JsonValueKind.Object)
+        {
+            stop = new JsonOutlineStop(value.Line, NoObject);
+            return null;
+        }
+
+        return value;
+    }
+
+    /// <summary>
+    /// <paramref name="text"/>'s value - whatever kind it holds, an array among them - or <see langword="null"/> with
+    /// <paramref name="stop"/> saying where it stops reading as JSON: what a data file's reader takes, which no project
+    /// file's shape is held to.
+    /// </summary>
+    /// <param name="text">The file's text.</param>
+    /// <param name="lenient">Whether comments and trailing commas are allowed.</param>
+    /// <param name="stop">Where and why it is no JSON, where it is none.</param>
+    public static JsonOutlineValue? LoadAny(string text, bool lenient, out JsonOutlineStop? stop)
+    {
         var skipped = text.StartsWith('﻿') ? 1 : 0;
         var bytes = Encoding.UTF8.GetBytes(text[skipped..]);
         var positions = new Positions(bytes, CodeFileText.LineIndex(text), skipped);
@@ -58,12 +79,6 @@ internal static class JsonOutline
             if (reader.Read())
             {
                 stop = new JsonOutlineStop(positions.LineAt(reader.TokenStartIndex), NoJson);
-                return null;
-            }
-
-            if (value.Kind != JsonValueKind.Object)
-            {
-                stop = new JsonOutlineStop(value.Line, NoObject);
                 return null;
             }
 
@@ -110,13 +125,16 @@ internal static class JsonOutline
                 return new JsonOutlineValue(JsonValueKind.String, line, reader.GetString(), null, null);
 
             default:
+                // The raw text of a number, a true, a false or a nothing, as the file writes it: a data file's key holds
+                // it as its value.
+                var raw = Encoding.UTF8.GetString(reader.ValueSpan);
                 return new JsonOutlineValue(reader.TokenType switch
                 {
                     JsonTokenType.Number => JsonValueKind.Number,
                     JsonTokenType.True => JsonValueKind.True,
                     JsonTokenType.False => JsonValueKind.False,
                     _ => JsonValueKind.Null,
-                }, line, null, null, null);
+                }, line, raw.Length > 0 ? raw : null, null, null);
         }
     }
 
@@ -157,7 +175,7 @@ internal sealed record JsonOutlineStop(int Line, string Why);
 /// <summary>One value of a JSON file, with the line it begins on.</summary>
 /// <param name="Kind">What it is.</param>
 /// <param name="Line">The line it begins on, from 1.</param>
-/// <param name="Text">A string's text; <see langword="null"/> for every other kind.</param>
+/// <param name="Text">A scalar's text as the file writes it - a string's, a number's, a true's; <see langword="null"/> for an object and an array.</param>
 /// <param name="Properties">An object's properties, in the order the file writes them; <see langword="null"/> for every other kind.</param>
 /// <param name="Items">An array's items; <see langword="null"/> for every other kind.</param>
 internal sealed record JsonOutlineValue(JsonValueKind Kind, int Line, string? Text, IReadOnlyList<JsonOutlineProperty>? Properties, IReadOnlyList<JsonOutlineValue>? Items)

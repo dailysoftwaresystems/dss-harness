@@ -116,20 +116,24 @@ public sealed record WorkflowDefinition(
 /// <param name="MaxFileBytes">The largest file read.</param>
 /// <param name="Generated">What becomes of generated code: <c>low</c> or <c>exclude</c>.</param>
 /// <param name="MapTokens">The cap, in tokens, of the run's repository map, made once and read as it is by every step after; 0 asks for none.</param>
+/// <param name="KeyNaming">The naming policies a configuration key's last segment is joined to a member's name by.</param>
+/// <param name="Claims">The file name endings, each with its dot, mapped to the implementation that reads them, by its name.</param>
 public sealed record FlowCodebaseGraph(
     IReadOnlyList<string>? Include = null,
     IReadOnlyList<string>? Exclude = null,
     IReadOnlyList<string>? Languages = null,
     int? MaxFileBytes = null,
     string? Generated = null,
-    int? MapTokens = null)
+    int? MapTokens = null,
+    IReadOnlyList<string>? KeyNaming = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? Claims = null)
 {
     /// <summary>
     /// The shape the block gives the run's graph, every key it leaves out at its default: read from the block, never
     /// written with it - the run's frozen definition, and its digest, hold what the file says, not this build's defaults.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public Codebase.CodebaseGraphShape Shape => Codebase.CodebaseGraphShape.Of(Include, Exclude, Languages, MaxFileBytes, Generated, MapTokens);
+    public Codebase.CodebaseGraphShape Shape => Codebase.CodebaseGraphShape.Of(Include, Exclude, Languages, MaxFileBytes, Generated, MapTokens, KeyNaming, Claims);
 }
 
 /// <summary>

@@ -1298,6 +1298,9 @@ public sealed class WorkflowFileParserTests
               maxFileBytes: 8192
               generated: exclude
               mapTokens: 900
+              keyNaming: [snake_case]
+              claims:
+                json: [.lang.json]
             steps:
               - name: map
                 type: graphify-codebase
@@ -1308,6 +1311,8 @@ public sealed class WorkflowFileParserTests
         Assert.Empty(read.CodebaseGraph.Exclude!);
         Assert.Equal(["markdown"], read.CodebaseGraph.Languages!);
         Assert.Equal((8192, "exclude", 900), (read.CodebaseGraph.MaxFileBytes, read.CodebaseGraph.Generated, read.CodebaseGraph.MapTokens));
+        Assert.Equal(["snake_case"], read.CodebaseGraph.KeyNaming!);
+        Assert.Equal([".lang.json"], read.CodebaseGraph.Claims!["json"]);
         Assert.True(read.Steps[0].Rebuild);
         Assert.Equal((8192L, true, 900), (read.CodebaseGraph.Shape.MaxFileBytes, read.CodebaseGraph.Shape.ExcludeGenerated, read.CodebaseGraph.Shape.MapTokens));
 
@@ -1337,6 +1342,15 @@ public sealed class WorkflowFileParserTests
                 type: graphify-codebase
                 rebuild: often
             """), problem => problem.Contains("rebuild", StringComparison.Ordinal));
+
+        Assert.Contains(Problems("""
+            name: flow
+            codebaseGraph:
+              claims: [json]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """), problem => problem.EndsWith("'codebaseGraph.claims' is not a mapping of an implementation's name to the endings it claims.", StringComparison.Ordinal));
     }
 
     /// <summary>A step's failOn takes its own type's values: incomplete is a graph step's, and a build's is refused it.</summary>

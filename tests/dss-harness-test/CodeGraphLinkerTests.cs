@@ -2373,6 +2373,104 @@ public sealed class CodeGraphLinkerTests
         yield return ("app/new.t", [File("app/new.t", [Member("app.Helper", 0), Type("lib.Shape")], scopes: [Open("app"), Open("lib")])]);
     }
 
+    /// <summary>
+    /// A key of a configuration file gains a <c>uses</c> edge of <c>candidates</c> from the declaration holding a string
+    /// literal equal to its last segment or its whole path, and from each member whose name is the segment as a declared
+    /// naming policy writes it - the default camelCase joining <c>CallingConvention</c> to <c>callingConvention</c>.
+    /// None of it is counted: a use is recall, never a doubt.
+    /// </summary>
+    [Fact]
+    public void AKeyIsJoinedToTheLiteralsAndMembersThatNameIt_AtCandidates()
+    {
+        var key = new ExtractNode("json:app.json#targets.x64.callingConvention", CodeNodeKinds.Member, "callingConvention", "targets.x64.callingConvention", 2, 2, "targets.x64.callingConvention") { SubKind = "key" };
+        var reader = new ExtractNode("c:Reader", CodeNodeKinds.Type, "Reader", "Reader", 1, 9, "Reader");
+        var bySegment = new ExtractNode("c:Reader.BySegment", CodeNodeKinds.Member, "BySegment", "Reader.BySegment", 2, 4, "BySegment") { Parent = "c:Reader" };
+        var byPath = new ExtractNode("c:Reader.ByPath", CodeNodeKinds.Member, "ByPath", "Reader.ByPath", 5, 8, "ByPath") { Parent = "c:Reader" };
+        var property = new ExtractNode("c:Reader.CallingConvention", CodeNodeKinds.Member, "CallingConvention", "Reader.CallingConvention", 6, 7, "CallingConvention") { Parent = "c:Reader" };
+
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("app.json", "json", new FileExtract([key])),
+            new CodeGraphFile("reader.c", "c", new FileExtract([reader, bySegment, byPath, property])
+            {
+                Literals = [new ExtractLiteral("callingConvention", 3), new ExtractLiteral("targets.x64.callingConvention", 5)],
+            }),
+        ]);
+
+        Assert.Contains(new CodeEdge("c:Reader.BySegment", "json:app.json#targets.x64.callingConvention", CodeEdgeKinds.Uses, 3, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(new CodeEdge("c:Reader.ByPath", "json:app.json#targets.x64.callingConvention", CodeEdgeKinds.Uses, 5, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(new CodeEdge("c:Reader.CallingConvention", "json:app.json#targets.x64.callingConvention", CodeEdgeKinds.Uses, 6, CodeConfidences.Candidates), linked.Edges);
+        Assert.Empty(linked.External);
+        Assert.Empty(linked.Unresolved);
+    }
+
+    /// <summary>
+    /// The naming policies the link is given say what a key's last segment joins: under <c>snake_case</c> alone,
+    /// <c>calling_convention</c> reaches <c>CallingConvention</c> and <c>callingConvention</c> does not.
+    /// </summary>
+    [Fact]
+    public void TheNamingPoliciesSayWhatAKeyJoins()
+    {
+        var camel = new ExtractNode("json:a.json#callingConvention", CodeNodeKinds.Member, "callingConvention", "callingConvention", 1, 1, "callingConvention") { SubKind = "key" };
+        var snake = new ExtractNode("json:a.json#calling_convention", CodeNodeKinds.Member, "calling_convention", "calling_convention", 2, 2, "calling_convention") { SubKind = "key" };
+        var property = new ExtractNode("c:Reader.CallingConvention", CodeNodeKinds.Member, "CallingConvention", "Reader.CallingConvention", 1, 1, "CallingConvention");
+
+        foreach (var (naming, camelJoined, snakeJoined) in new[] { ((string?)null, true, false), ("snake_case", false, true), ("kebab-case", false, false) })
+        {
+            var linked = CodeGraphLinker.Link(
+            [
+                new CodeGraphFile("a.json", "json", new FileExtract([camel, snake])),
+                new CodeGraphFile("reader.c", "c", new FileExtract([property])),
+            ], naming is null ? null : [naming]);
+
+            Assert.Equal(camelJoined, linked.Edges.Any(edge => edge.To == camel.Id && edge.From == property.Id));
+            Assert.Equal(snakeJoined, linked.Edges.Any(edge => edge.To == snake.Id && edge.From == property.Id));
+        }
+    }
+
+    /// <summary>
+    /// Two declarations of one qualified name that say they are parts - a XAML view and the C# type its <c>x:Class</c>
+    /// names - are joined by a <c>partOf</c> edge, exact, from the later id to the first; a declaration that says it is
+    /// a part alone, or one of another name, is not.
+    /// </summary>
+    [Fact]
+    public void TwoPartsOfOneDeclarationAreJoinedByPartOf_Exact()
+    {
+        var view = new ExtractNode("xml:Shop.Cart", CodeNodeKinds.Type, "Cart", "Shop.Cart", 1, 6, "Shop.Cart") { SubKind = "view", Part = true };
+        var code = new ExtractNode("c:Shop.Cart", CodeNodeKinds.Type, "Cart", "Shop.Cart", 1, 9, "Shop.Cart") { Part = true };
+        var other = new ExtractNode("c:Shop.Cart2", CodeNodeKinds.Type, "Cart2", "Shop.Cart2", 1, 2, "Shop.Cart2") { Part = true };
+        var whole = new ExtractNode("c:Shop.Order", CodeNodeKinds.Type, "Order", "Shop.Order", 1, 3, "Shop.Order");
+
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("Views/Cart.xaml", "xml", new FileExtract([view])),
+            new CodeGraphFile("Cart.xaml.cs", "c", new FileExtract([code, other, whole])),
+        ]);
+
+        Assert.Contains(new CodeEdge("xml:Shop.Cart", "c:Shop.Cart", CodeEdgeKinds.PartOf, 1, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.PartOf && edge.To != "c:Shop.Cart");
+    }
+
+    /// <summary>
+    /// A <c>$(Name)</c> an MSBuild project writes is a use of the key of that name wherever the repository declares it -
+    /// an imported <c>.props</c> file's <c>PropertyGroup</c> among them - through the project's own import of the file.
+    /// </summary>
+    [Fact]
+    public void APropertyAMSBuildProjectUses_ReachesTheKeyOfItsName()
+    {
+        var project = new CodeGraphFile("app.csproj", "msbuild", new FileExtract([new ExtractNode("msbuild:app.csproj", CodeNodeKinds.Project, "app.csproj", "app.csproj", 1, 3, "app.csproj")])
+        {
+            References = [new ExtractReference("msbuild:app.csproj", CodeEdgeKinds.Uses, "OutputPath", 2)],
+            Imports = [new ExtractImport(CodeImportForms.Relative, "Directory.Build.props", 1)],
+        });
+        var props = new CodeGraphFile("Directory.Build.props", "xml", new FileExtract([new ExtractNode("xml:Directory.Build.props#Project", CodeNodeKinds.Section, "Project", "Directory.Build.props#Project", 1, 3, "Project"),
+            new ExtractNode("xml:Directory.Build.props#OutputPath", CodeNodeKinds.Member, "OutputPath", "OutputPath", 2, 2, "OutputPath") { SubKind = "key" }]));
+
+        var linked = CodeGraphLinker.Link([project, props]);
+
+        Assert.Contains(new CodeEdge("msbuild:app.csproj", "xml:Directory.Build.props#OutputPath", CodeEdgeKinds.Uses, 2, CodeConfidences.Unique), linked.Edges);
+    }
+
     private static CodeGraphLinked Link(params CodeGraphFile[] files) => CodeGraphLinker.Link(files);
 
     private static CodeGraphFile File(string path, IReadOnlyList<ExtractNode> nodes, IReadOnlyList<ExtractReference>? references = null, IReadOnlyList<ExtractScope>? scopes = null, IReadOnlyList<ExtractImport>? imports = null)

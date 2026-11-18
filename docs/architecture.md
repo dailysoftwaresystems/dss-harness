@@ -4307,7 +4307,30 @@ name a `nameof` names - as a `uses` reference, qualified as its receiver is wher
 nothing the repository declares is the common case and counts nowhere: a use is recall, never a doubt, so it makes
 neither a node `unsure` nor a file's unsureness. A use is looked for as a member of any arity or a type (the same
 steps as a call), and `query-codebase-graph`'s `node` answers a node's `users` and `uses` groups beside its callers
-and callees. An implementation is registered by being written: the one scan of the core (`CoreImplementations<T>`, which
+and callees.
+
+The data a repository's code is configured by is read too. `json` (`.json`, `.jsonc`, `.json5`, the named manifests
+keeping their own extractors), `yaml` (`.yml`, `.yaml`, but `pubspec.yaml`, its anchors and aliases followed and its
+merge keys read, a GitHub Actions workflow's jobs and steps sections and a local action's `uses:` an import of its
+`action.yml`) and `xml` (`.xml`, `.config`, `.props`, `.targets`, `.resx`, `.xaml`, `.manifest`, `.nuspec`, but the
+MSBuild projects and solutions `msbuild` keeps) each make every scalar key anywhere in the file a member node of
+SubKind `key` named by its path (`targets.x64.callingConvention`), its value as its summary, bounded in depth and
+count (`FileExtract.MostKeys`, the rest counted in `KeysBeyond`); a top-level member that holds others is a section;
+an element with an id-like attribute (`name`, `key`, `id`, `x:Name`) is an element node named by it; a `.resx`'s
+`data name=` and a `.props` or `.targets`'s `PropertyGroup` children are keys, and a `$(Name)` an MSBuild project
+writes is a `uses` of the key of that name wherever the repository declares it, its `Import Project` an import of the
+file it names. The linker joins each key to the code that names it: a string literal equal to the key's last segment
+or whole path, and each member whose name is the segment as a naming policy the repository declares
+(`codebaseGraph.keyNaming`: `camelCase`, `snake_case`, `kebab-case` or `exact`, the last two the default) writes it -
+each a `uses` edge of `candidates`, for nothing says the code reads that key; the join is derived whole at every link,
+so a changed policy links again and reads no file again. A `.xaml` root's `x:Class` and a C# `partial` type say they
+are parts of one declaration (`ExtractNode.Part`), and the linker derives `partOf` between the parts of one qualified
+name - ids stay per language - which every walk that reads members - the `node` operation, a `related` walk, a type's
+outline, the spans a body is served from - walks as one. A repository may map further file name endings to an
+implementation of its own (`codebaseGraph.claims`), claimed after the exact names the registry holds and before the
+extensions.
+
+An implementation is registered by being written: the one scan of the core (`CoreImplementations<T>`, which
 `CodeGraphExtractors.Implementations` reads) finds each, `AddDssHarness` registers each type of it
 (`AddCoreImplementationsOf<T>`), and the registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
 content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or

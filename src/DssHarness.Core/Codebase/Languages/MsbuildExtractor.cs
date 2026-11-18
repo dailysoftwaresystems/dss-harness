@@ -3,19 +3,22 @@ using System.Xml;
 namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
-/// MSBuild's projects and solutions: a <c>.csproj</c> or a <c>.slnx</c> is one <c>project</c> node over the whole file,
+/// MSBuild's projects and solutions: a <c>.csproj</c> or <c>.slnx</c> is one <c>project</c> node over the whole file,
 /// named by its file name, its header its root element's line and a project's summary the first sentence of its
 /// <c>&lt;Description&gt;</c>, with a <c>projectReference</c> to each project it names - a project's
-/// <c>&lt;ProjectReference Include&gt;</c>, a solution's <c>&lt;Project Path&gt;</c> - by that project's file name. The
-/// file is read as XML as far as it parses, the line it stops at marked dynamic; nothing MSBuild evaluates is evaluated.
+/// <c>&lt;ProjectReference Include&gt;</c>, a solution's <c>&lt;Project Path&gt;</c> - by that project's file name. Each
+/// <c>$(Name)</c> it writes is a <c>uses</c> of the key of that name, wherever the repository declares it - an imported
+/// <c>.props</c> or <c>.targets</c> file's <c>PropertyGroup</c> among them, which the xml extractor reads - and each
+/// <c>&lt;Import Project&gt;</c> an import of the file it names. The file is read as XML as far as it parses, the line it
+/// stops at marked dynamic; nothing MSBuild evaluates is evaluated.
 /// </summary>
-public sealed class MsbuildExtractor : ICodeGraphExtractor
+public sealed partial class MsbuildExtractor : ICodeGraphExtractor
 {
     /// <inheritdoc/>
     public string Language => "msbuild";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".csproj", ".slnx");
@@ -25,9 +28,10 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "MSBuild projects (.csproj) and solutions (.slnx): a project node for each, named by its file name, a project's summary from its Description, and a projectReference to each project it names that the repository holds",
+        "MSBuild projects (.csproj) and solutions (.slnx): a project node for each, named by its file name, a project's summary from its Description, a projectReference to each project it names that the repository holds, each $(Name) a uses of the key of that name wherever the repository declares it, and each Import Project an import of the file it names",
         [
-            "what MSBuild evaluates: a reference under a condition is taken whatever the condition, a property in a path is left as written, and imported .props and .targets files are not read",
+            "what MSBuild evaluates: a reference under a condition is taken whatever the condition, and a property in a path is left as written",
+            "a property the project itself declares in its own PropertyGroup: no key of it here - the xml extractor reads the imported .props and .targets files' as keys",
             "a project named by a wildcard, and two projects of one file name, which a reference names both of",
             "a solution in the older .sln form",
             "what follows the point a file stops reading as XML, a line its extract marks dynamic",
@@ -43,6 +47,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
         var solution = name.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase);
         var id = $"{Language}:{input.Path}";
         var references = new List<ExtractReference>();
+        var imports = new List<ExtractImport>();
         string? signature = null;
         string? summary = null;
         ExtractDynamic? stopped = null;
@@ -84,6 +89,11 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
                 {
                     references.Add(new ExtractReference(id, CodeEdgeKinds.ProjectReference, project, FileExtract.LineWithin(at.LineNumber, lines.Count)));
                 }
+
+                if (!solution && reader.LocalName == "Import" && reader.GetAttribute("Project") is { Length: > 0 } imported)
+                {
+                    imports.Add(new ExtractImport(CodeImportForms.Relative, imported, FileExtract.LineWithin(at.LineNumber, lines.Count)));
+                }
             }
         }
         catch (XmlException ex)
@@ -93,13 +103,27 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
             stopped = new ExtractDynamic(FileExtract.LineWithin(ex.LineNumber, lines.Count), "the file stops reading as XML here, and nothing after it is read");
         }
 
-        var node = new ExtractNode(id, CodeNodeKinds.Project, name, input.Path, 1, lines.Count, signature ?? name)
+        // Every $(Name) the file writes is a use of the key of that name, wherever the repository declares it: the raw
+        // text is read, for MSBuild writes a property into an attribute as often as into an element's text.
+        for (var line = 1; line <= lines.Count; line++)
+        {
+            foreach (var property in Used().Matches(lines[line - 1]).Select(match => match.Groups["name"].Value))
+            {
+                references.Add(new ExtractReference(id, CodeEdgeKinds.Uses, property, line));
+            }
+        }
+
+        var node = new ExtractNode(id, CodeNodeKinds.Project, name, input.Path, 1, Math.Max(lines.Count, 1), signature ?? name)
         {
             Summary = summary,
         };
 
-        return new FileExtract([node]) { References = references, Dynamic = stopped is null ? [] : [stopped] };
+        return new FileExtract([node]) { References = references, Imports = imports, Dynamic = stopped is null ? [] : [stopped] };
     }
+
+    /// <summary>A <c>$(Name)</c> as MSBuild writes it: a property's name, never a property expression's opening bracket.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"\$\((?<name>[A-Za-z_][A-Za-z0-9_.\-]*)\)", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex Used();
 
     /// <summary>The file name of the project <paramref name="path"/> names, as its node is named; <see langword="null"/> where it names none, or names it by a wildcard.</summary>
     private static string? ProjectName(string path)

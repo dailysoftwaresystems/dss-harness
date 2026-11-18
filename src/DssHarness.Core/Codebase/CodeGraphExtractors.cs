@@ -122,10 +122,13 @@ public sealed class CodeGraphExtractors
 
     /// <summary>
     /// The implementations that claim <paramref name="path"/> at the narrowest level any does - its exact name, else its
-    /// extension - before any content test is asked; none where only the fallback reads it.
+    /// extension - before any content test is asked; none where only the fallback reads it. Where
+    /// <paramref name="endingClaims"/> maps endings of a file's name to implementations, the longest of them its name
+    /// ends with is claimed between the two, after any exact name and before any extension.
     /// </summary>
     /// <param name="path">The file's path, relative to the tree's root with forward separators.</param>
-    public IReadOnlyList<(ICodeGraphExtractor Extractor, CodeGraphClaim Claim)> ClaimantsOf(string path)
+    /// <param name="endingClaims">The endings a repository maps to implementations, by name, or null where it maps none.</param>
+    public IReadOnlyList<(ICodeGraphExtractor Extractor, CodeGraphClaim Claim)> ClaimantsOf(string path, IReadOnlyDictionary<string, IReadOnlyList<string>>? endingClaims = null)
     {
         ArgumentNullException.ThrowIfNull(path);
 
@@ -137,11 +140,60 @@ public sealed class CodeGraphExtractors
             return byName;
         }
 
+        if (EndingOf(name, endingClaims) is { } byEnding)
+        {
+            return byEnding;
+        }
+
         var dot = name.LastIndexOf('.');
 
         return dot <= 0
             ? []
             : Claiming(extractor => extractor.Claims.Extensions, claim => string.Equals(claim.Value, name[dot..], StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// The claimants of the longest ending <paramref name="name"/> ends with among <paramref name="endingClaims"/>, each
+    /// mapped ending to the implementation its language names; none where no mapped ending matches. A mapped language
+    /// this build holds no implementation of is left out, as its workflow's check refuses one before any run.
+    /// </summary>
+    private List<(ICodeGraphExtractor Extractor, CodeGraphClaim Claim)>? EndingOf(string name, IReadOnlyDictionary<string, IReadOnlyList<string>>? endingClaims)
+    {
+        if (endingClaims is not { Count: > 0 })
+        {
+            return null;
+        }
+
+        var (longest, of) = (0, null as List<(ICodeGraphExtractor, CodeGraphClaim)>);
+
+        foreach (var (language, endings) in endingClaims)
+        {
+            if (Find(language) is not { } extractor)
+            {
+                continue;
+            }
+
+            foreach (var ending in endings)
+            {
+                if (ending.Length == 0 || !name.EndsWith(ending, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (ending.Length > longest || of is null)
+                {
+                    of = [];
+                    longest = ending.Length;
+                }
+
+                if (ending.Length == longest)
+                {
+                    of.Add((extractor, new CodeGraphClaim(ending)));
+                }
+            }
+        }
+
+        return of;
     }
 
     /// <summary>
@@ -151,11 +203,12 @@ public sealed class CodeGraphExtractors
     /// </summary>
     /// <param name="path">The file's path, relative to the tree's root with forward separators.</param>
     /// <param name="probe">Its first characters, decoded (<see cref="CodeFileText.Probe"/>).</param>
-    public CodeGraphRoute Route(string path, string probe)
+    /// <param name="endingClaims">The endings a repository maps to implementations, by name, or null where it maps none.</param>
+    public CodeGraphRoute Route(string path, string probe, IReadOnlyDictionary<string, IReadOnlyList<string>>? endingClaims = null)
     {
         ArgumentNullException.ThrowIfNull(probe);
 
-        var claimants = ClaimantsOf(path);
+        var claimants = ClaimantsOf(path, endingClaims);
 
         if (claimants.Count == 0)
         {

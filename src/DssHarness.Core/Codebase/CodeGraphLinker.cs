@@ -53,15 +53,21 @@ public static class CodeGraphLinker
     /// revision that made it (<see cref="CodeGraphSymbolsFile.Linker"/>), so a graph linked by another one is linked again
     /// though no file changed, and no file is read again.
     /// </summary>
-    public const int Revision = 8;
+    public const int Revision = 9;
 
-    /// <summary>Links <paramref name="files"/>, one tree's every file, into its symbols and edges.</summary>
+    /// <summary>
+    /// Links <paramref name="files"/>, one tree's every file, into its symbols and edges. The keys of the configuration
+    /// files among them are joined to the literals and the members that name them under <paramref name="keyNaming"/> - the
+    /// naming policies the repository declares - or under the default of <see cref="CodebaseGraphShape.DefaultKeyNaming"/>
+    /// where none is given.
+    /// </summary>
     /// <param name="files">Every file the graph keeps, each once: those whose declarations are kept with their extracts.</param>
+    /// <param name="keyNaming">The naming policies a key's last segment is joined by; null for the default.</param>
     /// <exception cref="ArgumentException">Two of <paramref name="files"/> have one path.</exception>
-    public static CodeGraphLinked Link(IReadOnlyList<CodeGraphFile> files)
+    public static CodeGraphLinked Link(IReadOnlyList<CodeGraphFile> files, IReadOnlyList<string>? keyNaming = null)
     {
         ArgumentNullException.ThrowIfNull(files);
-        return new Linking(files, previous: null).Link();
+        return new Linking(files, previous: null, CodebaseGraphShape.NamingOf(keyNaming)).Link();
     }
 
     /// <summary>
@@ -69,15 +75,17 @@ public static class CodeGraphLinker
     /// object that link was given is unchanged, and only the references a change could have changed are found again -
     /// those of the files that changed, and those whose finding read something a change altered. What it gives is what
     /// <see cref="Link"/> gives for the same files; <see cref="CodeGraphLinked.References"/> counts what it found again.
+    /// The keys' join is made again whole, for it is derived and not found.
     /// </summary>
     /// <param name="previous">What an earlier link of the tree gave.</param>
     /// <param name="files">Every file the graph keeps now, each once.</param>
+    /// <param name="keyNaming">The naming policies a key's last segment is joined by; null for the default.</param>
     /// <exception cref="ArgumentException">Two of <paramref name="files"/> have one path.</exception>
-    public static CodeGraphLinked Relink(CodeGraphLinked previous, IReadOnlyList<CodeGraphFile> files)
+    public static CodeGraphLinked Relink(CodeGraphLinked previous, IReadOnlyList<CodeGraphFile> files, IReadOnlyList<string>? keyNaming = null)
     {
         ArgumentNullException.ThrowIfNull(previous);
         ArgumentNullException.ThrowIfNull(files);
-        return new Linking(files, previous.Memory).Link();
+        return new Linking(files, previous.Memory, CodebaseGraphShape.NamingOf(keyNaming)).Link();
     }
 
     /// <summary>One declaration of one file, placed.</summary>
@@ -234,6 +242,9 @@ public static class CodeGraphLinker
         private readonly LinkMemory? _previous;
         private readonly LinkKeys _keys;
 
+        /// <summary>The naming policies a key's last segment is joined to a member's name by, in the order declared.</summary>
+        private readonly IReadOnlyList<string> _keyNaming;
+
         /// <summary>Every path by its file's name, the last part of it: where an import by a path's ending looks.</summary>
         private readonly Dictionary<string, List<string>> _byFileName = new(StringComparer.Ordinal);
 
@@ -315,12 +326,13 @@ public static class CodeGraphLinker
         /// <summary>Every key the finding under way has read; null outside one.</summary>
         private HashSet<int>? _reads;
 
-        public Linking(IReadOnlyList<CodeGraphFile> files, LinkMemory? previous)
+        public Linking(IReadOnlyList<CodeGraphFile> files, LinkMemory? previous, IReadOnlyList<string> keyNaming)
         {
             // In one order whatever order they came in: a link made again is the whole link of the same files.
             _files = [.. files.OrderBy(file => file.Path, StringComparer.Ordinal)];
             _previous = previous;
             _keys = previous?.Keys ?? new LinkKeys();
+            _keyNaming = keyNaming;
             _paths = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (var file in _files)
@@ -467,6 +479,8 @@ public static class CodeGraphLinker
             Dispatches();
             Declares();
             Tests();
+            Parts();
+            Keys();
 
             // Every edge once: one found more than one way is as sure as its surest finding.
             var edges = _edges.GroupBy(edge => (edge.From, edge.To, edge.Kind, edge.Line))
@@ -1526,6 +1540,131 @@ public static class CodeGraphLinker
             {
                 _edges.Add(call with { Kind = CodeEdgeKinds.Tests });
             }
+        }
+
+        /// <summary>
+        /// Each <c>partOf</c> edge: one part of a declaration to the first of its parts, among the declarations of one
+        /// qualified name that say they are parts (<see cref="ExtractNode.Part"/>) - a XAML view and the C# type its
+        /// <c>x:Class</c> names, a Blazor component and its code-behind. Ids stay per language; the edge is derived, so
+        /// no stored extract changes meaning.
+        /// </summary>
+        private void Parts()
+        {
+            foreach (var alike in _declarations.Where(declaration => declaration.Node.Part).GroupBy(declaration => declaration.Node.Qualified, StringComparer.Ordinal))
+            {
+                List<string> ids = [.. alike.Select(part => part.Id).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+
+                for (var at = 1; at < ids.Count; at++)
+                {
+                    _edges.Add(new CodeEdge(ids[at], ids[0], CodeEdgeKinds.PartOf, alike.First(part => part.Id == ids[at]).Node.Start, CodeConfidences.Exact));
+                }
+            }
+        }
+
+        /// <summary>
+        /// The keys' join: each <c>uses</c> edge a key of a configuration file gains - from the declaration that holds a
+        /// string literal equal to the key's last segment or its whole path, and from each member whose name is the key's
+        /// last segment as a declared naming policy writes it - of <see cref="CodeConfidences.Candidates"/>, for nothing
+        /// says the code reads that key. A use is recall and never a doubt, so none of it is counted anywhere.
+        /// </summary>
+        private void Keys()
+        {
+            var keys = _declarations.Where(declaration => declaration.Node.SubKind == "key").ToList();
+
+            if (keys.Count == 0)
+            {
+                return;
+            }
+
+            var bySegment = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
+            var byPath = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
+
+            foreach (var key in keys)
+            {
+                Add(bySegment, key.Node.Name, key);
+                Add(byPath, key.Node.Qualified, key);
+            }
+
+            foreach (var file in _files)
+            {
+                if (file.Extract?.Literals is not { Count: > 0 } literals)
+                {
+                    continue;
+                }
+
+                var declarations = _owners[file].Values.OrderBy(declaration => declaration.Node.Start).ToList();
+
+                foreach (var literal in literals)
+                {
+                    var joined = (bySegment.TryGetValue(literal.Value, out var byName) ? byName : []).Concat(byPath.TryGetValue(literal.Value, out var named) ? named : []);
+
+                    foreach (var key in joined)
+                    {
+                        _edges.Add(new CodeEdge(OwnerOf(declarations, file, literal.Line), key.Id, CodeEdgeKinds.Uses, literal.Line, CodeConfidences.Candidates));
+                    }
+                }
+            }
+
+            foreach (var key in keys)
+            {
+                foreach (var member in MembersNamed(key.Node.Name))
+                {
+                    _edges.Add(new CodeEdge(member.Id, key.Id, CodeEdgeKinds.Uses, member.Node.Start, CodeConfidences.Candidates));
+                }
+            }
+        }
+
+        /// <summary>
+        /// The members of the whole tree whose name is <paramref name="segment"/> as one of the naming policies the
+        /// repository declares writes it: the key itself under <c>exact</c>, and the member's name the policy's shape of
+        /// the segment gives under each of the others - <c>calling_convention</c> and <c>calling-convention</c> both the
+        /// member <c>CallingConvention</c> reads. A policy takes only a key shaped as it writes them: a camelCase one has
+        /// no separator and begins lower-case, a snake_case one holds an underscore, a kebab-case one a dash.
+        /// </summary>
+        private IEnumerable<Declaration> MembersNamed(string segment)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal) { segment };
+
+            foreach (var naming in _keyNaming)
+            {
+                var words = naming switch
+                {
+                    CodebaseGraphShape.SnakeCase when segment.Contains('_', StringComparison.Ordinal) && segment.All(character => char.IsLower(character) || character == '_')
+                        => segment.Split('_', StringSplitOptions.RemoveEmptyEntries),
+                    CodebaseGraphShape.KebabCase when segment.Contains('-', StringComparison.Ordinal) && segment.All(character => char.IsLower(character) || character == '-')
+                        => segment.Split('-', StringSplitOptions.RemoveEmptyEntries),
+                    CodebaseGraphShape.CamelCase when segment.IndexOfAny(['_', '-']) < 0 && char.IsLower(segment[0])
+                        => [segment],
+                    _ => [],
+                };
+
+                if (words.Length > 0)
+                {
+                    names.Add(string.Concat(words.Select(word => string.Create(CultureInfo.InvariantCulture, $"{char.ToUpperInvariant(word[0])}{word[1..]}"))));
+                }
+            }
+
+            return names.SelectMany(name => _byName.TryGetValue(name, out var named) ? named : [])
+                .Where(declaration => declaration.Node is { Kind: CodeNodeKinds.Member, SubKind: not "key" });
+        }
+
+        /// <summary>
+        /// The node of <paramref name="file"/> the line <paramref name="line"/> is declared in - the innermost whose lines
+        /// hold it - else the file's own node: what a literal's edge to a key is made from.
+        /// </summary>
+        private static string OwnerOf(IReadOnlyList<Declaration> declarations, CodeGraphFile file, int line)
+        {
+            Declaration? inner = null;
+
+            foreach (var declaration in declarations)
+            {
+                if (declaration.Node.Start <= line && line <= declaration.Node.End && (inner is null || declaration.Node.Start > inner.Node.Start))
+                {
+                    inner = declaration;
+                }
+            }
+
+            return inner?.Id ?? CodeGraphIds.FileId(file.Path);
         }
 
         /// <summary>

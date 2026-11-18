@@ -1285,6 +1285,41 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Contains("        Changed();", fresh, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A XAML view and the C# type its <c>x:Class</c> names are walked as one: the node operation answers the other part
+    /// among its groups, a type's outline takes in both parts' declarations, and a body asked of one part reads the
+    /// other's lines too.
+    /// </summary>
+    [Fact]
+    public async Task AXamlViewAndItsXClassType_AreWalkedAsOne()
+    {
+        using var tree = await TreeAsync(
+            ("Views/Cart.xaml", """
+                <UserControl x:Class="Shop.Cart"
+                    xmlns="http://schemas.microsoft.com/winfx/2009/xaml"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+                  <Button x:Name="Checkout" />
+                </UserControl>
+                """),
+            ("Views/Cart.xaml.cs", """
+                namespace Shop
+                {
+                    public partial class Cart
+                    {
+                        public void Checkout()
+                        {
+                        }
+                    }
+                }
+                """));
+        var queries = await QueriesAsync(tree);
+
+        Assert.Equal(["xml:Shop.Cart", "csharp:Shop.Cart"], queries.OneDeclaration("xml:Shop.Cart"));
+        Assert.Equal("csharp:Shop.Cart", Assert.Single(queries.Edges("xml:Shop.Cart").Parts).Card.Id);
+        Assert.Contains(queries.OutlineType("xml:Shop.Cart"), card => card.Name == "Checkout");
+        Assert.Equal(2, queries.At("xml:Shop.Cart").Count);
+    }
+
     /// <summary>The tool over <paramref name="queries"/>, reading what the graph lists where no rule is given, and syncing a file again where <paramref name="sync"/>.</summary>
     internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null)
     {

@@ -5085,6 +5085,60 @@ public sealed class WorkflowValidatorTests
                 """));
     }
 
+    /// <summary>
+    /// V52: a codebaseGraph's keyNaming names each policy once and each one of the four; its claims map endings, each
+    /// well formed, to an implementation this build extracts, one ending to one implementation.
+    /// </summary>
+    [Fact]
+    public void V52_KeyNamingAndClaims_AreHeldToTheirBounds()
+    {
+        Assert.Empty(Problems("""
+            name: flow
+            codebaseGraph:
+              keyNaming: [snake_case]
+              claims:
+                json: [.lang.json, .target.json]
+                xml: [.props]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """));
+
+        Assert.Equal(
+            [
+                "codebaseGraph.keyNaming names 'camelCase' more than once",
+                "codebaseGraph.keyNaming names 'PascalCase', which is none of 'camelCase', 'snake_case', 'kebab-case', 'exact': how a configuration key's last segment is written in the code that reads it",
+                "codebaseGraph.claims is given empty, which is never read as no ending claimed: name the endings, or leave the key out",
+            ],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  keyNaming: [camelCase, camelCase, PascalCase]
+                  claims: {}
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+
+        Assert.Equal(
+            [
+                "codebaseGraph.claims.cobol is given empty, which is never read as none claimed: name its endings, or leave the implementation out",
+                "codebaseGraph.claims.json names the ending 'lang.json', which is not a file name's ending: a dot, what follows it, and no separator",
+                "codebaseGraph.claims maps the ending '.lang.json' to 'json' and 'xml', and a file is never given to one by order",
+            ],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  claims:
+                    cobol: []
+                    json: [.target.json, .lang.json, lang.json]
+                    xml: [.lang.json]
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+    }
+
     /// <summary>V52: a language the workflow names is one this build extracts, said with every one it does.</summary>
     [Fact]
     public void V52_ALanguageThisToolDoesNotExtract_IsRefused_NamingEveryOneItDoes()

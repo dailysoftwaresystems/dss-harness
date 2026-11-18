@@ -92,6 +92,7 @@ public sealed record GraphEdge(GraphCard Card, string Confidence);
 /// <param name="Uses">The members it reads or writes without calling them.</param>
 /// <param name="Tests">The tests that exercise it.</param>
 /// <param name="Includes">What it imports or names as a project, and what imports or names it.</param>
+/// <param name="Parts">The other parts of its declaration: a view and the type its <c>x:Class</c> names, a component and its code-behind.</param>
 public sealed record GraphEdges(
     IReadOnlyList<GraphEdge> Callers,
     IReadOnlyList<GraphEdge> Callees,
@@ -103,7 +104,8 @@ public sealed record GraphEdges(
     IReadOnlyList<GraphEdge> Users,
     IReadOnlyList<GraphEdge> Uses,
     IReadOnlyList<GraphEdge> Tests,
-    IReadOnlyList<GraphEdge> Includes)
+    IReadOnlyList<GraphEdge> Includes,
+    IReadOnlyList<GraphEdge> Parts)
 {
     /// <summary>Each group with the name the <c>node</c> operation prints it under, in that order.</summary>
     public IReadOnlyList<(string Name, IReadOnlyList<GraphEdge> Edges)> Groups =>
@@ -119,6 +121,7 @@ public sealed record GraphEdges(
         ("uses", Uses),
         ("tests", Tests),
         ("includes", Includes),
+        ("parts", Parts),
     ];
 }
 

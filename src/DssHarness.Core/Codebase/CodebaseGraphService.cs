@@ -510,7 +510,7 @@ public sealed class CodebaseGraphService(
             // Where the link result on disk is this manifest's and this build's linker's, it is read; else it is made again in memory.
             var baseTree = ReadSymbolsOrNull(run, manifest.Digest) is { } symbols
                 ? new Tree(BaseView, manifest.Tree, manifest.Files, manifest.Files.Keys.ToHashSet(StringComparer.Ordinal), null, null, manifest.Digest) { Manifest = manifest, Symbols = symbols }
-                : LinkedTree(run, BaseView, manifest.Tree, manifest.Files, manifest.Digest, manifest, record: null);
+                : LinkedTree(run, BaseView, manifest.Tree, manifest.Files, manifest.Digest, keyNaming: manifest.KeyNaming, manifest: manifest);
 
             return ReadOf(run, baseTree, EmptyExtracts);
         }
@@ -530,13 +530,13 @@ public sealed class CodebaseGraphService(
 
         // A view is the overlay of its worktree over the base it stands on, linked in memory: its link result is on no disk.
         var files = Whole(manifest.Files, record);
-        var viewTree = LinkedTree(run, agent, record.Tree, files, record.Base, manifest: null, record: record);
+        var viewTree = LinkedTree(run, agent, record.Tree, files, record.Base, keyNaming: manifest.KeyNaming, record: record);
 
         return ReadOf(run, viewTree, EmptyExtracts);
     }
 
-    /// <summary>The view <paramref name="view"/> of <paramref name="files"/>, linked in memory from the extracts on disk, nothing written.</summary>
-    private Tree LinkedTree(OrchestratorLayout run, string view, string treePath, IReadOnlyDictionary<string, CodeGraphFileEntry> files, string @base, CodeGraphManifest? manifest, CodeGraphView? record)
+    /// <summary>The view <paramref name="view"/> of <paramref name="files"/>, linked in memory from the extracts on disk, nothing written. The keys are joined under <paramref name="keyNaming"/>, the base manifest's where it named one.</summary>
+    private Tree LinkedTree(OrchestratorLayout run, string view, string treePath, IReadOnlyDictionary<string, CodeGraphFileEntry> files, string @base, IReadOnlyList<string>? keyNaming = null, CodeGraphManifest? manifest = null, CodeGraphView? record = null)
     {
         var sorted = new SortedDictionary<string, CodeGraphFileEntry>(files.ToDictionary(file => file.Key, file => file.Value, StringComparer.Ordinal), StringComparer.Ordinal);
         var linked = new Dictionary<string, CodeGraphFile>(StringComparer.Ordinal);
@@ -546,7 +546,7 @@ public sealed class CodebaseGraphService(
             linked[path] = Linked(path, entry, entry.Extract is { } name ? ExtractOrNull(run, name, path)?.Extract : null);
         }
 
-        return new Tree(view, treePath, files, files.Keys.ToHashSet(StringComparer.Ordinal), linked, CodeGraphLinker.Link([.. sorted.Keys.Select(path => linked[path])]), @base)
+        return new Tree(view, treePath, files, files.Keys.ToHashSet(StringComparer.Ordinal), linked, CodeGraphLinker.Link([.. sorted.Keys.Select(path => linked[path])], keyNaming), @base)
         {
             Manifest = manifest,
             View = record,
@@ -1294,6 +1294,8 @@ public sealed class CodebaseGraphService(
             var manifest = new CodeGraphManifest(CodeGraphManifest.CurrentSchema, _service._identity.Current.Version, _versions, _tree, head, dirty, _service._time.GetUtcNow(), files, digest)
             {
                 Languages = _shape.Languages,
+                KeyNaming = _shape.KeyNaming is null ? null : [.. _shape.KeyNaming],
+                Claims = _shape.Claims is null ? null : new Dictionary<string, IReadOnlyList<string>>(_shape.Claims.ToDictionary(claim => claim.Key, claim => claim.Value, StringComparer.Ordinal), StringComparer.Ordinal),
             };
 
             _service._store.WriteGraphManifest(_run, manifest);
@@ -1624,11 +1626,33 @@ public sealed class CodebaseGraphService(
             }
         }
 
-        /// <summary>Whether the tree is read as <paramref name="manifest"/>'s files were: by the same implementations at the same versions, under the same languages.</summary>
+        /// <summary>
+        /// Whether the tree is read as <paramref name="manifest"/>'s files were: by the same implementations at the same
+        /// versions, under the same languages and the same mapped claims. The naming policies join no file's reading, so
+        /// they are not asked here: the join is derived whole at every link.
+        /// </summary>
         private bool SameReading(CodeGraphManifest manifest)
             => manifest.Extractors.SequenceEqual(_versions)
                 && (manifest.Languages ?? []).SequenceEqual(_shape.Languages ?? [], StringComparer.Ordinal)
-                && (manifest.Languages is null) == (_shape.Languages is null);
+                && (manifest.Languages is null) == (_shape.Languages is null)
+                && SameClaims(manifest);
+
+        /// <summary>Whether <paramref name="manifest"/>'s mapped claims are the shape's, each ending of each language.</summary>
+        private bool SameClaims(CodeGraphManifest manifest)
+        {
+            if ((manifest.Claims is null) != (_shape.Claims is null))
+            {
+                return false;
+            }
+
+            var before = Mapped(manifest.Claims);
+            var now = Mapped(_shape.Claims);
+
+            return before.SequenceEqual(now);
+
+            static IEnumerable<(string Language, string Ending)> Mapped(IReadOnlyDictionary<string, IReadOnlyList<string>>? claims)
+                => claims is null ? [] : claims.SelectMany(claim => claim.Value.Select(ending => (claim.Key, ending))).OrderBy(mapped => mapped.Key, StringComparer.Ordinal).ThenBy(mapped => mapped.ending, StringComparer.Ordinal);
+        }
 
         /// <summary>The entry of <paramref name="file"/> kept from <paramref name="before"/>, where it is of that blob and nothing else that decides it changed; null otherwise.</summary>
         private CodeGraphFileEntry? Kept(string path, Listed file, CodeGraphFileEntry? before, bool sameReading)
@@ -2144,12 +2168,12 @@ public sealed class CodebaseGraphService(
 
         /// <summary>
         /// The implementation that reads <paramref name="path"/> where that is known without reading it - the fallback, or
-        /// the one claimant of its exact name or extension that asks no content test - and used; null where its content
-        /// must be read to know.
+        /// the one claimant of its exact name, a mapped ending or its extension that asks no content test - and used; null
+        /// where its content must be read to know.
         /// </summary>
         private ICodeGraphExtractor? Claimant(string path)
         {
-            var claimants = _service._extractors.ClaimantsOf(path);
+            var claimants = _service._extractors.ClaimantsOf(path, _shape.Claims);
 
             var claimant = claimants.Count switch
             {
@@ -2344,7 +2368,7 @@ public sealed class CodebaseGraphService(
             }
 
             List<CodeGraphFile> list = [.. entries.Keys.Select(path => files[path])];
-            return (files, from?.Linked is { } linked ? CodeGraphLinker.Relink(linked, list) : CodeGraphLinker.Link(list));
+            return (files, from?.Linked is { } linked ? CodeGraphLinker.Relink(linked, list, _shape.KeyNaming) : CodeGraphLinker.Link(list, _shape.KeyNaming));
         }
 
         /// <summary>The extract <paramref name="name"/> of <paramref name="path"/>, where it reads as one made for it; null where it does not.</summary>
@@ -2596,7 +2620,7 @@ public sealed class CodebaseGraphService(
         }
 
         var text = decoded.Text;
-        var route = _extractors.Route(path, CodeFileText.Probe(text));
+        var route = _extractors.Route(path, CodeFileText.Probe(text), shape.Claims);
 
         var input = new CodeFileInput(path, text);
         var lines = input.Lines;

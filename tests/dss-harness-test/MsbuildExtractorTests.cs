@@ -82,7 +82,8 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
     /// <summary>
     /// A project is named by its file name, so a solution and the project it is named after are two; its header is its
     /// root element's line, and its summary the first sentence of its <c>Description</c>. A reference by a wildcard names
-    /// no project, and each project of a list is named.
+    /// no project, each project of a list is named, and each <c>$(Name)</c> the file writes - into an attribute as into
+    /// an element - is a use of the key of that name.
     /// </summary>
     [Fact]
     public void AProject_IsNamedByItsFileName_WithItsHeader_ItsDescription_AndEachProjectItNames()
@@ -93,7 +94,15 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
 
         var project = Assert.Single(shapes.Nodes);
         Assert.Equal(("Shapes.csproj", "src/Shapes/Shapes.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">", "Shapes on a plane."), (project.Name, project.Qualified, project.Signature, project.Summary));
-        Assert.Equal([("Geometry.csproj", 8), ("Shapes.Tests.csproj", 9), ("App.csproj", 9)], shapes.References.Select(reference => (reference.Name, reference.Line)));
+        Assert.Equal(
+            [
+                ("Geometry.csproj", CodeEdgeKinds.ProjectReference, 8),
+                ("Shapes.Tests.csproj", CodeEdgeKinds.ProjectReference, 9),
+                ("App.csproj", CodeEdgeKinds.ProjectReference, 9),
+                ("Root", CodeEdgeKinds.Uses, 9),
+                ("Configuration", CodeEdgeKinds.Uses, 10),
+            ],
+            shapes.References.Select(reference => (reference.Name, reference.Kind, reference.Line)));
 
         // The declaration and the comment before the root are no header.
         Assert.Equal("<Project Sdk=\"Microsoft.NET.Sdk\">", Assert.Single(tests.Nodes).Signature);
@@ -101,7 +110,7 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
 
         // A solution's Description is no summary of it: a solution has none, and an element so named is something else's.
         Assert.Null(Assert.Single(Extractor.Extract(new CodeFileInput("All.slnx", "<Solution><Description>Not a summary.</Description></Solution>")).Nodes).Summary);
-        Assert.All(shapes.References.Concat(solution.References), reference => Assert.Equal(CodeEdgeKinds.ProjectReference, reference.Kind));
+        Assert.All(solution.References, reference => Assert.Equal(CodeEdgeKinds.ProjectReference, reference.Kind));
     }
 
     /// <summary>A document type's entities are never resolved: one it declares stops the parse where it is used, and what came before is kept.</summary>

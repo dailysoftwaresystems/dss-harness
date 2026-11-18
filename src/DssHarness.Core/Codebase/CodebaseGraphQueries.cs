@@ -132,7 +132,22 @@ public sealed class CodebaseGraphQueries
         _in = symbols.Edges.ToLookup(edge => edge.To, StringComparer.Ordinal);
         _percentile = Percentiles(symbols.Edges, kept.Count);
         _literals = extracts.SelectMany(file => (file.Value?.Literals ?? []).Select(literal => (file.Key, literal))).ToLookup(entry => entry.literal.Value, entry => (entry.Key, entry.literal.Line), StringComparer.Ordinal);
+        _parts = symbols.Edges.Where(edge => string.Equals(edge.Kind, CodeEdgeKinds.PartOf, StringComparison.Ordinal))
+            .SelectMany(edge => new[] { (edge.From, edge.To), (edge.To, edge.From) })
+            .GroupBy(pair => pair.Item1, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<string>)[.. group.Select(pair => pair.Item2).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)], StringComparer.Ordinal);
     }
+
+    /// <summary>Each node's other parts, by id: what <see cref="CodeEdgeKinds.PartOf"/> joins it to, either way round.</summary>
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _parts;
+
+    /// <summary>
+    /// The node <paramref name="id"/> and every other part of its declaration: what the walks that read members - the
+    /// <c>node</c> operation, a <c>related</c> walk, a type's outline, the spans a body is served from - walk as one.
+    /// </summary>
+    /// <param name="id">A node's id, the view's.</param>
+    public IReadOnlyList<string> OneDeclaration(string id)
+        => _parts.TryGetValue(id, out var parts) ? [id, .. parts] : [id];
 
     /// <summary>The view answered from: <c>base</c>, or an agent's name.</summary>
     public string View => _read.View;
@@ -426,12 +441,16 @@ public sealed class CodebaseGraphQueries
             callees);
     }
 
-    /// <summary>The edges of the node <paramref name="id"/> names, grouped by kind as the <c>node</c> operation gives them, each a card.</summary>
+    /// <summary>The edges of the node <paramref name="id"/> names - and of every other part of its declaration - grouped by kind as the <c>node</c> operation gives them, each a card.</summary>
     /// <param name="id">A node's id, the view's.</param>
     public GraphEdges Edges(string id)
     {
+        var of = OneDeclaration(id);
+
         IReadOnlyList<GraphEdge> Group(GraphSide side, string kind)
-            => [.. Steps(id, [(side, kind)]).Select(step => new GraphEdge(Card(step.To), step.Confidence))];
+            => [.. of.SelectMany(one => Steps(one, [(side, kind)]))
+                .GroupBy(step => step.To, StringComparer.Ordinal)
+                .Select(alike => new GraphEdge(Card(alike.Key), alike.Select(step => step.Confidence).Aggregate(CodeConfidences.Surer)))];
 
         return new GraphEdges(
             Group(GraphSide.In, CodeEdgeKinds.Calls),
@@ -444,12 +463,14 @@ public sealed class CodebaseGraphQueries
             Group(GraphSide.In, CodeEdgeKinds.Uses),
             Group(GraphSide.Out, CodeEdgeKinds.Uses),
             Group(GraphSide.In, CodeEdgeKinds.Tests),
-            [.. Group(GraphSide.Out, CodeEdgeKinds.Imports), .. Group(GraphSide.Out, CodeEdgeKinds.ProjectReference), .. Group(GraphSide.In, CodeEdgeKinds.Imports), .. Group(GraphSide.In, CodeEdgeKinds.ProjectReference)]);
+            [.. Group(GraphSide.Out, CodeEdgeKinds.Imports), .. Group(GraphSide.Out, CodeEdgeKinds.ProjectReference), .. Group(GraphSide.In, CodeEdgeKinds.Imports), .. Group(GraphSide.In, CodeEdgeKinds.ProjectReference)],
+            [.. of.Where(part => part != id).Select(part => new GraphEdge(Card(part), CodeConfidences.Exact))]);
     }
 
     /// <summary>
-    /// The nodes reached from <paramref name="id"/> over <paramref name="relation"/> to <paramref name="depth"/>, by distance.
-    /// A node with more edges of the relation's kinds than the view's 99th percentile of any of them (and at least
+    /// The nodes reached from <paramref name="id"/> - and every other part of its declaration, a part walked as the node
+    /// itself - over <paramref name="relation"/> to <paramref name="depth"/>, by distance. A node with more edges of the
+    /// relation's kinds than the view's 99th percentile of any of them (and at least
     /// <see cref="CrowdFloor"/>) is given and not gone through.
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
@@ -461,9 +482,11 @@ public sealed class CodebaseGraphQueries
         ArgumentOutOfRangeException.ThrowIfGreaterThan(depth, 3);
 
         var edges = GraphRelations.Edges(relation);
+        var of = OneDeclaration(id);
         var seen = new HashSet<string>(StringComparer.Ordinal) { id };
+        seen.UnionWith(of);
         var reached = new List<GraphReached>();
-        var frontier = new List<string> { id };
+        var frontier = new List<string>(of);
 
         for (var hop = 1; hop <= depth && frontier.Count > 0; hop++)
         {
@@ -554,10 +577,10 @@ public sealed class CodebaseGraphQueries
             .ThenBy(card => card.Id, StringComparer.Ordinal)];
     }
 
-    /// <summary>The declarations inside the type <paramref name="id"/> names, each with its span and hash; <paramref name="id"/> is a node the view holds.</summary>
+    /// <summary>The declarations inside the type <paramref name="id"/> names - and every other part of its declaration - each with its span and hash; <paramref name="id"/> is a node the view holds.</summary>
     /// <param name="id">A type node's id, the view's.</param>
     public IReadOnlyList<GraphCard> OutlineType(string id)
-        => [.. _out[id]
+        => [.. OneDeclaration(id).SelectMany(one => _out[one])
             .Where(edge => string.Equals(edge.Kind, CodeEdgeKinds.Contains, StringComparison.Ordinal))
             .Select(edge => edge.To)
             .Where(_symbols.ContainsKey)
@@ -600,9 +623,13 @@ public sealed class CodebaseGraphQueries
         return [.. Enumerable.Range(start - 1, Math.Max(0, end - start + 1)).Select(at => lines[at])];
     }
 
-    /// <summary>The node <paramref name="id"/> names across its files, so <c>body</c> and <c>edit</c> read each span and recompute its hash.</summary>
+    /// <summary>The node <paramref name="id"/> names across its files - and every other part of its declaration across its - so <c>body</c> and <c>edit</c> read each span and recompute its hash.</summary>
     /// <param name="id">A node's id, the view's.</param>
-    public IReadOnlyList<NodeAt> At(string id) => _nodes.TryGetValue(id, out var at) ? at : [];
+    public IReadOnlyList<NodeAt> At(string id)
+        => OneDeclaration(id).SelectMany(AtOne).ToList();
+
+    /// <summary>The places the node <paramref name="id"/> itself is declared at, without its parts.</summary>
+    private IReadOnlyList<NodeAt> AtOne(string id) => _nodes.TryGetValue(id, out var at) ? at : [];
 
     /// <summary>
     /// Whether a node an answer names makes the answer not sure, so it adds a text search: its file carries a
