@@ -283,7 +283,8 @@ public sealed class FlowStepGraph
                 path => Readable(path) && !PathPatterns.Matches(never, path, platform.PathComparison),
                 path => policy.Write(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar))),
                 async (path, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], token).ConfigureAwait(false)).Read),
-                near: () => served.made?.Near);
+                near: () => served.made?.Near,
+                pages: new GraphPageStore(Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName), fileSystem));
 
             served.support = new AgentGraphSupport(
                 tool,

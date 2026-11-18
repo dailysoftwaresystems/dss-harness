@@ -124,7 +124,7 @@ public sealed class CodebaseGraphQueryServiceTests
 
         Assert.Equal((HarnessExit.Success, true), (text.ExitCode, text.Quiet));
         Assert.Equal("8257a8 member public static double Twice(IShape shape) | src/Geometry.cs:16-19 #aac0401c | 0 caller(s), 1 callee(s)", Assert.Single(text.Data));
-        Assert.Equal(["exitCode", "summary", "run", "view", "head", "op", "answer"], document.Select(member => member.Key));
+        Assert.Equal(["exitCode", "summary", "run", "view", "head", "op", "answer", "page", "pages", "total", "entries"], document.Select(member => member.Key));
         Assert.Equal((0, "run", "base", await tree.HeadAsync(), "node"), (document["exitCode"]!.GetValue<int>(), document["run"]!.GetValue<string>(), document["view"]!.GetValue<string>(), document["head"]!.GetValue<string>(), document["op"]!.GetValue<string>()));
         Assert.StartsWith("bc11b2 member public static double Total(IShape[] shapes)", document["answer"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.DoesNotContain(HarnessLayout.OrchestratorsDirectoryName, document["answer"]!.GetValue<string>(), StringComparison.Ordinal);
@@ -144,6 +144,33 @@ public sealed class CodebaseGraphQueryServiceTests
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.StartsWith(first, Assert.Single(outcome.Data), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <c>--page</c> asks any page of the answer, the text carrying the page's header; a page past the last is a usage
+    /// error in text and in the document, and the document answers the page, the pages, the whole answer's total and the
+    /// page's entries.
+    /// </summary>
+    [Fact]
+    public async Task TheVerbsPage_AsksAnyPage_AndItsDocumentAnswersThePages()
+    {
+        using var tree = await InitialisedTreeAsync();
+        var service = Service(tree);
+
+        var outline = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Outline = true, OutlineOf = "src/Shapes.cs" }, json: false, Token);
+        var first = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "Twice", Page = 1 }, json: true, Token);
+        var past = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "Twice", Page = 2 }, json: true, Token);
+        var document = JsonNode.Parse(Assert.Single(first.Data))!.AsObject();
+        var pastDocument = JsonNode.Parse(Assert.Single(past.Data))!.AsObject();
+
+        Assert.Equal((HarnessExit.Success, 0), (outline.ExitCode, 0));
+        Assert.StartsWith("outline of src/Shapes.cs (6 declaration(s)):", Assert.Single(outline.Data), StringComparison.Ordinal);
+        Assert.DoesNotContain("page ", Assert.Single(outline.Data), StringComparison.Ordinal);
+        Assert.Equal((1, 1, 1), (document["page"]!.GetValue<int>(), document["pages"]!.GetValue<int>(), document["total"]!.GetValue<int>()));
+        Assert.Equal(["8257a8 member public static double Twice(IShape shape) | src/Geometry.cs:16-19 #aac0401c | 0 caller(s), 1 callee(s)"], document["entries"]!.AsArray().Select(entry => entry!.GetValue<string>()));
+        Assert.Equal((HarnessExit.UsageError, "page 2 of 'find Twice': it has 1 page (1 to 1)"), (past.ExitCode, past.Message));
+        Assert.Equal((2, 1, 1), (pastDocument["page"]!.GetValue<int>(), pastDocument["pages"]!.GetValue<int>(), pastDocument["total"]!.GetValue<int>()));
+        Assert.Empty(pastDocument["entries"]!.AsArray());
     }
 
     /// <summary>An agent whose view was not made yet is said, and the base answered, in the text and in the document.</summary>
@@ -181,7 +208,7 @@ public sealed class CodebaseGraphQueryServiceTests
 
         Assert.Equal(HarnessExit.Refused, none.ExitCode);
         Assert.StartsWith("run 'nope' has no codebase graph in '", none.Message, StringComparison.Ordinal);
-        Assert.Equal(["exitCode", "summary", "run", "view", "head", "op", "answer"], noneDocument.Select(member => member.Key));
+        Assert.Equal(["exitCode", "summary", "run", "view", "head", "op", "answer", "page", "pages", "total", "entries"], noneDocument.Select(member => member.Key));
         Assert.Equal((13, "nope", "find"), (noneDocument["exitCode"]!.GetValue<int>(), noneDocument["run"]!.GetValue<string>(), noneDocument["op"]!.GetValue<string>()));
         Assert.Null(noneDocument["view"]);
         Assert.Null(noneDocument["answer"]);
@@ -192,7 +219,7 @@ public sealed class CodebaseGraphQueryServiceTests
         {
             var usage = JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
 
-            Assert.Equal(["exitCode", "summary", "run", "view", "head", "op", "answer"], usage.Select(member => member.Key));
+            Assert.Equal(["exitCode", "summary", "run", "view", "head", "op", "answer", "page", "pages", "total", "entries"], usage.Select(member => member.Key));
             Assert.Equal((10, outcome.Message, "run", op), (usage["exitCode"]!.GetValue<int>(), usage["summary"]!.GetValue<string>(), usage["run"]!.GetValue<string>(), usage["op"]?.GetValue<string>()));
             Assert.Null(usage["view"]);
             Assert.Null(usage["answer"]);
@@ -320,7 +347,7 @@ public sealed class CodebaseGraphQueryServiceTests
         var found = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "Quagga" }, json: false, Token);
         var outline = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Outline = true, OutlineOf = "src\\Shapes.cs" }, json: false, Token);
 
-        Assert.Matches("^no node matched\ntext: lines that hold 'Quagga'\n  docs/open\\.txt:1 And a Quagga in the open\\.\n  \\[[0-9]+ file\\(s\\) you may not read were left out\\]$", Assert.Single(found.Data));
+        Assert.Matches("^no node matched\ntext: lines that hold 'Quagga'\n  docs/open\\.txt:1 And a Quagga in the open\\.\n\\[[0-9]+ file\\(s\\) you may not read were left out\\]$", Assert.Single(found.Data));
         Assert.StartsWith("outline of src/Shapes.cs (6 declaration(s)):", Assert.Single(outline.Data), StringComparison.Ordinal);
     }
 
@@ -443,12 +470,13 @@ public sealed class CodebaseGraphQueryServiceTests
     {
         var topic = Prose.Words(HelpTopics.Render("codebase-graph"));
 
-        Assert.Contains($"find - the nodes a query's words match, best first, generated code after every other, a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id, at most {CodebaseGraphTool.FindLines} ({CodebaseGraphTool.FindMost} with limit);", topic, StringComparison.Ordinal);
+        Assert.Contains($"find - the nodes a query's words match, best first, generated code after every other, a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id, {CodebaseGraphTool.FindLines} a page;", topic, StringComparison.Ordinal);
+        Assert.Contains("no answer is cut: each is pages of whole entries (GraphPages), an answer of more than one page starting with the line 'page k of n' and any page asked with page, from 1, an answer with no header holding all of it", topic, StringComparison.Ordinal);
         Assert.Contains("A step whose graph is tools is offered the tool - the API clients among their own, Claude Code through the engine's tool server - with the read operations, wholeFile only where its reads are narrowed and edit only on the API clients (the probe measured Claude Code takes an Edit after a ranged Read, so an agent that means to change a body reads its lines and Edits them), its schema naming those alone, and query-codebase-graph below runs its read operations by hand.", topic, StringComparison.Ordinal);
         Assert.Contains($"The run's repository map is the tree at a glance: a header line - the commit it is of, how many files and declarations the graph holds, and that the graph tool answers for the tree as it is now - the projects and top directories with their counts, then the most central declarations one line each as find gives it, a declaration's centrality the number of files other than its own and a test's whose references bind to it, raised by how its name matches the run's task as find weighs a name's words - the share of the task's words its name holds whole, each weighed by how often the task says it and how rare it is among the view's names, a name that holds them all raised as far as {DssHarness.Core.Codebase.CodebaseGraphQueries.TaskRaise} more such files would raise it - no declaration of a file that declares a test and nothing generated. It is made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept in map.md (map-<a digest of the read rules>.md for steps whose read rules narrow them) with what it was made from in map.json under the run's graph, made under its own lock so steps that start together keep one, and never made again in the run, a resumed run included - the base moves as folds land and the map does not - cut at whole lines under codebaseGraph.mapTokens ({DssHarness.Core.Codebase.CodebaseGraphShape.DefaultMapTokens} by default; 0 gives no map); one that cannot be made or read is said, and the step goes on without it. Every launch of a step that has a graph that begins a conversation of its own is given it as the <repository-map> part ahead of its context pack, the same bytes for every step that reads alike, so a client that caches a prefix reads it from the cache ('help agent-clients' says where each client sets its marks). A launch that goes on with a stored conversation on the API clients is told, in its one new user message, <codebase-changes> instead: the declarations its view changed since what that conversation was told of them - its pack and every delta after it - moved or changed with their new range and hash, removed - and the nodes of its own pack the conversation was not given; never a map or a pack again whole, for a conversation's prefix is never changed, and no earlier message, tool result, map or pack is ever sent changed. A launch the walk of the step's order moves to another client or provider begins a conversation of its own, and is given the map and its own pack, as Claude Code, whose every launch begins one, is. Each launch's first message is a line of the step's graph.jsonl - what of the graph it was given and what that cost, or why it was given no pack - and the step's figures are its last launch's.", topic, StringComparison.Ordinal);
         Assert.Contains($"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand", topic, StringComparison.Ordinal);
         Assert.Contains($"It ends 0, {HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.", topic, StringComparison.Ordinal);
-        Assert.Contains($"at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word", topic, StringComparison.Ordinal);
+        Assert.Contains("each path:line with no hash, all of them paged - nothing left out - and the files it did not read said", topic, StringComparison.Ordinal);
 
         // The workflow key says the maps as the topic does: one for each ground of reads, each kept in its own file.
         Assert.Contains(

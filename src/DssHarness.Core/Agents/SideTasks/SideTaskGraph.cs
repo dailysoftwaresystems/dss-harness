@@ -188,6 +188,7 @@ public sealed class SideTaskGraph
             path => policy.Read(Full(path)).Refusal() is null && !PathPatterns.Matches(never, path, platform.PathComparison),
             path => policy.Write(Full(path)),
             async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read),
-            () => near);
+            () => near,
+            pages: new GraphPageStore(Path.Combine(layout.Directory, GraphPageStore.DirectoryName), files));
     }
 }

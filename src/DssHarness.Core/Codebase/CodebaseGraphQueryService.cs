@@ -38,6 +38,9 @@ public sealed record CodebaseGraphQuery(string Run, string? Agent)
 
     /// <summary>A <c>body</c>: the symbols to read, in the order given.</summary>
     public IReadOnlyList<string>? Body { get; init; }
+
+    /// <summary>The page of the answer to give, from 1; the first where it is left out.</summary>
+    public int? Page { get; init; }
 }
 
 /// <summary>
@@ -102,6 +105,11 @@ public sealed class CodebaseGraphQueryService(
         }
 
         var (op, input) = chosen;
+
+        if (query.Page is { } page)
+        {
+            input["page"] = page;
+        }
 
         if (op != GraphOp.Related && (query.Relation is not null || query.Depth is not null))
         {
@@ -193,7 +201,7 @@ public sealed class CodebaseGraphQueryService(
             ? CommandOutcome.Usage(text)
             : CommandOutcome.Ok($"graph {Name(op)} of run '{query.Run}' ({view ?? CodebaseGraphService.BaseView})") with { Data = [text], Quiet = true };
 
-        return CodebaseGraphQueryReports.Render(outcome, query.Run, view ?? read.View, read.Head, Name(op), json, text);
+        return CodebaseGraphQueryReports.Render(outcome, query.Run, view ?? read.View, read.Head, Name(op), json, text, answer.Paging);
     }
 
     private static (GraphOp Op, JsonObject Input)? Input(CodebaseGraphQuery query)

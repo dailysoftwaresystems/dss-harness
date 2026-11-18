@@ -79,18 +79,18 @@ public sealed class CodebaseGraphServingTests
 
         Assert.Equal(
             [
-                ("csharp", "Sum the areas of every shape in an order and report the largest of them", 95.0),
-                ("csharp", "Describe each shape for the report table", 99.3),
+                ("csharp", "Sum the areas of every shape in an order and report the largest of them", 94.9),
+                ("csharp", "Describe each shape for the report table", 99.2),
                 ("c", "Compute the total and the largest of the shapes' areas", 70.8),
-                ("c", "Describe each circle for the report table", 99.0),
+                ("c", "Describe each circle for the report table", 98.9),
                 ("dart", "Find the largest of the shapes by its area", 77.5),
-                ("dart", "Build the report table of the shapes with each described", 78.3),
+                ("dart", "Build the report table of the shapes with each described", 78.2),
             ],
             ratios);
 
         // The median task's share: the middle of the six, ordered.
         var ordered = ratios.Select(one => one.Ratio).Order().ToArray();
-        Assert.Equal(78.3, ordered[(ordered.Length - 1) / 2]);
+        Assert.Equal(78.2, ordered[(ordered.Length - 1) / 2]);
     }
 
     /// <summary>

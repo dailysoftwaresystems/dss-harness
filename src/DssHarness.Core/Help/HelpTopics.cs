@@ -5455,19 +5455,18 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "What an agent asks of the graph is one tool, graph, whose op says what is asked: "
-            + $"{CodebaseGraphTool.NameOf(GraphOp.Find)} - the nodes a query's words match, best first, generated code after every other, a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id, at most {CodebaseGraphTool.FindLines} ({CodebaseGraphTool.FindMost} with limit); "
-            + $"{CodebaseGraphTool.NameOf(GraphOp.Node)} - a node's card and its edges by kind, {CodebaseGraphTool.NodeLinesAKind} of each with the count of the rest; "
-            + $"{CodebaseGraphTool.NameOf(GraphOp.Related)} - the nodes one relation ({string.Join(", ", GraphRelations.All)}) reaches, 1 to {CodebaseGraphTool.MostDepth} hops, at most {CodebaseGraphTool.RelatedLines}, a node with more edges of that kind than the view's 99th percentile, and at least {CodebaseGraphQueries.CrowdFloor}, given and not gone through; "
-            + $"{CodebaseGraphTool.NameOf(GraphOp.Outline)} - a file's or a type's declarations, or the repository's, at most {CodebaseGraphTool.OutlineLines}; "
-            + $"{CodebaseGraphTool.NameOf(GraphOp.Body)} - the lines of 1 to {CodebaseGraphTool.BodySymbols} nodes, read fresh and numbered as view_file numbers them, a type's members' bodies left out unless full - each member's signature line kept - at most {CodebaseGraphTool.BodyLines} in all; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Find)} - the nodes a query's words match, best first, generated code after every other, a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id, {CodebaseGraphTool.FindLines} a page; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Node)} - a node's card and its edges by kind, {CodebaseGraphTool.NodeLinesAKind} of each a page; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Related)} - the nodes one relation ({string.Join(", ", GraphRelations.All)}) reaches, 1 to {CodebaseGraphTool.MostDepth} hops, {CodebaseGraphTool.RelatedLines} a page, a node with more edges of that kind than the view's 99th percentile, and at least {CodebaseGraphQueries.CrowdFloor}, given and not gone through; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Outline)} - a file's or a type's declarations, or the repository's, {CodebaseGraphTool.OutlineLines} a page; "
+            + $"{CodebaseGraphTool.NameOf(GraphOp.Body)} - the lines of 1 to {CodebaseGraphTool.BodySymbols} nodes, read fresh and numbered as view_file numbers them, a type's members' bodies left out unless full - each member's signature line kept - {CodebaseGraphTool.BodyLines} lines a page; "
             + $"{CodebaseGraphTool.NameOf(GraphOp.Edit)} - a node's lines replaced where the hash given is its hash now - a node spread over files in the part that hash names - the file's encoding, line endings and final newline kept, and nothing written where it changed; "
             + $"{CodebaseGraphTool.NameOf(GraphOp.WholeFile)} - the narrowing of reads lifted for one file, with why. "
             + "body and edit reach a file only inside the tree, each link resolved, never through a link out of it. "
             + "A step whose graph is tools is offered the tool - the API clients among their own, Claude Code through the engine's tool server - with the read operations, wholeFile only where its reads are narrowed and edit only on the API clients (the probe measured Claude Code takes an Edit after a ranged Read, so an agent that means to change a body reads its lines and Edits them), its schema naming those alone, and query-codebase-graph below runs its read operations by hand. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
-            + "Every node an answer names carries path:start-end - a declaration # with the first eight characters of its digest too, a file its lines - every answer ends naming the files whose extract the graph no longer holds, if any, and every answer is cut at a whole line past "
-            + $"{(CodebaseGraphTool.MostCharacters / 1024).ToString(CultureInfo.InvariantCulture)} KB, saying how to ask for the rest with offset. Where the graph is not sure - no node matched, a name it does not hold, "
-            + $"an edge of {CodeConfidences.Candidates}, a node named with external or unresolved callees or in a file dynamic or generated - the answer adds text: at most {CodebaseGraphTool.TextHits} lines that hold the name as a whole word, "
-            + "searched as search_files searches, each path:line with no hash, saying how many more there were and the files it did not read; a path or a path:line is searched for by no word.");
+            + "Every node an answer names carries path:start-end - a declaration # with the first eight characters of its digest too, a file its lines - and no answer is cut: each is pages of whole entries (GraphPages), an answer of more than one page starting with the line 'page k of n' and any page asked with page, from 1, an answer with no header holding all of it; a page past the last is refused with the answer's range, and the totals a header says are counted, never estimated. The first page of an answer computes its whole result once and keeps it - under the digest of the graph it was computed on, in graph-pages/ under the step's directory, so a later page and a resumed conversation read pages of that one result - and where the graph moved to another digest the answer is made again and the page says so. Every answer ends naming the files whose extract the graph no longer holds, if any. Where the graph is not sure - no node matched, a name it does not hold, "
+            + $"an edge of {CodeConfidences.Candidates}, a node named with external or unresolved callees or in a file dynamic or generated - the answer adds text: lines that hold the name as a whole word, "
+            + "searched as search_files searches, each path:line with no hash, all of them paged - nothing left out - and the files it did not read said; a path or a path:line is searched for by no word.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -5522,8 +5521,8 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             $"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand - --find <query>, --node <symbol>, "
-            + "--related <symbol> --relation <relation> [--depth <n>], --outline [<path or symbol>] or --body <symbol>... - on the run's graph, the base or with "
-            + "--agent <agent> that agent's view, and prints the answer an agent would be given; --json the same in one document. It reads only - no sync, "
+            + "--related <symbol> --relation <relation> [--depth <n>], --outline [<path or symbol>] or --body <symbol>... [--page <n>] - on the run's graph, the base or with "
+            + "--agent <agent> that agent's view, and prints the answer an agent would be given, its page's header naming the pages; --json the same in one document holding the page, the pages, the whole answer's total and the page's entries. It reads only - no sync, "
             + "no lock, nothing written - the main checkout's run and configuration wherever it is typed, a misuse told before anything is read, and a view not made yet said and the base answered. It ends 0, "
             + $"{HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.");
 
@@ -6496,7 +6495,7 @@ public static class HelpTopics
             + $"{OrchestratorLayout.HandoffFileName} where one stopped it, and for a reason step the {OrchestratorLayout.PolicyFileName} it started under - the agents' "
             + "configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps "
             + "that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a "
-            + "line for each launch's first message, each call of the graph tool, each escape of its narrowed reads) and its working-set.json, the "
+            + "line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its graph-pages/ (the whole result an answer's pages read from, one file an ask, so a later page and a resumed conversation read pages of that one result) and its working-set.json, the "
             + "seeds of the packs of the steps after it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),

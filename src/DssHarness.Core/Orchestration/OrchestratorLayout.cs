@@ -206,6 +206,13 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public const string StepGraphFileName = "graph.jsonl";
 
     /// <summary>
+    /// The name of the directory a step that has a codebase graph keeps the whole result an answer's pages read from in,
+    /// in its own: one file an ask, under the digest of the graph it was computed on, so a later page and a resumed
+    /// conversation read pages of that one result.
+    /// </summary>
+    public const string StepPagesDirectoryName = "graph-pages";
+
+    /// <summary>
     /// The name of the file a reason step that has a codebase graph keeps its working set in, in its directory: the nodes it
     /// edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet.
     /// </summary>

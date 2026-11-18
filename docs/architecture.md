@@ -4589,13 +4589,21 @@ prefix, then the share of the query's words weighed by their rarity, a summary's
 generated code after every other, a tie by how near the step's own work each node is (`GraphNearness`: its context
 pack or a working set it was given, a file its `writes` covers, a file its agent changed, a path or a name its prompt
 holds) and then by id; `related` gives a hub - more edges of the relation's kinds than the 99th percentile and at least
-`CodebaseGraphQueries.CrowdFloor`, `CodebaseGraphQueries.Crowd` the one rule of it - and does not go through it; each operation is bounded
-(`CodebaseGraphTool.FindLines` and the rest) and every answer cut at a whole line past `CodebaseGraphTool.MostCharacters`,
-saying the offset to ask again with; every answer ends naming the files whose extract the view no longer holds
+`CodebaseGraphQueries.CrowdFloor`, `CodebaseGraphQueries.Crowd` the one rule of it - and does not go through it. No answer of
+the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`), an operation's page holding up to its bound
+(`CodebaseGraphTool.FindLines` and the rest) and within `CodebaseGraphTool.MostCharacters` less what the pages reserve; an
+answer of more than one page starts with the line `page k of n` - the exact totals, counted never estimated, and how to
+ask for the next with `page`, from 1, `offset` and `limit` refused naming it - and an answer with no header holds all of
+it; a page past the last is refused with the answer's range. The first page of an answer computes its whole result once
+and keeps it, under the digest of the graph it was computed on (`CodeGraphSymbolsFile.Graph`, which moves as the base the
+view stands on moves), in `graph-pages\` under the step's directory, so a later page and a resumed conversation read
+pages of that one result; a page asked after the view moved to another digest is made again on it and its header says
+so. Every answer ends naming the files whose extract the view no longer holds
 (`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where the graph is not sure - no node matched, a
 name it does not hold, an edge of `candidates`, a node named with external or unresolved callees or in a file `dynamic`
 or generated - the answer adds the lines that hold the name as a whole word, searched by `AgentFiles.SearchAsync` as
-`search_files` searches and saying what it did not read in the same notes (`AgentSearch.LeftOut`), through the read rule
+`search_files` searches, all of them paged as the answer's entries - none left out - and saying what it did not read in
+the same notes (`AgentSearch.LeftOut`), through the read rule
 the tool is handed, which leaves out and counts every node, edge and hit of a file it refuses; a path or a `path:line`
 is searched for by no word. `body` reads a node's lines fresh - a type's members' bodies left out unless `full`, each
 member's signature line kept - and where its hash moved since the view was read, has the file checked again before
@@ -4735,7 +4743,8 @@ through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on dis
 view linked in memory from the base's files and its record, and a link result another linker made linked again in
 memory - with a read rule that refuses what no graph lists (`CodebaseGraphService.NeverListed`), the main checkout's run
 and configuration wherever it is typed (`MainTree`); a misuse is told by `CodebaseGraphTool.Misused` before anything is
-read, and a view not made yet is said and the base answered; it ends 0, 13 where the run has no graph and 10 for a
+read, and a view not made yet is said and the base answered; `--page` asks any page of the answer, its document answering
+the page, the pages, the whole answer's total and the page's entries; it ends 0, 13 where the run has no graph and 10 for a
 usage error, and no host is asked to run it.
 
 ## Anchor registries

@@ -138,6 +138,13 @@ public sealed class CodebaseGraphQueries
     /// <summary>The commit the tree's HEAD named when it was listed, where it named one.</summary>
     public string? Head => _read.Head;
 
+    /// <summary>
+    /// The digest of the graph the view answers from (<see cref="CodeGraphSymbolsFile.Graph"/>): the digest of the
+    /// manifest its link result was made from, which moves only as the base the view stands on moves - what tells a kept
+    /// page the graph it was computed on is the graph it is asked of now.
+    /// </summary>
+    public string Graph => _read.Symbols.Graph;
+
     /// <summary>The tree, absolute.</summary>
     public string Tree => _read.Tree;
 

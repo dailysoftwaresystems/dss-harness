@@ -762,7 +762,7 @@ public sealed class SideTaskPolicyTests
 
         var found = await tool.RunAsync(System.Text.Json.Nodes.JsonNode.Parse("""{"op":"find","query":"Code"}""")!.AsObject(), operations, TestContext.Current.CancellationToken);
 
-        Assert.Equal("no node matched\n1 node(s) left out: in files your reads do not reach", found.Text);
+        Assert.Matches("^no node matched\\n1 node\\(s\\) left out: in files your reads do not reach\\ntext: no line holds 'Code'\\n\\[[0-9]+ file\\(s\\) you may not read were left out\\]$", found.Text);
 
         var edited = await tool.RunAsync(
             System.Text.Json.Nodes.JsonNode.Parse("""{"op":"edit","symbol":"Demo.Secret.Code","hash":"#00000000","text":"    public static int Code() => 8;"}""")!.AsObject(),
