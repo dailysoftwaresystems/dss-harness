@@ -254,18 +254,14 @@ public sealed record ClassHomeAudit(IReadOnlyList<string> Consolidated, IReadOnl
 /// closing record says of it.
 /// </summary>
 /// <param name="Record">Where the call's record is (<see cref="Agents.AgentMeasureSupport.RecordFileOf"/>), as a problem names it where it cannot be read.</param>
-/// <param name="Measured">
-/// The cell the call measured and its result - passed, failed or unmeasured - as its record says them, and when the record
-/// was written, which the tool runtime does as it answers the call: what orders a fix's measurement after the failure's.
-/// Null where the record cannot be read.
-/// </param>
-public sealed record ClassClosureMeasure(string Record, (string Cell, string Result, DateTime Written)? Measured)
+/// <param name="Measured">What the call measured and answered, as its record says it, and when the record was written; null where the record cannot be read.</param>
+public sealed record ClassClosureMeasure(string Record, ClassClosureMeasured? Measured)
 {
     /// <summary>
     /// What the measure call <paramref name="callId"/>, held by the stream of the step kept at
     /// <paramref name="stepDirectory"/>, measured, as its record says it, and when the record was written
     /// (<see cref="FileSystem.IFileSystem.LastWriteTimeUtc"/>): unread, and named by its path, where no record that reads
-    /// as one is there.
+    /// as one is there - one that names no leg, variant, filter or cell, or no result a measure call answers.
     /// </summary>
     /// <param name="fileSystem">The file system the step's records are read on.</param>
     /// <param name="stepDirectory">The directory of the step whose stored stream holds the call.</param>
@@ -277,10 +273,46 @@ public sealed record ClassClosureMeasure(string Record, (string Cell, string Res
         return new(
             record,
             Agents.AgentMeasureSupport.RecordOf(fileSystem, stepDirectory, callId) is { } said
+                && ClassClosureReading.Text(said["leg"]) is { } leg
+                && ClassClosureReading.Text(said["variant"]) is { } variant
+                && ClassClosureReading.Text(said["filter"]) is { } filter
                 && ClassClosureReading.Text(said["cell"]) is { } cell
                 && ClassClosureReading.Text(said["result"]) is { } result
-                    ? (cell, result, fileSystem.LastWriteTimeUtc(record))
+                    ? new ClassClosureMeasured(leg, variant, filter, cell, result, fileSystem.LastWriteTimeUtc(record))
                     : null);
+    }
+}
+
+/// <summary>
+/// What one measure call measured and answered, as its own record says it (<see cref="Agents.AgentMeasureSupport.Said"/>):
+/// the measurement - the leg the call ran, the variant it built, the filter of its tests and the cell it named - its
+/// result, and when its record was written. A measurement is the four together, never the cell alone: the cell is the
+/// builder's own label, and what was measured is the tests the filter ran on that leg, built as that variant.
+/// </summary>
+/// <param name="Leg">The leg the call measured on, as the call gave it.</param>
+/// <param name="Variant">The build configuration it measured as, as the call gave it.</param>
+/// <param name="Filter">The tests it ran, as the leg's runner took the filter; empty for all of them.</param>
+/// <param name="Cell">The cell of the universe it named, as the call gave it.</param>
+/// <param name="Result">What it answered: passed, failed or unmeasured.</param>
+/// <param name="Written">
+/// When its record was written, which the tool runtime does as it answers the call: what orders one call of a measurement
+/// after another.
+/// </param>
+public sealed record ClassClosureMeasured(string Leg, string Variant, string Filter, string Cell, string Result, DateTime Written)
+{
+    /// <summary>
+    /// Whether <paramref name="other"/> made the measurement this one made: the same leg, variant, filter and cell, each as
+    /// the calls gave them - the measure tool takes each as it is spelt.
+    /// </summary>
+    /// <param name="other">Another call's measurement.</param>
+    public bool SameMeasurement(ClassClosureMeasured other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        return string.Equals(Leg, other.Leg, StringComparison.Ordinal)
+            && string.Equals(Variant, other.Variant, StringComparison.Ordinal)
+            && string.Equals(Filter, other.Filter, StringComparison.Ordinal)
+            && string.Equals(Cell, other.Cell, StringComparison.Ordinal);
     }
 }
 
@@ -302,7 +334,8 @@ public sealed record ClassClosureMeasure(string Record, (string Cell, string Res
 /// </param>
 /// <param name="Measures">
 /// Every measure call of the item's stored streams, by the id a record's <c>measuredBy</c> cites - answered passed, failed
-/// or unmeasured alike, each with what its own record says it measured and when that record was written - empty where they
+/// or unmeasured alike, each with what its own record says it measured - its leg, variant, filter and cell - and when that
+/// record was written - empty where they
 /// hold none, so a measurement cited is never read as made. Null for a manual lane, whose measurements are read as given,
 /// their command lines.
 /// </param>
@@ -405,8 +438,10 @@ public sealed record ClassClosureJudged(
 /// and a site that reads its home among the paths the agent changed; every search was made - it cites the call that made
 /// it, a tool call of the item's stored streams whose tool ran, however it ended, one of whose input's texts holds its
 /// query - and every neighbour was measured - its measurement a <c>measure</c> call of the same streams whose own record
-/// says it measured the neighbour's cell and answered its result (failed for failed-fixed, the fix shown by another call
-/// of the cell that answered passed, its record written after the failing call's), or reasoned where it says it was not;
+/// says it measured the neighbour's cell and answered its result (failed for failed-fixed), and the newest call of that
+/// measurement - the same leg, variant, filter and cell - to measure anything answered passed: the call cited or a later
+/// one for passed, a call whose record was written after the failing call's for failed-fixed - or reasoned where it says
+/// it was not;
 /// every test of the pin is declared in the worktree; where the worktree's configuration declares an arms registry, the
 /// arm is one of its arms and mutates the home's own file, or the record says why the class has none; the universe holds
 /// every axis the plan names, and the claim names every axis of it; and where the home was touched by other work, the
@@ -582,25 +617,38 @@ public static class ClassClosureRules
             if (cited.Measured is not { } measured)
             {
                 problems.Add($"class '{entry.Class}': the neighbour '{cell}' is measured by the call '{measuredBy}', whose record '{cited.Record}' cannot be read");
-            }
-            else if (!string.Equals(measured.Cell, cell, StringComparison.Ordinal))
-            {
-                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is measured by the call '{measuredBy}', which measured the cell '{measured.Cell}'");
-            }
-            else if (!string.Equals(measured.Result, AnswerOf(result), StringComparison.Ordinal))
-            {
-                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is '{result}' in the record, but the call '{measuredBy}' that measured it answered '{measured.Result}'");
+                continue;
             }
 
-            // The failing call shows the failure, never the fix: a fix is shown by the cell measured again and passing, by a
-            // call whose record was written after the failing one's - the builder's word that it fixed the cell is not one.
-            else if (result == "failed-fixed"
-                && !measures.Values.Any(other => other.Measured is { } again
-                    && string.Equals(again.Cell, cell, StringComparison.Ordinal)
-                    && again.Result == "passed"
-                    && again.Written > measured.Written))
+            if (!string.Equals(measured.Cell, cell, StringComparison.Ordinal))
             {
-                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is 'failed-fixed', and no measure call of this item's stored streams measured it passing after the call '{measuredBy}' answered 'failed'");
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is measured by the call '{measuredBy}', which measured the cell '{measured.Cell}'");
+                continue;
+            }
+
+            if (!string.Equals(measured.Result, AnswerOf(result), StringComparison.Ordinal))
+            {
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is '{result}' in the record, but the call '{measuredBy}' that measured it answered '{measured.Result}'");
+                continue;
+            }
+
+            // What holds of a measurement is its newest word: a pass a later call of the same measurement failed no longer
+            // shows the cell passing, and the failing call shows the failure, never the fix - a fix is shown by the same
+            // tests measured again after it, the newest of them passing. The builder's word that it fixed the cell is not
+            // one, nor a pass of other tests, on another leg or built otherwise, that it named by the cell.
+            var newest = NewestAfter(measures, measured);
+
+            if (result == "passed" && newest is { Measured.Result: "failed" } broken)
+            {
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is 'passed' in the record, but the call '{broken.Call}', the newest to measure it after the call '{measuredBy}', answered 'failed'");
+            }
+            else if (result == "failed-fixed" && newest is null)
+            {
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is 'failed-fixed', and no measure call of this item's stored streams measured it passing - on the leg '{measured.Leg}', as '{measured.Variant}', with the filter '{measured.Filter}' - after the call '{measuredBy}' answered 'failed'");
+            }
+            else if (result == "failed-fixed" && newest is { Measured.Result: "failed" } still)
+            {
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is 'failed-fixed', but the call '{still.Call}', the newest to measure it after the call '{measuredBy}', answered 'failed'");
             }
         }
 
@@ -661,11 +709,30 @@ public static class ClassClosureRules
 
     /// <summary>
     /// What the measure call a neighbour cites answered, where the neighbour's result is true: <c>failed</c> for
-    /// <c>failed-fixed</c> - the measurement showed the failure, and the fix is the item's, after it, shown by a later call
-    /// of the cell that answered passed - and every other result as it is spelt, <c>passed</c> a call that answered passed.
+    /// <c>failed-fixed</c> - the measurement showed the failure, and the fix is the item's, after it, shown by the newest
+    /// later call of the same measurement answering passed (<see cref="NewestAfter"/>) - and every other result as it is
+    /// spelt, <c>passed</c> a call that answered passed.
     /// </summary>
     /// <param name="result">The neighbour's result, as the record spells it.</param>
     private static string AnswerOf(string result) => result == "failed-fixed" ? "failed" : result;
+
+    /// <summary>
+    /// The newest measure call of <paramref name="measures"/> that made the measurement <paramref name="measured"/> made
+    /// (<see cref="ClassClosureMeasured.SameMeasurement"/>) after it - its record written later - and measured something:
+    /// answered passed or failed, for a call answered unmeasured measured nothing of the cell. Of calls whose records were
+    /// written at the same moment a failure is the newest, so a pass beside it never speaks for it. Null where no later
+    /// call measured it.
+    /// </summary>
+    /// <param name="measures">Every measure call of the item's stored streams, by its id.</param>
+    /// <param name="measured">What the call a neighbour cites measured.</param>
+    private static (string Call, ClassClosureMeasured Measured)? NewestAfter(IReadOnlyDictionary<string, ClassClosureMeasure> measures, ClassClosureMeasured measured)
+        => measures
+            .Where(other => other.Value.Measured is { Result: "passed" or "failed" } again && again.Written > measured.Written && again.SameMeasurement(measured))
+            .Select(other => ((string Call, ClassClosureMeasured Measured)?)(other.Key, other.Value.Measured!))
+            .OrderByDescending(other => other!.Value.Measured.Written)
+            .ThenBy(other => other!.Value.Measured.Result == "passed")
+            .ThenBy(other => other!.Value.Call, StringComparer.Ordinal)
+            .FirstOrDefault();
 
     /// <summary>
     /// The audits one entry requires, and its home's touches and hotspots: the touches of every path that is its home's as

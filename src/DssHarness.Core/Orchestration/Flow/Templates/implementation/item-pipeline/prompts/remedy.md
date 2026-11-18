@@ -53,8 +53,9 @@ You cannot run `build`, `test` or `check-mutations` yourself: the engine runs th
 tool: it takes the leg, its variant, the filter and the cell you are measuring, runs those tests of that leg in the
 tree you work in, and answers what they showed. Your record's `measuredBy` cites the id of the call that measured,
 and its `result` is what that call answered for that cell: `passed` where it passed, `failed-fixed` where it failed
-and you fixed it in this item. A fix is shown, never said: after you fix a failed cell, measure it again, and the
-check looks for a later call of that cell that answered passed; your record may still cite the call that failed.
+and you fixed it in this item. A fix is shown, never said: after you fix a failed cell, measure it again - the same
+leg, variant, filter and cell - and the check holds the cell to the newest call of that measurement, which must
+answer passed, for `passed` and `failed-fixed` alike; your record may still cite the call that failed.
 Only a leg this run's configuration declares is measured; a reference that is no declared leg - a tool, a service,
 another implementation - is named unmeasured, with the reason, and so is a cell the tool answers unmeasured.
 

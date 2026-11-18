@@ -683,9 +683,11 @@ one refused or whose input did not read, one of whose input's texts holds its qu
 neighbour measured by a `measure` call - whichever client called it, whatever it answered - whose
 own record (`measures/<call id>/measure.json` of the step whose stream holds it, never the
 builder's word or the stream's capped text of the answer) can be read, names the neighbour's
-cell and answered its result (`failed` for `failed-fixed`, whose fix another `measure` call of
-the cell shows: one that answered `passed`, its record written after the failing call's), or
-reasoned why not, every test of the pin declared, the arm one of the registry the worktree holds
+cell and answered its result (`failed` for `failed-fixed`; and the newest call of that
+measurement - the same leg, variant, filter and cell, never another measurement under the cell's
+name - to measure anything answered `passed`: the call cited or a later one for `passed`, one
+whose record was written after the failing call's for `failed-fixed`), or reasoned why not,
+every test of the pin declared, the arm one of the registry the worktree holds
 and mutating the home's own file or a reason the class has nothing to mutate, the universe
 holding every planned axis and the claim naming each - and each home's touches since the run's
 start commit, the item's own commits left out: a home touched by other work must carry a home

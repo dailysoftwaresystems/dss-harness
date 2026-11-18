@@ -777,7 +777,8 @@ public sealed class WorkflowTemplatesTests
 
         // The builders measure on declared legs alone, and name any other reference unmeasured; a neighbour's result is
         // what the call it cites answered for its cell, as the class-closure check holds it to that call's own record, and
-        // a fixed cell is measured again, for the check holds a fix to a later call of the cell that passed.
+        // a cell is measured again after its fix, the same leg, variant, filter and cell, for the check holds the cell to the
+        // newest call of that measurement.
         foreach (var builds in new[] { "item-pipeline/prompts/implement.md", "item-pipeline/prompts/remedy.md" })
         {
             Assert.Contains(
@@ -786,7 +787,7 @@ public sealed class WorkflowTemplatesTests
                 StringComparison.Ordinal);
             Assert.Contains(
                 "Your record's `measuredBy` cites the id of the call that measured, and its `result` is what that call answered for that cell: `passed` where it passed, `failed-fixed` where it failed and you fixed it in this item. "
-                    + "A fix is shown, never said: after you fix a failed cell, measure it again, and the check looks for a later call of that cell that answered passed; your record may still cite the call that failed.",
+                    + "A fix is shown, never said: after you fix a failed cell, measure it again - the same leg, variant, filter and cell - and the check holds the cell to the newest call of that measurement, which must answer passed, for `passed` and `failed-fixed` alike; your record may still cite the call that failed.",
                 Prose.Words(WorkflowTemplates.TextOf(builds)!),
                 StringComparison.Ordinal);
         }

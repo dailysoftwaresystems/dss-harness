@@ -1027,13 +1027,13 @@ public sealed class CheckStepRunnerTests : IDisposable
         var measures = new Dictionary<string, ClassClosureMeasure>(StringComparer.Ordinal)
         {
             ["m-unread"] = new(unread, null),
-            ["m-other"] = new("m-other.json", ("rate:z", "passed", written)),
-            ["m-failed"] = new("m-failed.json", ("rate:c", "failed", written)),
-            ["m-unmeasured"] = new("m-unmeasured.json", ("rate:d", "unmeasured", written)),
-            ["m-passed-e"] = new("m-passed-e.json", ("rate:e", "passed", written)),
-            ["m-passed-f"] = new("m-passed-f.json", ("rate:f", "passed", written)),
-            ["m-failed-g"] = new("m-failed-g.json", ("rate:g", "failed", written)),
-            ["m-passed-g"] = new("m-passed-g.json", ("rate:g", "passed", written.AddMinutes(1))),
+            ["m-other"] = new("m-other.json", On("rate:z", "passed", written)),
+            ["m-failed"] = new("m-failed.json", On("rate:c", "failed", written)),
+            ["m-unmeasured"] = new("m-unmeasured.json", On("rate:d", "unmeasured", written)),
+            ["m-passed-e"] = new("m-passed-e.json", On("rate:e", "passed", written)),
+            ["m-passed-f"] = new("m-passed-f.json", On("rate:f", "passed", written)),
+            ["m-failed-g"] = new("m-failed-g.json", On("rate:g", "failed", written)),
+            ["m-passed-g"] = new("m-passed-g.json", On("rate:g", "passed", written.AddMinutes(1))),
         };
 
         Assert.Equal(
@@ -1048,15 +1048,19 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         // A manual lane's measurements are its command lines, read as given.
         Assert.Empty(ClassClosureRules.Judge([], [entry], ClassClosureProof.Manual(arms: null, StringComparison.Ordinal)).Problems);
+
+        // Each measurement as the tool's records name the calls of these: the leg 'windows', as 'debug', with the filter 'Rate'.
+        static ClassClosureMeasured On(string cell, string result, DateTime at) => new("windows", "debug", "Rate", cell, result, at);
     }
 
     /// <summary>
     /// The check reads what each measure call of the agent's stored streams measured from the call's own record, in the
     /// directory of the step whose stream holds it - whatever the call answered, so a failed cell's call, which its stream
     /// holds as one that did not succeed, is a measure call too - and never from the stream's text of the answer: a record
-    /// the call's own step does not hold is not read from another step's, and a call whose stream says passed is held to the
-    /// failure its record keeps. A neighbour whose call measured its cell and answered its result passes, a failure fixed
-    /// among them where the cell was measured again after it and passed.
+    /// the call's own step does not hold is not read from another step's, a call whose stream says passed is held to the
+    /// failure its record keeps, and a record that does not say the leg, variant and filter its call ran cannot be read,
+    /// for what it measured cannot be told. A neighbour whose call measured its cell and answered its result passes, a
+    /// failure fixed among them where the cell was measured again after it and passed.
     /// </summary>
     [Fact]
     public async Task TheClassClosureCheck_ReadsWhatEachMeasureCallMeasured_FromItsOwnRecord_InTheStepWhoseStreamHoldsIt()
@@ -1070,21 +1074,25 @@ public sealed class CheckStepRunnerTests : IDisposable
         // The implementation's step measured x, passed; the rework's measured y and failed - its call answered as one that
         // did not succeed - and measured it again after its fix, passing; it measured z, its stream's text saying passed
         // where its record keeps a failure, and measured another cell than the one the record names. The record of the
-        // implementation's second call is kept only in the rework's step, whose stream does not hold it.
+        // implementation's second call is kept only in the rework's step, whose stream does not hold it; the record of the
+        // rework's last call names no filter, so what it measured cannot be told.
         WriteStream(kit.Harness, kit.Layout, "builder", MeasureCalls(("toolu_1", true), ("toolu_3", true)), step: "impl-1");
-        WriteStream(kit.Harness, kit.Layout, "builder", MeasureCalls(("toolu_2", false), ("toolu_4", true), ("toolu_5", true), ("toolu_6", true)), step: "rework-1");
+        WriteStream(kit.Harness, kit.Layout, "builder", MeasureCalls(("toolu_2", false), ("toolu_4", true), ("toolu_5", true), ("toolu_6", true), ("toolu_7", true)), step: "rework-1");
         WriteMeasure(kit.Layout, "builder", "impl-1", "toolu_1", "rate:x", Measured("passed"));
         WriteMeasure(kit.Layout, "builder", "rework-1", "toolu_2", "rate:y", Measured("failed"), written: failed);
         WriteMeasure(kit.Layout, "builder", "rework-1", "toolu_3", "rate:w", Measured("passed"));
         WriteMeasure(kit.Layout, "builder", "rework-1", "toolu_4", "rate:z", Measured("failed"));
         WriteMeasure(kit.Layout, "builder", "rework-1", "toolu_5", "rate:other", Measured("passed"));
         WriteMeasure(kit.Layout, "builder", "rework-1", "toolu_6", "rate:y", Measured("passed"), written: failed.AddMinutes(1));
+        var filterless = DssHarness.Core.Agents.AgentMeasureSupport.RecordFileOf(kit.Layout.AgentStepDirectory("builder", "rework-1"), "toolu_7");
+        Directory.CreateDirectory(Path.GetDirectoryName(filterless)!);
+        File.WriteAllText(filterless, """{"leg":"windows","variant":"debug","cell":"rate:u","result":"passed"}""" + "\n");
 
         var judged = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
             ClosureRun(
                 kit,
                 Class("c-rate", home: "src/Home.cs", symbol: "Home"),
-                Measuring(("rate:x", "toolu_1", "passed"), ("rate:y", "toolu_2", "failed-fixed"), ("rate:w", "toolu_3", "passed"), ("rate:z", "toolu_4", "passed"), ("rate:v", "toolu_5", "passed"))),
+                Measuring(("rate:x", "toolu_1", "passed"), ("rate:y", "toolu_2", "failed-fixed"), ("rate:w", "toolu_3", "passed"), ("rate:z", "toolu_4", "passed"), ("rate:v", "toolu_5", "passed"), ("rate:u", "toolu_7", "passed"))),
             Token);
 
         Assert.Equal(
@@ -1092,6 +1100,7 @@ public sealed class CheckStepRunnerTests : IDisposable
                 $"class 'c-rate': the neighbour 'rate:w' is measured by the call 'toolu_3', whose record '{DssHarness.Core.Agents.AgentMeasureSupport.RecordFileOf(kit.Layout.AgentStepDirectory("builder", "impl-1"), "toolu_3")}' cannot be read",
                 "class 'c-rate': the neighbour 'rate:z' is 'passed' in the record, but the call 'toolu_4' that measured it answered 'failed'",
                 "class 'c-rate': the neighbour 'rate:v' is measured by the call 'toolu_5', which measured the cell 'rate:other'",
+                $"class 'c-rate': the neighbour 'rate:u' is measured by the call 'toolu_7', whose record '{filterless}' cannot be read",
             ],
             [.. judged.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
         Assert.Equal((false, true, ClassClosureExit.Findings), (judged.Output["passed"]!.GetValue<bool>(), judged.Red, judged.Exit));
@@ -1108,13 +1117,17 @@ public sealed class CheckStepRunnerTests : IDisposable
 
     /// <summary>
     /// A neighbour the record says failed and was fixed stands on the call that measured the failure, and the fix is shown
-    /// only by the cell measured again: another measure call of the item's stored streams - in any of its steps - that
-    /// measured the same cell and answered passed, its record written after the failing call's. Without one, with one
-    /// that measured another cell, with one that answered failed again, or with one whose record was written before the
-    /// failing call's, the fix is the builder's word alone, and the neighbour is refused.
+    /// only by the same measurement made again: of the measure calls of the item's stored streams - in any of its steps -
+    /// that ran the same leg, as the same variant, with the same filter, naming the same cell, their records written after
+    /// the failing call's, the newest to measure anything answered passed. Without one - none at all, one that measured
+    /// another cell, a pass of other tests, on another leg or built otherwise under the cell's name, or one whose record was
+    /// written before the failing call's - or where the newest answered failed - failing again, or fixed and broken again -
+    /// the fix is the builder's word alone, and the neighbour is refused. A call answered unmeasured measured nothing of the
+    /// cell and is never the newest word: a failure it follows still stands against the fix, and a fix it follows stands,
+    /// as does a failure measured again and then fixed.
     /// </summary>
     [Fact]
-    public async Task AFailedFixedNeighbour_StandsOnlyWhereALaterCallMeasuredItsCellPassing()
+    public async Task AFailedFixedNeighbour_StandsOnlyWhereTheNewestLaterCallOfItsMeasurementPassed()
     {
         var temp = new TempDirectory();
         _made.Add(temp);
@@ -1122,12 +1135,37 @@ public sealed class CheckStepRunnerTests : IDisposable
         await kit.CreateAgentAsync("builder");
         var failed = new DateTime(2026, 11, 18, 9, 0, 0, DateTimeKind.Utc);
 
-        // The implementation measured each cell failing at once. The rework measured a passing a minute later, never b
-        // again, another cell than c, d failing again, and e passing - but a minute before its failure was measured.
-        WriteStream(kit.Harness, kit.Layout, "builder", MeasureCalls(("fail-a", false), ("fail-b", false), ("fail-c", false), ("fail-d", false), ("fail-e", false)), step: "impl-1");
-        WriteStream(kit.Harness, kit.Layout, "builder", MeasureCalls(("again-a", true), ("again-c", true), ("again-d", false), ("again-e", true)), step: "rework-1");
+        // The implementation measured each cell failing at once, on the leg 'windows' as 'debug' with the filter 'Rate'.
+        // The rework measured a passing a minute later, never b again, another cell than c, d failing again, and e passing
+        // - but a minute before its failure was measured; f passing with other tests, g on another leg and h built
+        // otherwise, each under the cell's name; i passing and, a minute on, failing again; j failing again and then
+        // passing; k passing and then unmeasured; l passing, failing again and then unmeasured.
+        string[] cells = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+        WriteStream(kit.Harness, kit.Layout, "builder", MeasureCalls([.. cells.Select(cell => ($"fail-{cell}", false))]), step: "impl-1");
+        WriteStream(
+            kit.Harness,
+            kit.Layout,
+            "builder",
+            MeasureCalls(
+                ("again-a", true),
+                ("again-c", true),
+                ("again-d", false),
+                ("again-e", true),
+                ("again-f", true),
+                ("again-g", true),
+                ("again-h", true),
+                ("again-i", true),
+                ("broken-i", false),
+                ("again-j", false),
+                ("fixed-j", true),
+                ("again-k", true),
+                ("skipped-k", false),
+                ("again-l", true),
+                ("broken-l", false),
+                ("skipped-l", false)),
+            step: "rework-1");
 
-        foreach (var cell in new[] { "a", "b", "c", "d", "e" })
+        foreach (var cell in cells)
         {
             WriteMeasure(kit.Layout, "builder", "impl-1", $"fail-{cell}", $"rate:{cell}", Measured("failed"), written: failed);
         }
@@ -1136,36 +1174,112 @@ public sealed class CheckStepRunnerTests : IDisposable
         WriteMeasure(kit.Layout, "builder", "rework-1", "again-c", "rate:other", Measured("passed"), written: failed.AddMinutes(1));
         WriteMeasure(kit.Layout, "builder", "rework-1", "again-d", "rate:d", Measured("failed"), written: failed.AddMinutes(1));
         WriteMeasure(kit.Layout, "builder", "rework-1", "again-e", "rate:e", Measured("passed"), written: failed.AddMinutes(-1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "again-f", "rate:f", Measured("passed"), written: failed.AddMinutes(1), filter: "Smoke");
+        WriteMeasure(kit.Layout, "builder", "rework-1", "again-g", "rate:g", Measured("passed"), written: failed.AddMinutes(1), leg: "linux");
+        WriteMeasure(kit.Layout, "builder", "rework-1", "again-h", "rate:h", Measured("passed"), written: failed.AddMinutes(1), variant: "release");
+        WriteMeasure(kit.Layout, "builder", "rework-1", "again-i", "rate:i", Measured("passed"), written: failed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "broken-i", "rate:i", Measured("failed"), written: failed.AddMinutes(2));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "again-j", "rate:j", Measured("failed"), written: failed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "fixed-j", "rate:j", Measured("passed"), written: failed.AddMinutes(2));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "again-k", "rate:k", Measured("passed"), written: failed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "skipped-k", "rate:k", Measured("unmeasured"), written: failed.AddMinutes(2));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "again-l", "rate:l", Measured("passed"), written: failed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "broken-l", "rate:l", Measured("failed"), written: failed.AddMinutes(2));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "skipped-l", "rate:l", Measured("unmeasured"), written: failed.AddMinutes(3));
 
         var judged = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
-            ClosureRun(
-                kit,
-                Class("c-rate", home: "src/Home.cs", symbol: "Home"),
-                Measuring(
-                    ("rate:a", "fail-a", "failed-fixed"),
-                    ("rate:b", "fail-b", "failed-fixed"),
-                    ("rate:c", "fail-c", "failed-fixed"),
-                    ("rate:d", "fail-d", "failed-fixed"),
-                    ("rate:e", "fail-e", "failed-fixed"))),
+            ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), Measuring([.. cells.Select(cell => ($"rate:{cell}", $"fail-{cell}", "failed-fixed"))])),
             Token);
 
         Assert.Equal(
             [
-                "class 'c-rate': the neighbour 'rate:b' is 'failed-fixed', and no measure call of this item's stored streams measured it passing after the call 'fail-b' answered 'failed'",
-                "class 'c-rate': the neighbour 'rate:c' is 'failed-fixed', and no measure call of this item's stored streams measured it passing after the call 'fail-c' answered 'failed'",
-                "class 'c-rate': the neighbour 'rate:d' is 'failed-fixed', and no measure call of this item's stored streams measured it passing after the call 'fail-d' answered 'failed'",
-                "class 'c-rate': the neighbour 'rate:e' is 'failed-fixed', and no measure call of this item's stored streams measured it passing after the call 'fail-e' answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:b' is 'failed-fixed', and no measure call of this item's stored streams measured it passing - on the leg 'windows', as 'debug', with the filter 'Rate' - after the call 'fail-b' answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:c' is 'failed-fixed', and no measure call of this item's stored streams measured it passing - on the leg 'windows', as 'debug', with the filter 'Rate' - after the call 'fail-c' answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:d' is 'failed-fixed', but the call 'again-d', the newest to measure it after the call 'fail-d', answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:e' is 'failed-fixed', and no measure call of this item's stored streams measured it passing - on the leg 'windows', as 'debug', with the filter 'Rate' - after the call 'fail-e' answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:f' is 'failed-fixed', and no measure call of this item's stored streams measured it passing - on the leg 'windows', as 'debug', with the filter 'Rate' - after the call 'fail-f' answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:g' is 'failed-fixed', and no measure call of this item's stored streams measured it passing - on the leg 'windows', as 'debug', with the filter 'Rate' - after the call 'fail-g' answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:h' is 'failed-fixed', and no measure call of this item's stored streams measured it passing - on the leg 'windows', as 'debug', with the filter 'Rate' - after the call 'fail-h' answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:i' is 'failed-fixed', but the call 'broken-i', the newest to measure it after the call 'fail-i', answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:l' is 'failed-fixed', but the call 'broken-l', the newest to measure it after the call 'fail-l', answered 'failed'",
             ],
             [.. judged.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
         Assert.Equal((false, true, ClassClosureExit.Findings), (judged.Output["passed"]!.GetValue<bool>(), judged.Red, judged.Exit));
 
-        // The fix shown by a later passing call of its cell closes the neighbour on its own.
-        var fixedOne = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
-            ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), Measuring(("rate:a", "fail-a", "failed-fixed"))),
+        // The fixes the newest later call of the same measurement shows passing close their neighbours on their own: one
+        // passing once, one failing again before it passed, and one an unmeasured call followed.
+        var fixedOnes = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
+            ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), Measuring(("rate:a", "fail-a", "failed-fixed"), ("rate:j", "fail-j", "failed-fixed"), ("rate:k", "fail-k", "failed-fixed"))),
             Token);
 
-        Assert.Empty(fixedOne.Output!["problems"]!.AsArray());
-        Assert.Equal((true, false, HarnessExit.Success), (fixedOne.Output["passed"]!.GetValue<bool>(), fixedOne.Red, fixedOne.Exit));
+        Assert.Empty(fixedOnes.Output!["problems"]!.AsArray());
+        Assert.Equal((true, false, HarnessExit.Success), (fixedOnes.Output["passed"]!.GetValue<bool>(), fixedOnes.Red, fixedOnes.Exit));
+    }
+
+    /// <summary>
+    /// A neighbour the record says passed stands on the call it cites only while that measurement's newest word is a pass:
+    /// a later call of the same leg, variant, filter and cell that answered failed - the cell broken after it was measured -
+    /// refuses it, naming that call, and so does a failure whose record was written at the same moment as a later pass's,
+    /// for the pass never speaks for it, and so does a failure only a call answered unmeasured follows, for that call
+    /// measured nothing. A later failure of other tests under the cell's name, a later failure measured passing again after
+    /// it, and a later call answered unmeasured alone leave it standing.
+    /// </summary>
+    [Fact]
+    public async Task APassedNeighbour_StandsOnlyWhereNoLaterCallOfItsMeasurementFailedLast()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+        var passed = new DateTime(2026, 11, 18, 9, 0, 0, DateTimeKind.Utc);
+
+        // The implementation measured each cell passing at once. The rework measured p failing a minute later; q failing
+        // and then passing; r failing with other tests; s unmeasured; t failing and passing, both a minute later; and u
+        // failing and then unmeasured.
+        string[] cells = ["p", "q", "r", "s", "t", "u"];
+        WriteStream(kit.Harness, kit.Layout, "builder", MeasureCalls([.. cells.Select(cell => ($"pass-{cell}", true))]), step: "impl-1");
+        WriteStream(
+            kit.Harness,
+            kit.Layout,
+            "builder",
+            MeasureCalls(("broken-p", false), ("broken-q", false), ("again-q", true), ("other-r", false), ("skipped-s", false), ("broken-t", false), ("again-t", true), ("broken-u", false), ("skipped-u", false)),
+            step: "rework-1");
+
+        foreach (var cell in cells)
+        {
+            WriteMeasure(kit.Layout, "builder", "impl-1", $"pass-{cell}", $"rate:{cell}", Measured("passed"), written: passed);
+        }
+
+        WriteMeasure(kit.Layout, "builder", "rework-1", "broken-p", "rate:p", Measured("failed"), written: passed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "broken-q", "rate:q", Measured("failed"), written: passed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "again-q", "rate:q", Measured("passed"), written: passed.AddMinutes(2));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "other-r", "rate:r", Measured("failed"), written: passed.AddMinutes(1), filter: "Smoke");
+        WriteMeasure(kit.Layout, "builder", "rework-1", "skipped-s", "rate:s", Measured("unmeasured"), written: passed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "broken-t", "rate:t", Measured("failed"), written: passed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "again-t", "rate:t", Measured("passed"), written: passed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "broken-u", "rate:u", Measured("failed"), written: passed.AddMinutes(1));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "skipped-u", "rate:u", Measured("unmeasured"), written: passed.AddMinutes(2));
+
+        var judged = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
+            ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), Measuring([.. cells.Select(cell => ($"rate:{cell}", $"pass-{cell}", "passed"))])),
+            Token);
+
+        Assert.Equal(
+            [
+                "class 'c-rate': the neighbour 'rate:p' is 'passed' in the record, but the call 'broken-p', the newest to measure it after the call 'pass-p', answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:t' is 'passed' in the record, but the call 'broken-t', the newest to measure it after the call 'pass-t', answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:u' is 'passed' in the record, but the call 'broken-u', the newest to measure it after the call 'pass-u', answered 'failed'",
+            ],
+            [.. judged.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        Assert.Equal((false, true, ClassClosureExit.Findings), (judged.Output["passed"]!.GetValue<bool>(), judged.Red, judged.Exit));
+
+        // The passes no later failure of their own measurement had the last word on close their neighbours on their own.
+        var standing = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
+            ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), Measuring(("rate:q", "pass-q", "passed"), ("rate:r", "pass-r", "passed"), ("rate:s", "pass-s", "passed"))),
+            Token);
+
+        Assert.Empty(standing.Output!["problems"]!.AsArray());
+        Assert.Equal((true, false, HarnessExit.Success), (standing.Output["passed"]!.GetValue<bool>(), standing.Red, standing.Exit));
     }
 
     /// <summary>
@@ -1391,12 +1505,23 @@ public sealed class CheckStepRunnerTests : IDisposable
     /// Keeps what the measure call <paramref name="id"/> of the agent's step <paramref name="step"/> answered as the tool
     /// runtime keeps it: the call said back with its answer (<see cref="DssHarness.Core.Agents.AgentMeasureSupport.Said"/>)
     /// in the call's own record (<see cref="DssHarness.Core.Agents.AgentMeasureSupport.RecordFileOf"/>), dated
-    /// <paramref name="written"/> where it is given - when the runtime answered the call - and now where it is not.
+    /// <paramref name="written"/> where it is given - when the runtime answered the call - and now where it is not. The
+    /// call ran the leg 'windows' as 'debug' with the filter 'Rate' unless it names its own.
     /// </summary>
-    private static void WriteMeasure(OrchestratorLayout layout, string agent, string step, string id, string cell, DssHarness.Core.Agents.AgentMeasureAnswer answer, DateTime? written = null)
+    private static void WriteMeasure(
+        OrchestratorLayout layout,
+        string agent,
+        string step,
+        string id,
+        string cell,
+        DssHarness.Core.Agents.AgentMeasureAnswer answer,
+        DateTime? written = null,
+        string leg = "windows",
+        string variant = "debug",
+        string filter = "Rate")
     {
         var directory = layout.AgentStepDirectory(agent, step);
-        var call = new DssHarness.Core.Agents.AgentMeasureCall(id, "windows", "debug", "Rate", cell, DssHarness.Core.Agents.AgentMeasureSupport.RecordsOf(directory, id));
+        var call = new DssHarness.Core.Agents.AgentMeasureCall(id, leg, variant, filter, cell, DssHarness.Core.Agents.AgentMeasureSupport.RecordsOf(directory, id));
         var record = DssHarness.Core.Agents.AgentMeasureSupport.RecordFileOf(directory, id);
 
         Directory.CreateDirectory(call.Records);

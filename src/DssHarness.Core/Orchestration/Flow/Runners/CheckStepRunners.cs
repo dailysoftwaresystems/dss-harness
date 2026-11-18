@@ -115,7 +115,8 @@ public sealed class AnchorCitationsStepRunner(IHarnessContextLoader contextLoade
 /// weighing of its worktree would write, remove or merge, and what the run's ledger of its folds says its earlier folds
 /// of the agent changed, so a site folded before a review is still the agent's work after it; every tool call of the
 /// agent's stored streams, by the one reading of a stream's calls (<see cref="Agents.AgentStreamCalls"/>), and what each
-/// of their measure calls measured, by its own record in the directory of the step whose stream holds it, and when that
+/// of their measure calls measured - its leg, variant, filter and cell - and answered, by its own record in the directory
+/// of the step whose stream holds it, and when that
 /// record was written (<see cref="ClassClosureMeasure"/>); what its
 /// worktree still declares, through the graph's view of its tree - synced where the step starts - or text; the arms the
 /// registry of its worktree declares, where an arm its work adds stands before the fold merges it in; and each home's
@@ -194,7 +195,7 @@ public sealed class ClassClosureStepRunner(
         // Every tool call of the agent's stored streams - each step of its own directory - by the one reading of a stream's
         // calls: paired with its answer by its id, its tool by the runtime's name, whichever client made it, each with
         // whether its tool ran. Each measure call, whatever it answered, with what its own record - kept in the directory of
-        // the step whose stream holds it - says it measured, and when the record was written.
+        // the step whose stream holds it - says it measured, its leg, variant, filter and cell, and when the record was written.
         var calls = new Dictionary<string, Agents.AgentStreamCall>(StringComparer.Ordinal);
         var measures = new Dictionary<string, ClassClosureMeasure>(StringComparer.Ordinal);
 
