@@ -2957,8 +2957,8 @@ public static class HelpTopics
             + "person removes the directory: task.json (its turns, each written as it ends, with its client, provider, model "
             + "and effort, what it used and cost, and what the agent ran under), the stored stream (stream.jsonl) and the transcript as a "
             + "person reads it (transcript.md), each action decided (tools.json holds the offered table), each denial "
-            + "(denials.jsonl) and each search and fetch (web.jsonl), and the stored conversation under sessions/ where "
-            + "its client stores one. Beside the directory, <task>.owner.json names the process that holds the side-task "
+            + "(denials.jsonl) and each search and fetch (web.jsonl), the stored conversation under sessions/ where "
+            + $"its client stores one, and where it has its graph, graph/ and {OrchestratorLayout.StepPagesDirectoryName}/ - the whole result of each ask of more than one page its graph tool answered, which the chat's later pages read. Beside the directory, <task>.owner.json names the process that holds the side-task "
             + "open, claimed before anything is written and task.json written inside the claim, so two commands never "
             + "take one name; a dead one is reclaimed and said. A side-task whose turn outgrew the model's context - a "
             + "chat's, or a one shot's - keeps no stored conversation to go on with, for handed again it would meet the "
@@ -4171,8 +4171,9 @@ public static class HelpTopics
             + "a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's "
             + "wholeFile lifts the narrowing for one file the graph parsed for the rest of the step, an escape stated with "
             + "the lines the graph read it as, a path it holds no parsed file at refused as a misuse - each call, escape "
-            + "and denied read a line of the step's graph.jsonl; a body the graph served and an edit it made count as "
-            + "views of their files for the edit check, and an edit it made is a write, alone in its turn and counted "
+            + "and denied read a line of the step's graph.jsonl; a page of a body counts as a view of each file whose lines "
+            + "it served, as those lines were read, and an edit the graph made as a view of the file it wrote, for the edit "
+            + "check, and an edit it made is a write, alone in its turn and counted "
             + "among the files written; a wholeFile is alone in its turn too, for the reads beside it are narrowed by what it "
             + "lifts, the graph's other reads running with the other reads. The step's view is synced after "
             + "each write - by the paths it wrote, a directory moved or deleted by every file beneath it - and whole after "
@@ -5464,9 +5465,10 @@ public static class HelpTopics
             + $"{CodebaseGraphTool.NameOf(GraphOp.WholeFile)} - the narrowing of reads lifted for one file, with why. "
             + "body and edit reach a file only inside the tree, each link resolved, never through a link out of it. "
             + "A step whose graph is tools is offered the tool - the API clients among their own, Claude Code through the engine's tool server - with the read operations, wholeFile only where its reads are narrowed and edit only on the API clients (the probe measured Claude Code takes an Edit after a ranged Read, so an agent that means to change a body reads its lines and Edits them), its schema naming those alone, and query-codebase-graph below runs its read operations by hand. An operation given a member it does not read, one of the wrong type, or missing one it needs, is refused with a usage line. "
-            + "Every node an answer names carries path:start-end - a declaration # with the first eight characters of its digest too, a file its lines - and no answer is cut: each is pages of whole entries (GraphPages), an answer of more than one page starting with the line 'page k of n' and any page asked with page, from 1, an answer with no header holding all of it; a page past the last is refused with the answer's range, and the totals a header says are counted, never estimated. The first page of an answer computes its whole result once and keeps it - under the digest of the graph it was computed on, in graph-pages/ under the step's directory, so a later page and a resumed conversation read pages of that one result - and where the graph moved to another digest the answer is made again and the page says so. Every answer ends naming the files whose extract the graph no longer holds, if any. Where the graph is not sure - no node matched, a name it does not hold, "
+            + $"Every node an answer names carries path:start-end - a declaration # with the first eight characters of its digest too, a file its lines - and no answer of a read is cut: each is pages of whole entries (GraphPages), every page's entries within {CodebaseGraphTool.MostCharacters} characters less what the pages reserve - an entry wider than that given in pieces, a page each, each marked with … where it goes on - and a block's head on the page that serves its first line; an answer of more than one page starts with the line 'page k of n', which gives the exact total and how to ask for the next on every page but the last, which says it is the last, and any page is asked with page, from 1, an answer with no header holding all of it; a page past the last is refused with the answer's range, and the totals a header says are counted, never estimated. An edit's answer and a wholeFile's are one page, said once it is done, and neither takes page. "
+            + $"The page that computes an answer of more than one page keeps its whole result - under the digest of the graph the view answers from, its link result and every file as the view holds it, so the step's own writes move it as a fold does, in {OrchestratorLayout.StepPagesDirectoryName}/ under the step's directory or the side-task's, the most recent {GraphPageStore.MostKept} - and a later page, a resumed conversation and a step that goes on with the work read pages of that one result, each under the read rules it was computed under; an answer of one page is never kept, and page 1 never reads what was. A later page asked after the graph moved, or with no result of page 1 that reads, is made again on the graph as it stands, and its header says which. The last page of every answer ends naming the files whose extract the graph no longer holds, if any. Where the graph is not sure - no node matched, a name it does not hold, "
             + $"an edge of {CodeConfidences.Candidates}, a node named with external or unresolved callees or in a file dynamic or generated - the answer adds text: lines that hold the name as a whole word, "
-            + "searched as search_files searches, each path:line with no hash, all of them paged - nothing left out - and the files it did not read said; a path or a path:line is searched for by no word.");
+            + $"searched as search_files searches, each path:line with no hash, a section of their own, {CodebaseGraphTool.TextHits} of each word a page, all of them paged - nothing left out - and the files it did not read said; a path or a path:line is searched for by no word.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -5521,8 +5523,8 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             $"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand - --find <query>, --node <symbol>, "
-            + "--related <symbol> --relation <relation> [--depth <n>], --outline [<path or symbol>] or --body <symbol>... [--page <n>] - on the run's graph, the base or with "
-            + "--agent <agent> that agent's view, and prints the answer an agent would be given, its page's header naming the pages; --json the same in one document holding the page, the pages, the whole answer's total and the page's entries. It reads only - no sync, "
+            + "--related <symbol> --relation <relation> [--depth <n>], --outline [<path or symbol>] or --body <symbol>..., any of them with --page <n> - on the run's graph, the base or with "
+            + "--agent <agent> that agent's view, and prints the answer an agent would be given, its page's header naming the pages; --json the same in one document holding the digest of the graph answered from, the page, the pages, the whole answer's total and the page's entries, each with what it counts toward the total, its section's caption and its node. Each call counts its page on the graph as it stands, keeping nothing: a script that reads page after page compares the digest to know they are of one graph. It reads only - no sync, "
             + "no lock, nothing written - the main checkout's run and configuration wherever it is typed, a misuse told before anything is read, and a view not made yet said and the base answered. It ends 0, "
             + $"{HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.");
 
@@ -6495,7 +6497,7 @@ public static class HelpTopics
             + $"{OrchestratorLayout.HandoffFileName} where one stopped it, and for a reason step the {OrchestratorLayout.PolicyFileName} it started under - the agents' "
             + "configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps "
             + "that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a "
-            + "line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its graph-pages/ (the whole result an answer's pages read from, one file an ask, so a later page and a resumed conversation read pages of that one result) and its working-set.json, the "
+            + $"line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its {OrchestratorLayout.StepPagesDirectoryName}/ (the whole result of each ask of more than one page its graph tool answered, one file an ask, the most recent {GraphPageStore.MostKept}, so a later page, a resumed conversation and a step that goes on with its work read pages of that one result) and its working-set.json, the "
             + "seeds of the packs of the steps after it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),
@@ -6526,7 +6528,7 @@ public static class HelpTopics
         ($"{HarnessLayout.SideTasksDirectoryName}/<task>/",
             "ignored; one side-task: its task.json, stored stream, transcript, denials and web, its conversation where "
             + "its client stores one, and its own codebase graph (graph/, its map and each call of the graph tool) where it "
-            + "was given one; <task>.owner.json beside it while a side-task holds it open"),
+            + $"was given one, with {OrchestratorLayout.StepPagesDirectoryName}/ (the whole result of each ask of more than one page its graph tool answered, which its later pages read); <task>.owner.json beside it while a side-task holds it open"),
         ($"{HarnessLayout.MutationsDirectoryName}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the tree's mutation workers, in every tree, never "
             + $"sent to a host by sync ('{ToolPackage.Command} help mutations')"),

@@ -64,7 +64,7 @@ internal static class QueryCodebaseGraphCommand
 
     private static readonly Option<bool> JsonOption = new("--json")
     {
-        Description = "Write the answer as JSON: the run, the view, the commit, the operation, the answer, and its page, pages, total and entries.",
+        Description = "Write the answer as JSON: the run, the view, the commit, the digest of the graph answered from, the operation, the answer, and its page, pages, total and entries.",
     };
 
     internal static Command Create()

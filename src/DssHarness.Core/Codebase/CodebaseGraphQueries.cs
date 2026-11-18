@@ -44,6 +44,7 @@ public sealed class CodebaseGraphQueries
         ArgumentNullException.ThrowIfNull(read);
 
         _read = read;
+        _graph = new(() => GraphOf(read));
         _folded = new(() => read.Files.Keys.ToLookup(key => key, StringComparer.OrdinalIgnoreCase));
         var symbols = read.Symbols;
 
@@ -156,11 +157,27 @@ public sealed class CodebaseGraphQueries
     public string? Head => _read.Head;
 
     /// <summary>
-    /// The digest of the graph the view answers from (<see cref="CodeGraphSymbolsFile.Graph"/>): the digest of the
-    /// manifest its link result was made from, which moves only as the base the view stands on moves - what tells a kept
-    /// page the graph it was computed on is the graph it is asked of now.
+    /// The digest of the graph the view answers from: the digest of the manifest its link result was made from
+    /// (<see cref="CodeGraphSymbolsFile.Graph"/>), which moves as the base the view stands on moves, with every file as the
+    /// view holds it - its blob, its state, the implementation that read it and its extract, never when it was last looked
+    /// at - so an agent's view moves with the agent's own writes too, where the base's digest alone does not. What tells a
+    /// kept page the graph it was computed on is the graph it is asked of now: a step that wrote since page 1 recounts its
+    /// later pages, and says so. Computed once a view, where first asked.
     /// </summary>
-    public string Graph => _read.Symbols.Graph;
+    public string Graph => _graph.Value;
+
+    private readonly Lazy<string> _graph;
+
+    /// <summary>The digest <see cref="Graph"/> answers, of the view <paramref name="read"/>.</summary>
+    private static string GraphOf(CodebaseGraphRead read)
+        => FileSystem.FileContentHash.Of(stream => System.Text.Json.JsonSerializer.Serialize(
+            stream,
+            new
+            {
+                graph = read.Symbols.Graph,
+                files = read.Files.OrderBy(file => file.Key, StringComparer.Ordinal).Select(file => new { path = file.Key, file.Value.Blob, file.Value.State, file.Value.Language, file.Value.Extract }),
+            },
+            FileSystem.JsonStateFile.LineOptions));
 
     /// <summary>The tree, absolute.</summary>
     public string Tree => _read.Tree;

@@ -2061,6 +2061,32 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
+    /// A step that goes on with earlier work reads the pages that work's graph answers kept: a later page of an ask the
+    /// earlier conversation asked page 1 of - which the continuation record carries word for word - is a page of that one
+    /// result, and is kept again with the step's own records, for a step that goes on from it in turn.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatGoesOnWithEarlierWork_ReadsThePagesItsGraphAnswersKept()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit, (Path.Combine("src", "Hub.cs"), CodebaseGraphToolTests.HubFile(30)));
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
+        var operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: false, narrow: false);
+
+        var earlier = await runner.RunAsync(Graphing(kit, Graphed()), Token);
+        var first = await agents.Asked[0].Graph!.Tool!.RunAsync(JsonNode.Parse("""{"op":"find","query":"M"}""")!.AsObject(), operations, Token);
+        var later = await runner.RunAsync(Graphing(kit, Graphed(), instance: "again") with { WorkedFrom = [new FlowWorkedFrom("think", "a9")], Handoff = "what was left" }, Token);
+        var second = await agents.Asked[1].Graph!.Tool!.RunAsync(JsonNode.Parse("""{"op":"find","query":"M","page":2}""")!.AsObject(), operations, Token);
+
+        Assert.True(earlier.Passed, earlier.Error);
+        Assert.True(later.Passed, later.Error);
+        Assert.Equal("page 1 of 3 · 58 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+        Assert.Equal("page 2 of 3 · 58 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(kit.Layout.InstanceDirectory("again", "a9"), OrchestratorLayout.StepPagesDirectoryName)));
+    }
+
+    /// <summary>
     /// An answer that goes on with a stored conversation of the attempt - one whose first message held the run's map ahead
     /// of the pack - is told what changed of the codebase against that pack: the declarations that moved since, with their
     /// new range and hash, and the nodes of its own pack it was not given. The step carries the map and the pack beside the

@@ -284,7 +284,7 @@ public sealed class FlowStepGraph
                 path => policy.Write(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar))),
                 async (path, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], token).ConfigureAwait(false)).Read),
                 near: () => served.made?.Near,
-                pages: new GraphPageStore(Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName), fileSystem));
+                pages: PagesOf(fileSystem, layout, run, directory, ground));
 
             served.support = new AgentGraphSupport(
                 tool,
@@ -296,6 +296,21 @@ public sealed class FlowStepGraph
 
         return served;
     }
+
+    /// <summary>
+    /// Where the step's graph tool keeps the results its answers' pages read from: its own directory's
+    /// <c>graph-pages</c> (<see cref="OrchestratorLayout.StepPagesDirectoryName"/>), which every attempt of the step and a
+    /// resumed conversation read; and, where its own holds nothing for an ask, those of the instances its work goes on
+    /// from (<see cref="FlowStepRun.WorkedFrom"/>), the nearest first - a continuation record carries that work's last
+    /// iterations word for word, its pages among them - each read under the step's own read rules alone
+    /// (<see cref="ReadsOf"/>), so no page gives a line of a file this step may not read.
+    /// </summary>
+    private static GraphPageStore PagesOf(IFileSystem fileSystem, OrchestratorLayout layout, FlowStepRun run, string directory, AgentPolicyGround ground)
+        => new(
+            Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName),
+            fileSystem,
+            ReadsOf(ground),
+            [.. (run.WorkedFrom ?? []).Select(source => Path.Combine(layout.InstanceDirectory(source.Instance, source.Agent), OrchestratorLayout.StepPagesDirectoryName))]);
 
     /// <summary>The step's use of the graph, its default resolved: <c>off</c>, <c>map</c> or <c>tools</c>.</summary>
     public string Mode { get; }
@@ -640,9 +655,11 @@ public sealed class FlowStepGraph
     /// <summary>
     /// What a step's reads are decided by beyond what every step of the run shares - the read rules of its ground, from the
     /// configuration, its definition and its step - named by a digest of them, sorted and once each: steps whose read rules
-    /// are the same share one map; null where no read rule narrows the step's reads.
+    /// are the same share one map, and read the pages one another's graph tool kept; null where no read rule narrows the
+    /// step's reads. A side-task's ground is named by it too.
     /// </summary>
-    private static string? ReadsOf(AgentPolicyGround ground)
+    /// <param name="ground">The step's ground, or a side-task's.</param>
+    internal static string? ReadsOf(AgentPolicyGround ground)
     {
         var rules = ground.Restrictions
             .Select(restriction => restriction.Text)

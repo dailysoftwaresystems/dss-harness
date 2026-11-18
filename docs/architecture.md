@@ -4655,21 +4655,40 @@ generated code after every other, a tie by how near the step's own work each nod
 pack or a working set it was given, a file its `writes` covers, a file its agent changed, a path or a name its prompt
 holds) and then by id; `related` gives a hub - more edges of the relation's kinds than the 99th percentile and at least
 `CodebaseGraphQueries.CrowdFloor`, `CodebaseGraphQueries.Crowd` the one rule of it - and does not go through it. No answer of
-the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`), an operation's page holding up to its bound
-(`CodebaseGraphTool.FindLines` and the rest) and within `CodebaseGraphTool.MostCharacters` less what the pages reserve; an
-answer of more than one page starts with the line `page k of n` - the exact totals, counted never estimated, and how to
-ask for the next with `page`, from 1, `offset` and `limit` refused naming it - and an answer with no header holds all of
-it; a page past the last is refused with the answer's range. The first page of an answer computes its whole result once
-and keeps it, under the digest of the graph it was computed on (`CodeGraphSymbolsFile.Graph`, which moves as the base the
-view stands on moves), in `graph-pages\` under the step's directory, so a later page and a resumed conversation read
-pages of that one result; a page asked after the view moved to another digest is made again on it and its header says
-so. Every answer ends naming the files whose extract the view no longer holds
-(`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where the graph is not sure - no node matched, a
-name it does not hold, an edge of `candidates`, a node named with external or unresolved callees or in a file `dynamic`
-or generated - the answer adds the lines that hold the name as a whole word, searched by `AgentFiles.SearchAsync` as
-`search_files` searches, all of them paged as the answer's entries - none left out - and saying what it did not read in
-the same notes (`AgentSearch.LeftOut`), through the read rule
-the tool is handed, which leaves out and counts every node, edge and hit of a file it refuses; a path or a `path:line`
+a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`), an operation's page holding up to
+its bound (`CodebaseGraphTool.FindLines` and the rest) and every page's entries within `CodebaseGraphTool.MostCharacters`
+less what the pages reserve and the answer's leading lines - an entry wider than that given in pieces at character
+boundaries, never inside a surrogate pair, a page each, each marked with `…` where it goes on or went on, and the page
+that ends inside one saying it goes on; a block's head rides only with its block's first counted line, so the page that
+serves a node's lines names it, and a block is told by its node's id, so two overloads are two blocks. An answer of more
+than one page starts with the line `page k of n` - on every page but the last the exact total, counted never estimated,
+and how to ask for the next with `page`, from 1, `offset` and `limit` refused naming it; the last says it is the last -
+and an answer with no header holds all of it; a page past the last is refused with the answer's range. A write is no
+paged read: `edit` and `wholeFile` take no `page`, refused before anything is written, and answer one page once they are
+done, an edit whose new lines hold more declarations than a page saying how many and that `outline` pages them. The page
+that computes an answer of more than one page keeps its whole result (`GraphPageStore`), under the digest of the graph
+the view answers from (`CodebaseGraphQueries.Graph`: the link result's manifest and every file as the view holds it -
+blob, state, implementation and extract - so an agent's own writes move it as a fold moves the base; the plan named the
+link result's digest alone, which an agent's view never moves) and the read rules it was computed under
+(`FlowStepGraph.ReadsOf`), in `graph-pages/` (`OrchestratorLayout.StepPagesDirectoryName`) under the step's directory or
+the side-task's, one line a file, the most recent `GraphPageStore.MostKept` on disk and `GraphPageStore.MostHeld` in
+memory; an answer of one page is never kept, and page 1 never reads what was. A later page of the same ask - resolved as
+the tool resolves it, each node by its id and each default filled in - reads what was kept, in the same process, a
+resumed conversation, or a step that goes on with the work (whose continuation record carries that work's last iterations
+word for word), which reads the `graph-pages/` of the instances it goes on from where its own holds nothing; a page asked
+after the view moved to another digest, or with no result of page 1 that reads under its read rules, is made again on the
+graph as it stands and its header says which, a refused one after its range; a result whose file could not be written is
+held in memory alone, and the page that computed it says a later page may be counted again. A page counts as viewed,
+for the edit check, the files whose lines it served, each as its lines were read (`GraphFileRead`), never as the file
+stands when the page is given. The last page of every answer ends naming the files whose extract the view no longer
+holds (`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where the graph is not sure - no node
+matched, a name it does not hold, an edge of `candidates` - in a `node`, outside its groups of recall
+(`GraphEdges.Groups`), a use being never a doubt - a node named with external or unresolved callees or in a file
+`dynamic` or generated - the answer adds the lines that hold the name as a whole word, searched by
+`AgentFiles.SearchAsync` as `search_files` searches, a section of their own at `CodebaseGraphTool.TextHits` a page of
+each word, a body's among them, all of them paged - none left out - and saying what it did not read in the notes the
+answer ends with (`AgentSearch.LeftOut`), through the read rule the tool is handed, which leaves out and counts every
+node, edge and hit of a file it refuses; a path or a `path:line`
 is searched for by no word. `body` reads a node's lines fresh - a type's members' bodies left out unless `full`, each
 member's signature line kept - and where its hash moved since the view was read, has the file checked again before
 serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`); `edit`,
@@ -4688,7 +4707,7 @@ between the reads - held to the write rules as `replace_in_file` is and counted 
 `wholeFile`, which changes how the reads beside it are narrowed, every other read operation running with the turn's
 other reads (`AgentToolRuntime.Alone`); a side-task's edit alone holds the main tree's lock (`AgentToolRuntime.Locks`),
 and the files a `wholeFile` lifted are kept in a set that Claude Code's served calls, which run beside its own reads, may
-read and write at once. A body served and an edit made count as views of their files for the edit check. After each write and each command of the agent's, on every client - the runtime's file tools,
+read and write at once. A page of a body and an edit made count as views of the files whose lines they served or wrote for the edit check, each as it was read or written. After each write and each command of the agent's, on every client - the runtime's file tools,
 its `run_command`, the graph's edit, and Claude Code's own `Write`, `Edit`, `NotebookEdit` and `Bash` - the one owner
 of what follows a write (`AfterWrites.FollowAsync`) syncs the view: by the paths written, beneath the view's tree alone
 (`AgentPolicy.Beneath`) - a directory moved or deleted naming every file git lists beneath it and every file the graph
@@ -4809,8 +4828,10 @@ view linked in memory from the base's files and its record, and a link result an
 memory - with a read rule that refuses what no graph lists (`CodebaseGraphService.NeverListed`), the main checkout's run
 and configuration wherever it is typed (`MainTree`); a misuse is told by `CodebaseGraphTool.Misused` before anything is
 read, and a view not made yet is said and the base answered; `--page` asks any page of the answer, its document answering
-the page, the pages, the whole answer's total and the page's entries; it ends 0, 13 where the run has no graph and 10 for a
-usage error, and no host is asked to run it.
+the digest of the graph answered from (`CodebaseGraphQueries.Graph`), the page, the pages, the whole answer's total and the
+page's entries, each with what it counts toward the total, its section's caption and its node; it keeps nothing between
+calls, each counting its page on the graph as it stands, so a script reading page after page compares the digest; it ends
+0, 13 where the run has no graph and 10 for a usage error, and no host is asked to run it.
 
 ## Anchor registries
 

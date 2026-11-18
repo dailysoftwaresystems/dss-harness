@@ -546,8 +546,9 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// <summary>
     /// One call of the run's graph tool, answered by the tool it was given and recorded as each of its calls is: a usage
     /// the agent can correct is answered as a failed call with the tool's own words, a refusal with the policy's, recorded
-    /// as every denial is. An edit the tool made counts among the files written, and is followed as every write is; a body
-    /// it served and an edit it made count as views of their files for the edit check, as a <c>view_file</c> is a view; a
+    /// as every denial is. An edit the tool made counts among the files written, and is followed as every write is; the
+    /// files whose lines a page served, and the one an edit wrote, count as views of them for the edit check - each as its
+    /// lines were read, or as the edit wrote it - as a <c>view_file</c> is a view of the bytes it read; a
     /// <c>wholeFile</c> that lifted the narrowing of reads is an escape <c>stated</c>, recorded as the tool made it - its
     /// file as the view holds it, with the agent's reason.
     /// </summary>
@@ -575,9 +576,12 @@ public sealed partial class AgentToolRuntime : IDisposable
             await WroteAsync(AgentGraphSupport.ToolName, Path.Combine(tree, wrote.Replace('/', Path.DirectorySeparatorChar))).ConfigureAwait(false);
         }
 
+        // A file the answer's page served lines of is viewed as those lines were read - an edit's as it wrote it - never as
+        // it stands now: a page read from what page 1 kept leaves the file as page 1 read it, and an edit made from its
+        // lines after the file changed is refused as changed since viewed.
         foreach (var viewed in answer.Viewed)
         {
-            ViewedAgain(Path.Combine(tree, viewed.Replace('/', Path.DirectorySeparatorChar)));
+            _viewed[Path.Combine(tree, viewed.Path.Replace('/', Path.DirectorySeparatorChar))] = viewed.Digest;
         }
 
         if (answer.Escape is { } escape)
@@ -619,38 +623,6 @@ public sealed partial class AgentToolRuntime : IDisposable
         _host.FileSystem.WriteAllTextAtomic(AgentMeasureSupport.RecordFileOf(_run.StepDirectory, callId), _run.Mask.Redact(said) + "\n");
 
         return answer.Measured && answer.Passed ? Answer.Done(said) : Answer.Failed(said);
-    }
-
-    /// <summary>
-    /// The lines of the file at <paramref name="full"/> as they stand now, recorded as a view of it for the edit check -
-    /// what a body the graph served and an edit it made leave, as a <c>view_file</c> leaves them.
-    /// </summary>
-    /// <param name="full">The file, absolute.</param>
-    private void ViewedAgain(string full)
-    {
-        try
-        {
-            if (_host.FileSystem.StandingOf(full) is { Length: <= AgentTools.MostViewedBytes } && _host.FileSystem.OpenRead(full) is { } read)
-            {
-                using (read)
-                {
-                    _viewed[full] = Hash(ReadAll(read));
-                }
-            }
-        }
-        catch (IOException)
-        {
-            // A file that cannot be read now leaves no view of it: an edit of it asks for one first, as any edit does.
-        }
-    }
-
-    /// <summary>Everything a stream holds.</summary>
-    /// <param name="stream">The stream.</param>
-    private static byte[] ReadAll(Stream stream)
-    {
-        using var copied = new MemoryStream();
-        stream.CopyTo(copied);
-        return copied.ToArray();
     }
 
     /// <summary>

@@ -107,21 +107,25 @@ public sealed record GraphEdges(
     IReadOnlyList<GraphEdge> Includes,
     IReadOnlyList<GraphEdge> Parts)
 {
-    /// <summary>Each group with the name the <c>node</c> operation prints it under, in that order.</summary>
-    public IReadOnlyList<(string Name, IReadOnlyList<GraphEdge> Edges)> Groups =>
+    /// <summary>
+    /// Each group with the name the <c>node</c> operation prints it under, in that order, and whether its edges are recall:
+    /// a use, read or written without a call, finds a site and never says how sure the graph is of what it declares, so no
+    /// edge of a recall group is a doubt - however many candidates it has.
+    /// </summary>
+    public IReadOnlyList<(string Name, IReadOnlyList<GraphEdge> Edges, bool Recall)> Groups =>
     [
-        ("callers", Callers),
-        ("callees", Callees),
-        ("bases", Bases),
-        ("derived", Derived),
-        ("implementations", Implementations),
-        ("overrides", Overrides),
-        ("references", References),
-        ("users", Users),
-        ("uses", Uses),
-        ("tests", Tests),
-        ("includes", Includes),
-        ("parts", Parts),
+        ("callers", Callers, false),
+        ("callees", Callees, false),
+        ("bases", Bases, false),
+        ("derived", Derived, false),
+        ("implementations", Implementations, false),
+        ("overrides", Overrides, false),
+        ("references", References, false),
+        ("users", Users, true),
+        ("uses", Uses, true),
+        ("tests", Tests, false),
+        ("includes", Includes, false),
+        ("parts", Parts, false),
     ];
 }
 

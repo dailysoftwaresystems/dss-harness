@@ -45,10 +45,12 @@ public sealed record GraphToolAnswer(string Text, GraphToolOutcome Outcome, stri
     public GraphToolFacts Facts { get; init; } = GraphToolFacts.None;
 
     /// <summary>
-    /// The files the call leaves viewed, relative to the tree - those a <c>body</c> served lines of and the one an edit
-    /// made - which the runtime counts as views of them for its edit check, as a <c>view_file</c> is a view.
+    /// The files the call leaves viewed, relative to the tree - those whose lines the page given served, and the one an
+    /// edit wrote - each with the digest of the bytes the page's lines were read from, or the edit wrote: what the runtime
+    /// records as the view of each for its edit check, as a <c>view_file</c> records the bytes it read. A page read from a
+    /// kept result leaves the file as page 1 read it, so an edit made from stale lines is refused as changed since viewed.
     /// </summary>
-    public IReadOnlyList<string> Viewed { get; init; } = [];
+    public IReadOnlyList<GraphFileRead> Viewed { get; init; } = [];
 
     /// <summary>
     /// The escape a <c>wholeFile</c> that lifted the narrowing of reads made, <see cref="GraphEscapeLine.Stated"/> with the
@@ -160,8 +162,9 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// no work, or it says none.
 /// </param>
 /// <param name="pages">
-/// Where the first page of an answer keeps its whole result, under the step's <c>graph-pages\</c> directory, so its later
-/// pages - and a resumed conversation's - are pages of that one result; null where none is kept (the verb).
+/// Where the page that computes an answer of more than one page keeps its whole result - the conversation's
+/// <c>graph-pages</c> directory, a step's or a side-task's - so its later pages, and a resumed or continued
+/// conversation's, are pages of that one result; null where none is kept (the verb).
 /// </param>
 public sealed class CodebaseGraphTool(
     CodebaseGraphQueries queries,
@@ -195,7 +198,7 @@ public sealed class CodebaseGraphTool(
     /// <summary>The most symbols one <c>body</c> reads.</summary>
     public const int BodySymbols = 8;
 
-    /// <summary>The hits a page of the text fallback holds.</summary>
+    /// <summary>The hits a page of the text fallback holds of each word it searched, a section of its own in every operation's answer, a body's among them.</summary>
     public const int TextHits = 20;
 
     /// <summary>The most hops a <c>related</c> walk goes.</summary>
@@ -344,7 +347,11 @@ public sealed class CodebaseGraphTool(
     private string? Held(string path)
         => _queries.HeldPath(path, _case ??= _paths.ComparisonIn(_queries.Tree));
 
-    /// <summary>The members each operation reads beside <c>op</c>, and of them those it needs.</summary>
+    /// <summary>
+    /// The members each operation reads beside <c>op</c>, and of them those it needs. A read takes <c>page</c>; a write
+    /// does not - an <c>edit</c>'s answer and a <c>wholeFile</c>'s are one page, said after the write, never paged - so a
+    /// <c>page</c> given to one is refused before anything is written.
+    /// </summary>
     /// <param name="op">An operation.</param>
     public static (IReadOnlyList<string> Reads, IReadOnlyList<string> Needs) Members(GraphOp op) => op switch
     {
@@ -353,8 +360,8 @@ public sealed class CodebaseGraphTool(
         GraphOp.Related => (["symbol", "relation", "depth", "page"], ["symbol", "relation"]),
         GraphOp.Outline => (["path", "symbol", "page"], []),
         GraphOp.Body => (["symbols", "full", "page"], ["symbols"]),
-        GraphOp.Edit => (["symbol", "hash", "text", "page"], ["symbol", "hash", "text"]),
-        GraphOp.WholeFile => (["path", "reason", "page"], ["path", "reason"]),
+        GraphOp.Edit => (["symbol", "hash", "text"], ["symbol", "hash", "text"]),
+        GraphOp.WholeFile => (["path", "reason"], ["path", "reason"]),
         _ => throw new ArgumentOutOfRangeException(nameof(op), op, "Not an operation of the graph tool."),
     };
 
@@ -428,7 +435,7 @@ public sealed class CodebaseGraphTool(
 
         return "Asks the codebase graph of the tree you work in: "
             + string.Join("; ", Ordered(ops).Select(op => said[op]))
-            + $". Every node is named with its handle and path:start-end #hash - read a range of a file by those lines - and every answer is pages of whole entries: one of more than one page starts with the line 'page k of n' and any page is asked for with page, from 1; an answer with no header holds all of it. Where the graph is not sure, the answer adds text: lines that hold the name.";
+            + $". Every node is named with its handle and path:start-end #hash - read a range of a file by those lines - and every answer of a read is pages of whole entries, a line wider than a page given in pieces marked …: one of more than one page starts with the line 'page k of n' and any page is asked for with page, from 1; an answer with no header holds all of it. Where the graph is not sure, the answer adds text: lines that hold the name.";
     }
 
     /// <summary>Runs the <c>graph</c> call <paramref name="input"/> asks, where its operation is among <paramref name="ops"/>.</summary>
@@ -474,11 +481,12 @@ public sealed class CodebaseGraphTool(
     private async Task<GraphToolAnswer> FindAsync(JsonObject input, CancellationToken cancellationToken)
     {
         var query = Str(input, "query")!;
+        var kind = Str(input, "kind");
         var path = Str(input, "path") is { } given ? Held(given) ?? given : null;
 
-        return await PagedAsync(input, GraphOp.Find, $"find {query}", async token =>
+        return await PagedAsync(input, GraphOp.Find, new JsonObject { ["query"] = query, ["kind"] = kind, ["path"] = path }, $"find {query}", async token =>
         {
-            var matched = _queries.Find(query, Str(input, "kind"), path, int.MaxValue, 0, near?.Invoke()).Cards;
+            var matched = _queries.Find(query, kind, path, int.MaxValue, 0, near?.Invoke()).Cards;
             var (kept, left) = Readable(matched);
 
             if (kept.Count > 0)
@@ -501,7 +509,7 @@ public sealed class CodebaseGraphTool(
             return await UnresolvedAsync(input, GraphOp.Node, symbol, cancellationToken).ConfigureAwait(false);
         }
 
-        return await PagedAsync(input, GraphOp.Node, $"node {symbol}", async token =>
+        return await PagedAsync(input, GraphOp.Node, new JsonObject { ["symbol"] = card.Id }, $"node {symbol}", async token =>
         {
             var leading = new List<string> { GraphLines.Of(card) };
             var sections = new List<GraphSection>();
@@ -509,7 +517,7 @@ public sealed class CodebaseGraphTool(
             var left = 0;
             var unsure = _queries.Unsure(card.Id);
 
-            foreach (var (group, members) in _queries.Edges(card.Id).Groups)
+            foreach (var (group, members, recall) in _queries.Edges(card.Id).Groups)
             {
                 var kept = members.Where(edge => Reads(edge.Card)).ToList();
                 left += members.Count - kept.Count;
@@ -519,10 +527,10 @@ public sealed class CodebaseGraphTool(
                     continue;
                 }
 
-                // Every edge of the kind decides whether the graph is sure of the answer: no page's bound hides one. A use
-                // is recall, never a doubt - its candidates say nothing of how sure the graph is of what it declares.
-                var doubt = group is not "users" and not "uses";
-                unsure |= kept.Any(edge => doubt && (string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal) || _queries.Unsure(edge.Card.Id)));
+                // Every edge of the kind decides whether the graph is sure of the answer: no page's bound hides one. A
+                // group of recall - a use - is never a doubt: its candidates say nothing of how sure the graph is of what
+                // it declares.
+                unsure |= !recall && kept.Any(edge => string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal) || _queries.Unsure(edge.Card.Id));
                 sections.Add(Section($"{group} ({kept.Count}):", [.. kept.Select(edge => new GraphEntry("  " + EdgeLine(edge)))], NodeLinesAKind));
             }
 
@@ -551,7 +559,7 @@ public sealed class CodebaseGraphTool(
             return await UnresolvedAsync(input, GraphOp.Related, symbol, cancellationToken).ConfigureAwait(false);
         }
 
-        return await PagedAsync(input, GraphOp.Related, $"related {symbol}", async token =>
+        return await PagedAsync(input, GraphOp.Related, new JsonObject { ["symbol"] = card.Id, ["relation"] = relation, ["depth"] = depth }, $"related {symbol}", async token =>
         {
             var reached = _queries.Related(card.Id, relation, depth);
             var kept = reached.Where(one => Reads(one.Card)).ToList();
@@ -582,15 +590,15 @@ public sealed class CodebaseGraphTool(
 
             if (!_mayRead(path))
             {
-                return Said($"'{path}' is a file your reads do not reach");
+                return Said(input, $"outline {path}", $"'{path}' is a file your reads do not reach");
             }
 
             if (_queries.OutlineFile(path) is not { } cards)
             {
-                return Said($"the view holds no file at '{path}'");
+                return Said(input, $"outline {path}", $"the view holds no file at '{path}'");
             }
 
-            return await PagedAsync(input, GraphOp.Outline, $"outline {path}", token => Task.FromResult(OutlineOf(path, cards)), cancellationToken).ConfigureAwait(false);
+            return await PagedAsync(input, GraphOp.Outline, new JsonObject { ["path"] = path }, $"outline {path}", token => Task.FromResult(OutlineOf(path, cards)), cancellationToken).ConfigureAwait(false);
         }
 
         if (Str(input, "symbol") is { } symbol)
@@ -600,34 +608,40 @@ public sealed class CodebaseGraphTool(
                 return await UnresolvedAsync(input, GraphOp.Outline, symbol, cancellationToken).ConfigureAwait(false);
             }
 
-            var members = _queries.OutlineType(card.Id);
-            var (kept, left) = Readable(members);
+            return await PagedAsync(input, GraphOp.Outline, new JsonObject { ["symbol"] = card.Id }, $"outline {symbol}", token =>
+            {
+                var (kept, left) = Readable(_queries.OutlineType(card.Id));
 
-            return await PagedAsync(input, GraphOp.Outline, $"outline {symbol}", token => Task.FromResult(new GraphAnswer(
-                MembersOf(card, kept),
-                kept.Count == 0 ? [] : [Section(null, [.. kept.Select(one => new GraphEntry("  " + GraphLines.Of(one)))], OutlineLines)],
-                Notes(left),
-                [],
-                [])), cancellationToken).ConfigureAwait(false);
+                return Task.FromResult(new GraphAnswer(
+                    MembersOf(card, kept),
+                    kept.Count == 0 ? [] : [Section(null, [.. kept.Select(one => new GraphEntry("  " + GraphLines.Of(one)))], OutlineLines)],
+                    Notes(left),
+                    [],
+                    []));
+            }, cancellationToken).ConfigureAwait(false);
         }
 
-        var overview = _queries.Overview();
-        var lines = new List<string>();
-        lines.AddRange(overview.Projects.Where(Reads).Select(project => "project " + GraphLines.Of(project)));
-        lines.AddRange(overview.Directories
-            .Select(directory => (directory.Directory, Files: directory.Files.Count(_mayRead)))
-            .Where(directory => directory.Files > 0)
-            .Select(directory => $"directory {directory.Directory} ({ReportText.Counted(directory.Files, "file")})"));
-        lines.AddRange(overview.Namespaces
-            .Where(one => one.Files.Any(_mayRead))
-            .Select(one => $"namespace {one.Card.Qualified} ({ReportText.Counted(one.Declarations.Count(Reads), "declaration")})"));
+        // The repository's overview is the answer's whole result: made once, by the page that computes it.
+        return await PagedAsync(input, GraphOp.Outline, new JsonObject(), "outline", token =>
+        {
+            var overview = _queries.Overview();
+            var lines = new List<string>();
+            lines.AddRange(overview.Projects.Where(Reads).Select(project => "project " + GraphLines.Of(project)));
+            lines.AddRange(overview.Directories
+                .Select(directory => (directory.Directory, Files: directory.Files.Count(_mayRead)))
+                .Where(directory => directory.Files > 0)
+                .Select(directory => $"directory {directory.Directory} ({ReportText.Counted(directory.Files, "file")})"));
+            lines.AddRange(overview.Namespaces
+                .Where(one => one.Files.Any(_mayRead))
+                .Select(one => $"namespace {one.Card.Qualified} ({ReportText.Counted(one.Declarations.Count(Reads), "declaration")})"));
 
-        return await PagedAsync(input, GraphOp.Outline, "outline", token => Task.FromResult(new GraphAnswer(
-            RepositoryOf(lines),
-            lines.Count == 0 ? [] : [Section(null, [.. lines.Select(line => new GraphEntry(line))], OutlineLines)],
-            [],
-            [],
-            [])), cancellationToken).ConfigureAwait(false);
+            return Task.FromResult(new GraphAnswer(
+                RepositoryOf(lines),
+                lines.Count == 0 ? [] : [Section(null, [.. lines.Select(line => new GraphEntry(line))], OutlineLines)],
+                [],
+                [],
+                []));
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>A file outline's answer: its leading lines and its declarations as one section.</summary>
@@ -677,25 +691,40 @@ public sealed class CodebaseGraphTool(
     private async Task<GraphToolAnswer> BodyAsync(JsonObject input, CancellationToken cancellationToken)
     {
         var full = Flag(input, "full");
+        var symbols = Strings(input, "symbols");
+        var ask = new JsonObject
+        {
+            ["symbols"] = new JsonArray([.. symbols.Select(symbol => (JsonNode)(Resolved(symbol)?.Id ?? symbol))]),
+            ["full"] = full,
+        };
 
-        return await PagedAsync(input, GraphOp.Body, $"body {string.Join(", ", Strings(input, "symbols"))}", async token =>
+        return await PagedAsync(input, GraphOp.Body, ask, $"body {string.Join(", ", symbols)}", async token =>
         {
             var entries = new List<GraphEntry>();
             var asked = new List<string>();
-            var viewed = new List<string>();
+            var read = new List<GraphFileRead>();
+            var searched = new Searches(this);
 
-            foreach (var symbol in Strings(input, "symbols"))
+            foreach (var symbol in symbols)
             {
                 if (Resolved(symbol) is not { } card)
                 {
-                    // A symbol that names no one node is said inside the answer, as its own lines are: a body is one stream.
-                    entries.AddRange(await UnresolvedEntriesAsync(symbol, token).ConfigureAwait(false));
+                    // A symbol that names no one node is said inside the answer, as its own lines are: a body is one
+                    // stream. The lines a text search adds for it are the fallback's own section, at its own size a page.
+                    var (said, word) = Unresolved(symbol);
+                    entries.AddRange(said);
+
+                    if (word is not null)
+                    {
+                        await searched.AddAsync(word, token).ConfigureAwait(false);
+                    }
+
                     continue;
                 }
 
                 asked.Add(card.Id);
 
-                var (lines, why) = await ReadLinesAsync(card.Path, token).ConfigureAwait(false);
+                var (lines, digest, why) = await ReadLinesAsync(card.Path, token).ConfigureAwait(false);
                 var hash = lines is null || card.Hash is null ? null : Hash(lines, card);
 
                 // A declaration whose lines moved since the view was read is extracted again, where the tool may check its file, and served as it is now.
@@ -708,7 +737,7 @@ public sealed class CodebaseGraphTool(
                     }
 
                     card = found;
-                    (lines, why) = await ReadLinesAsync(card.Path, token).ConfigureAwait(false);
+                    (lines, digest, why) = await ReadLinesAsync(card.Path, token).ConfigureAwait(false);
                     hash = lines is null ? null : Hash(lines, card);
                 }
 
@@ -738,26 +767,61 @@ public sealed class CodebaseGraphTool(
                     }
                 }
 
-                // The block's head and every line of it name the node, so a page that ends inside it says it goes on.
+                // The block's head and every line of it name the node, so a page that ends inside it says it goes on; each
+                // served line names its file, which the page that gives it leaves viewed as its lines were read.
                 entries.Add(new(head, Lines: 0, GoesOn: card.Qualified, Node: card.Id));
 
                 foreach (var (text, number) in Shown(card, CodebaseGraphQueries.Body(card, lines), full))
                 {
                     entries.Add(number is { } line
-                        ? new($"{line.ToString(CultureInfo.InvariantCulture)}\t{text}", Lines: 1, GoesOn: card.Qualified, Node: card.Id)
+                        ? new($"{line.ToString(CultureInfo.InvariantCulture)}\t{text}", Lines: 1, GoesOn: card.Qualified, Node: card.Id, File: card.Path)
                         : new(text, Lines: 0, GoesOn: card.Qualified, Node: card.Id));
                 }
 
-                viewed.Add(card.Path);
+                // A file read twice in one answer is viewed as the first read found it: where a later read differs, an edit
+                // made from the earlier lines is refused as changed since viewed.
+                if (!read.Any(file => string.Equals(file.Path, card.Path, StringComparison.Ordinal)))
+                {
+                    read.Add(new GraphFileRead(card.Path, digest!));
+                }
 
                 if (_queries.Unsure(card.Id))
                 {
-                    entries.AddRange(await HitEntriesAsync(card.Name, token).ConfigureAwait(false));
+                    await searched.AddAsync(card.Name, token).ConfigureAwait(false);
                 }
             }
 
-            return new GraphAnswer([], [Section(null, entries, BodyLines)], [], asked.Distinct(StringComparer.Ordinal).ToList(), viewed.Distinct(StringComparer.Ordinal).ToList());
+            return new GraphAnswer([], [Section(null, entries, BodyLines), .. searched.Sections], searched.Notes, asked.Distinct(StringComparer.Ordinal).ToList(), read);
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The text searches one answer adds, each word once: their hits as sections of their own, each at the text
+    /// fallback's size a page, and the notes of what they found nothing for or did not read, said where the answer ends.
+    /// </summary>
+    private sealed class Searches(CodebaseGraphTool tool)
+    {
+        private readonly HashSet<string> _words = new(StringComparer.Ordinal);
+
+        /// <summary>The hits' sections, in the order the words were searched.</summary>
+        public List<GraphSection> Sections { get; } = [];
+
+        /// <summary>The notes the searches end the answer with.</summary>
+        public List<string> Notes { get; } = [];
+
+        /// <summary>Searches <paramref name="word"/>, where no search of this answer searched it.</summary>
+        public async Task AddAsync(string word, CancellationToken cancellationToken)
+        {
+            if (!_words.Add(word.Trim()))
+            {
+                return;
+            }
+
+            var searched = await tool.SearchAsync(word, cancellationToken).ConfigureAwait(false);
+            Sections.AddRange(searched.SectionsOf(word));
+            Notes.AddRange(searched.NoHitsOf(word));
+            Notes.AddRange(searched.Notes);
+        }
     }
 
     private async Task<GraphToolAnswer> OneEditAtATimeAsync(JsonObject input, CancellationToken cancellationToken)
@@ -787,7 +851,7 @@ public sealed class CodebaseGraphTool(
 
         if (Resolved(symbol) is not { } card)
         {
-            return await UnresolvedAsync(input, GraphOp.Edit, symbol, cancellationToken);
+            return await UnresolvedAsync(input, GraphOp.Edit, symbol, cancellationToken).ConfigureAwait(false);
         }
 
         if (!string.Equals(card.Hash, hash, StringComparison.OrdinalIgnoreCase)
@@ -857,8 +921,10 @@ public sealed class CodebaseGraphTool(
         var was = edited.LineCount;
         edited.ReplaceLines(card.Start, card.End, text);
         var moved = edited.LineCount - was;
+        var bytes = edited.Bytes();
+
         // Where it lands decided again before a byte is written, as the runtime's own writes are (AgentFiles.Write).
-        if (_files.Write(_paths.WritableRootOf(Full(card.Path)), Full(card.Path), edited.Bytes(), landing => _paths.Opened(landing, write: true).Denied) is { } landed)
+        if (_files.Write(_paths.WritableRootOf(Full(card.Path)), Full(card.Path), bytes, landing => _paths.Opened(landing, write: true).Denied) is { } landed)
         {
             return new GraphToolAnswer(landed.Reason, GraphToolOutcome.Refused, card.Path, landed);
         }
@@ -867,28 +933,23 @@ public sealed class CodebaseGraphTool(
         var written = card.End - card.Start + 1 + moved;
         var shift = moved == 0 ? "no later declaration moved" : $"the file's later declarations moved {ReportText.Counted(Math.Abs(moved), "line")} {(moved > 0 ? "down" : "up")}";
         var held = (after.OutlineFile(card.Path) ?? []).Where(one => one.Start >= card.Start && one.Start < card.Start + written).Select(one => "  " + GraphLines.Of(one)).ToList();
-        var said = after.Part(card.Id, card.Path) is { } refound ? GraphLines.Of(refound)
-            : written == 0 ? $"the new lines are none: '{card.Qualified}' is gone from '{card.Path}'"
-            : held.Count == 0 ? $"the new lines no longer declare '{card.Qualified}', nor anything else"
-            : $"the new lines no longer declare '{card.Qualified}'; they hold:\n" + string.Join('\n', held);
-        var editedAnswer = await PagedAsync(input, GraphOp.Edit, $"edit {symbol}", token => Task.FromResult(new GraphAnswer(
-            [$"edited '{card.Qualified}' in '{card.Path}'; {shift}"],
-            [Section(null, [.. said.Split('\n').Where(line => line.Length > 0).Select(line => new GraphEntry(line))], OutlineLines)],
-            UnheldLines(),
-            [],
-            [card.Path])), cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<string> said = after.Part(card.Id, card.Path) is { } refound ? [GraphLines.Of(refound)]
+            : written == 0 ? [$"the new lines are none: '{card.Qualified}' is gone from '{card.Path}'"]
+            : held.Count == 0 ? [$"the new lines no longer declare '{card.Qualified}', nor anything else"]
+            : [$"the new lines no longer declare '{card.Qualified}'; they hold:", .. held];
 
-        if (editedAnswer.Paging?.Refusal is not null)
-        {
-            return Usage(editedAnswer.Text);
-        }
+        // A write is no paged read: its answer is one page, said once the write is done - the declarations its lines
+        // hold, or, where they pass one page, how many, and the read that pages them.
+        var leading = $"edited '{card.Qualified}' in '{card.Path}'; {shift}";
+        var answer = OnePage([leading, .. said], $"edit {symbol}")
+            ?? Said([leading, $"the new lines no longer declare '{card.Qualified}'; they hold {ReportText.Counted(held.Count, "declaration")}: outline '{card.Path}' to read them"]);
 
-        return editedAnswer with
+        return answer with
         {
             Outcome = GraphToolOutcome.Wrote,
             Path = card.Path,
             Facts = new GraphToolFacts([], [], [card.Id], new GraphWrittenLines(card.Path, card.Start, written, WrittenHash(edited, card.Start, written))),
-            Viewed = [card.Path],
+            Viewed = [new GraphFileRead(card.Path, FileContentHash.Of(bytes))],
         };
     }
 
@@ -968,12 +1029,9 @@ public sealed class CodebaseGraphTool(
 
         _lifted.TryAdd(held, true);
 
-        var paged = GraphPages.Assemble([], [$"the narrowing of reads is lifted for '{held}' for the rest of this step: {reason}"], UnheldLines(), Int(input, "page") ?? 1, $"wholeFile {path}", MostCharacters);
-
-        return new GraphToolAnswer(paged.Text, GraphToolOutcome.Answered)
+        return Said([$"the narrowing of reads is lifted for '{held}' for the rest of this step: {reason}"]) with
         {
             Escape = new GraphEscapeLine(held, lines, EstimatedTokens.OfBytes(file.Bytes), GraphEscapeLine.Stated, reason),
-            Paging = paged,
         };
     }
 
@@ -983,67 +1041,78 @@ public sealed class CodebaseGraphTool(
     /// </summary>
     private GraphCard? Resolved(string symbol) => _queries.Resolve(symbol) is GraphResolve.Found found && Reads(found.Card) ? found.Card : null;
 
-    /// <summary>What a symbol that names no one node the step reads is answered with: its candidates, or a text search for it - in pages as any answer.</summary>
+    /// <summary>
+    /// What a symbol that names no one node the step reads is answered with: its candidates, or a text search for it - in
+    /// pages as any read's answer, the search made by the page that computes the answer. An <c>edit</c> is no read: its
+    /// answer is one page, and where the candidates or the lines that hold the name pass one, it says how many and the read
+    /// that pages them.
+    /// </summary>
     private async Task<GraphToolAnswer> UnresolvedAsync(JsonObject input, GraphOp op, string symbol, CancellationToken cancellationToken)
     {
+        var asked = $"{NameOf(op)} {symbol}";
+
         switch (_queries.Resolve(symbol))
         {
             case GraphResolve.Candidates candidates:
                 var (kept, left) = Readable(candidates.Cards);
+                var many = $"'{symbol}' is not one name: {ReportText.Counted(kept.Count, "node")} carry it - ask again by a handle";
+                var named = new GraphAnswer([many], [Section(null, [.. kept.Select(card => new GraphEntry(GraphLines.Of(card)))], FindLines)], Notes(left), [], []);
 
-                return await PagedAsync(input, op, $"{NameOf(op)} {symbol}", token => Task.FromResult(new GraphAnswer(
-                    [$"'{symbol}' is not one name: {ReportText.Counted(kept.Count, "node")} carry it - ask again by a handle"],
-                    [Section(null, [.. kept.Select(card => new GraphEntry(GraphLines.Of(card)))], FindLines)],
-                    Notes(left),
-                    [],
-                    [])), cancellationToken).ConfigureAwait(false);
+                return op == GraphOp.Edit
+                    ? OnePage(named, asked) ?? Said([$"{many}; node '{symbol}' gives them"])
+                    : await PagedAsync(input, op, new JsonObject { ["symbol"] = symbol }, asked, token => Task.FromResult(named), cancellationToken).ConfigureAwait(false);
 
             case GraphResolve.Found:
-                return Said($"'{symbol}' is in a file your reads do not reach");
+                return op == GraphOp.Edit ? Said([$"'{symbol}' is in a file your reads do not reach"]) : Said(input, asked, $"'{symbol}' is in a file your reads do not reach");
 
             default:
-                var name = Simple(symbol);
-                var searched = name is null ? Searched.None : await SearchAsync(name, cancellationToken).ConfigureAwait(false);
+                var none = $"'{symbol}' is not a node the view holds";
 
-                return await PagedAsync(input, op, $"{NameOf(op)} {symbol}", token => Task.FromResult(new GraphAnswer(
-                    [$"'{symbol}' is not a node the view holds"],
-                    name is null ? [] : searched.SectionsOf(name),
-                    name is null ? [] : [.. searched.NoHitsOf(name), .. searched.Notes],
-                    [],
-                    [])), cancellationToken).ConfigureAwait(false);
+                async Task<GraphAnswer> SearchedAsync(CancellationToken token)
+                {
+                    var searched = new Searches(this);
+
+                    if (Simple(symbol) is { } name)
+                    {
+                        await searched.AddAsync(name, token).ConfigureAwait(false);
+                    }
+
+                    return new GraphAnswer([none], searched.Sections, searched.Notes, [], []);
+                }
+
+                return op == GraphOp.Edit
+                    ? OnePage(await SearchedAsync(cancellationToken).ConfigureAwait(false), asked) ?? Said([$"{none}; node '{symbol}' gives the lines that hold its name"])
+                    : await PagedAsync(input, op, new JsonObject { ["symbol"] = symbol }, asked, SearchedAsync, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    /// <summary>A body's entries for a symbol that names no one node the step reads: said, never served, and the text search where none is held.</summary>
-    private async Task<IReadOnlyList<GraphEntry>> UnresolvedEntriesAsync(string symbol, CancellationToken cancellationToken)
+    /// <summary>
+    /// What a body says, in its stream, of a symbol that names no one node the step reads - its candidates, or that its
+    /// file is one the reads do not reach, or that the view holds no node of it - and the word its text search is for,
+    /// where one is searched: a name the view does not hold.
+    /// </summary>
+    private (IReadOnlyList<GraphEntry> Said, string? Searched) Unresolved(string symbol)
     {
         switch (_queries.Resolve(symbol))
         {
             case GraphResolve.Candidates candidates:
                 var (kept, left) = Readable(candidates.Cards);
 
-                return [
+                return ([
                     new GraphEntry($"'{symbol}' is not one name: {ReportText.Counted(kept.Count, "node")} carry it - ask again by a handle", Lines: 0),
                     .. kept.Select(card => new GraphEntry(GraphLines.Of(card), Lines: 0)),
-                    .. Notes(left).Select(note => new GraphEntry(note, Lines: 0))];
+                    .. Notes(left).Select(note => new GraphEntry(note, Lines: 0))], null);
 
             case GraphResolve.Found:
-                return [new($"'{symbol}' is in a file your reads do not reach", Lines: 0)];
+                return ([new($"'{symbol}' is in a file your reads do not reach", Lines: 0)], null);
 
             default:
-                var entries = new List<GraphEntry> { new($"'{symbol}' is not a node the view holds", Lines: 0) };
-
-                if (Simple(symbol) is { } name)
-                {
-                    entries.AddRange(await HitEntriesAsync(name, cancellationToken).ConfigureAwait(false));
-                }
-
-                return entries;
+                return ([new($"'{symbol}' is not a node the view holds", Lines: 0)], Simple(symbol));
         }
     }
 
     /// <summary>What a text search gave: its hits as entries, and the notes of what it did not read.</summary>
-    /// <param name="Hits">The hits, each one line - entries of the answer, at the text fallback's size a page.</param>
+    /// <param name="Hits">The hits, each one line - entries of a section of their own, at the text fallback's size a page (<see cref="TextHits"/>).</param>
     /// <param name="Notes">The notes of the files the search did not read, said at the answer's end.</param>
     private sealed record Searched(IReadOnlyList<GraphEntry> Hits, IReadOnlyList<string> Notes)
     {
@@ -1087,21 +1156,6 @@ public sealed class CodebaseGraphTool(
         }
     }
 
-    /// <summary>The lines a text search for <paramref name="name"/> added inside a body's stream, where the graph was not sure of one of its symbols.</summary>
-    private async Task<IReadOnlyList<GraphEntry>> HitEntriesAsync(string name, CancellationToken cancellationToken)
-    {
-        var searched = await SearchAsync(name, cancellationToken).ConfigureAwait(false);
-
-        if (searched.Hits.Count == 0)
-        {
-            return [.. searched.NoHitsOf(name).Select(note => new GraphEntry(note, Lines: 0)), .. searched.Notes.Select(note => new GraphEntry(note, Lines: 0))];
-        }
-
-        // A body's fallback rides in its own stream: its caption says what its hits are, and the notes of what the search
-        // did not read end the answer, where the pages leave them.
-        return [new($"text: lines that hold '{name.Trim()}'", Lines: 0), .. searched.Hits, .. searched.Notes.Select(note => new GraphEntry(note, Lines: 0))];
-    }
-
     /// <summary>
     /// The file at <paramref name="path"/> read whole, in its encoding, or why it is not: a place the runtime's own tools
     /// may not read (<see cref="ConfinedPaths.Read"/>) - a link out of the tree put along it since the view was read, by its
@@ -1110,38 +1164,46 @@ public sealed class CodebaseGraphTool(
     /// </summary>
     private async Task<(EncodedTextReading? Reading, string? Why)> ReadFileAsync(string path, CancellationToken cancellationToken)
     {
+        var (reading, _, why) = await ReadBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        return (reading, why);
+    }
+
+    /// <summary>The file at <paramref name="path"/> read as <see cref="ReadFileAsync"/> reads it, with the digest of the bytes it was read from.</summary>
+    private async Task<(EncodedTextReading? Reading, string? Digest, string? Why)> ReadBytesAsync(string path, CancellationToken cancellationToken)
+    {
         var confined = _paths.Read(Full(path));
 
         if (confined.Full is not { } full)
         {
-            return (null, confined.Denied!.Reason);
+            return (null, null, confined.Denied!.Reason);
         }
 
         if (_fileSystem.StandingOf(full) is not { } standing)
         {
-            return (null, $"there is no file at '{path}'");
+            return (null, null, $"there is no file at '{path}'");
         }
 
         if (standing.Length > AgentTools.MostViewedBytes)
         {
-            return (null, $"'{path}' holds {DiskSpace.Size(standing.Length)}, past the {DiskSpace.Size(AgentTools.MostViewedBytes)} a body or an edit reads whole: read a range of it");
+            return (null, null, $"'{path}' holds {DiskSpace.Size(standing.Length)}, past the {DiskSpace.Size(AgentTools.MostViewedBytes)} a body or an edit reads whole: read a range of it");
         }
 
         var read = await _files.ReadAsync(full, AgentTools.MostViewedBytes, opened => _paths.Opened(opened, write: false).Denied, cancellationToken).ConfigureAwait(false);
 
         if (read.Denied is { } moved)
         {
-            return (null, moved.Reason);
+            return (null, null, moved.Reason);
         }
 
         var reading = EncodedText.Read(read.Bytes!);
-        return reading.IsRead ? (reading, null) : (null, $"'{path}' is {(reading.Binary ? "binary" : "no text this tool reads")}: {reading.Why}");
+        return reading.IsRead ? (reading, FileContentHash.Of(read.Bytes!), null) : (null, null, $"'{path}' is {(reading.Binary ? "binary" : "no text this tool reads")}: {reading.Why}");
     }
 
-    private async Task<(IReadOnlyList<string>? Lines, string? Why)> ReadLinesAsync(string path, CancellationToken cancellationToken)
+    /// <summary>The lines of the file at <paramref name="path"/>, read fresh, with the digest of the bytes they were read from - what a page that serves them leaves as the file's view - or why they are not read.</summary>
+    private async Task<(IReadOnlyList<string>? Lines, string? Digest, string? Why)> ReadLinesAsync(string path, CancellationToken cancellationToken)
     {
-        var (reading, why) = await ReadFileAsync(path, cancellationToken).ConfigureAwait(false);
-        return (reading is null ? null : CodeFileText.Lines(reading.Text!.Text), why);
+        var (reading, digest, why) = await ReadBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        return (reading is null ? null : CodeFileText.Lines(reading.Text!.Text), digest, why);
     }
 
     /// <summary>The lines of <paramref name="body"/> as <c>body</c> gives them: a type's members' bodies left out unless <paramref name="full"/>, each member's signature kept.</summary>
@@ -1211,67 +1273,120 @@ public sealed class CodebaseGraphTool(
     /// <param name="Sections">The answer's sections, in their order.</param>
     /// <param name="Trailing">The notes the answer ends with, said on its last page.</param>
     /// <param name="Nodes">The nodes the ask named, by their ids - what the answer's facts hold as asked.</param>
-    /// <param name="Viewed">The files the answer served lines of, as the runtime counts views of them.</param>
+    /// <param name="Read">The files the answer served lines of, each with the digest of the bytes they were read from: what a page that gives a file's lines leaves as its view.</param>
     private sealed record GraphAnswer(
         IReadOnlyList<string> Leading,
         IReadOnlyList<GraphSection> Sections,
         IReadOnlyList<string> Trailing,
         IReadOnlyList<string> Nodes,
-        IReadOnlyList<string> Viewed);
+        IReadOnlyList<GraphFileRead> Read);
 
     /// <summary>
-    /// The answer of an operation's page, from what <paramref name="compute"/> answers with or what an earlier page
-    /// kept: the first page of an ask computes the whole answer once and keeps it - under the digest of the graph it was
-    /// computed on - and a later page of the same ask reads what was kept, so it is a page of that one answer; where the
-    /// graph has moved to another digest, the answer is made again on it and the page says so.
+    /// The answer of a read's page, from what <paramref name="compute"/> answers with or what an earlier page kept. Page 1
+    /// always computes the whole answer, and keeps it where it is more than one page - under the digest of the graph the
+    /// view answers from (<see cref="CodebaseGraphQueries.Graph"/>), which the step's own writes move as a fold does - and
+    /// never reads what was kept. A later page of the same ask, resolved as the tool resolves it, reads what was kept, so
+    /// it is a page of that one answer; where the graph moved to another digest, or no result of page 1 reads, the
+    /// answer is made again on the graph as it stands and the page says which. A page with nothing kept for it outside a
+    /// conversation (the verb) is counted as it stands, as every page of the verb is.
     /// </summary>
     /// <param name="input">The call's input, its page member telling the page asked.</param>
     /// <param name="op">The operation.</param>
+    /// <param name="ask">The ask as the tool resolved it - each node by its id, each file as the view holds it, each default filled in - that its key is made of.</param>
     /// <param name="asked">How the answer names what was asked, for a page past the last to say.</param>
-    /// <param name="compute">Computes the whole answer, where the page asked needs it.</param>
+    /// <param name="compute">Computes the whole answer, where the page asked needs it: everything the answer is made of, its text searches among it.</param>
     /// <param name="cancellationToken">Stops the computing.</param>
-    private async Task<GraphToolAnswer> PagedAsync(JsonObject input, GraphOp op, string asked, Func<CancellationToken, Task<GraphAnswer>> compute, CancellationToken cancellationToken)
+    private async Task<GraphToolAnswer> PagedAsync(JsonObject input, GraphOp op, JsonObject ask, string asked, Func<CancellationToken, Task<GraphAnswer>> compute, CancellationToken cancellationToken)
     {
         var page = Int(input, "page") ?? 1;
-        var key = GraphPageStore.KeyOf(NameOf(op), input);
+        var key = GraphPageStore.KeyOf(NameOf(op), ask);
         var digest = _queries.Graph;
-        var kept = _pages?.Find(key);
-        var answer = default(GraphAnswer);
-        var recounted = false;
+        GraphAnswer? answer = null;
+        string? note = null;
 
-        if (page == 1 || kept is null || !string.Equals(kept.Digest, digest, StringComparison.Ordinal))
+        if (page > 1 && _pages is not null)
         {
-            answer = await compute(cancellationToken).ConfigureAwait(false);
-            recounted = page > 1 && kept is not null;
-            _pages?.Keep(new GraphPageKept(GraphPageKept.CurrentSchema, key, digest, asked, answer.Leading, answer.Sections, answer.Trailing, answer.Nodes, answer.Viewed));
+            var found = _pages.Find(key);
+
+            if (found.Kept is { } kept && string.Equals(kept.Digest, digest, StringComparison.Ordinal))
+            {
+                answer = new GraphAnswer(kept.Leading, kept.Sections, kept.Trailing, kept.Nodes, kept.Read);
+            }
+            else
+            {
+                note = found.Kept is not null ? GraphPages.Recounted : GraphPages.NotKept(found.Why);
+            }
         }
 
-        var held = answer ?? new GraphAnswer(kept!.Leading, kept.Sections, kept.Trailing, kept.Nodes, kept.Viewed);
-        var paged = GraphPages.Assemble(held.Sections, held.Leading, [.. held.Trailing, .. UnheldLines()], page, asked, MostCharacters, recounted);
+        var computed = answer is null;
+        answer ??= await compute(cancellationToken).ConfigureAwait(false);
+
+        IReadOnlyList<string> trailing = [.. answer.Trailing, .. UnheldLines()];
+        var paged = GraphPages.Assemble(answer.Sections, answer.Leading, trailing, page, asked, MostCharacters, note);
+
+        // A result of one page has no later page to read it: only a result of more is kept, and its page says where it could not be.
+        if (computed && _pages is not null && paged.Pages > 1
+            && _pages.Keep(new GraphPageKept(GraphPageKept.CurrentSchema, key, digest, _pages.Reads, asked, answer.Leading, answer.Sections, answer.Trailing, answer.Nodes, answer.Read)) is { } unkept)
+        {
+            paged = GraphPages.Assemble(answer.Sections, answer.Leading, trailing, page, asked, MostCharacters, note is null ? GraphPages.Unkept(unkept) : $"{note} · {GraphPages.Unkept(unkept)}");
+        }
 
         if (paged.Refusal is not null)
         {
             return new GraphToolAnswer(paged.Text, GraphToolOutcome.Usage) { Paging = paged };
         }
 
+        // What the page gave is the page's own: the nodes and the files whose lines it served, a file viewed as its lines were read.
+        var served = paged.Entries.Where(entry => entry.File is not null).ToList();
+        var read = answer.Read.GroupBy(file => file.Path, StringComparer.Ordinal).ToDictionary(file => file.Key, file => file.First().Digest, StringComparer.Ordinal);
+
         return new GraphToolAnswer(paged.Text, GraphToolOutcome.Answered)
         {
             Facts = new GraphToolFacts(
-                held.Nodes.ToArray(),
-                paged.Entries.Where(entry => entry.Lines > 0 && entry.Node is not null).Select(entry => entry.Node!).Distinct(StringComparer.Ordinal).ToArray(),
+                answer.Nodes.ToArray(),
+                served.Where(entry => entry.Node is not null).Select(entry => entry.Node!).Distinct(StringComparer.Ordinal).ToArray(),
                 [],
                 Hits: paged.Entries.Count(entry => entry.Hit)),
-            Viewed = held.Viewed,
+            Viewed = [.. served.Select(entry => entry.File!).Distinct(StringComparer.Ordinal).Where(read.ContainsKey).Select(path => new GraphFileRead(path, read[path]))],
             Paging = paged,
         };
     }
 
-    /// <summary>An answer of one sentence, no pages asked of it: said as it is, with the notes every answer ends with.</summary>
-    private GraphToolAnswer Said(string text)
+    /// <summary>
+    /// A read's answer of one sentence: said as it is, with the notes every answer ends with - one page, so a page past it
+    /// is refused with its range, as any answer's page past the last is.
+    /// </summary>
+    private GraphToolAnswer Said(JsonObject input, string asked, string text)
     {
-        var paged = GraphPages.Assemble([], [text], UnheldLines(), 1, "graph", MostCharacters);
+        var paged = GraphPages.Assemble([], [text], UnheldLines(), Int(input, "page") ?? 1, asked, MostCharacters);
+
+        return new GraphToolAnswer(paged.Text, paged.Refusal is null ? GraphToolOutcome.Answered : GraphToolOutcome.Usage) { Paging = paged };
+    }
+
+    /// <summary>A write's answer, or a sentence no page is asked of: its lines, said as they are, with the notes every answer ends with.</summary>
+    private GraphToolAnswer Said(IReadOnlyList<string> lines)
+    {
+        var paged = GraphPages.Assemble([], lines, UnheldLines(), 1, "graph", MostCharacters);
 
         return new GraphToolAnswer(paged.Text, GraphToolOutcome.Answered) { Paging = paged };
+    }
+
+    /// <inheritdoc cref="Said(IReadOnlyList{string})"/>
+    private GraphToolAnswer Said(string text) => Said([text]);
+
+    /// <summary>
+    /// A write's answer of <paramref name="lines"/>, the first said as its head and the rest as its entries, where all of
+    /// it is one page; null where it is more, for a write's answer is never paged.
+    /// </summary>
+    private GraphToolAnswer? OnePage(IReadOnlyList<string> lines, string asked)
+        => OnePage(new GraphAnswer([lines[0]], lines.Count == 1 ? [] : [Section(null, [.. lines.Skip(1).Select(line => new GraphEntry(line))], int.MaxValue)], [], [], []), asked);
+
+    /// <summary>The first page of <paramref name="answer"/>, where all of it is one page; null where it is more.</summary>
+    private GraphToolAnswer? OnePage(GraphAnswer answer, string asked)
+    {
+        var paged = GraphPages.Assemble(answer.Sections, answer.Leading, [.. answer.Trailing, .. UnheldLines()], 1, asked, MostCharacters);
+
+        return paged.Pages > 1 ? null : new GraphToolAnswer(paged.Text, GraphToolOutcome.Answered) { Paging = paged };
     }
 
     private static string EdgeLine(GraphEdge edge)
@@ -1323,8 +1438,8 @@ public sealed class CodebaseGraphTool(
         // The retired ways of going on are refused naming what took their place: a model meets one way to ask for more.
         if (extra.Count > 0)
         {
-            return extra.All(name => name is "offset" or "limit")
-                ? $"op '{Names[op]}' does not read {string.Join(", ", extra)}: an answer's further pages are asked by page, from 1"
+            return extra.All(name => name is "offset" or "limit") ? $"op '{Names[op]}' does not read {string.Join(", ", extra)}: an answer's further pages are asked by page, from 1"
+                : extra is ["page"] ? $"op '{Names[op]}' does not read page: what it answers is one page, said once it is done"
                 : $"op '{Names[op]}' does not read {string.Join(", ", extra)}: it reads {(reads.Count == 0 ? "nothing more" : string.Join(", ", reads))}";
         }
 

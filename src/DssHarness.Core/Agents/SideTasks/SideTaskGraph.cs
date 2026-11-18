@@ -101,7 +101,7 @@ public sealed class SideTaskGraph
             return null;
         }
 
-        var tool = Tool(queries, new AgentPolicy(files, platform, ground));
+        var tool = Tool(queries, new AgentPolicy(files, platform, ground), Orchestration.Flow.FlowStepGraph.ReadsOf(ground));
 
         return new AgentGraphSupport(
             tool,
@@ -173,9 +173,10 @@ public sealed class SideTaskGraph
     /// <summary>
     /// The tool over <paramref name="view"/>: every operation, no narrowing, a file re-extracted where an edit moved it -
     /// what it reads and what an edit writes asked of <paramref name="policy"/>, the side-task's own, as the run's graph tool
-    /// asks its step's, and never what no graph lists.
+    /// asks its step's, and never what no graph lists - its answers' pages kept in the side-task's own
+    /// <c>graph-pages</c> for the whole chat, read back under the read rules <paramref name="reads"/> names alone.
     /// </summary>
-    private CodebaseGraphTool Tool(CodebaseGraphQueries view, AgentPolicy policy)
+    private CodebaseGraphTool Tool(CodebaseGraphQueries view, AgentPolicy policy, string? reads)
     {
         var never = CodebaseGraphService.NeverListed(request.WorktreesRoot);
         string Full(string path) => Path.Combine(view.Tree, path.Replace('/', Path.DirectorySeparatorChar));
@@ -189,6 +190,6 @@ public sealed class SideTaskGraph
             path => policy.Write(Full(path)),
             async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read),
             () => near,
-            pages: new GraphPageStore(Path.Combine(layout.Directory, GraphPageStore.DirectoryName), files));
+            pages: new GraphPageStore(Path.Combine(layout.Directory, OrchestratorLayout.StepPagesDirectoryName), files, reads));
     }
 }

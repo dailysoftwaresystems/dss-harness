@@ -2350,6 +2350,39 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal(("src/Big.cs", 222), (Assert.IsType<GraphDeniedLine>(Assert.Single(lines)).Path, ((GraphDeniedLine)lines[0]).Lines));
     }
 
+    /// <summary>
+    /// A page of a graph body is a view of the files whose lines it served, as they were read, and of no other: after page
+    /// 1, a file whose lines only a later page holds is no view an edit may follow; after page 2 - read from what page 1
+    /// kept, the file changed on disk since - it is the view of the file as its lines were read, so the edit meets the
+    /// change and is refused, never made over lines the agent did not see.
+    /// </summary>
+    [Fact]
+    public async Task APageOfAGraphBody_IsAViewOfTheFilesItServed_AsTheyWereRead()
+    {
+        var big = "namespace Demo;\n\npublic static class Big\n{\n" + string.Concat(Enumerable.Range(0, 700).Select(at => $"    // line {at}\n")) + "}\n";
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", big));
+        using var pages = new TempDirectory();
+        var store = new DssHarness.Core.Codebase.GraphPageStore(pages.Combine("graph-pages"), tree.Harness.FileSystem);
+        var runtime = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree), sync: false, pages: store), []);
+        var geometry = Path.Combine(tree.Tree, "src", "Geometry.cs");
+
+        var first = await Call(runtime, AgentGraphSupport.ToolName, ("op", "body"), ("symbols", new[] { "Demo.Big", "Twice" }), ("full", true));
+        var unseen = await Replace(runtime, "src/Geometry.cs", "return Total([shape, shape]);", "return 0;");
+
+        Assert.True(first.Ok, first.Text);
+        Assert.Equal((false, AgentToolRuntime.NeverViewed), (unseen.Ok, unseen.Text));
+
+        File.WriteAllText(geometry, "// formatted\n" + File.ReadAllText(geometry));
+        var second = await Call(runtime, AgentGraphSupport.ToolName, ("op", "body"), ("symbols", new[] { "Demo.Big", "Twice" }), ("full", true), ("page", 2));
+        var stale = await Replace(runtime, "src/Geometry.cs", "return Total([shape, shape]);", "return 0;");
+
+        Assert.True(second.Ok, second.Text);
+        Assert.StartsWith("page 2 of 2 · the last\n", second.Text, StringComparison.Ordinal);
+        Assert.Equal((false, AgentToolRuntime.ChangedSinceViewed), (stale.Ok, stale.Text));
+        Assert.StartsWith("// formatted\n", File.ReadAllText(geometry), StringComparison.Ordinal);
+        Assert.Contains("return Total([shape, shape]);", File.ReadAllText(geometry), StringComparison.Ordinal);
+    }
+
     /// <summary>A C# file of 222 lines, past the narrowing's bound.</summary>
     private static readonly string BigFile = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
 

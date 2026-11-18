@@ -201,7 +201,7 @@ public sealed class CodebaseGraphQueryService(
             ? CommandOutcome.Usage(text)
             : CommandOutcome.Ok($"graph {Name(op)} of run '{query.Run}' ({view ?? CodebaseGraphService.BaseView})") with { Data = [text], Quiet = true };
 
-        return CodebaseGraphQueryReports.Render(outcome, query.Run, view ?? read.View, read.Head, Name(op), json, text, answer.Paging);
+        return CodebaseGraphQueryReports.Render(outcome, query.Run, view ?? read.View, read.Head, Name(op), json, text, answer.Paging, queries.Graph);
     }
 
     private static (GraphOp Op, JsonObject Input)? Input(CodebaseGraphQuery query)

@@ -73,7 +73,7 @@ public sealed class StoppedDocumentTests
         ["run"] = Ledger,
         ["check-mutations"] = Ledger,
         ["stop-run"] = ["exitCode", "summary", "run", "runDirectory", "dispatcher", "stopped", "records"],
-        ["query-codebase-graph"] = ["exitCode", "summary", "run", "view", "head", "op", "answer", "page", "pages", "total", "entries"],
+        ["query-codebase-graph"] = ["exitCode", "summary", "run", "view", "head", "graph", "op", "answer", "page", "pages", "total", "entries"],
         ["clean"] = ["exitCode", "summary", "passed", "cancelled", "unfinished", "complete", "legs"],
         ["up"] = ["exitCode", "summary", "direction"],
         ["down"] = ["exitCode", "summary", "direction"],

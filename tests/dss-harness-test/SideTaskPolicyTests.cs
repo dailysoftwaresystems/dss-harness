@@ -808,6 +808,28 @@ public sealed class SideTaskPolicyTests
 
         Assert.Contains(" public static class Added | src/Added.cs:3-9 #", found.Text, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The side-task's graph answers keep their pages with its records - <c>graph-pages/</c> under the side-task's own
+    /// directory, as a step's are under its step's - so its later page is a page of the one result its first page counted.
+    /// </summary>
+    [Fact]
+    public async Task TheSideTasksGraphPages_AreKeptUnderItsOwnDirectory_AndItsLaterPageReadsThem()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Hub.cs", CodebaseGraphToolTests.HubFile(30)));
+        var layout = SideTaskLayout.Of(tree.Layout, "one");
+        var graph = new SideTaskGraph(tree.Service, tree.Harness.FileSystem, tree.Harness.Platform, tree.Harness.GitClient, tree.Store, TimeProvider.System, tree.Layout, layout, tree.WorktreesRoot);
+        await graph.OpenAsync(TestContext.Current.CancellationToken);
+        var tool = graph.Support(SideTaskPolicy.Ground(tree.Layout, new HarnessConfig { Worktrees = new WorktreeSettings() }, [], []))!.Tool!;
+        var operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: true, narrow: false);
+
+        var first = await tool.RunAsync(System.Text.Json.Nodes.JsonNode.Parse("""{"op":"find","query":"M"}""")!.AsObject(), operations, TestContext.Current.CancellationToken);
+        var second = await tool.RunAsync(System.Text.Json.Nodes.JsonNode.Parse("""{"op":"find","query":"M","page":2}""")!.AsObject(), operations, TestContext.Current.CancellationToken);
+
+        Assert.Equal("page 1 of 2 · 30 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(layout.Directory, DssHarness.Core.Orchestration.OrchestratorLayout.StepPagesDirectoryName)));
+        Assert.Equal("page 2 of 2 · the last", second.Text.Split('\n')[0]);
+    }
 }
 
 /// <summary>The web-search sources a policy test builds: the configuration's own, as many as a test says.</summary>
