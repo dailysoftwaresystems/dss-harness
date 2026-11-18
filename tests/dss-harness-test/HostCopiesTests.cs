@@ -2452,13 +2452,7 @@ public sealed class HostCopiesTests
             ("mac", "ADDRESS=mac.invalid\nUSER=dev\nREPOSITORY_PAHT=/Users/dev/mine/repo\n"),
         })
         {
-            temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, ".env"), env);
-            temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, ".key"), "not a real key\n");
-            temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, "known_hosts"), $"{item}.invalid ssh-ed25519 AAAA\n");
-
-            // Private, as a key must be where the system keeps permissions: one other users may read leaves the item
-            // unread, and so its copies unknown.
-            harness.FileSystem.ProtectSecretFile(temp.Combine(".harness-config", "sshItems", item, ".key"));
+            WriteSshItem(temp, harness, item, env);
         }
 
         // A copy beside each place config.json names, and one beside the item's: only the item's is this machine's.
@@ -2476,6 +2470,7 @@ public sealed class HostCopiesTests
         var mac = listing.Hosts![0];
         var pi = listing.Hosts[1];
 
+        Assert.True(pi.Unasked is null, pi.Unasked);
         Assert.Equal([Pi], inspector.Inspected);
         Assert.Equal((Mac, null, unknown, HarnessExit.HostUnavailable), (mac.Host, mac.RepositoryPath, mac.Unasked, mac.ExitCode));
         Assert.Empty(mac.Copies);
@@ -2520,12 +2515,7 @@ public sealed class HostCopiesTests
         var harness = await PrepareAsync(temp, hosts.Path);
         var declared = hosts.Combine("pi", "repo");
         var mine = hosts.Combine("pi", "mine", "repo");
-        temp.WriteFile(Path.Combine(".harness-config", "sshItems", "pi", ".env"), $"ADDRESS=pi.invalid\nUSER=dev\nREPOSITORY_PATH={mine}\n");
-        temp.WriteFile(Path.Combine(".harness-config", "sshItems", "pi", ".key"), "not a real key\n");
-        temp.WriteFile(Path.Combine(".harness-config", "sshItems", "pi", "known_hosts"), "pi.invalid ssh-ed25519 AAAA\n");
-
-        // A key other users can read is no item ssh could use, and leaves where the host keeps its copies unknown.
-        harness.FileSystem.ProtectSecretFile(temp.Combine(".harness-config", "sshItems", "pi", ".key"));
+        WriteSshItem(temp, harness, "pi", $"ADDRESS=pi.invalid\nUSER=dev\nREPOSITORY_PATH={mine}\n");
         var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
         var record = Record(harness);
         var formerAlpha = GoneTree(temp, "alpha");
@@ -2548,7 +2538,7 @@ public sealed class HostCopiesTests
         var listing = await Lister(harness, inspector).ListAsync(temp.Path, worktrees, askHosts: true, cancellationToken);
         var pi = listing.Hosts!.Single(host => host.Host == Pi);
 
-        Assert.Null(pi.Unasked);
+        Assert.True(pi.Unasked is null, pi.Unasked);
         Assert.Equal(mine, pi.RepositoryPath);
         Assert.Equal([("beta", CopyStanding.Gone)], pi.Copies.Select(copy => (copy.Found.Name, copy.Standing)));
         Assert.Equal([declared], pi.Earlier.Select(place => place.RepositoryPath));
@@ -2941,6 +2931,26 @@ public sealed class HostCopiesTests
             new HostSession(new HostConnection { Host = HostId.Ssh("vps") }, "dssharness"),
             commands,
             new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false));
+
+    /// <summary>
+    /// Writes the ssh item <paramref name="item"/> of the tree at <paramref name="temp"/> as a person keeps one - its settings,
+    /// its key and the host keys it accepts - each made private through the file system's own call: where the system keeps
+    /// permissions, a key other users can read, or host keys or settings they can change, leave the item unread, and with it
+    /// where the host keeps its copies - as a temporary directory that lets other users in, a Windows arm64 runner's, leaves
+    /// what is written in it, and as Linux and macOS leave a written file readable by others.
+    /// </summary>
+    /// <param name="temp">The repository.</param>
+    /// <param name="harness">The harness whose file system makes each file private.</param>
+    /// <param name="item">The item's name.</param>
+    /// <param name="environment">What its .env holds.</param>
+    private static void WriteSshItem(TempDirectory temp, HarnessFactory harness, string item, string environment)
+    {
+        foreach (var (file, text) in new[] { (".env", environment), (".key", "not a real key\n"), ("known_hosts", $"{item}.invalid ssh-ed25519 AAAA\n") })
+        {
+            temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, file), text);
+            harness.FileSystem.ProtectSecretFile(temp.Combine(".harness-config", "sshItems", item, file));
+        }
+    }
 
     /// <summary>
     /// A repository whose worktrees fit this machine's path budget however deep its temporary directory is, and which
