@@ -411,6 +411,21 @@ public sealed class ImplementationFlowTests
     }
 
     /// <summary>
+    /// The workflow's lines with the minutes the last answer can be changed for widened from the shipped one to ten: a
+    /// test changes an answer within its window once the steps that answer set going have started, which a loaded machine
+    /// can take past a minute, and a window spent there would refuse the very change the test is of. A change past the
+    /// window is made by ageing the answers' records, never by waiting.
+    /// </summary>
+    private static string[] WithTenMinutesToChangeAnAnswer(string[] lines)
+    {
+        var at = Array.FindIndex(lines, line => line.Trim() == "changedAnswerMinutes: 1");
+
+        Assert.True(at >= 0, "the shipped workflow names no changedAnswerMinutes of 1 to widen");
+
+        return [.. lines[..at], lines[at].Replace("changedAnswerMinutes: 1", "changedAnswerMinutes: 10", StringComparison.Ordinal), .. lines[(at + 1)..]];
+    }
+
+    /// <summary>
     /// Takes the model of the reporter's tier that signs in with the machine's login out of it, tier and model both:
     /// the tier holds the keyed model alone, so a slot that holds no key holds none for the reporter.
     /// </summary>
@@ -4321,6 +4336,7 @@ public sealed class ImplementationFlowTests
             var pipelineAsShipped = File.ReadAllLines(pipeline);
 
             await EditShippedAsync(kit, WithoutConfiguredLoopBounds);
+            await EditWorkflowAsync(kit, "implementation.yml", WithTenMinutesToChangeAnAnswer);
 
             var paused = await StartAsync(kit, "request=Ship the orders report.");
 
@@ -4332,7 +4348,7 @@ public sealed class ImplementationFlowTests
                 () => kit.Agents.Of("implementer").Count >= 1 && kit.Agents.Of("auditor").Count >= 1,
                 () => $"{Shown(kit)}");
 
-            // The change, within the minute of the answer it changes: handed to the engine running the run.
+            // The change, within the window of the answer it changes: handed to the engine running the run.
             var changed = await ChangeAsync(kit, "revise", "Also ship the ledger.");
 
             Assert.True(HarnessExit.Success == changed.ExitCode, $"{changed.ExitCode}: {changed.Message} | {Shown(kit)}");
@@ -5585,6 +5601,8 @@ public sealed class ImplementationFlowTests
                         new AgentRunResult(AgentRunStatus.NotStarted, AgentNotStartedBecause.KeyMissing, Error: "the run was given no credential, and every request is signed with a key"));
                 });
 
+            await EditWorkflowAsync(kit, "implementation.yml", WithTenMinutesToChangeAnAnswer);
+
             // It waits on a question: the approval open, the run paused on it. The call answers with the facts - the
             // question among them, and the command that answers it - worded by the reporter, and changes no file of the
             // run but its own record.
@@ -5647,7 +5665,7 @@ public sealed class ImplementationFlowTests
 
             await WhenAsync(() => kit.Agents.Of("auditor").Count >= 1, () => $"{Shown(kit)}");
 
-            // The approval answered 'approve' and changed to 'revise' within the minute: the plan is approved again and
+            // The approval answered 'approve' and changed to 'revise' within its window: the plan is approved again and
             // the ledger is owed to the round that runs next.
             var changed = await ChangeAsync(kit, "revise", "Also ship the ledger.");
 
