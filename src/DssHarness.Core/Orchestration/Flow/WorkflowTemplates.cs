@@ -77,7 +77,7 @@ public static class WorkflowTemplates
         "priority", "triage", "plan", "replan", "plan-update", "plan-audit", "item-audit",
         "anchors", "deferrals", "handoff",
         "self-audit", "pr-body",
-        "diagnose", "rediagnose", "redirect", "pre-existing",
+        "diagnose", "rediagnose", "redirect", "remedy-revise", "pre-existing",
         "recommend", "status", "ask",
     ];
 

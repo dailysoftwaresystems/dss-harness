@@ -587,7 +587,8 @@ implementer and everything that resumes it, the six reviewers, the self-audit, t
 pre-existing-issue triage, which measured cheaper - the reviewers, the self-audit, the diagnosis and
 the steps that verify and fix starting their packs from their changes (`graphFrom: changes`); the
 request triage and the plan audit, whose work is text the map does not light, ask none, each having
-measured costlier with no quality gained; the prioritiser and a review's scope are given the map alone
+measured costlier with no quality gained, and the item audit, the plan audit's agent on a later
+round's items, asks none as it does, searching the data by its own text search; the prioritiser and a review's scope are given the map alone
 (the scope's whole overhead a fifth of a cent beside the review rounds it steers); and the scribe's
 steps, which write the run's records, ask none of it (`dssharness help codebase-graph`). The planner
 keeps the tool, its default, as it was: the measurement found it costlier with the graph and did not
@@ -2128,10 +2129,12 @@ once its agent is no longer live - and a sync of its own that fails is said, owe
 fails the step (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
 `validate-plan`, the machine's check of a plan's
 work items - each declaring the classes of the decisions it changes or saying in `noClass` why it decides none, the
-classes held to what the tree and the item's own paths say: one id to a class in a plan, the home among the item's own
-paths and there in the tree where it exists, every site that changes the item's too, more than one site consolidated at
-the home, each class searched by data its queries name again, its universe holding the axes the repository declares,
-and one home belonging to one item; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
+classes held to what the tree and the item's own paths say: one id to a class in a plan, each home and each site a path
+inside the tree as a path an item reuses is, the home among the item's own paths and there in the tree where it exists,
+a site marked `home` exactly where it is the home by its path and symbol, every other site - which changes, reading the
+home or deleted - the item's too, more than one site consolidated at the home, each class searched by data its queries
+name again, its universe holding the axes the repository declares, and one home belonging to one item, two classes of
+one item sharing one as they may; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
 first reason step runs on, both recorded before the agent is made so a step run again asks for the same one;
 `reason`, which works the step's agent - the one its `in` names or the work it goes on with (`resume`), or, where it
 names neither, the engine's own read-only agent, with no worktree, made before the step runs and deleted once no step

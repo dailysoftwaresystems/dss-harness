@@ -169,6 +169,134 @@ public sealed class JsonSchemaSubsetTests
             JsonSchemaSubset.SubsetProblems(whole));
     }
 
+    /// <summary>
+    /// A reference a taken definition holds to a definition of its own file, written there as a local one, is never
+    /// bound to the referring schema's own definition of that name: where the name cannot be taken - the schema holds
+    /// it, said otherwise, or an earlier shared reference took it from another file - the reference is written naming
+    /// the file it reaches into, and refused as a shared reference that was not taken. Left local, it would type and
+    /// check the taken definition's members by a shape its file never gave them, and pass.
+    /// </summary>
+    [Fact]
+    public void AReferenceATakenDefinitionHoldsToItsOwnFile_IsNeverBoundToTheSchemasOwnDefinitionOfThatName()
+    {
+        var plan = Schema("""
+            {"$defs":{"workItem":{"type":"object","additionalProperties":false,"required":["classes"],"properties":{"classes":{"type":"array","items":{"$ref":"#/$defs/closureClass"}}}},"closureClass":{"type":"object","additionalProperties":false,"required":["id"],"properties":{"id":{"type":"string"}}}}}
+            """);
+        var other = Schema("""{"$defs":{"closureClass":{"type":"integer"}}}""");
+        var holding = (JsonObject)Schema("""
+            {"type":"object","additionalProperties":false,"required":["items","finding"],"properties":{"items":{"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"}},"finding":{"$ref":"#/$defs/closureClass"}},"$defs":{"closureClass":{"type":"string"}}}
+            """);
+        var taking = (JsonObject)Schema("""
+            {"type":"object","additionalProperties":false,"required":["cell","items"],"properties":{"cell":{"$ref":"other.schema.json#/$defs/closureClass"},"items":{"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"}}}}
+            """);
+        JsonObject? Beside(string file) => file switch { "plan.schema.json" => (JsonObject)plan, "other.schema.json" => (JsonObject)other, _ => null };
+        const string NotTaken = "$.$defs.workItem.properties.classes.items.$ref: 'plan.schema.json#/$defs/closureClass' names a definition of the schema file 'plan.schema.json' beside this one, and it was not taken into this schema's own definitions - the file is not beside it, or holds no definition 'closureClass', or this schema holds the name already, said otherwise";
+
+        // The schema's own definition of the name stands as it wrote it, its own reference still finding it; the taken
+        // definition's reference names its file, and is refused.
+        var held = JsonSchemaSubset.Shared(holding, Beside);
+
+        Assert.Equal("plan.schema.json#/$defs/closureClass", held["$defs"]!["workItem"]!["properties"]!["classes"]!["items"]!["$ref"]!.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(Schema("""{"type":"string"}"""), held["$defs"]!["closureClass"]));
+        Assert.Equal([NotTaken], JsonSchemaSubset.SubsetProblems(held));
+
+        // The name taken already from another file is not the plan's either.
+        var took = JsonSchemaSubset.Shared(taking, Beside);
+
+        Assert.True(JsonNode.DeepEquals(other["$defs"]!["closureClass"], took["$defs"]!["closureClass"]));
+        Assert.Equal([NotTaken], JsonSchemaSubset.SubsetProblems(took));
+    }
+
+    /// <summary>
+    /// Definitions that are no mapping are never thrown on, and never replaced: a file beside the schema whose
+    /// <c>$defs</c> is a list or a value answers no reference, which stands refused; and a schema whose own
+    /// <c>$defs</c> is no mapping takes nothing in, so the subset check refuses both what it holds there and its
+    /// shared reference, where a mapping put in its place would have passed it.
+    /// </summary>
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("\"the definitions\"")]
+    [InlineData("null")]
+    public void DefinitionsThatAreNoMapping_AreNeverThrownOn_NorReplaced(string defs)
+    {
+        var plan = Schema("""
+            {"$defs":{"workItem":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}}}
+            """);
+        const string NotTaken = "$.items.$ref: 'plan.schema.json#/$defs/workItem' names a definition of the schema file 'plan.schema.json' beside this one, and it was not taken into this schema's own definitions - the file is not beside it, or holds no definition 'workItem', or this schema holds the name already, said otherwise";
+
+        // The file beside the schema: no mapping answers nothing, whether the schema holds the name or not.
+        var beside = (JsonObject)Schema($$"""{"$defs":{{defs}}}""");
+
+        Assert.Equal(
+            [NotTaken],
+            JsonSchemaSubset.SubsetProblems(JsonSchemaSubset.Shared((JsonObject)Schema("""{"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"}}"""), _ => beside)));
+        Assert.Equal(
+            [NotTaken],
+            JsonSchemaSubset.SubsetProblems(JsonSchemaSubset.Shared((JsonObject)Schema("""{"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"},"$defs":{"workItem":{"type":"string"}}}"""), _ => beside)));
+
+        // The schema's own: left as it is written, with its shared reference.
+        var holding = (JsonObject)Schema($$"""{"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"},"$defs":{{defs}}}""");
+        var whole = JsonSchemaSubset.Shared(holding, _ => (JsonObject)plan);
+
+        Assert.True(JsonNode.DeepEquals(holding, whole));
+        Assert.Equal([NotTaken, "$.$defs: is not a mapping of definitions to schemas"], JsonSchemaSubset.SubsetProblems(whole));
+    }
+
+    /// <summary>
+    /// A schema's text is read one way, by whichever reader asks: text that is not JSON and JSON that is no object said
+    /// at the root, with no schema to read; a schema that shares nothing read as its file wrote it; one that shares a
+    /// definition read with it taken in where the files beside it are read, and refused for it where they are not - each
+    /// problem the one check of a schema's text says, which is the reading's own.
+    /// </summary>
+    [Fact]
+    public void ASchemasText_IsReadOneWay_WhereverItIsRead()
+    {
+        var plan = Schema("""{"$defs":{"workItem":{"type":"string"}}}""");
+        const string Sharing = """{"type":"array","items":{"$ref":"plan.schema.json#/$defs/workItem"}}""";
+        const string Own = """{"type":"array","items":{"type":"string"}}""";
+        string unread;
+
+        try
+        {
+            _ = JsonNode.Parse("{ not json");
+            throw new InvalidOperationException("the text parsed");
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            unread = ex.Message;
+        }
+
+        var notJson = JsonSchemaSubset.Whole("{ not json", _ => (JsonObject)plan);
+        var noObject = JsonSchemaSubset.Whole("true");
+        var own = JsonSchemaSubset.Whole(Own, _ => (JsonObject)plan);
+        var shared = JsonSchemaSubset.Whole(Sharing, beside => beside == "plan.schema.json" ? (JsonObject)plan : null);
+        var alone = JsonSchemaSubset.Whole(Sharing);
+
+        Assert.Null(notJson.Schema);
+        Assert.False(notJson.TookIn);
+        Assert.Equal([$"$: is not JSON ({unread})"], notJson.Problems);
+        Assert.Null(noObject.Schema);
+        Assert.False(noObject.TookIn);
+        Assert.Equal(["$: a schema is a JSON object"], noObject.Problems);
+
+        Assert.True(JsonNode.DeepEquals(Schema(Own), own.Schema));
+        Assert.Equal((false, 0), (own.TookIn, own.Problems.Count));
+
+        Assert.True(JsonNode.DeepEquals(Schema("""{"type":"array","items":{"$ref":"#/$defs/workItem"},"$defs":{"workItem":{"type":"string"}}}"""), shared.Schema));
+        Assert.Equal((true, 0), (shared.TookIn, shared.Problems.Count));
+
+        Assert.True(JsonNode.DeepEquals(Schema(Sharing), alone.Schema));
+        Assert.False(alone.TookIn);
+        Assert.Equal(
+            ["$.items.$ref: 'plan.schema.json#/$defs/workItem' names a definition of the schema file 'plan.schema.json' beside this one, and it was not taken into this schema's own definitions - the file is not beside it, or holds no definition 'workItem', or this schema holds the name already, said otherwise"],
+            alone.Problems);
+
+        // The check of a schema's text is the reading's problems, the files beside it read or not.
+        Assert.Equal(alone.Problems, JsonSchemaSubset.TextProblems(Sharing));
+        Assert.Empty(JsonSchemaSubset.TextProblems(Sharing, beside => beside == "plan.schema.json" ? (JsonObject)plan : null));
+        Assert.Equal(notJson.Problems, JsonSchemaSubset.TextProblems("{ not json"));
+    }
+
     /// <summary>A schema from its text, refused by the parse itself where the text is not JSON.</summary>
     private static JsonNode Schema(string text)
     {

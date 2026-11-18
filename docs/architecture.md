@@ -2068,15 +2068,21 @@ fallback, an account at its limit or a provider that fails is a pause that resum
 still fails is asked. The implementation workflow writes `onFailure: recover` on every step of its flow that tests, folds,
 checks, commits, pushes or waits - itself or through its group - and `onFailure: pause` on every
 reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
-the visits), asks a person only for what only a person can give (`direction`), and builds, tests,
-folds and reviews its fix as a round's work items are. The flow builds first: its baseline is split
+the visits), asks a person only for what only a person can give (`direction`), holds the remedy items its last word
+sets out - the diagnosis's, or the one it gives on the person's answer (`redirect`) - to the plan's own check
+(`remedy-check`), gives what the check refuses back to the diagnostician within the visit (`remedy-revise`) and checks
+what it gives again (`remedy-recheck`), and builds, tests, folds and reviews the items those checks read as a round's
+work items are (`remedies`, expanding from them), the revised ones as they stand where the check still refuses them, as
+a round's are. A later round's items are audited before any is built (`item-audit`, which the round's `items` wait
+for), and the round is judged by the self-audit that read that audit: its until reads the self-audit and the machine's
+checks, never the audit's own go, given before the build that may settle it. The flow builds first: its baseline is split
 in two - a `build` step, which fails red and is taken by the recovery and built again - and the
 `test` step it was, which waits for the build - and it makes its codebase graph after that build,
 beside the baseline's tests and the CI read (`onFailure: continue`, for a run goes on without a map);
 every reason step after it is served from the graph as the twenty-run measurement of 2026-11-11 set
 each type's value, its steps saying the graph keys only where a type is served otherwise than by
-default (`graph: off` on the request triage and the plan audit, whose work is text the map does not
-light, and on the scribe's; `graph: map` on the prioritiser and a review's scope; `graphFrom: changes`
+default (`graph: off` on the request triage, the plan audit and the item audit, whose work is text the map
+does not light - the audits searching the data by their own text search - and on the scribe's; `graph: map` on the prioritiser and a review's scope; `graphFrom: changes`
 on the reviewers, the self-audit, the diagnosis and the steps that verify and fix - a step that goes
 on with another's work starting its own pack where it says; the implementer, the planner and the
 pre-existing-issue triage saying nothing, for the tool and their task's seeds are their default - the
@@ -2189,11 +2195,14 @@ reads by the one check of a schema's text (`JsonSchemaSubset.TextProblems`, thro
 each problem on its own line naming the file, the step and the place in the schema, so no run starts over a schema no
 answer could be held to. A schema may share a definition with the schema files beside it - a `$ref` of the form
 `plan.schema.json#/$defs/workItem` - and every reader of one takes the shared definitions in
-(`JsonSchemaSubset.Shared`, through `WorkflowFiles.SchemaProblems` where a definition is checked, `WorkflowValidator`'s
-typing and the step's own reading of its schema at a run): the definitions its references name, and those they reach,
-are copied into the schema's own `$defs` and the references made local, so the shipped plan, self-audit and diagnosis
-schemas hold one work-item definition between them, and a reference nothing beside the schema answers is refused where
-the schema is checked, naming the file; the shipped definition's schemas are held to it where this build reads them - a runner or a leg no configuration
+(`JsonSchemaSubset.Shared`), by the one reading of a schema's text that the check, `WorkflowValidator`'s typing and the
+step's own reading of its schema at a run each ask (`JsonSchemaSubset.Whole`, which the check reaches through
+`WorkflowFiles.SchemaProblems` and `JsonSchemaSubset.TextProblems`): the definitions its references name, and those
+they reach, are copied into the schema's own `$defs` and the references made local, so the shipped plan, self-audit and
+diagnosis schemas hold one work-item definition between them, and a reference nothing beside the schema answers is
+refused where the schema is checked, naming the file - one a taken definition holds to its own file's definitions
+written naming that file, never left local to name a definition of the referring schema's own that only shares its
+name, and a referring schema whose own `$defs` is no mapping taking nothing in, so both are refused; the shipped definition's schemas are held to it where this build reads them - a runner or a leg no configuration
 declares is said the same way, as is a definition that cannot be read, and a workflow whose
 directory leads out of the workflows directory, or whose definition out of its own directory, once
 their links are followed. Every problem is collected and reported together (12), without running
@@ -2976,10 +2985,15 @@ run's directory and syncs the run's one codebase graph through `ICodebaseGraphSe
 and its tests (P-C9: the units its change affects in `tests`, none blank, or why it affects none in `noTests`, exactly
 one of the two):
 an item declares the classes of the decisions it changes or says in `noClass` why it decides none; a class id names
-one class in a plan; the home is among the item's own paths and there in the tree where it exists; every site that
-changes - `reads-home` or `deleted` - is the item's too, for patching some of a class's sites is never done; more
-than one site means consolidate, as one site that is not the home does; a class is searched by data its queries name
-again, and its universe holds the axes the repository declares; and one home belongs to one item. The builder closes
+one class in a plan; each home and each site is a path inside the tree, held to the rule a path an item reuses is
+(`OrchestrationRules.PathsProblem`), and one that is not is said and matched and looked for no further, so a `..`, a
+doubled separator or a rooted path is the plan's problem, never the check's failure; the home is among the item's own
+paths and there in the tree where it exists; a site is the home exactly where its path, compared as the machine
+compares paths, and its symbol are the home's, and only that site is marked `home`; every other site changes -
+`reads-home` or `deleted` - and is the item's too, for patching some of a class's sites is never done; more than one
+site means consolidate, as one site that is not the home does; a class is searched by data its queries name again,
+and its universe holds the axes the repository declares; and one home belongs to one item - two classes of one item
+may share one, a place that decides more than one thing, which that item changes alone. The builder closes
 the class (part 01's B and C): the implementer's definition and the implement and remedy prompts hold the
 class-closure paragraph, every prompt that goes on with an item - mend, rework, reconcile, anchors, unblock, redo and
 undo - reads the item's classes and the record so far (`{input.item.classes}`, `{implement.latest.closure}`) under

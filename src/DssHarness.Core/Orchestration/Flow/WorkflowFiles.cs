@@ -29,8 +29,8 @@ public static class WorkflowFiles
     public sealed record Placed(IReadOnlyList<string> Files, IReadOnlyList<Beyond> Beyond);
 
     /// <summary>
-    /// Why a schema the definition names is not one the engine reads, each problem
-    /// <see cref="Schemas.JsonSchemaSubset.TextProblems"/> says on its own line naming the file and what names it; none
+    /// Why a schema the definition names is not one the engine reads, each problem the one check of a schema's text
+    /// (<see cref="Schemas.JsonSchemaSubset.TextProblems"/>) says on its own line naming the file and what names it; none
     /// where it is one. Said where a repository's workflow is checked and where this build's own is read, so a
     /// definition never holds over a schema no answer could be held to. Where the files beside the schema are read,
     /// the definitions its references share with them are taken into it first (<see cref="Schemas.JsonSchemaSubset.Shared"/>),
@@ -47,23 +47,7 @@ public static class WorkflowFiles
         ArgumentNullException.ThrowIfNull(named);
         ArgumentNullException.ThrowIfNull(text);
 
-        JsonNode? parsed;
-
-        try
-        {
-            parsed = JsonNode.Parse(text);
-        }
-        catch (JsonException ex)
-        {
-            return [$"'{named.File}', {named.What}, is not a schema the engine reads: $: is not JSON ({ex.Message})"];
-        }
-
-        // JSON's null parses to no node at all, and is no schema as any other value that is not an object is not.
-        var problems = parsed is not JsonObject schema
-            ? ["$: a schema is a JSON object"]
-            : Schemas.JsonSchemaSubset.SubsetProblems(neighbours is null ? schema : Schemas.JsonSchemaSubset.Shared(schema, neighbours));
-
-        return [.. problems.Select(problem => $"'{named.File}', {named.What}, is not a schema the engine reads: {problem}")];
+        return [.. Schemas.JsonSchemaSubset.TextProblems(text, neighbours).Select(problem => $"'{named.File}', {named.What}, is not a schema the engine reads: {problem}")];
     }
 
     /// <summary>

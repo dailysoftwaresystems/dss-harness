@@ -5822,10 +5822,12 @@ public sealed partial class HelpTests
         Assert.Contains(
             "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "
                 + "decides none, the classes held to what the tree and the item's own paths say of them: a class id used once in the "
-                + "plan, the home among the item's own paths and there in the tree where it exists, every site that changes the "
-                + "item's too - patching some of a class's sites is never done - more than one site consolidated at the home, as one "
-                + "site that is not the home is, each class searched by data its queries name again, its universe holding the axes "
-                + "the repository declares, and one home belonging to one item; and each item naming the tests its change affects in "
+                + "plan, each home and each site a path inside the tree as a path an item reuses is, the home among the item's own "
+                + "paths and there in the tree where it exists, a site marked home exactly where it is the home by its path and "
+                + "symbol, every other site - which changes, reading the home or deleted - the item's too - patching some of a "
+                + "class's sites is never done - more than one site consolidated at the home, as one site that is not the home is, "
+                + "each class searched by data its queries name again, its universe holding the axes the repository declares, and "
+                + "one home belonging to one item, two classes of one item sharing one as they may; and each item naming the tests its change affects in "
                 + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two.",
             prose,
             StringComparison.Ordinal);
@@ -5904,7 +5906,8 @@ public sealed partial class HelpTests
                 + "code keep the tool - the implementer and the pre-existing-issue triage say nothing and are given it "
                 + "and their task's seeds by default, as the planner is, which the measurement left as it was, and the "
                 + "reviewers, the self-audit, the diagnosis and the steps that verify and fix say graphFrom: changes - "
-                + "the request triage and the plan audit, whose work is text the map does not light, ask none, the "
+                + "the request triage and the plan audit, whose work is text the map does not light, ask none, as the "
+                + "item audit does, the plan audit's agent on a later round's items, searching by its own text search, the "
                 + "prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the "
                 + "run's records, ask none of it. Where config.json declares "
                 + $"{WorkflowTemplates.ShippedWorkflowName}, init writes each of its "

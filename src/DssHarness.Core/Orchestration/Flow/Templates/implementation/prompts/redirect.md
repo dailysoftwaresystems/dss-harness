@@ -2,24 +2,15 @@ The person you asked has answered, with what the run is to do about the failure 
 
 {direction.text}
 
-Where lines below say a machine check refused the work items, settle them too: the diagnosis is revised by its own
-problems, as by the person's answer.
-
-## What the plan check said of the remedy items
-
-Passed: {remedy-check.ok}. Problems:
-
-{remedy-check.problems}
-
-Each item that changes a decision gives its class - its one home, its sites, its searches, its universe - and one that
-decides none says why in noClass, or the check refuses it again.
-
 Take their answer as the decision it is, and say again what puts the failure right, in its light. Check what their
 answer says of the cause before you build on it: the cause and the evidence are what you read or ran, not their words.
 
 - **fix**, where their answer leads to a change the run makes: the work items, at most four, each sized to one
   builder's cycle, with the paths it owns, the tests that show the failure is gone - or, where no test can, why in
-  noTests - and its definition of done, of which the first statement is that `{source.step}` would now pass.
+  noTests - and its definition of done, of which the first statement is that `{source.step}` would now pass. Each item
+  that changes a decision gives its class - its one home, its sites, its searches, its universe - and one that decides
+  none says why in noClass. A machine check reads the items before any is built, and gives you its problems to settle
+  where it refuses them.
 - **retry**, where their answer means nothing needs changing - they lifted what stood in the way - and the step will
   pass as it is.
 - **person**, where their answer still leaves something only a person can give, or asks for what no course does, such

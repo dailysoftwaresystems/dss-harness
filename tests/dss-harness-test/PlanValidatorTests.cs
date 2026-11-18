@@ -5,12 +5,13 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// The machine's check of a plan's classes (P-C1 to P-C8): an item declares the decisions it changes or says why it
-/// changes none; a class id names one class in a plan; the home of a class is the item's own to change and there in
-/// the tree where it exists; every site that must change is the item's too, for patching some of a class's sites is
-/// never done; more than one site means consolidate, as one site that is not the home does; a class is searched by
-/// data it can name again, and its universe holds the axes the repository declares; and one home belongs to one item.
-/// And of its tests (P-C9): an item names the units of the tests its change affects, or says why it affects none.
-/// Each rule is red with itself removed, held by the reverts this file's twin methods name.
+/// changes none; a class id names one class in a plan; each home and each site is a path inside the tree; the home of a
+/// class is the item's own to change and there in the tree where it exists; a site is marked home exactly where it is
+/// the home, and every other site, which must change, is the item's too, for patching some of a class's sites is never
+/// done; more than one site means consolidate, as one site that is not the home does; a class is searched by data it
+/// can name again, and its universe holds the axes the repository declares; and one home belongs to one item. And of
+/// its tests (P-C9): an item names the units of the tests its change affects, or says why it affects none. Each rule
+/// is red with itself removed, held by the reverts this file's twin methods name.
 /// </summary>
 public sealed class PlanValidatorTests : IDisposable
 {
@@ -293,5 +294,81 @@ public sealed class PlanValidatorTests : IDisposable
                 "work items 'one' and 'two' both hold a class whose home is 'src/one/home.cs' at 'Decides': one home, one item",
             ],
             await CheckAsync(repository, Item(classes: [Class()]), other));
+    }
+
+    /// <summary>
+    /// P-C8 is of two items: two classes of one item may share a home - one place that decides two things, which the
+    /// item that owns it changes in one sitting - so no rule of one item's is broken, and nothing is said of it.
+    /// </summary>
+    [Fact]
+    public async Task TwoClassesOfOneItemSharingAHome_AreSound()
+    {
+        var (_, repository) = await RepositoryAsync();
+
+        Assert.Empty(await CheckAsync(repository, Item(classes: [Class(), Class("C2")])));
+    }
+
+    /// <summary>
+    /// A home and a site are paths inside the tree, as the paths an item reuses and replaces are: one that climbs out, is
+    /// rooted, or holds a doubled separator is the plan's problem, said by the rule that owns it, and nothing more is
+    /// asked of it - never matched against the item's paths, which would end the check as the engine's own failure, nor
+    /// looked for in the tree, which a rooted path would leave. The rest of its class is still checked.
+    /// </summary>
+    [Fact]
+    public async Task AHomeOrASiteThatIsNoPathInsideTheTree_IsAProblemOfThePlan_NeverAFailureOfTheCheck()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var climbing = Item(classes: [Class(home: "src/one/../one/home.cs")]);
+        var doubled = Item("two", "src/two/**", classes: [Class("C2", "src/two/home.cs", action: "consolidate", sites: [Site("src/two/home.cs"), Site("src//two/site.cs", then: "reads-home")])]);
+        var beside = Item("created", "src/created/**", classes: [Class("C3", "src/created/home.cs", action: "consolidate", sites: [Site("src/created/home.cs"), Site("../shared/site.cs", then: "reads-home")])]);
+        var rooted = Item("four", "src/four/**", classes: [Class("C4", "/src/four/home.cs", searches: [])]);
+
+        Assert.Equal(
+            [
+                "the home work item 'one''s C1 names, 'src/one/../one/home.cs', is not a path relative to the tree, spelt with forward slashes",
+                "a site work item 'one''s C1 names, 'src/one/../one/home.cs', is not a path relative to the tree, spelt with forward slashes",
+                "a site work item 'two''s C2 names, 'src//two/site.cs', is not a path relative to the tree, spelt with forward slashes",
+                "a site work item 'created''s C3 names, '../shared/site.cs', is not a path relative to the tree, spelt with forward slashes",
+                "the home work item 'four''s C4 names, '/src/four/home.cs', is not a path relative to the tree, spelt with forward slashes",
+                "a site work item 'four''s C4 names, '/src/four/home.cs', is not a path relative to the tree, spelt with forward slashes",
+                "work item 'four''s C4 names no search: the sites are found by searching the data, and each search is recorded",
+            ],
+            await CheckAsync(repository, climbing, doubled, beside, rooted));
+    }
+
+    /// <summary>
+    /// A home and a site are compared as paths, whichever separator they are written with: a site written with
+    /// backslashes at the home is the home, and a class whose one site it is needs no consolidation.
+    /// </summary>
+    [Fact]
+    public async Task ASiteWrittenWithBackslashesAtTheHome_IsTheHome()
+    {
+        var (_, repository) = await RepositoryAsync();
+
+        Assert.Empty(await CheckAsync(repository, Item(classes: [Class(sites: [Site("src\\one\\home.cs")])])));
+    }
+
+    /// <summary>
+    /// A site is the home exactly where its path and its symbol are the home's, and only that site is marked home: one
+    /// marked home elsewhere - in another item's paths, or at another symbol of the home's own file - is a place that
+    /// decides today, which a mark of home would leave deciding, held to the item's paths as every other site is; and
+    /// the home's own site marked as a site that reads the home is refused too.
+    /// </summary>
+    [Fact]
+    public async Task ASiteMarkedHomeThatIsNotTheHome_OrTheHomeMarkedOtherwise_IsAProblem()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var foreign = Item(classes: [Class(action: "consolidate", sites: [Site(), Site("src/other/other.cs")])]);
+        var unmarked = Item("two", "src/two/**", classes: [Class("C2", "src/two/home.cs", action: "consolidate", sites: [Site("src/two/home.cs", then: "reads-home"), Site("src/two/site.cs", then: "reads-home")])]);
+        var otherSymbol = Item("created", "src/created/**", classes: [Class("C3", "src/created/home.cs", action: "consolidate", sites: [Site("src/created/home.cs"), Site("src/created/home.cs", symbol: "Elsewhere")])]);
+
+        Assert.Equal(
+            [
+                "work item 'one''s C1 has its site at 'src/other/other.cs' marked home, and its home is 'src/one/home.cs' at 'Decides': a site is the home only at the home's path and symbol - every other site reads the home or is deleted",
+                "work item 'one''s C1 has its site at 'src/other/other.cs' (home) outside the item: the item owns it, or the class belongs to the item that owns it",
+                "work item 'two''s C2 has its site at 'src/two/home.cs' marked 'reads-home', and it is its home: the home's own site is marked home, for it is the place that decides",
+                "work item 'created''s C3 has its site at 'src/created/home.cs' marked home, and its home is 'src/created/home.cs' at 'Decides': a site is the home only at the home's path and symbol - every other site reads the home or is deleted",
+            ],
+            await CheckAsync(repository, foreign, unmarked, otherSymbol));
     }
 }

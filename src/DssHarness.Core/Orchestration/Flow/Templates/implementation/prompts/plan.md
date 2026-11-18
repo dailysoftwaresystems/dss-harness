@@ -84,14 +84,15 @@ For every defect the plan fixes and every behaviour it changes, write the class 
 1. Write the invariant in one sentence: X is decided by Y for every Z.
 2. Find the one home that should decide it - or say that no place does today, and creating the home is the fix.
 3. Find every site that decides it today, by searching the data - the kind, the key, the diagnostic, the verb, the
-   literal - across every tier, format, target and file kind, never the file the defect was seen in alone. The graph's
-   sites operation first where the graph sees the data, text search for what it lists only, and each search said in
-   notCovered where the graph does not see it.
+   literal - across every tier, format, target and file kind, never the file the defect was seen in alone. The graph
+   first where it sees the data - its find for the names, its node and related for what reads and calls them - and
+   text search for what it does not see, each such search said in notCovered.
 4. Record each search: what was searched, how, the query as it was made, and how many places it found.
 5. Write the universe from the axes the repository declares, and the count of their product.
 6. Where more than one site decides, the action is consolidate: the home decides, every other site reads it, and the
    item owns every path that changes. Patching some of a class's sites is never done; a class with one site names the
-   home itself, and its searches prove it is the only one.
+   home itself, and its searches prove it is the only one. The site at the home's path and symbol is marked home, and
+   no other is: every other site reads the home or is deleted.
 
 The work of a class goes to one item, which owns every site that changes, so items are split by classes before they are
 split by files. An item that decides nothing - a document, a rename the tools make, a dependency bump - gives no class
@@ -131,8 +132,9 @@ nothing is being updated.
 
 A machine checks the items before anyone builds them: every name valid, no file under two items, forbidden paths kept,
 every path an item reuses or replaces there in the tree, every item saying what it reuses, creates or replaces, each
-class's home among the item's own paths and there in the tree, every site that changes the item's too, more than one
-site consolidated at the home, each class searched by data its queries name again, the universe holding the axes the
-repository declares, one class id used once, and one home belonging to one item. An independent auditor then checks
+home and site a path inside the tree, each class's home among the item's own paths and there in the tree, a site marked
+home only where it is the home, every other site the item's too, more than one site consolidated at the home, each
+class searched by data its queries name again, the universe holding the axes the repository declares, one class id
+used once, and one home belonging to one item. An independent auditor then checks
 the plan against the code, searching for itself what you say does not exist - the classes above all. Then
 a person approves it, unless they approved it beforehand in what they gave this run.

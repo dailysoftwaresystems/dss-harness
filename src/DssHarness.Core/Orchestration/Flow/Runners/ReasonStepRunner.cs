@@ -802,12 +802,13 @@ public sealed class ReasonStepRunner(
             : null;
 
     /// <summary>
-    /// The step's output schema read whole: where its references name definitions the schema files beside it share
-    /// (<see cref="Schemas.JsonSchemaSubset.Shared"/>), they are taken in - so the schema the client is sent and the
-    /// schema the answer is held to are one, and hold - and where nothing is shared, the schema stands as its file
-    /// wrote it, judged where a definition is checked, not here. A shared definition nothing beside the schema
-    /// answers is refused (13) naming why: the definition's check said it when the run began, and this says where
-    /// it is again.
+    /// The step's output schema read whole, by the one reading of a schema's text
+    /// (<see cref="Schemas.JsonSchemaSubset.Whole"/>): where its references name definitions the schema files beside it
+    /// share, they are taken in - so the schema the client is sent and the schema the answer is held to are one, and
+    /// hold - and where nothing is taken in, the schema stands as its file wrote it, judged by the check every client is
+    /// held to before it is taken (<see cref="AgentOutput.SchemaProblems"/>), not here. Text that is no schema at all, and
+    /// a whole made here that the subset does not read, are refused (13) naming why: the definition's check said it when
+    /// the run began, and this says where it is again.
     /// </summary>
     /// <param name="files">Reads the files the workflow names, beside the schema among them.</param>
     /// <param name="layout">The repository's layout.</param>
@@ -816,37 +817,18 @@ public sealed class ReasonStepRunner(
     /// <param name="named">The schema, as the step names it.</param>
     private static string SchemaWholeOf(WorkflowNamedFiles files, HarnessLayout layout, string workflow, WorkflowStep step, string named)
     {
-        var why = $"'{named}', the output schema of step '{step.Name}'";
-        string text = files.ReadText(layout, workflow, named, "a schema");
-        JsonObject schema;
-
-        try
-        {
-            schema = (JsonNode.Parse(text) as JsonObject)!;
-        }
-        catch (JsonException ex)
-        {
-            throw new HarnessException(HarnessExit.ConfigInvalid, $"{why} is not a schema the engine reads: $: is not JSON ({ex.Message})");
-        }
-
-        if (schema is null)
-        {
-            throw new HarnessException(HarnessExit.ConfigInvalid, $"{why} is not a schema the engine reads: $: a schema is a JSON object");
-        }
-
-        var whole = Schemas.JsonSchemaSubset.Shared(
-            schema,
+        var text = files.ReadText(layout, workflow, named, "a schema");
+        var read = Schemas.JsonSchemaSubset.Whole(
+            text,
             beside => WorkflowFiles.RootOf(files.ReadTextIfThere(layout, workflow, WorkflowFiles.Beside(named, beside), "a schema beside it")));
 
-        if (JsonNode.DeepEquals(schema, whole))
+        if (read.Schema is not null && !read.TookIn)
         {
             return text;
         }
 
-        var problems = Schemas.JsonSchemaSubset.SubsetProblems(whole);
-
-        return problems.Count > 0
-            ? throw new HarnessException(HarnessExit.ConfigInvalid, $"{why} is not a schema the engine reads: {string.Join("; ", problems)}")
+        return read.Schema is not { } whole || read.Problems.Count > 0
+            ? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', the output schema of step '{step.Name}', is not a schema the engine reads: {string.Join("; ", read.Problems)}")
             : whole.ToJsonString();
     }
 

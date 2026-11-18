@@ -29,8 +29,8 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
         Assert.Equal(89, Count(definition.Steps));
-        Assert.Equal(55, Count(definition.Recover!.Steps));
-        Assert.Equal(57, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(57, Count(definition.Recover!.Steps));
+        Assert.Equal(58, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "finalTests" && input.Default == "affected");
         Assert.Equal(["affected", "all"], definition.Inputs.Single(input => input.Name == "finalTests").Options);
@@ -99,7 +99,8 @@ public sealed class WorkflowTemplatesTests
     /// diagnosis, and the pre-existing-issue triage (it measured cheaper) - the reviewers, the self-audit, the
     /// diagnosis and the steps that verify and fix starting their packs from their changes (<c>graphFrom: changes</c>);
     /// the request triage and the plan audit, whose work is text the map does not light, ask none (each measured
-    /// costlier with no quality gained); the prioritiser and a review's scope keep the map (the scope's whole overhead
+    /// costlier with no quality gained), as the item audit - the plan audit's agent on a later round's items - does,
+    /// searching the data by its own text search; the prioritiser and a review's scope keep the map (the scope's whole overhead
     /// is a fifth of a cent beside the review rounds it steers; the prioritiser is unmeasured, serving only a run with
     /// no request); the scribes ask none as before. The planner, which resumes itself and so may say a graph key of its
     /// own, keeps its default, the tool, as it was: the measurement found it costlier with the graph and did not move
@@ -179,6 +180,7 @@ public sealed class WorkflowTemplatesTests
             ("notes-cite", null, null),
             ("diagnose", null, "changes"),
             ("redirect", null, "changes"),
+            ("remedy-revise", null, "changes"),
             ("triage-pre-existing-issue", null, null),
         };
 
@@ -805,7 +807,7 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(FlowRecover.PauseOnFailure, recover.OnFailure);
         Assert.Equal(5, recover.MaxVisits);
         Assert.Equal("diagnose", recover.Steps[0].Resume);
-        Assert.Equal(["diagnose", "direction", "remedy-check", "redirect", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
+        Assert.Equal(["diagnose", "direction", "redirect", "remedy-check", "remedy-revise", "remedy-recheck", "remedies", "publish"], [.. recover.Steps.Select(step => step.Name)]);
 
         var passedOver = new List<string>();
         var untried = new List<string>();
@@ -896,6 +898,39 @@ public sealed class WorkflowTemplatesTests
                 Walk(step.Steps, path, effective, recovering, step.With.TryGetValue("failTo", out var filled) ? filled : failTo);
             }
         }
+    }
+
+    /// <summary>
+    /// What the shipped flow builds is what a plan check read, after the last word on it, and a later round is audited
+    /// before it is built. The rounds' items wait for the item audit as well as for the check, so the audit reads the
+    /// tree they are built on and the self-audit after the build reads what it found; the round is judged by that
+    /// self-audit, so the item audit's go - said before the build that may settle it - is no term of the rounds' until.
+    /// The recovery checks the diagnosis's items once the person's answer, where one was given, made its last word
+    /// (redirect); sends what the check refuses back to the diagnostician within the visit (remedy-revise); checks what
+    /// it gives again (remedy-recheck); and builds the items those checks read, never the diagnosis's own list.
+    /// </summary>
+    [Fact]
+    public void WhatTheShippedFlowBuilds_IsWhatAPlanCheckRead_AfterTheLastWordOnIt()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+        var recover = definition.Recover!.Steps;
+
+        Assert.Equal(["item-problems", "item-audit"], StepAt(definition.Steps, "rounds", "items").DependsOn);
+        Assert.Equal("item-check.items", StepAt(definition.Steps, "rounds", "items").ForEach);
+        Assert.Equal(
+            "self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && empty(round-checks.findings)",
+            StepAt(definition.Steps, "rounds").Repeat!.Until);
+
+        Assert.Equal(["direction"], StepAt(recover, "redirect").DependsOn);
+        Assert.Equal("(direction.answer ?? '') == 'continue'", StepAt(recover, "redirect").When);
+        Assert.Equal(["redirect"], StepAt(recover, "remedy-check").DependsOn);
+        Assert.Equal("diagnose.latest.items", StepAt(recover, "remedy-check").Items);
+        Assert.Equal(("diagnose", "!(remedy-check.ok ?? true)"), (StepAt(recover, "remedy-revise").Resume, StepAt(recover, "remedy-revise").When));
+        Assert.Equal(["remedy-check"], StepAt(recover, "remedy-revise").DependsOn);
+        Assert.Equal(["remedy-revise"], StepAt(recover, "remedy-recheck").DependsOn);
+        Assert.Equal("diagnose.latest.items", StepAt(recover, "remedy-recheck").Items);
+        Assert.Equal(["remedy-recheck"], StepAt(recover, "remedies").DependsOn);
+        Assert.Equal("remedy-recheck.items ?? remedy-check.items", StepAt(recover, "remedies").ForEach);
     }
 
     /// <summary>

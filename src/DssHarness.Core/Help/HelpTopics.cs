@@ -5639,7 +5639,8 @@ public static class HelpTopics
         builder.AppendLine("code keep the tool - the implementer and the pre-existing-issue triage say nothing and are given it");
         builder.AppendLine("and their task's seeds by default, as the planner is, which the measurement left as it was, and the");
         builder.AppendLine("reviewers, the self-audit, the diagnosis and the steps that verify and fix say graphFrom: changes -");
-        builder.AppendLine("the request triage and the plan audit, whose work is text the map does not light, ask none, the");
+        builder.AppendLine("the request triage and the plan audit, whose work is text the map does not light, ask none, as the");
+        builder.AppendLine("item audit does, the plan audit's agent on a later round's items, searching by its own text search, the");
         builder.AppendLine("prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the");
         builder.AppendLine("run's records, ask none of it. Where");
         builder.AppendLine($"config.json declares {WorkflowTemplates.ShippedWorkflowName},");
@@ -5906,10 +5907,12 @@ public static class HelpTopics
             + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
             + "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "
             + "decides none, the classes held to what the tree and the item's own paths say of them: a class id used once in the "
-            + "plan, the home among the item's own paths and there in the tree where it exists, every site that changes the "
-            + "item's too - patching some of a class's sites is never done - more than one site consolidated at the home, as one "
-            + "site that is not the home is, each class searched by data its queries name again, its universe holding the axes "
-            + "the repository declares, and one home belonging to one item; and each item naming the tests its change affects in "
+            + "plan, each home and each site a path inside the tree as a path an item reuses is, the home among the item's own "
+            + "paths and there in the tree where it exists, a site marked home exactly where it is the home by its path and "
+            + "symbol, every other site - which changes, reading the home or deleted - the item's too - patching some of a "
+            + "class's sites is never done - more than one site consolidated at the home, as one site that is not the home is, "
+            + "each class searched by data its queries name again, its universe holding the axes the repository declares, and "
+            + "one home belonging to one item, two classes of one item sharing one as they may; and each item naming the tests its change affects in "
             + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
             + "with the items, each problem among the rest: each piece of one of the four kinds (added, changed, removed, told) "
             + "and its texts; an added or a changed piece's item an item of the list, a removed piece's of a work item's shape; "

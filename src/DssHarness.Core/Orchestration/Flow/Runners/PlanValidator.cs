@@ -393,11 +393,12 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     }
 
     /// <summary>
-    /// What a work item's classes say of the repository and of the item's own paths (P-C3 to P-C7): the home of each
-    /// class is the item's to change and there in the tree where it exists; every site that changes is the item's too,
-    /// for patching some of a class's sites is never done; more than one site means consolidate, as one site that is
-    /// not the home does; a class without a search, a search without a query and a universe without axes decide
-    /// nothing checkable.
+    /// What a work item's classes say of the repository and of the item's own paths (P-C3 to P-C7): each home and each
+    /// site a path inside the tree, as the paths an item reuses and replaces are; the home of each class the item's to
+    /// change and there in the tree where it exists; a site marked the home exactly where it is the home, by its path and
+    /// its symbol; every other site the item's too, for it changes - it reads the home or is deleted - and patching some
+    /// of a class's sites is never done; more than one site means consolidate, as one site that is not the home does; a
+    /// class without a search, a search without a query and a universe without axes decide nothing checkable.
     /// </summary>
     /// <param name="item">The work item, its classes read as they are given.</param>
     /// <param name="root">The main tree's root, the paths of a home and a site are checked against.</param>
@@ -429,20 +430,27 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 continue;
             }
 
-            // P-C3: the home is the item's to change, and where it exists it is in the tree.
-            if (!item.Owned.Any(pattern => pattern.Pattern.Matches(homePath, comparison)))
-            {
-                problems.Add($"{where}'s {id} has its home at '{homePath}', which the item does not own: the home changes, and the item that changes it owns it");
-            }
+            // A home that is no path inside the tree is said, and nothing more is asked of it: matched against the item's
+            // paths or looked for in the tree it would name no path the tree holds, or one outside it.
+            var homeAt = TreePathOf(homePath, $"the home {where}'s {id} names", problems);
 
-            if (homeExists && fileSystem.KindOf(Path.Combine(root, PathPatterns.Normalize(homePath))) == PathKind.None)
+            if (homeAt is not null)
             {
-                problems.Add($"{where}'s {id} has its home at '{homePath}', which is not in the main tree: a class is closed at what is there, or its home is created (exists: false)");
+                // P-C3: the home is the item's to change, and where it exists it is in the tree.
+                if (!item.Owned.Any(pattern => pattern.Pattern.Matches(homeAt, comparison)))
+                {
+                    problems.Add($"{where}'s {id} has its home at '{homePath}', which the item does not own: the home changes, and the item that changes it owns it");
+                }
+
+                if (homeExists && fileSystem.KindOf(Path.Combine(root, homeAt)) == PathKind.None)
+                {
+                    problems.Add($"{where}'s {id} has its home at '{homePath}', which is not in the main tree: a class is closed at what is there, or its home is created (exists: false)");
+                }
             }
 
             var homeIsASite = false;
 
-            foreach (var (site, atSite) in sites.Select((site, atSite) => (site, atSite)))
+            foreach (var site in sites)
             {
                 var path = Text((site as JsonObject)?["path"]);
 
@@ -452,21 +460,42 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                     continue;
                 }
 
+                if (TreePathOf(path, $"a site {where}'s {id} names", problems) is not { } siteAt)
+                {
+                    continue;
+                }
+
                 var symbol = SymbolOf((site as JsonObject)?["symbol"]);
                 var then = Text((site as JsonObject)?["then"]);
 
-                if (fileSystem.KindOf(Path.Combine(root, PathPatterns.Normalize(path))) == PathKind.None)
+                if (fileSystem.KindOf(Path.Combine(root, siteAt)) == PathKind.None)
                 {
                     problems.Add($"{where}'s {id} has its site at '{path}', which is not in the main tree: the sites are the places that decide today");
                 }
 
-                // P-C4: every site that must change is the item's - patching N-1 of N is refused.
-                if (then is "reads-home" or "deleted" && !item.Owned.Any(pattern => pattern.Pattern.Matches(path, comparison)))
+                // A site is the home only where its path and its symbol are the home's, and then it is marked so; a site
+                // marked home anywhere else is a place that decides today, which the plan would leave deciding.
+                var isHome = homeAt is not null && string.Equals(siteAt, homeAt, comparison) && string.Equals(symbol, homeSymbol, StringComparison.Ordinal);
+
+                if (isHome && !string.Equals(then, "home", StringComparison.Ordinal))
+                {
+                    problems.Add($"{where}'s {id} has its site at '{path}' marked '{then}', and it is its home: the home's own site is marked home, for it is the place that decides");
+                }
+                else if (homeAt is not null && !isHome && string.Equals(then, "home", StringComparison.Ordinal))
+                {
+                    problems.Add($"{where}'s {id} has its site at '{path}' marked home, and its home is '{homePath}' at '{homeSymbol}': a site is the home only at the home's path and symbol - every other site reads the home or is deleted");
+                }
+
+                // P-C4: every site that must change is the item's - every one but the home, where the home is known; each
+                // marked reads-home or deleted, where it is not - so patching N-1 of N is refused.
+                var changes = homeAt is not null ? !isHome : then is "reads-home" or "deleted";
+
+                if (changes && !item.Owned.Any(pattern => pattern.Pattern.Matches(siteAt, comparison)))
                 {
                     problems.Add($"{where}'s {id} has its site at '{path}' ({then}) outside the item: the item owns it, or the class belongs to the item that owns it");
                 }
 
-                homeIsASite |= string.Equals(path, homePath, comparison) && string.Equals(symbol, homeSymbol, StringComparison.Ordinal);
+                homeIsASite |= isHome;
             }
 
             // P-C5: one decision, one place - a class of many sites is consolidated, and one site that is not the home
@@ -476,7 +505,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
                 problems.Add($"{where}'s {id} holds {sites.Count.ToString(CultureInfo.InvariantCulture)} sites and its action is '{action}': more than one site means consolidate - the home decides, every other site reads it");
             }
 
-            if (sites.Count == 1 && !homeIsASite && !string.Equals(action, "consolidate", StringComparison.Ordinal))
+            if (sites.Count == 1 && homeAt is not null && !homeIsASite && !string.Equals(action, "consolidate", StringComparison.Ordinal))
             {
                 problems.Add($"{where}'s {id} holds one site, which is not its home, and its action is '{action}': consolidate - the home decides, every other site reads it");
             }
@@ -554,36 +583,63 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
 
     /// <summary>
     /// P-C8: two items' classes name the same home, by path and symbol - one home, one item, for a home two items
-    /// change is a home decided in two places.
+    /// change is a home decided in two places. Two classes of one item may share a home: one place may decide more than
+    /// one thing, and the item that owns it changes it in one sitting, so no rule of one item's own is broken. Where two
+    /// items share one, the home rule (P-C3) and the rule that no path is owned by two items say so as well, each of its
+    /// own part; this names the cause. A home that is no path inside the tree is said by the class rules, and compared
+    /// with none.
     /// </summary>
     private static void HomeProblems(IReadOnlyList<Item> items, StringComparison comparison, List<string> problems)
     {
         Func<string, string> fold = comparison == StringComparison.OrdinalIgnoreCase
             ? static path => path.ToUpperInvariant()
             : static path => path;
-        var homes = new Dictionary<(string Path, string Symbol), string>();
+        var homes = new Dictionary<(string Path, string Symbol), Item>();
 
         foreach (var item in items)
         {
             foreach (var @class in item.Node["classes"] as JsonArray ?? [])
             {
-                if (Text(((@class as JsonObject)?["home"] as JsonObject)?["path"]) is not { } path)
+                var home = (@class as JsonObject)?["home"] as JsonObject;
+
+                if (Text(home?["path"]) is not { } path || TreePathOf(path, "a home", problems: null) is not { } homeAt)
                 {
                     continue;
                 }
 
-                var named = (Path: fold(PathPatterns.Normalize(path)), Symbol: SymbolOf(((@class as JsonObject)?["home"] as JsonObject)?["symbol"]));
+                var named = (Path: fold(homeAt), Symbol: SymbolOf(home?["symbol"]));
 
-                if (homes.TryGetValue(named, out var first))
+                if (!homes.TryGetValue(named, out var first))
                 {
-                    problems.Add($"work items '{first}' and '{item.Name}' both hold a class whose home is '{path}' at '{named.Symbol}': one home, one item");
+                    homes[named] = item;
                 }
-                else
+                else if (!ReferenceEquals(first, item))
                 {
-                    homes[named] = item.Name;
+                    problems.Add($"work items '{first.Name}' and '{item.Name}' both hold a class whose home is '{path}' at '{named.Symbol}': one home, one item");
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// The path a class's home or site names, as the class rules compare it - its separators made forward slashes, read
+    /// past at either end - where it is a path inside the tree by the rule the paths an item reuses and replaces are held
+    /// to (<see cref="OrchestrationRules.PathsProblem"/>): neither rooted nor climbing out, with no empty or <c>.</c>
+    /// part. Null where it is not, its problem added to <paramref name="problems"/> where they are given, for no pattern
+    /// matches such a path and no look in the tree for it stays inside the tree.
+    /// </summary>
+    /// <param name="path">The path, as the plan gives it.</param>
+    /// <param name="what">What names it, as its problem says it.</param>
+    /// <param name="problems">The problems of the plan, the path's own added to; null where it is said elsewhere.</param>
+    private static string? TreePathOf(string path, string what, List<string>? problems)
+    {
+        if (OrchestrationRules.PathsProblem([path], what) is { } problem)
+        {
+            problems?.Add(problem);
+            return null;
+        }
+
+        return PathPatterns.Normalize(path);
     }
 
     /// <summary>A symbol as the class rules compare it: its text, or empty where none is given.</summary>

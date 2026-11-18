@@ -1690,6 +1690,67 @@ public sealed class ImplementationFlowTests
         }
 
         /// <summary>
+        /// A later round's items are audited before any is built, and the round is judged by the self-audit that read the
+        /// audit: no builder of the round is asked while the item audit works; its findings reach that round's
+        /// self-audit; and a self-audit that holds the round clean ends the rounds by their until - an item audit that
+        /// said no-go before the build, which the build settled, never ends them at their bound with nothing said of it.
+        /// </summary>
+        [Fact]
+        public async Task ALaterRoundsItems_AreAuditedBeforeTheyAreBuilt_AndJudgedByTheSelfAuditThatReadTheAudit()
+        {
+            using var temp = new TempDirectory();
+            Held? audit = null;
+            const string Missed = "class C1 is decided at src/two/frame.cs as well, which its site list lacks";
+            var kit = await PrepareAsync(
+                temp,
+                agents =>
+                {
+                    agents.Queue("auditor", Completed(SelfAudit(clean: false, items: [One(name: "two", owned: "src/two/**")])), Completed(SelfAudit(clean: true)));
+                    audit = agents.Hold("plan-auditor", step => step.Prompt.StartsWith("Audit the classes of this round's work items before they are built.", StringComparison.Ordinal));
+                });
+
+            var running = StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            // The second round's item audit is asked, and works on.
+            await WhenAsync(() => kit.Agents.Of("plan-auditor").Count == 2, () => Shown(kit));
+
+            // While it works, nothing of the round's build starts - drawn beside the audit, its group would be under way at
+            // once - and no builder of the round is asked: the first round's builder is the only one there is.
+            IReadOnlyList<string> Building() => [.. (kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())?.Steps ?? [])
+                .Where(step => step.Instance.StartsWith("rounds#2.items", StringComparison.Ordinal) && step.State != nameof(FlowInstanceState.NotStarted))
+                .Select(step => $"{step.Instance} {step.State}")];
+
+            for (var waited = 0; waited < 100 && kit.Agents.Of("implementer").Count < 2 && Building().Count == 0; waited++)
+            {
+                await Task.Delay(Poll, Token);
+            }
+
+            Assert.Empty(Building());
+            Assert.Single(kit.Agents.Of("implementer"));
+
+            audit!.Open(with: Completed(Audit(go: false, Missed)));
+
+            var end = await running;
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
+            Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+            // The round was built after its audit, and its self-audit read what the audit found.
+            var asked = kit.Agents.Asked.ToList();
+
+            Assert.True(
+                asked.FindIndex(step => step.AgentDefinition == "plan-auditor" && step.Prompt.StartsWith("Audit the classes", StringComparison.Ordinal))
+                    < asked.FindLastIndex(step => step.AgentDefinition == "implementer"),
+                string.Join(", ", asked.Select(step => step.AgentDefinition)));
+            Assert.Equal(2, kit.Agents.Of("implementer").Count);
+            Assert.Contains(Missed, kit.Agents.Of("auditor")[1].Prompt, StringComparison.Ordinal);
+
+            // The clean self-audit ended the rounds by their until: no bound was met, and nothing was left.
+            Assert.DoesNotContain(Questions(kit).Questions, question => question.Kind == "loopBound");
+            Assert.Null(kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Step == "rounds" && step.Group).Leftover);
+        }
+
+        /// <summary>
         /// A run given a plan: the items come from the file the person wrote, named to the planner and to the plan's
         /// auditor - and a red CI leg is not the run's work: the prioritizer puts it to a person as a stop, and the
         /// person's decision reaches the planner with it.
@@ -2484,6 +2545,77 @@ public sealed class ImplementationFlowTests
             Assert.Equal(
                 [("recover.remedies.checkpoint", nameof(FlowInstanceState.Done)), ("recover.remedies.fix.review.correctness", nameof(FlowInstanceState.Done)), ("recover.remedies.fold", nameof(FlowInstanceState.Done))],
                 [.. flow.Where(step => step.Step is "recover.remedies.fold" or "recover.remedies.checkpoint" or "recover.remedies.fix.review.correctness").Select(step => (step.Step, step.State)).OrderBy(step => step.Step, StringComparer.Ordinal)]);
+            Assert.Equal(
+                [("build", nameof(FlowInstanceState.Failed)), ("build+2", nameof(FlowInstanceState.Done))],
+                [.. flow.Where(step => step.Step == "build").Select(step => (step.Instance, step.State)).OrderBy(step => step.Instance, StringComparer.Ordinal)]);
+        }
+
+        /// <summary>
+        /// The remedy items a person's answer leads to are checked before any is built, and what the check refuses goes
+        /// back to the diagnostician within the visit: the diagnosis puts the failure to a person, the person answers
+        /// continue, the diagnosis said again on their answer sets out an item the plan check refuses - it declares no
+        /// class and says no reason - the diagnostician is given the check's problems and sets out the item again, the
+        /// check passes it, and that item, the one the check read, is the one built; the step that failed then runs again.
+        /// </summary>
+        [Fact]
+        public async Task TheRemediesAPersonsAnswerLeadsTo_AreChecked_TheirProblemsGoBackWithinTheVisit_AndWhatPassedIsBuilt()
+        {
+            using var temp = new TempDirectory();
+            var unclassed = Remedy("frame", "src/frame/**");
+            unclassed["noClass"] = "";
+            unclassed["title"] = "The frame, unclassed";
+            const string Refused = "work item 'frame' declares no class and says no reason: an item that changes a decision gives it a class, and one that decides nothing - a document, a rename the tools make, a dependency bump - says why in noClass";
+            var kit = await PrepareAsync(
+                temp,
+                ground: new Ground(Legs: true),
+                script: agents => agents.Queue(
+                    "diagnostician",
+                    Completed(Diagnosis(course: "person", choices: [Choice("Rename the type the tool names", "the run builds the rename and the build runs again"), Choice("Restore the type", "a person restores it, and the build runs again")])),
+                    Completed(Diagnosis(course: "fix", items: [unclassed])),
+                    Completed(Diagnosis(course: "fix", items: [Remedy("frame", "src/frame/**")]))),
+                machine: steps => steps.Queue("build", MachineSteps.Red(HarnessExit.CommandFailed, "the build is red: Tool.Frame is not defined")));
+
+            var paused = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.Equal(FlowExit.Paused, paused.ExitCode);
+            Assert.True(Questions(kit).Open.Single().RaisedBy?.Step?.Contains("direction", StringComparison.Ordinal) == true, Shown(kit));
+
+            var end = await AnswerAsync(kit, "continue", "Rename the type the tool names.");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
+            Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+            // The diagnostician was asked three times: the diagnosis, its word on the person's answer, and its word on the
+            // check's problems, which it was given whole.
+            var diagnoses = kit.Agents.Of("diagnostician");
+
+            Assert.Equal(3, diagnoses.Count);
+            Assert.StartsWith("The person you asked has answered, with what the run is to do", diagnoses[1].Prompt, StringComparison.Ordinal);
+            Assert.Contains("Rename the type the tool names.", diagnoses[1].Prompt, StringComparison.Ordinal);
+            Assert.StartsWith("The machine's plan check refused the work items you set out", diagnoses[2].Prompt, StringComparison.Ordinal);
+
+            // The problems as a prompt holds a list the engine reads: written as JSON.
+            Assert.Contains(new JsonArray(Refused).ToJsonString(), diagnoses[2].Prompt, StringComparison.Ordinal);
+
+            // The check read the person's remedy and refused it; the check again read the one said on its problems, and
+            // passed it.
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps;
+            var check = flow.Single(step => step.Step == "recover.remedy-check");
+            var recheck = flow.Single(step => step.Step == "recover.remedy-recheck");
+
+            Assert.Equal((false, Refused), (check.Output!["ok"]!.GetValue<bool>(), check.Output!["problems"]!.AsArray().Single()!.GetValue<string>()));
+            Assert.Equal("The frame, unclassed", check.Output!["items"]!.AsArray().Single()!["title"]!.GetValue<string>());
+            Assert.True(recheck.Output!["ok"]!.GetValue<bool>());
+            Assert.Empty(recheck.Output!["problems"]!.AsArray());
+
+            // The one remedy built is the one the check passed, on the remedy prompt, before the round's own item; the
+            // build ran again, green.
+            var builders = kit.Agents.Of("implementer");
+
+            Assert.Equal(2, builders.Count);
+            Assert.StartsWith("Build this work item. It puts right a failure of this run", builders[0].Prompt, StringComparison.Ordinal);
+            Assert.Contains("Name the job the workflow runs", builders[0].Prompt, StringComparison.Ordinal);
+            Assert.DoesNotContain("The frame, unclassed", builders[0].Prompt, StringComparison.Ordinal);
             Assert.Equal(
                 [("build", nameof(FlowInstanceState.Failed)), ("build+2", nameof(FlowInstanceState.Done))],
                 [.. flow.Where(step => step.Step == "build").Select(step => (step.Instance, step.State)).OrderBy(step => step.Instance, StringComparer.Ordinal)]);

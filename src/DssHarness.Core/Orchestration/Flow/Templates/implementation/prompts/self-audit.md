@@ -37,7 +37,9 @@ they left out:
 
 {item-audit.latest.closure}
 
-Where a line says that a step left no output, that audit did not run: the round's items were the plan's own.
+Where a line says that the item audit left no output, it was skipped in the first round, whose items were the plan's
+own and were audited with the plan; or it failed, or a person had it passed over, and what it would have found is
+unknown - say so under unverified, never as a pass.
 
 The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` shows all of it.
 
@@ -78,9 +80,10 @@ Name it under unverified; it is a finding only where the line says the step fail
    skipped.
 2. Look for what was left out without being said. An item a person chose to skip shows above among what was not
    checked: it is not a finding and gets no work item.
-3. A red gate, an arm of the sweep that is not as it should be and a finding of the registry's checks are findings.
-   Give every finding a work item that repairs it, unless only a person can: say so in the finding, and give it no
-   item.
+3. A red gate, an arm of the sweep that is not as it should be and a finding of the registry's checks are findings,
+   and so is each finding of the item audit above that the tree does not settle: a site it found that still decides on
+   its own, a cell of the universe still left out. Give every finding a work item that repairs it, unless only a
+   person can: say so in the finding, and give it no item.
 4. Say unverified of what you could not verify.
 
 ## The tests a work item names
