@@ -619,6 +619,30 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// Every repair of the item pipeline that goes on with the implementation - and so may change its code - goes back
+    /// through the item's tests before anything is folded: one the item's own steps raise goes on to the item's block,
+    /// whose verify runs again (a blocked answer asked first), and one the review loop's revise raises goes on to reverify.
+    /// The class-closure check's own repairs are among them - close-class consolidates sites and arms the class, home-audit
+    /// refactors the home and its callers - for a repair that went on to the check alone would fold code no test ran on,
+    /// under a checkpoint naming the tests run before it.
+    /// </summary>
+    [Fact]
+    public void EveryRepairThatGoesOnWithTheImplementation_GoesBackThroughTheItemsTests()
+    {
+        var items = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items");
+        var revise = StepAt(items.Steps, "fix", "revise");
+
+        static bool GoesOn(WorkflowStep step) => step.Resume == "implement" || step.Steps.Any(GoesOn);
+
+        Assert.Equal(
+            [("unblock", "item-blocked"), ("mend", "item-blocked"), ("close-class", "item-blocked"), ("home-audit", "item-blocked"), ("reconcile", "item-blocked"), ("cite", "item-blocked")],
+            [.. items.Steps.Where(step => step.On is not null && GoesOn(step)).Select(step => (step.Name, step.Then ?? string.Empty))]);
+        Assert.Equal(
+            [("remend", "reverify"), ("reclose-class", "reverify"), ("rehome-audit", "reverify"), ("rereconcile", "reverify"), ("recite", "reverify")],
+            [.. revise.Steps.Where(step => step.On is not null && GoesOn(step)).Select(step => (step.Name, step.Then ?? string.Empty))]);
+    }
+
+    /// <summary>
     /// The shipped flow declares its texts - the bar for recommendations and its closure, the universe a repository's
     /// decisions range over - and <c>init</c> writes <c>closure.md</c> once and never over a repository's own, exactly
     /// as it keeps <c>recommendations.md</c>: the file is the repository's from the day it is written.

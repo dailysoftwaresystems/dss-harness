@@ -3166,8 +3166,13 @@ public sealed class WorkflowValidatorTests
             """
             name: default
             steps:
+              - name: item-agent
+                type: create-agent
+                agent: implementer
               - name: closing
                 type: class-closure
+                in: item-agent
+                dependsOn: [item-agent]
                 classes: 'plan.latest.classes'
                 record: 'implement.latest.closure'
                 touches: 0

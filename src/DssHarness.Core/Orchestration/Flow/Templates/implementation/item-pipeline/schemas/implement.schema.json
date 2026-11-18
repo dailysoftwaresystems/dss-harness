@@ -122,7 +122,7 @@
                 "description": "Why the home moved, where the work moved it."
               }
             },
-            "description": "Given only where the work moved the home."
+            "description": "Given where the work moved the home: where the record's home is not the one the item's class names, the record without it is refused."
           },
           "sites": {
             "type": "array",
@@ -184,7 +184,7 @@
                 },
                 "call": {
                   "type": "string",
-                  "description": "The id of the tool call in this item's stored streams that made the search; empty where the search was made without one."
+                  "description": "The id of the tool call in this item's stored streams that made the search. Every search cites the call that made it - a reading of files is made by a call too - and a search that cites none is refused, for a search that was not made does not count."
                 }
               }
             }
@@ -200,7 +200,7 @@
             "properties": {
               "axes": {
                 "type": "array",
-                "description": "Each axis of the universe the class names, with the values the work covered.",
+                "description": "Each axis of the universe the class names, with the values the work covered: every axis the item's class names is among them.",
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
@@ -260,7 +260,7 @@
             }
           },
           "arm": {
-            "description": "The mutation arm of the class, where the repository keeps mutation arms: the arm's id and its site - the home. Where it keeps none, or the class has no arm, an object holding why. Where it keeps them and the class has one, an empty arm is refused by the fold's check.",
+            "description": "The mutation arm of the class, where the repository keeps mutation arms: the arm's id, as the registry your worktree holds names it - an arm your work adds among them - and its site, the home. Where it keeps none, or the class has nothing to mutate, an object holding why. Where it keeps them, an arm that names no id of its registry and gives no why is refused before the fold.",
             "anyOf": [
               {
                 "type": "object",
@@ -351,7 +351,7 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["consolidated", "invariants", "structural"],
-            "description": "The home audit, where the home was touched by other work of this run or the class was reopened twice: what the audit consolidated, the invariants the home should uphold, and what is now structural - one decision, one place.",
+            "description": "The home audit, where the home was touched by other work of this run: what the audit consolidated, the invariants the home should uphold, and what is now structural - one decision, one place.",
             "properties": {
               "consolidated": {
                 "type": "array",

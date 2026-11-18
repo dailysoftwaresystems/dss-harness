@@ -4182,6 +4182,16 @@ public sealed partial class HelpTests
             "A manual lane has no records of its calls, so its searches",
             result.StandardOutput,
             StringComparison.Ordinal);
+
+        // An empty record closes nothing, a lane's arm is its worktree's, and a run's own folds are judged by the check.
+        Assert.Contains(
+            "so; a record that names no class closes no row, and a class's arm is named against the",
+            result.StandardOutput,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "registry the lane's worktree holds. A run's own folds are held to no closure.json:",
+            result.StandardOutput,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -5937,14 +5947,18 @@ public sealed partial class HelpTests
                 + $"{AnchorCitationSubjects.Default} where it names none) - each held to its rows or its paths where it names them: the anchors "
                 + "among those rows the change opened, closed and lost, a problem at a line of one of them and every problem of a registry as a "
                 + "whole, or the citations in those files; a rows or paths expression that reads nothing names nothing. Each answers passed and "
-                + "findings, each a line as the check prints it. class-closure runs before every fold of an item: it judges the classes the item's "
-                + "plan declares against the closing record its builder answered - every planned site accounted for, a deleted site no longer "
-                + "declaring its symbol in the worktree, every search a tool call of the item's stored streams whose input holds its query, every "
-                + "neighbour measured by a measure call of the same streams or reasoned why not, every test of the pin declared, the arm one of "
-                + "the registry's and mutating the home's own file, the claim naming every axis of the universe - and each home's touches since "
-                + "its base, the item's own commits left out, a record without a home audit refused where the home was touched by other work or "
-                + "the class was reopened twice. Its problems are the record's (1, which close-class repairs) apart from a missing home audit (2, "
-                + "which home-audit makes), and it answers passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
+                + "findings, each a line as the check prints it. class-closure runs before every fold of an item, judging the work of the agent "
+                + "its in names: it judges the classes the item's plan declares against the closing record its builder answered - every planned "
+                + "site accounted for and the planned home kept or its move said (homeMoved), a deleted site no longer declaring its symbol in "
+                + "the worktree (the graph's view of it, synced where the step starts, or its text), a site that reads its home among the paths "
+                + "the agent changed (what its fold would write and what its earlier folds of the run changed), every search a tool call of the "
+                + "item's stored streams one of whose input's texts holds its query, every neighbour measured by a measure call of the same "
+                + "streams - whichever client called it - or reasoned why not, every test of the pin declared, the arm one of the registry its "
+                + "worktree holds and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every "
+                + "planned axis and the claim naming each - and each home's touches since its base, the item's own commits left out, a record "
+                + "without a home audit refused where the home was touched by other work; a fold it cannot weigh fails it with the weighing's "
+                + "own code. Its problems are the record's (1, which close-class repairs) apart from a missing home audit (2, which home-audit "
+                + "makes), and it answers passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
                 + "ci-read reads the legs check-ci-legs reads, of its branch - the one checked out "
                 + "in the main checkout where it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as "
                 + "check-ci-legs --json gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the "

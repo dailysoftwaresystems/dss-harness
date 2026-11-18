@@ -76,6 +76,14 @@ public sealed record FoldAgentRequest(string StartDirectory, string Orchestrator
     /// and what it left at each path. Null from the command line, which keeps no ledger.
     /// </summary>
     public Flow.FoldIntent? Intent { get; init; }
+
+    /// <summary>
+    /// Whether a step of a run asks it - a <c>fold</c>, or the dry weighing a <c>class-closure</c> check reads - rather than
+    /// a person at the command line. A run's builder answers the closing record of its classes in its own answer, which
+    /// the run's class-closure check judges before every fold, so a row the fold closes is held to no
+    /// <c>closure.json</c>: <c>anchors.closure</c> is the rule of a lane folded by hand. False from the command line.
+    /// </summary>
+    public bool ByRun { get; init; }
 }
 
 /// <summary>What deleting an agent was asked, beside the allowances its last fold is let through with.</summary>
@@ -101,4 +109,11 @@ public sealed record DeleteAgentRequest(string StartDirectory, string Orchestrat
     /// at each path. Null from the command line, which keeps no ledger, and for a deletion that folds nothing.
     /// </summary>
     public Flow.FoldIntent? Intent { get; init; }
+
+    /// <summary>
+    /// Whether a run deletes it - a <c>delete-agent</c> step, or the engine's own deleting of an agent it made - rather than
+    /// a person at the command line: the fold it makes is held to no <c>closure.json</c>, as <see cref="FoldAgentRequest.ByRun"/>
+    /// says. False from the command line.
+    /// </summary>
+    public bool ByRun { get; init; }
 }

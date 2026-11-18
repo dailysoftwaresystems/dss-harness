@@ -70,13 +70,17 @@ public static class AgentStreamAccount
                 continue;
             }
 
-            if (started.Tool == Runtime.AgentTools.RunCommand)
+            // A tool of the engine's tool server Claude Code called is the runtime's tool it is, by the one reading of a
+            // stored tool's name.
+            var tool = AgentStreamCalls.ToolOf(started.Tool);
+
+            if (tool == Runtime.AgentTools.RunCommand)
             {
                 commands.Add((Said(answered.Input), answered.Ok));
             }
-            else if (WritingTools.Contains(started.Tool) && Paths(answered.Input) is [_, ..] paths)
+            else if (WritingTools.Contains(tool) && Paths(answered.Input) is [_, ..] paths)
             {
-                written.AddRange(paths.Select(path => $"{path} ({started.Tool})"));
+                written.AddRange(paths.Select(path => $"{path} ({tool})"));
             }
         }
 

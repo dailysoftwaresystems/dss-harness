@@ -671,18 +671,26 @@ undo) is given the item's classes and the record so far under "The class you are
 fresh agent holds the class as text, never a memory of it; and a step whose prompt reads the
 item's classes has its context pack seeded from every site and home of them. Before every fold of
 an item, the `class-closure` check judges the record with no model - every planned site accounted
-for, a deleted site no longer declaring its symbol in the worktree, every search a tool call of
-the item's stored streams whose input holds its query, every neighbour measured by a `measure`
-call or reasoned why not, every test of the pin declared, the arm one of the registry's and
-mutating the home's own file, the claim naming every axis of the universe - and each home's
+for and the planned home kept or its move said (`homeMoved`), a deleted site no longer declaring
+its symbol in the worktree (the graph's view of it, synced where the check starts, or its text), a
+site that reads its home among the paths the agent changed (what its fold would write and what its
+earlier folds of the run changed), every search a tool call of the item's stored streams one of
+whose input's texts holds its query, every neighbour measured by a `measure` call - whichever
+client called it - or reasoned why not, every test of the pin declared, the arm one of the
+registry the worktree holds and mutating the home's own file or a reason the class has nothing to
+mutate, the universe holding every planned axis and the claim naming each - and each home's
 touches since the run's start commit, the item's own commits left out: a home touched by other
-work, or a class reopened twice, must carry a home audit. The record's problems are repaired by
-`close-class`, which goes on with the implementation, and a missing audit by `home-audit`, which
-reads the whole home and makes its invariants structural; a home touched often enough is named a
-hotspot in the check's answer. A lane folded by hand joins the same rule opt-in:
-`anchors.closure: "required"` has `fold-agent` refuse a row whose status moves to closed unless
-its directory holds `closure.json`, judged by the same rules, its searches and measurements read
-as given - no consent lifts it.
+work must carry a home audit. A fold it cannot weigh fails the check. The record's problems are
+repaired by `close-class`, which goes on with the implementation, and a missing audit by
+`home-audit`, which reads the whole home and makes its invariants structural; each changes code,
+so each goes back through the item's tests - its verify, or reverify in the review loop - before
+the check runs again and anything is folded; a home touched often enough is named a hotspot in the
+check's answer. A lane folded by hand joins the same rule opt-in: `anchors.closure: "required"`
+has `fold-agent` refuse a row whose status moves to closed unless its directory holds
+`closure.json` naming a class at least, judged by the same rules, its searches and measurements
+read as given and its arms against the registry its worktree holds - no consent lifts it. A run's
+own folds are held to no `closure.json`: the builder's answer is its record, which the check
+judged.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its
@@ -2114,7 +2122,7 @@ C and C++ through a structural scanner that reads every branch of a conditional,
 `graph/`, reading again only the files whose content, reader, reader's version, size limit or languages changed and those it could not read, and starting a run's first
 graph from the newest earlier run's - or, with `in`, the view of that agent's worktree, held against the main checkout's
 graph as an overlay of what the worktree holds otherwise, so no file is read whose extract either made; the engine syncs
-on its own too, under the claim its step holds - a reason step's view where it starts, the main checkout's by every path
+on its own too, under the claim its step holds - a reason step's view where it starts, and a class-closure check's, the main checkout's by every path
 the run's folds changed that it has not taken yet and every path a commit changed since its last sync, a worktree's after a refresh or a rebase moved it, and a view dropped
 once its agent is no longer live - and a sync of its own that fails is said, owed until one goes through, and never
 fails the step (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);

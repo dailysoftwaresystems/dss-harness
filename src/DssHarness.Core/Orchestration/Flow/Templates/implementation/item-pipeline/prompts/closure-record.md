@@ -25,13 +25,15 @@ one of its sites is left.
 
 ## What to do
 
-1. Read each problem and find what in your change caused it: a planned site with no after, a search cited that no call
-   of your streams made, a neighbour measured by nothing, a pin that names a test the worktree does not declare, an arm
-   that is not the registry's or does not mutate the home, a claim that names no universe.
+1. Read each problem and find what in your change caused it: a planned site with no after, a home that is not the
+   planned one with no homeMoved saying why, a search cited that no call of your streams made, a neighbour measured by
+   nothing, a pin that names a test the worktree does not declare, an arm that is not the registry's or does not mutate
+   the home, a universe that leaves out a planned axis, a claim that names no universe.
 2. Do the work: search the data where the record says it was searched, by the tool, so the call is made and its id is
-   yours to cite; measure the neighbours the claim rests on, with the measure tool, or write the reason one was not;
-   consolidate a site the plan holds as reads-home into the home and delete what it replaced; arm the class where the
-   repository's registry holds an arm for it.
+   yours to cite - every search cites the call that made it; measure the neighbours the claim rests on, with the
+   measure tool, or write the reason one was not; consolidate a site the plan holds as reads-home into the home and
+   delete what it replaced; arm the class where the repository keeps arms - its arm in the registry your worktree holds
+   - or say in the arm's why that the class has nothing to mutate.
 3. Keep to the paths your task allows; where the fix lies outside them, change nothing and name the problem and the
    path in your summary.
 
@@ -40,4 +42,5 @@ one of its sites is left.
 The same report as before, brought up to date, every list in full; its closure record answers each problem the check
 found, and its searches and measurements cite the calls that made them.
 
-When you report, the engine runs the check again, and folds your work only where the record closes every class.
+When you report, the engine tests your work again, then runs the check again, and folds your work only where its tests
+pass and the record closes every class.

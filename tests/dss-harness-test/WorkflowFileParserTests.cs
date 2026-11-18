@@ -645,6 +645,27 @@ public sealed class WorkflowFileParserTests
             problems);
     }
 
+    /// <summary>
+    /// A class-closure step judges an agent's work - its worktree, its stored streams, the fold it weighs - so one that
+    /// names no create-agent step in is refused as the file is read: with no agent's streams, every call its record cites
+    /// would be read as given.
+    /// </summary>
+    [Fact]
+    public void AClassClosureStepThatNamesNoAgent_IsRefused()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: closing
+                type: class-closure
+                classes: 'plan.latest.classes'
+                record: 'implement.latest.closure'
+            """);
+
+        Assert.Equal(["line 3, column 5: closing names no 'in'; a class-closure step is refused without it."], problems);
+    }
+
     [Fact]
     public void AValueOfTheWrongShape_IsRefusedNamingTheKeyItWasReadFor()
     {

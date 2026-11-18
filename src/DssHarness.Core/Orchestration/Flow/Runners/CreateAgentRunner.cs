@@ -85,7 +85,7 @@ public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHost
                 ? "was made part way and recorded no commit its worktree was made from"
                 : "was closed, its worktree's removal begun";
             var deleted = await agents.DeleteAsync(
-                new DeleteAgentRequest(place.Repository, place.Run, made.Name, new FoldAllowances(), Apply: true, DiscardUncommitted: true),
+                new DeleteAgentRequest(place.Repository, place.Run, made.Name, new FoldAllowances(), Apply: true, DiscardUncommitted: true) { ByRun = true },
                 cancellationToken).ConfigureAwait(false);
 
             return deleted.Outcome.Succeeded

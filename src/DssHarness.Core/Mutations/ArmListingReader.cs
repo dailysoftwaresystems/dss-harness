@@ -216,4 +216,22 @@ public sealed class ArmListingReader(
 
         return new SweepArms(validation.Registry, selected, validation.Scopes);
     }
+
+    /// <summary>
+    /// Each arm the registry of <paramref name="context"/>'s tree declares, by its id, with the file its own site mutates -
+    /// the registry alone, read and verified as <see cref="ReadAsync"/> reads it for a check, no leg's tree read - or null
+    /// where that tree's configuration declares no registry: what a class's closing record names its arm against.
+    /// </summary>
+    /// <param name="context">The context of the tree whose registry is read: an agent's worktree's, where its work adds arms the fold merges in.</param>
+    /// <param name="command">The command reading it, as a refusal names it.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    /// <exception cref="HarnessException">The registry is declared and does not read or verify, as <see cref="ReadAsync"/> refuses it.</exception>
+    internal async Task<IReadOnlyList<(string Id, string Site)>?> DeclaredArmsAsync(HarnessContext context, string command, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return MutationService.Declares(context, _fileSystem)
+            ? [.. (await ReadAsync(context, null, command, cancellationToken, sweeps: false).ConfigureAwait(false)).Selected.Select(arm => (arm.Id, arm.Own.Site))]
+            : null;
+    }
 }

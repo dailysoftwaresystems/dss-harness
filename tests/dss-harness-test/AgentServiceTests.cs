@@ -2375,9 +2375,10 @@ public sealed class AgentServiceTests
     /// <summary>
     /// Where <c>anchors.closure</c> says <c>required</c>, fold-agent refuses a row whose status moves to closed unless its
     /// directory holds <c>closure.json</c> - read against the schema the run's own implement answer is held to, and judged
-    /// by the same rules the <c>class-closure</c> step reads, a manual lane's searches and measurements read as given.
-    /// No consent lifts it; the record is written or the row does not close. Where the configuration says nothing, a row
-    /// closes as it always did.
+    /// by the same rules the <c>class-closure</c> step reads, a manual lane's searches and measurements read as given, and
+    /// an empty record closing nothing. No consent lifts it; the record is written or the row does not close. A run's own
+    /// fold is no lane folded by hand: its builder's record is its answer, which the run's class-closure check judged, so
+    /// it is held to no closure.json. Where the configuration says nothing, a row closes as it always did.
     /// </summary>
     [Fact]
     public async Task FoldAgentUnderAnchorsClosureRequired_RefusesARowThatClosesWithNoClosureJson()
@@ -2409,6 +2410,12 @@ public sealed class AgentServiceTests
             string.Join(" || ", refused.Details!));
         Assert.Contains(Core.Orchestration.RefusalKind.Closure, (refused.Facts as Core.Orchestration.AgentVerbFacts)!.Refusals);
 
+        // The same fold, asked by a step of a run, is weighed with no closure.json asked of it.
+        var byRun = await kit.Harness.AgentService.FoldAsync(new Core.Orchestration.FoldAgentRequest(kit.Main, "o1", "ag", rows, Apply: false) { ByRun = true }, Token);
+
+        Assert.True(byRun.Outcome.Succeeded, OrchestrationKit.Describe(byRun.Outcome));
+        Assert.Empty(byRun.Facts!.Refusals);
+
         var applied = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: true, cancellationToken: Token);
 
         Assert.Equal(HarnessExit.Refused, applied.ExitCode);
@@ -2431,6 +2438,17 @@ public sealed class AgentServiceTests
         Assert.True(
             judged.Details!.Any(line => line.Contains("class 'c-rate': the claim does not name the axis 'format'", StringComparison.Ordinal)),
             string.Join(" || ", judged.Details!));
+
+        // An empty record closes no class, and so no row.
+        OrchestrationKit.Write(kit.Layout.RowsDirectory("ag"), "D-ONE-TWO-THREE/closure.json", "[]");
+
+        var empty = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: false, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, empty.ExitCode);
+        Assert.True(
+            empty.Details!.Any(line => line.Contains("'D-ONE-TWO-THREE': the record names no class: a row closes by the record of each class it closes, and an empty one closes none", StringComparison.Ordinal)),
+            string.Join(" || ", empty.Details!));
+        Assert.Contains(Core.Orchestration.RefusalKind.Closure, (empty.Facts as Core.Orchestration.AgentVerbFacts)!.Refusals);
 
         // The record that closes: the fold goes through, saying what a manual lane's record cannot prove.
         OrchestrationKit.Write(
@@ -2458,6 +2476,63 @@ public sealed class AgentServiceTests
         var asAlways = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: true, cancellationToken: Token);
 
         Assert.True(asAlways.Succeeded, OrchestrationKit.Describe(asAlways));
+    }
+
+    /// <summary>
+    /// A lane folded by hand under <c>anchors.closure: required</c> names its class's arm against the registry its worktree
+    /// holds, where the arm its work adds stands before the fold merges it into the main tree's: the lane's own new arm,
+    /// mutating the home, closes the row; an arm neither registry holds is refused.
+    /// </summary>
+    [Fact]
+    public async Task AManualLanesArm_IsJudgedAgainstTheRegistryItsWorktreeHolds()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        kit.Harness.WriteConfig(
+            kit.Main,
+            new Core.Configuration.HarnessConfig
+            {
+                Worktrees = OrchestrationKit.Settings,
+                Mutations = AgentArmRegistryTests.Config.Mutations,
+                Anchors = new Core.Configuration.AnchorSettings { Closure = "required" },
+            });
+        OrchestrationKit.Write(kit.Main, AgentArmRegistryTests.Registry, AgentArmRegistryTests.Text(AgentArmRegistryTests.Arm("alpha")));
+        AgentArmRegistryTests.WriteTexts(kit.Main, "alpha");
+        await kit.Harness.CommitAllAsync(kit.Main, "an arm registry", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        OrchestrationKit.Write(worktree, AgentArmRegistryTests.Registry, AgentArmRegistryTests.Text(AgentArmRegistryTests.Arm("alpha"), AgentArmRegistryTests.Arm("rate")));
+        AgentArmRegistryTests.WriteTexts(worktree, "rate");
+        OrchestrationKit.WriteRow(
+            kit.Layout.RowsDirectory("ag"),
+            "D-ONE-TWO-THREE",
+            ("status", Core.Anchors.AnchorStatus.ClosedMark + " CLOSED"),
+            ("trigger", "always"),
+            ("closing", "the rate holds"),
+            ("cross-refs", ""),
+            ("priority", "P2"));
+        var rows = new Core.Orchestration.FoldAllowances { New = ["D-ONE-TWO-THREE"] };
+
+        string Record(string arm)
+            => "[{\"class\":\"c-rate\",\"invariant\":\"one place\",\"home\":{\"path\":\"src/rate.cpp\",\"symbol\":\"Rate\"},"
+                + "\"sites\":[],\"searches\":[],\"universe\":{\"axes\":[{\"name\":\"format\",\"values\":[\"a\"]}],\"cellsPinned\":0,\"cellsArmed\":1},"
+                + "\"pin\":{\"tests\":[],\"tableDriven\":true,\"over\":\"the universe\"},\"arm\":{\"id\":\"" + arm + "\",\"site\":\"src/rate.cpp\"},"
+                + "\"neighbours\":[],\"claim\":\"the rate holds over every format\"}]";
+
+        OrchestrationKit.Write(kit.Layout.RowsDirectory("ag"), "D-ONE-TWO-THREE/closure.json", Record("rate"));
+
+        var armed = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: false, cancellationToken: Token);
+
+        Assert.True(armed.Succeeded, OrchestrationKit.Describe(armed));
+
+        OrchestrationKit.Write(kit.Layout.RowsDirectory("ag"), "D-ONE-TWO-THREE/closure.json", Record("ghost"));
+
+        var unknown = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", rows, apply: false, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, unknown.ExitCode);
+        Assert.True(
+            unknown.Details!.Any(line => line.Contains("'D-ONE-TWO-THREE': class 'c-rate': the arm 'ghost' is not an arm of the registry its worktree holds", StringComparison.Ordinal)),
+            string.Join(" || ", unknown.Details!));
     }
 
     /// <summary>The real file system, except that one file cannot be read, as while another program holds it.</summary>

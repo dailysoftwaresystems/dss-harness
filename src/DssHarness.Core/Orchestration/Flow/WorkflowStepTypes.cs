@@ -284,7 +284,7 @@ public static class WorkflowStepTypes
         new(
             "class-closure",
             [
-                new("in", "the create-agent step whose agent's worktree it works in, which it waits for through dependsOn"),
+                new("in", "the create-agent step whose agent's work it judges - its worktree, its stored streams, its fold - which it waits for through dependsOn") { Required = true },
                 new("classes", "an expression yielding the classes the item's plan declares") { Required = true },
                 new("record", "an expression yielding the closing record the builder answered") { Required = true },
                 new("base", "the commit the home's touches are counted from"),
@@ -294,7 +294,7 @@ public static class WorkflowStepTypes
             ],
             ["base"],
             "red",
-            "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), OrchestrationStore.ReadStepStream, CodebaseGraphService.ReadOnlyAsync, ArmListingReader, IGitClient.CountTouchesAsync",
+            "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), FoldLedger, AgentStreamCalls, CodebaseGraphService.ReadOnlyAsync, ArmListingReader.DeclaredArmsAsync, IGitClient.CountTouchesAsync",
             ["read main", "read the agent's tree where in names one"],
             null,
             ClassClosureOutput),

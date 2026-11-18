@@ -197,7 +197,7 @@ public static class FlowInstanceId
             }
         }
 
-        return string.Join(".", segments.Take(last + 1));
+        return last < 0 ? id : string.Join(".", segments.Take(last + 1));
     }
 
     /// <summary>

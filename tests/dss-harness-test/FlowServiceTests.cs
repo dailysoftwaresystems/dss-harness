@@ -245,8 +245,8 @@ public sealed class FlowServiceTests
 
     /// <summary>
     /// The engine's deleting of a read-only agent whose work is over says its failure in the agent's own log however it
-    /// failed - a throw as well as a refusal answered - and the run goes on all the same; an agent with no record left
-    /// is deleted already, and nothing is asked or said of it.
+    /// failed - a throw as well as a refusal answered - and the run goes on all the same, the deletion asked as a run's;
+    /// an agent with no record left is deleted already, and nothing is asked or said of it.
     /// </summary>
     [Fact]
     public async Task AReadOnlyAgentsDeletionThatThrows_IsSaidInItsLog_AndAnAgentGoneIsNotAskedAgain()
@@ -285,7 +285,7 @@ public sealed class FlowServiceTests
         Assert.Equal(
             ("delete-agent", HarnessExit.InternalError, "deleting agent 'a1' failed: the disk went away"),
             ((string?)said["command"], (int?)said["exitCode"], (string?)said["message"]));
-        await agents.Received(1).DeleteAsync(Arg.Is<DeleteAgentRequest>(request => request.Agent == "a1"), Arg.Any<CancellationToken>());
+        await agents.Received(1).DeleteAsync(Arg.Is<DeleteAgentRequest>(request => request.Agent == "a1" && request.ByRun), Arg.Any<CancellationToken>());
         await agents.DidNotReceive().DeleteAsync(Arg.Is<DeleteAgentRequest>(request => request.Agent == "a2"), Arg.Any<CancellationToken>());
         Assert.False(File.Exists(RunOf(repository).LogFile("a2")));
     }

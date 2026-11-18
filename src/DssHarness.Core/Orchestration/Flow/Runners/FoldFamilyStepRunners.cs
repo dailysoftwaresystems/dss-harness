@@ -555,7 +555,7 @@ public sealed class FoldStepRunner(IHarnessContextLoader contextLoader, IHostPla
         ArgumentNullException.ThrowIfNull(call);
 
         return agents.FoldAsync(
-            new FoldAgentRequest(call.Place.Repository, call.Place.Run, call.Agent, AllowancesOf(call), call.Apply) { Expected = call.Expected, Intent = call.Intent },
+            new FoldAgentRequest(call.Place.Repository, call.Place.Run, call.Agent, AllowancesOf(call), call.Apply) { Expected = call.Expected, Intent = call.Intent, ByRun = true },
             cancellationToken);
     }
 
@@ -598,6 +598,7 @@ public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, I
             {
                 Expected = call.Expected,
                 Intent = call.Intent,
+                ByRun = true,
             },
             cancellationToken);
     }

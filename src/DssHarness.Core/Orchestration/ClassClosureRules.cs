@@ -10,8 +10,8 @@ public static class ClassClosureExit
     public const int Findings = 1;
 
     /// <summary>
-    /// The record holds no home audit where one is required - the home was touched by other work, or the class was reopened
-    /// twice: the repair is <c>home-audit</c>, not a closing of the record.
+    /// The record holds no home audit where one is required - the home was touched by other work: the repair is
+    /// <c>home-audit</c>, not a closing of the record.
     /// </summary>
     public const int HomeAudit = 2;
 }
@@ -103,6 +103,7 @@ internal static class ClassClosureReading
 /// <param name="Invariant">What the class decides, in one sentence.</param>
 /// <param name="HomePath">The file its home is declared in, as git names it.</param>
 /// <param name="HomeSymbol">The symbol its home is declared as.</param>
+/// <param name="HomeMoved">Why the work moved the home off the one the plan named, where it says so; null where it says nothing.</param>
 /// <param name="Sites">Each path it was decided at: the file, the symbol, what decided there before, and what decides there after.</param>
 /// <param name="Searches">Each search the data was searched by: what was searched, how, the query, and the call that made it.</param>
 /// <param name="Axes">The names of the universe the record pins.</param>
@@ -117,6 +118,7 @@ public sealed record ClassClosureRecord(
     string Invariant,
     string HomePath,
     string HomeSymbol,
+    string? HomeMoved,
     IReadOnlyList<(string Path, string Symbol, string Before, string After)> Sites,
     IReadOnlyList<(string Data, string Query, string Call)> Searches,
     IReadOnlyList<string> Axes,
@@ -139,6 +141,7 @@ public sealed record ClassClosureRecord(
                 Text(entry["invariant"]) ?? string.Empty,
                 Text(entry["home"]?["path"]) ?? string.Empty,
                 Text(entry["home"]?["symbol"]) ?? string.Empty,
+                Text(entry["homeMoved"]?["why"]),
                 ReadSites(entry["sites"] as JsonArray),
                 ReadSearches(entry["searches"] as JsonArray),
                 ClassClosureReading.Axes(entry["universe"] as JsonObject),
@@ -236,56 +239,64 @@ public sealed record ClassHomeAudit(IReadOnlyList<string> Consolidated, IReadOnl
         => (node as JsonArray ?? []).Select(line => line is JsonValue value && value.TryGetValue<string>(out var text) ? text : null).OfType<string>();
 }
 
-/// <summary>One tool call of an item's stored streams, as a closing record cites it: which tool, and the input it was given.</summary>
-/// <param name="Tool">The tool, as the stream names it.</param>
-/// <param name="Input">The whole input, as the stream stored it.</param>
-public sealed record ClassClosureCall(string Tool, string Input);
-
 /// <summary>
 /// What a closing record is judged against, beside itself: the paths the agent changed, the calls its stored streams hold,
-/// what its worktree still declares, the arms its repository declares, and how often each home was touched in this run.
+/// what its worktree still declares, the arms its worktree's registry declares, and how often each home was touched in this
+/// run. A manual lane - a lane folded by hand, whose closing record is its <c>closure.json</c> - has no stored streams and
+/// no run, and says so by what it leaves null: what it leaves null is read as given, never taken for none.
 /// </summary>
-/// <param name="Changed">The paths the agent changed, as the fold would write them.</param>
-/// <param name="Calls">Every tool call of the item's stored streams, by the id a record cites; empty where there is no stream to read.</param>
+/// <param name="Changed">
+/// The paths the agent changed: what its fold would write, remove or merge, and what the run's earlier folds of it changed.
+/// Null for a manual lane, whose sites that read their home are read as given.
+/// </param>
+/// <param name="Calls">
+/// Every tool call of the item's stored streams that went through, by the id a record cites - empty where they hold none,
+/// so a call cited is never read as made. Null for a manual lane, whose searches and measurements are read as given, their
+/// command lines.
+/// </param>
 /// <param name="Declares">
 /// Whether a file of the agent's worktree still declares a symbol - the graph's view of its tree, or text where the graph
 /// lists the file only. Null where there is no worktree to read: a manual lane, judged by hand.
 /// </param>
 /// <param name="TestDeclared">Whether a test the pin names is declared in the worktree - the graph's tests edges, or text. Null as <paramref name="Declares"/> is.</param>
-/// <param name="Arms">Each arm the repository's registry declares, with the file its own site mutates; empty where none is declared.</param>
-/// <param name="ArmsDeclared">Whether the repository declares an arms registry at all.</param>
+/// <param name="Arms">
+/// Each arm the registry of the agent's worktree declares, with the file its own site mutates - the registry the fold
+/// merges in, so an arm the work adds is among them; null where that tree's configuration declares no arms registry.
+/// </param>
 /// <param name="TouchesByOthers">How often each home path was touched in this run by work other than this item's own commits.</param>
 /// <param name="TouchesAll">How often each home path was touched in this run, this item's own commits among them.</param>
 /// <param name="TouchesRequired">How many touches by others require a home audit; 0 where none is required.</param>
 /// <param name="HotspotAt">How many touches name a home a hotspot; never reached, nothing is listed.</param>
-/// <param name="ReopenedTwice">The classes the run's ledger says were reopened a second time.</param>
 public sealed record ClassClosureProof(
-    IReadOnlyList<string> Changed,
-    IReadOnlyDictionary<string, ClassClosureCall> Calls,
+    IReadOnlyList<string>? Changed,
+    IReadOnlyDictionary<string, Agents.AgentStreamCall>? Calls,
     Func<string, string, bool>? Declares,
     Func<string, bool>? TestDeclared,
-    IReadOnlyList<(string Id, string Site)> Arms,
-    bool ArmsDeclared,
+    IReadOnlyList<(string Id, string Site)>? Arms,
     IReadOnlyDictionary<string, int> TouchesByOthers,
     IReadOnlyDictionary<string, int> TouchesAll,
     int TouchesRequired,
-    int HotspotAt,
-    IReadOnlySet<string> ReopenedTwice)
+    int HotspotAt)
 {
-    /// <summary>A proof that reads nothing but the record itself: a manual lane's, judged by hand, with its calls read as given.</summary>
-    public static ClassClosureProof Manual(IReadOnlyList<(string Id, string Site)> arms, bool armsDeclared)
+    /// <summary>Whether the record is a manual lane's, judged by hand: no stored stream holds its calls.</summary>
+    public bool ByHand => Calls is null;
+
+    /// <summary>
+    /// A proof that reads nothing but the record itself and the registry: a manual lane's, judged by hand, its sites that
+    /// read their home, its searches and its measurements read as given.
+    /// </summary>
+    /// <param name="arms">Each arm the registry of the lane's worktree declares, with its own site; null where it declares none.</param>
+    public static ClassClosureProof Manual(IReadOnlyList<(string Id, string Site)>? arms)
         => new(
-            [],
-            new Dictionary<string, ClassClosureCall>(),
+            Changed: null,
+            Calls: null,
             Declares: null,
             TestDeclared: null,
             arms,
-            armsDeclared,
             new Dictionary<string, int>(),
             new Dictionary<string, int>(),
             TouchesRequired: 0,
-            HotspotAt: int.MaxValue,
-            new HashSet<string>(StringComparer.Ordinal));
+            HotspotAt: int.MaxValue);
 }
 
 /// <summary>One home the run touched often enough to name: the path, the class whose home it is, and how often.</summary>
@@ -319,13 +330,15 @@ public sealed record ClassClosureJudged(
 /// <summary>
 /// The rules a closing record is judged by, with no model - the one owner of the judgement, read by the
 /// <c>class-closure</c> step before every fold and by a manual lane's fold under <c>anchors.closure</c>: every planned
-/// class has an entry; every planned site is accounted for, a deleted site no longer declaring its symbol in the worktree
-/// and a site that reads its home among the paths the agent changed; every search was made - its call a tool call of the
-/// item's stored streams, its input holding its query - and every neighbour was measured - its measurement a
-/// <c>measure</c> call of the same streams, or reasoned where it says it was not; every test of the pin is declared in the
-/// worktree; where the repository declares an arms registry, the arm is one of its arms and mutates the home's own file;
-/// the claim names every axis of the universe; and where the home was touched by other work, or the class was reopened
-/// twice, the record carries a home audit.
+/// class has an entry, and a manual lane's record names one at least; a planned class's home is the plan's, or the record
+/// says why it moved; every planned site is accounted for, a deleted site no longer declaring its symbol in the worktree
+/// and a site that reads its home among the paths the agent changed; every search was made - it cites the call that made
+/// it, a tool call of the item's stored streams one of whose input's texts holds its query - and every neighbour was
+/// measured - its measurement a <c>measure</c> call of the same streams, or reasoned where it says it was not; every test
+/// of the pin is declared in the worktree; where the worktree's configuration declares an arms registry, the arm is one of
+/// its arms and mutates the home's own file, or the record says why the class has none; the universe holds every axis the
+/// plan names, and the claim names every axis of it; and where the home was touched by other work, the record carries a
+/// home audit.
 /// </summary>
 public static class ClassClosureRules
 {
@@ -372,6 +385,13 @@ public static class ClassClosureRules
             }
         }
 
+        // A manual lane's record is what closes its row, with no plan beside it to say which classes it decides: one that
+        // names no class closes none, and an empty file would close the row with nothing judged.
+        if (proof.ByHand && record.Count == 0)
+        {
+            problems.Add("the record names no class: a row closes by the record of each class it closes, and an empty one closes none");
+        }
+
         return new ClassClosureJudged(problems, audits, hotspots, touches);
     }
 
@@ -380,7 +400,15 @@ public static class ClassClosureRules
     {
         List<string> problems = [];
 
-        foreach (var (path, symbol, then) in planned?.Sites ?? [])
+        // The plan named the class's one home: a record that names another moved it, and says why or is refused.
+        if (planned is not null
+            && (!string.Equals(entry.HomePath, planned.HomePath, StringComparison.Ordinal) || !string.Equals(entry.HomeSymbol, planned.HomeSymbol, StringComparison.Ordinal))
+            && string.IsNullOrWhiteSpace(entry.HomeMoved))
+        {
+            problems.Add($"class '{entry.Class}': the home is '{entry.HomeSymbol}' in '{entry.HomePath}', not the planned '{planned.HomeSymbol}' in '{planned.HomePath}', and the record says not why it moved (homeMoved)");
+        }
+
+        foreach (var (path, _, _) in planned?.Sites ?? [])
         {
             if (!entry.Sites.Any(site => string.Equals(site.Path, path, StringComparison.Ordinal)))
             {
@@ -390,14 +418,15 @@ public static class ClassClosureRules
 
         foreach (var site in entry.Sites)
         {
-            if (site.After == "deleted" && proof.Declares is { } declares
-                && declares(site.Path, string.IsNullOrWhiteSpace(site.Symbol) ? entry.HomeSymbol : site.Symbol))
+            // A site that is a whole file names no symbol of its own: what it declared there was the class's, by its home's name.
+            var symbol = string.IsNullOrWhiteSpace(site.Symbol) ? entry.HomeSymbol : site.Symbol;
+
+            if (site.After == "deleted" && proof.Declares is { } declares && declares(site.Path, symbol))
             {
-                problems.Add($"class '{entry.Class}': the site '{site.Path}' is deleted, but it still declares '{site.Symbol}'");
+                problems.Add($"class '{entry.Class}': the site '{site.Path}' is deleted, but it still declares '{symbol}'");
             }
 
-            if (site.After == "reads-home" && proof.Changed.Count > 0
-                && !proof.Changed.Contains(site.Path, StringComparer.Ordinal))
+            if (site.After == "reads-home" && proof.Changed is { } changed && !changed.Contains(site.Path, StringComparer.Ordinal))
             {
                 problems.Add($"class '{entry.Class}': the site '{site.Path}' reads its home, but the agent changed nothing at it");
             }
@@ -405,25 +434,27 @@ public static class ClassClosureRules
 
         foreach (var (data, query, call) in entry.Searches)
         {
-            if (proof.Calls.Count == 0 && call.Length > 0)
-            {
-                // A manual lane, judged by hand: the call is read as given, its command line, for no stream holds it.
-                continue;
-            }
-
             if (call.Length == 0)
             {
                 problems.Add($"class '{entry.Class}': the search for '{data}' cites no call: a search that was not made does not count");
                 continue;
             }
 
-            if (!proof.Calls.TryGetValue(call, out var cited))
+            if (proof.Calls is not { } calls)
+            {
+                // A manual lane, judged by hand: the call is read as given, its command line, for no stream holds it.
+                continue;
+            }
+
+            if (!calls.TryGetValue(call, out var cited))
             {
                 problems.Add($"class '{entry.Class}': the search for '{data}' cites the call '{call}', which is not a tool call of this item's stored streams");
                 continue;
             }
 
-            if (query.Length > 0 && !cited.Input.Contains(query, StringComparison.Ordinal))
+            // The query as the model wrote it, looked for in what the call was given as the model wrote it: never in the
+            // input's JSON text, where a client escapes what the query holds.
+            if (query.Length > 0 && !cited.Texts().Any(text => text.Contains(query, StringComparison.Ordinal)))
             {
                 problems.Add($"class '{entry.Class}': the search for '{data}' cites the call '{call}', whose input does not hold the query '{query}'");
             }
@@ -441,18 +472,20 @@ public static class ClassClosureRules
                 continue;
             }
 
-            if (proof.Calls.Count == 0)
+            if (measuredBy.Length == 0)
             {
-                // A manual lane: the measurement is read as given, its command line.
-                if (measuredBy.Length == 0)
-                {
-                    problems.Add($"class '{entry.Class}': the neighbour '{cell}' is measured by no call");
-                }
-
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is measured by no call");
                 continue;
             }
 
-            if (!proof.Calls.TryGetValue(measuredBy, out var cited) || cited.Tool != Agents.AgentMeasureSupport.ToolName)
+            if (proof.Calls is not { } calls)
+            {
+                // A manual lane: the measurement is read as given, its command line.
+                continue;
+            }
+
+            // The tool by the runtime's name, whichever client called it (AgentStreamCalls.ToolOf).
+            if (!calls.TryGetValue(measuredBy, out var cited) || cited.Tool != Agents.AgentMeasureSupport.ToolName)
             {
                 problems.Add($"class '{entry.Class}': the neighbour '{cell}' is measured by the call '{measuredBy}', which is not a measure call of this item's stored streams");
             }
@@ -466,25 +499,36 @@ public static class ClassClosureRules
             }
         }
 
-        if (proof.ArmsDeclared)
+        // Where the worktree keeps arms, a class is armed by one of them, or says why it has nothing to mutate - the arm's
+        // other form, as the record's schema holds it; one that names neither is refused.
+        if (proof.Arms is { } arms)
         {
-            if (entry.ArmId is not { } armId)
+            if (entry.ArmId is { } armId)
             {
-                problems.Add($"class '{entry.Class}': arms nothing, but this repository declares an arms registry");
-            }
-            else
-            {
-                var named = proof.Arms.FirstOrDefault(candidate => string.Equals(candidate.Id, armId, StringComparison.OrdinalIgnoreCase));
+                var named = arms.FirstOrDefault(candidate => string.Equals(candidate.Id, armId, StringComparison.OrdinalIgnoreCase));
 
                 if (named.Id is null)
                 {
-                    problems.Add($"class '{entry.Class}': the arm '{armId}' is not an arm of this repository's registry");
+                    problems.Add($"class '{entry.Class}': the arm '{armId}' is not an arm of the registry its worktree holds");
                 }
                 else if (!string.Equals(named.Site, entry.HomePath, StringComparison.Ordinal))
                 {
                     problems.Add($"class '{entry.Class}': the arm '{armId}' mutates '{named.Site}', not the home '{entry.HomePath}'");
                 }
             }
+            else if (string.IsNullOrWhiteSpace(entry.ArmWhy))
+            {
+                problems.Add($"class '{entry.Class}': arms nothing and says not why, but this repository declares an arms registry");
+            }
+        }
+
+        // The universe the plan names is the least the record covers: an axis it leaves out is one the claim never ranges over.
+        List<string> axes = [.. entry.Axes];
+
+        foreach (var axis in (planned?.Axes ?? []).Where(axis => !entry.Axes.Contains(axis, StringComparer.Ordinal)))
+        {
+            problems.Add($"class '{entry.Class}': the universe leaves out the planned axis '{axis}'");
+            axes.Add(axis);
         }
 
         if (entry.Claim.Length == 0)
@@ -493,7 +537,7 @@ public static class ClassClosureRules
         }
         else
         {
-            foreach (var axis in entry.Axes.Where(axis => !entry.Claim.Contains(axis, StringComparison.Ordinal)))
+            foreach (var axis in axes.Where(axis => !entry.Claim.Contains(axis, StringComparison.Ordinal)))
             {
                 problems.Add($"class '{entry.Class}': the claim does not name the axis '{axis}'");
             }
@@ -514,18 +558,9 @@ public static class ClassClosureRules
             hotspots.Add(new ClassClosureHotspot(entry.Class, entry.HomePath, all));
         }
 
-        if (entry.HomeAudit is not null)
-        {
-            return;
-        }
-
-        if (proof.TouchesRequired > 0 && byOthers >= proof.TouchesRequired)
+        if (entry.HomeAudit is null && proof.TouchesRequired > 0 && byOthers >= proof.TouchesRequired)
         {
             audits.Add($"class '{entry.Class}': home touched {byOthers.ToString(System.Globalization.CultureInfo.InvariantCulture)} times in this run by other work");
-        }
-        else if (proof.ReopenedTwice.Contains(entry.Class))
-        {
-            audits.Add($"class '{entry.Class}' reopened twice");
         }
     }
 }

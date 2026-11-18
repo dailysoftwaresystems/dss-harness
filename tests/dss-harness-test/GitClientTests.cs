@@ -232,6 +232,37 @@ public sealed class GitClientTests
         Assert.True(await harness.GitClient.IsRepositoryAsync(nested, cancellationToken));
     }
 
+    /// <summary>
+    /// A home's touches follow renames to the path they moved to: the commit that renamed a file into the home - a rename
+    /// git names with both paths - touched the home, and so did each commit after it that changed it, newest first; a
+    /// commit that touched only another file is no touch, and the path the home was renamed from is touched by none of
+    /// them.
+    /// </summary>
+    [Fact]
+    public async Task CountTouchesAsync_FollowsARenameIntoAPath_ToThePathItMovedTo()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("src/Old.cs", "class Rate\n{\n    int Decide() => 1;\n}\n");
+        await harness.CommitAllAsync(temp.Path, "the old home", cancellationToken);
+        var start = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+
+        await harness.RunGitAsync(temp.Path, ["mv", "src/Old.cs", "src/Home.cs"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "the home moves"], cancellationToken);
+        var renamed = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        temp.WriteFile("src/Other.cs", "class Other { }\n");
+        await harness.CommitAllAsync(temp.Path, "another file", cancellationToken);
+        temp.WriteFile("src/Home.cs", "class Rate\n{\n    int Decide() => 2;\n}\n");
+        await harness.CommitAllAsync(temp.Path, "the home changes", cancellationToken);
+        var changed = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+
+        var touches = await harness.GitClient.CountTouchesAsync(temp.Path, start, "HEAD", ["src/Home.cs", "src/Old.cs"], cancellationToken);
+
+        Assert.Equal([new GitTouch(changed, "src/Home.cs"), new GitTouch(renamed, "src/Home.cs")], touches);
+    }
+
     [Fact]
     public async Task GetMainWorktreeAsync_FindsTheMainCheckout_FromInsideALinkedWorktree()
     {

@@ -9,10 +9,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// The syncs of a run's codebase graph the engine makes of its own, each under the claim its step already holds and none a
-/// step: a reason step's view where it starts - the agent's it works in, the base for one that reads; the base by the paths
-/// the run's folds changed that the graph has not taken yet, after each fold and deletion and before its next attempt
-/// does anything; the target's view after a refresh or a rebase, where it has one; and the view of each agent that is no
-/// longer live dropped. Each only where the run has a graph, and none fails its step - the graph is a map - but one that
+/// step: the view of a step that reads it where it starts (<see cref="FlowStepRunners.ReadsViewAtStart"/>) - the agent's
+/// it works in, the base for one that reads; the base by the paths the run's folds changed that the graph has not taken
+/// yet, after each fold and deletion and before its next attempt does anything; the target's view after a refresh or a
+/// rebase, where it has one; and the view of each agent that is no longer live dropped. Each only where the run has a graph, and none fails its step - the graph is a map - but one that
 /// fails is said: a line of <c>sync.jsonl</c> that says why, and a warning that says what takes it up again.
 /// </summary>
 /// <param name="graph">Syncs the graph.</param>
@@ -101,9 +101,10 @@ public sealed class FlowGraphSyncs(
     }
 
     /// <summary>
-    /// A reason step starts: its view is synced by a whole listing - the agent's it works in, the base for one that reads -
-    /// where the run has a graph, so a person's change of the main tree and the agent's own work since its last step are in
-    /// what it is served.
+    /// A step that reads the graph's view starts - a reason step, or a class-closure check
+    /// (<see cref="FlowStepRunners.ReadsViewAtStart"/>): its view is synced by a whole listing - the agent's it works in,
+    /// the base for one that reads - where the run has a graph, so a person's change of the main tree and the agent's own
+    /// work since its last step are in what it is served, or what it judges.
     /// </summary>
     /// <param name="run">The step's run.</param>
     /// <param name="cancellationToken">Stops the sync, and the step with it.</param>

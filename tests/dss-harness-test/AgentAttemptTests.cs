@@ -147,4 +147,32 @@ public sealed class AgentAttemptTests
                 ]),
             account);
     }
+
+    /// <summary>
+    /// A file a tool of the engine's tool server wrote, called by Claude Code - stored by the name Claude Code calls it,
+    /// <c>mcp__dssharness__create_file</c> - is one the attempt wrote, named as the runtime names the tool: the handoff reads
+    /// a stored tool's name as the one reading of a stream's calls does.
+    /// </summary>
+    [Fact]
+    public void TheEnginesHandoff_NamesAFileClaudeCodeWroteThroughTheEnginesToolServer()
+    {
+        var served = DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.ServedName(AgentTools.CreateFile);
+        AgentEvent[] stream =
+        [
+            new RunStarted(1),
+            new ToolCallStarted("toolu_1", served, AgentToolRunner.Harness),
+            new AssistantMessage("wrote it", [new AgentToolCall("toolu_1", served)]),
+            new ToolCallFinished("toolu_1", Ok: true, TimeSpan.Zero, """{"path":"made.txt","content":"x"}""", "ok"),
+        ];
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "The files the attempt wrote:",
+                $"- made.txt ({AgentTools.CreateFile})",
+                "The last commands it ran: none.",
+                "The agent's last messages, word for word:",
+                "wrote it"),
+            AgentStreamAccount.Of(stream, [], keepMessages: 1));
+    }
 }

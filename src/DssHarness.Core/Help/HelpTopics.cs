@@ -4451,7 +4451,10 @@ public static class HelpTopics
         builder.AppendLine("the run's class-closure check reads. No consent lifts it: the record is written or");
         builder.AppendLine("the row does not close. A manual lane has no records of its calls, so its searches");
         builder.AppendLine("and measurements are read as given, their command lines, and the fold's dry run says");
-        builder.AppendLine("so. The default is 'off', and a row closes as it always did.");
+        builder.AppendLine("so; a record that names no class closes no row, and a class's arm is named against the");
+        builder.AppendLine("registry the lane's worktree holds. A run's own folds are held to no closure.json:");
+        builder.AppendLine("the builder's answer is its record, which the run's class-closure check judges.");
+        builder.AppendLine("The default is 'off', and a row closes as it always did.");
         builder.AppendLine("No verdict is read from the prose beside the Status, unless anchors.triggerCarriesVerdict");
         builder.AppendLine("is true: then a closed row's Trigger opens with the closed mark and no other row's");
         builder.AppendLine("does, write-anchor and set-anchor refuse a row whose two cells disagree, fold-agent");
@@ -5358,7 +5361,8 @@ public static class HelpTopics
             + "same way and held against the base - the main checkout's graph, synced first where the run has none - as an "
             + "overlay of each file the worktree holds otherwise and each of the base's it does not hold, so no file is read "
             + "whose extract the base or an earlier sync made. An agent that only reads has no worktree: its view is the base. "
-            + "The engine syncs on its own too, under the claim its step already holds: a reason step's view where it starts - "
+            + "The engine syncs on its own too, under the claim its step already holds: a reason step's view where it starts, "
+            + "and a class-closure check's, which reads what the worktree still declares from it - "
             + "its agent's, the one the step it goes on with works in, or the base for one that reads; the base by every path "
             + "the run's folds changed that it has not taken yet - after a fold or a delete-agent's fold, and before each "
             + "attempt of one - with no listing, the run's ledger of its folds saying which it took, and with every path git "
@@ -6017,15 +6021,20 @@ public static class HelpTopics
             + "to its rows or its paths where it names them: the anchors among those rows the change opened, closed and lost, a "
             + "problem at a line of one of them and every problem of a registry as a whole, or the citations in those files; a rows "
             + "or paths expression that reads nothing names nothing. Each answers passed and findings, each a line as the check "
-            + "prints it. class-closure runs before every fold of an item: it judges the classes the item's plan declares "
-            + "against the closing record its builder answered - every planned site accounted for, a deleted site no longer "
-            + "declaring its symbol in the worktree, every search a tool call of the item's stored streams whose input holds "
-            + "its query, every neighbour measured by a measure call of the same streams or reasoned why not, every test of "
-            + "the pin declared, the arm one of the registry's and mutating the home's own file, the claim naming every axis "
-            + "of the universe - and each home's touches since its base, the item's own commits left out, a record without "
-            + "a home audit refused where the home was touched by other work or the class was reopened twice. Its problems "
-            + "are the record's (1, which close-class repairs) apart from a missing home audit (2, which home-audit makes), "
-            + "and it answers passed, problems, hotspots - the homes touched hotspot times or more - and touches. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
+            + "prints it. class-closure runs before every fold of an item, judging the work of the agent its in names: it "
+            + "judges the classes the item's plan declares against the closing record its builder answered - every planned "
+            + "site accounted for and the planned home kept or its move said (homeMoved), a deleted site no longer declaring "
+            + "its symbol in the worktree (the graph's view of it, synced where the step starts, or its text), a site that "
+            + "reads its home among the paths the agent changed (what its fold would write and what its earlier folds of the "
+            + "run changed), every search a tool call of the item's stored streams one of whose input's texts holds its "
+            + "query, every neighbour measured by a measure call of the same streams - whichever client called it - or "
+            + "reasoned why not, every test of the pin declared, the arm one of the registry its worktree holds and mutating "
+            + "the home's own file or a reason the class has nothing to mutate, the universe holding every planned axis and "
+            + "the claim naming each - and each home's touches since its base, the item's own commits left out, a record "
+            + "without a home audit refused where the home was touched by other work; a fold it cannot weigh fails it with "
+            + "the weighing's own code. Its problems are the record's (1, which close-class repairs) apart from a missing "
+            + "home audit (2, which home-audit makes), and it answers passed, problems, hotspots - the homes touched hotspot "
+            + "times or more - and touches. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
             + "it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as check-ci-legs --json "
             + "gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the commit the run last "
             + $"pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore names - a job "

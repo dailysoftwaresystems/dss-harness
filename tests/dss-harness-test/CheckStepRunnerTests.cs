@@ -425,8 +425,14 @@ public sealed class CheckStepRunnerTests : IDisposable
                 run: OrchestrationKit.Orchestrator),
             Token);
 
-        // The site deleted above still declares its symbol in the worktree, so the complete record still fails on it -
-        // the deleted file's text has to go for the record to pass; here it does.
+        // The site deleted above still declares its symbol in the worktree, so the complete record still fails on it, and
+        // on it alone - the deleted file's text has to go for the record to pass; here it does.
+        Assert.False(passing.Output!["passed"]!.GetValue<bool>());
+        Assert.Equal(ClassClosureExit.Findings, passing.Exit);
+        Assert.Equal(
+            ["class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Old'"],
+            [.. passing.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+
         File.Delete(Path.Combine(worktree, "src", "Old.cs"));
 
         var passed = await new ClassClosureStepRunner(
@@ -518,11 +524,20 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         Assert.True(audited.Output!["passed"]!.GetValue<bool>());
 
+        // Outside every forEach a step is an item of itself: a fold no forEach holds is another step's work, never the
+        // check's own, so both commits are other work's.
+        kit.Harness.OrchestrationStore.UpdateFolds(layout, ledger => ledger with { Folds = [ledger.Folds[0] with { Instance = "notes-fold" }] });
+
+        var outside = await ClosureAsync(kit, agents, graphs, baseCommit, instance: "class-closure");
+        var counted = outside.Output!["touches"]!.AsArray().Single();
+
+        Assert.Equal(("src/Home.cs", 2, 2), (counted!["path"]!.GetValue<string>(), counted["byOthers"]!.GetValue<int>(), counted["all"]!.GetValue<int>()));
+
         return;
 
-        async Task<FlowStepResult> ClosureAsync(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService graphs, string from, bool homeAudit = false)
+        async Task<FlowStepResult> ClosureAsync(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService graphs, string from, bool homeAudit = false, string instance = "rounds#1.items[0].class-closure")
         {
-            var entry = Entry("c-rate", home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [("the data", "query", "call-1")], neighbours: [], tests: [], axes: [], claim: "The rate holds");
+            var entry = Entry("c-rate", home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [("the data", "query", "call-1")], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
             var record = new JsonArray(entry);
 
             if (homeAudit)
@@ -549,7 +564,7 @@ public sealed class CheckStepRunnerTests : IDisposable
                         ["record"] = FlowValue.Of(record),
                     },
                     worksIn: "builder",
-                    instance: "rounds#1.items[0].class-closure",
+                    instance: instance,
                     run: OrchestrationKit.Orchestrator),
                 Token);
 
@@ -565,30 +580,393 @@ public sealed class CheckStepRunnerTests : IDisposable
         }
     }
 
-    /// <summary>A class the run's ledger says was reopened a second time is refused without a home audit, the record's own health apart.</summary>
+    /// <summary>
+    /// The check reads the calls of every client's stored stream as that client writes them, by the one reading of a
+    /// stream's calls: a turn that started two calls before either was answered is paired by the calls' ids, never by the
+    /// order the answers came in; a call Claude Code made of the engine's tool server, stored as
+    /// <c>mcp__dssharness__measure</c>, is the runtime's <c>measure</c>; and a query is looked for in what the model wrote,
+    /// never in the input's JSON text, where a backslash is escaped and Claude Code escapes <c>&lt;</c> and <c>&amp;</c>.
+    /// The dry weighing it reads is asked as a run's.
+    /// </summary>
     [Fact]
-    public void AClassReopenedTwice_IsRefusedWithoutAHomeAudit()
+    public async Task TheClassClosureCheck_ReadsEveryClientsCalls_ByTheirIds_AsTheRuntimeNamesThem_AsTheModelWroteThem()
     {
-        var judged = ClassClosureRules.Judge(
-            [PlannedClass.In(Class("c-rate", home: "src/Home.cs", symbol: "Home"))!],
-            [ClassClosureRecord.In(Entry("c-rate", home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [], neighbours: [], tests: [], axes: [], claim: "The rate holds"))!],
-            new ClassClosureProof(
-                new List<string>(),
-                new Dictionary<string, ClassClosureCall>(),
-                Declares: null,
-                TestDeclared: null,
-                new List<(string Id, string Site)>(),
-                ArmsDeclared: false,
-                new Dictionary<string, int>(),
-                new Dictionary<string, int>(),
-                TouchesRequired: 1,
-                HotspotAt: 5,
-                new HashSet<string>(["c-rate"], StringComparer.Ordinal)));
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
 
-        Assert.Equal(["class 'c-rate' reopened twice"], judged.Audits);
-        Assert.False(judged.Passed);
-        Assert.Empty(judged.Problems);
+        // As Claude Code stores a call's input: the model's JSON written again, every character its encoder escapes escaped.
+        var asked = System.Text.Json.Nodes.JsonNode.Parse("""{"pattern":"class\\s+Rate","glob":"IReadOnlyList<string> && more"}""")!.ToJsonString();
+        Assert.Contains("\\u003C", asked, StringComparison.Ordinal);
+
+        WriteStream(
+            kit.Harness,
+            kit.Layout,
+            "builder",
+            [
+                new DssHarness.Core.Agents.ToolCallStarted("toolu_1", "Grep", DssHarness.Core.Agents.AgentToolRunner.ClaudeCode),
+                new DssHarness.Core.Agents.ToolCallStarted("toolu_2", "mcp__dssharness__measure", DssHarness.Core.Agents.AgentToolRunner.Harness),
+                new DssHarness.Core.Agents.ToolCallFinished("toolu_1", Ok: true, TimeSpan.Zero, asked, "src/Rate.cs"),
+                new DssHarness.Core.Agents.ToolCallFinished("toolu_2", Ok: true, TimeSpan.Zero, """{"leg":"windows","cell":"rate:x"}""", "passed"),
+            ]);
+
+        var agents = Weighing("src/Home.cs");
+        var result = await Closure(kit, agents).RunAsync(
+            ClosureRun(
+                kit,
+                Class("c-rate", home: "src/Home.cs", symbol: "Home"),
+                Entry(
+                    "c-rate",
+                    home: "src/Home.cs",
+                    sites: [("src/Home.cs", "Home", "home")],
+                    searches: [("the rate's declarations", "class\\s+Rate", "toolu_1"), ("the rate's readers", "IReadOnlyList<string> && more", "toolu_1")],
+                    neighbours: [("rate:x", "toolu_2", "passed", "")],
+                    tests: [],
+                    axes: ["format"],
+                    claim: "The rate holds over every format")),
+            Token);
+
+        Assert.Empty(result.Output!["problems"]!.AsArray());
+        Assert.True(result.Passed);
+        Assert.Equal(HarnessExit.Success, result.Exit);
+        _ = await agents.Received(1).FoldAsync(Arg.Is<DssHarness.Core.Orchestration.FoldAgentRequest>(request => request.ByRun && !request.Apply), Arg.Any<CancellationToken>());
+
+        // A call cited for a measurement that is no measure call, and a query no text of the cited call holds, are refused.
+        var wrong = await Closure(kit, agents).RunAsync(
+            ClosureRun(
+                kit,
+                Class("c-rate", home: "src/Home.cs", symbol: "Home"),
+                Entry(
+                    "c-rate",
+                    home: "src/Home.cs",
+                    sites: [("src/Home.cs", "Home", "home")],
+                    searches: [("the rate's writers", "class Rate", "toolu_1")],
+                    neighbours: [("rate:x", "toolu_1", "passed", "")],
+                    tests: [],
+                    axes: ["format"],
+                    claim: "The rate holds over every format")),
+            Token);
+
+        Assert.Equal(
+            [
+                "class 'c-rate': the search for 'the rate's writers' cites the call 'toolu_1', whose input does not hold the query 'class Rate'",
+                "class 'c-rate': the neighbour 'rate:x' is measured by the call 'toolu_1', which is not a measure call of this item's stored streams",
+            ],
+            [.. wrong.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
     }
+
+    /// <summary>
+    /// A site that reads its home is among the paths the agent changed where the run's ledger says one of the agent's
+    /// earlier folds changed it, though the fold no longer writes it - the main tree holds it as the agent does once it is
+    /// folded, so a rework of the review loop that changes another file leaves the site the agent's work all the same; a
+    /// fold of another agent's is no change of this one's.
+    /// </summary>
+    [Fact]
+    public async Task ASiteTheAgentFoldedEarlier_IsAmongThePathsItChanged()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+
+        kit.Harness.OrchestrationStore.UpdateFolds(kit.Layout, ledger => ledger with
+        {
+            Folds =
+            [
+                new FlowFoldEntry("f1", "rounds#1.items[0].fold", 1, "fold", "builder", "applied", DateTimeOffset.UtcNow, [new FlowFoldPath("src/A.cs", "written", null, new string('a', 64), Changed: true)], [], DateTimeOffset.UtcNow),
+                new FlowFoldEntry("f2", "rounds#1.items[1].fold", 1, "fold", "other", "applied", DateTimeOffset.UtcNow, [new FlowFoldPath("src/C.cs", "written", null, new string('c', 64), Changed: true)], [], DateTimeOffset.UtcNow),
+            ],
+        });
+
+        var result = await Closure(kit, Weighing("src/B.cs")).RunAsync(
+            ClosureRun(
+                kit,
+                Class("c-rate", home: "src/Home.cs", symbol: "Home"),
+                Entry(
+                    "c-rate",
+                    home: "src/Home.cs",
+                    sites: [("src/A.cs", "Read", "reads-home"), ("src/B.cs", "Read", "reads-home"), ("src/C.cs", "Read", "reads-home")],
+                    searches: [],
+                    neighbours: [],
+                    tests: [],
+                    axes: ["format"],
+                    claim: "The rate holds over every format")),
+            Token);
+
+        Assert.Equal(
+            ["class 'c-rate': the site 'src/C.cs' reads its home, but the agent changed nothing at it"],
+            [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+    }
+
+    /// <summary>
+    /// What the check cannot weigh it never reads as nothing: where the fold's own dry weighing - asked as a run's - throws,
+    /// or answers with no plan - an agent it cannot fold - the step fails with the weighing's own code and words, and no
+    /// site that reads its home passes unchecked.
+    /// </summary>
+    [Fact]
+    public async Task TheClassClosureCheck_FailsWithTheWeighingsOwnWords_WhereTheFoldCannotBeWeighed()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+        var run = ClosureRun(
+            kit,
+            Class("c-rate", home: "src/Home.cs", symbol: "Home"),
+            Entry("c-rate", home: "src/Home.cs", sites: [("src/A.cs", "Read", "reads-home")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format"));
+
+        var throwing = Substitute.For<DssHarness.Core.Orchestration.IAgentService>();
+        throwing.FoldAsync(Arg.Any<DssHarness.Core.Orchestration.FoldAgentRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<DssHarness.Core.Application.UseCaseResult<DssHarness.Core.Orchestration.AgentVerbFacts>>(new HarnessException(HarnessExit.CommandFailed, "git could not read the worktree.")));
+
+        var thrown = await Closure(kit, throwing).RunAsync(run, Token);
+
+        Assert.Equal((false, HarnessExit.CommandFailed, "the paths agent 'builder' changed could not be weighed: git could not read the worktree."), (thrown.Passed, thrown.Exit, thrown.Error));
+        Assert.Null(thrown.Output);
+
+        // The weighing is the fold's dry run, asked as a run's: no closure.json is asked of it.
+        _ = await throwing.Received(1).FoldAsync(Arg.Is<DssHarness.Core.Orchestration.FoldAgentRequest>(request => !request.Apply && request.ByRun), Arg.Any<CancellationToken>());
+
+        var unweighed = Substitute.For<DssHarness.Core.Orchestration.IAgentService>();
+        unweighed.FoldAsync(Arg.Any<DssHarness.Core.Orchestration.FoldAgentRequest>(), Arg.Any<CancellationToken>())
+            .Returns(DssHarness.Core.Application.UseCaseResult<DssHarness.Core.Orchestration.AgentVerbFacts>.From(
+                new CommandOutcome(HarnessExit.Refused, "agent 'builder' cannot be folded: its HEAD was moved by hand.")));
+
+        var refused = await Closure(kit, unweighed).RunAsync(run, Token);
+
+        Assert.Equal((false, HarnessExit.Refused, "the paths agent 'builder' changed could not be weighed: agent 'builder' cannot be folded: its HEAD was moved by hand."), (refused.Passed, refused.Exit, refused.Error));
+    }
+
+    /// <summary>
+    /// A class's arm is judged against the registry the agent's worktree holds, where an arm the work adds stands before
+    /// the fold merges it into the main tree's: an arm the work added and that mutates the home passes; a class that says
+    /// why it has nothing to mutate passes, as the record's schema allows; an arm the registry holds none of, an arm that
+    /// mutates another file, and an arm that names neither an id nor a reason are each refused.
+    /// </summary>
+    [Fact]
+    public async Task AClassesArm_IsJudgedAgainstTheRegistryItsWorktreeHolds_OrItsReasonForNone()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        kit.Harness.WriteConfig(kit.Main, AgentArmRegistryTests.Config);
+        OrchestrationKit.Write(kit.Main, AgentArmRegistryTests.Registry, AgentArmRegistryTests.Text(AgentArmRegistryTests.Arm("alpha")));
+        AgentArmRegistryTests.WriteTexts(kit.Main, "alpha");
+        await kit.Harness.CommitAllAsync(kit.Main, "an arm registry", Token);
+        var worktree = await kit.CreateAgentAsync("builder");
+
+        // The work adds the arm of its class's home; the main tree's registry holds alpha alone.
+        OrchestrationKit.Write(worktree, AgentArmRegistryTests.Registry, AgentArmRegistryTests.Text(AgentArmRegistryTests.Arm("alpha"), AgentArmRegistryTests.Arm("rate")));
+        AgentArmRegistryTests.WriteTexts(worktree, "rate");
+
+        JsonObject Armed(string id, JsonObject arm)
+        {
+            var entry = Entry(id, home: "src/rate.cpp", sites: [("src/rate.cpp", "Rate", "home")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+            entry["arm"] = arm;
+            return entry;
+        }
+
+        var result = await Closure(kit, Weighing("src/rate.cpp")).RunAsync(
+            Run(
+                new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = "HEAD" },
+                kit.Main,
+                read: new Dictionary<string, FlowValue>
+                {
+                    ["classes"] = FlowValue.Of(new JsonArray()),
+                    ["record"] = FlowValue.Of(new JsonArray(
+                        Armed("N1", new JsonObject { ["id"] = "rate", ["site"] = "src/rate.cpp" }),
+                        Armed("N2", new JsonObject { ["why"] = "the class decides a name, and a name has nothing to mutate" }),
+                        Armed("N3", new JsonObject { ["id"] = "ghost", ["site"] = "src/rate.cpp" }),
+                        Armed("N4", new JsonObject { ["id"] = "alpha", ["site"] = "src/alpha.cpp" }),
+                        Armed("N5", new JsonObject { ["why"] = " " }))),
+                },
+                worksIn: "builder",
+                instance: "rounds#1.items[0].class-closure",
+                run: OrchestrationKit.Orchestrator),
+            Token);
+
+        Assert.Equal(
+            [
+                "class 'N3': the arm 'ghost' is not an arm of the registry its worktree holds",
+                "class 'N4': the arm 'alpha' mutates 'src/alpha.cpp', not the home 'src/rate.cpp'",
+                "class 'N5': arms nothing and says not why, but this repository declares an arms registry",
+            ],
+            [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+    }
+
+    /// <summary>
+    /// A class-closure step's view of the run's codebase graph is synced where it starts, as a reason step's is, so what
+    /// the worktree still declares is read from the tree as the work left it, never from a view synced before the
+    /// builder's last edits: a site whose declaration the work took out - its name left in a comment, which text alone
+    /// would still find - is deleted, by the view.
+    /// </summary>
+    [Fact]
+    public async Task AClassClosureStepsView_IsSyncedWhereItStarts_AndDeclarationsAreReadFromIt()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "src/Old.cs", "namespace Rates;\n\npublic class Old\n{\n    public int Rate() => 1;\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the site", Token);
+        var worktree = await kit.CreateAgentAsync("builder");
+        await kit.Harness.CodebaseGraph.SyncAsync(FlowGraphSyncs.RequestOf(await kit.Harness.ContextLoader.LoadAsync(kit.Main, Token), new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, null, Flow), "test"), Token);
+
+        var runners = new FlowStepRunners([Closure(kit, Weighing("src/Old.cs"), kit.Harness.CodebaseGraph)], kit.Harness.GraphSyncs);
+        var run = ClosureRun(
+            kit,
+            Class("c-rate", home: "src/Home.cs", symbol: "Home"),
+            Entry("c-rate", home: "src/Home.cs", sites: [("src/Old.cs", "Old", "deleted")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format"));
+
+        // An earlier step synced the agent's view, which holds the class the work has not taken out yet.
+        await kit.Harness.GraphSyncs.AtStartAsync(run, Token);
+        var before = await runners.RunAsync(run, Token);
+
+        Assert.Equal(
+            ["class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Old'"],
+            [.. before.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+
+        // The work takes the class out; the view, synced again where the next check starts, declares it no longer - read
+        // as it was synced before, it would.
+        OrchestrationKit.Write(worktree, "src/Old.cs", "namespace Rates;\n\n// Old moved to Home.\npublic class Other\n{\n}\n");
+
+        var after = await runners.RunAsync(run, Token);
+
+        Assert.Empty(after.Output!["problems"]!.AsArray());
+        Assert.True(after.Passed);
+    }
+
+    /// <summary>
+    /// A planned class holds the record to the plan: the record's universe holds every axis the plan names, and the claim
+    /// names each; a home other than the planned one is refused unless the record says why it moved; and a deleted site
+    /// that names no symbol of its own is judged, and named, by its home's.
+    /// </summary>
+    [Fact]
+    public void APlannedClass_HoldsTheRecordToItsAxesAndItsHome()
+    {
+        var planned = Class("c-rate", home: "src/Home.cs", symbol: "Home");
+        ((JsonArray)planned["universe"]!["axes"]!).Add(new JsonObject { ["name"] = "direction", ["values"] = new JsonArray("in", "out"), ["declaredIn"] = "src/Home.cs" });
+        var moved = Entry("c-rate", home: "src/Rate.cs", sites: [("src/Old.cs", "", "deleted")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+        var proof = RunProof(changed: [], calls: [], declares: (path, symbol) => path == "src/Old.cs" && symbol == "Home");
+
+        var judged = ClassClosureRules.Judge([PlannedClass.In(planned)!], [ClassClosureRecord.In(moved)!], proof);
+
+        Assert.Equal(
+            [
+                "class 'c-rate': the home is 'Home' in 'src/Rate.cs', not the planned 'Home' in 'src/Home.cs', and the record says not why it moved (homeMoved)",
+                "class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Home'",
+                "class 'c-rate': the universe leaves out the planned axis 'direction'",
+                "class 'c-rate': the claim does not name the axis 'direction'",
+            ],
+            judged.Problems);
+
+        moved["homeMoved"] = new JsonObject { ["why"] = "the rate is decided where the rates are read" };
+        moved["universe"]!["axes"]!.AsArray().Add(new JsonObject { ["name"] = "direction", ["values"] = new JsonArray("in", "out") });
+        moved["claim"] = "The rate holds over every format and direction";
+
+        Assert.Equal(
+            ["class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Home'"],
+            ClassClosureRules.Judge([PlannedClass.In(planned)!], [ClassClosureRecord.In(moved)!], proof).Problems);
+    }
+
+    /// <summary>
+    /// A run's proof reads none of what it read as given: no change at a site that reads its home is a problem, and a call
+    /// its streams do not hold is not made, the streams holding none at all. A manual lane's proof reads them as given, its
+    /// command lines - but a search cites a call, a measurement names one, and its record names a class: an empty record
+    /// closes no row.
+    /// </summary>
+    [Fact]
+    public void ARunsProof_ReadsNothingAsGiven_AndAManualLanesRecordStillCitesItsCalls_AndNamesAClass()
+    {
+        var entry = ClassClosureRecord.In(Entry(
+            "c-rate",
+            home: "src/Home.cs",
+            sites: [("src/A.cs", "Read", "reads-home")],
+            searches: [("the rate", "rate", "made-up"), ("the readers", "readers", "")],
+            neighbours: [("rate:x", "made-up", "passed", ""), ("rate:y", "", "passed", "")],
+            tests: [],
+            axes: ["format"],
+            claim: "The rate holds over every format"))!;
+
+        Assert.Equal(
+            [
+                "class 'c-rate': the site 'src/A.cs' reads its home, but the agent changed nothing at it",
+                "class 'c-rate': the search for 'the rate' cites the call 'made-up', which is not a tool call of this item's stored streams",
+                "class 'c-rate': the search for 'the readers' cites no call: a search that was not made does not count",
+                "class 'c-rate': the neighbour 'rate:x' is measured by the call 'made-up', which is not a measure call of this item's stored streams",
+                "class 'c-rate': the neighbour 'rate:y' is measured by no call",
+            ],
+            ClassClosureRules.Judge([], [entry], RunProof(changed: [], calls: [])).Problems);
+
+        var manual = ClassClosureProof.Manual(arms: null);
+
+        Assert.True(manual.ByHand);
+        Assert.Equal(
+            [
+                "class 'c-rate': the search for 'the readers' cites no call: a search that was not made does not count",
+                "class 'c-rate': the neighbour 'rate:y' is measured by no call",
+            ],
+            ClassClosureRules.Judge([], [entry], manual).Problems);
+        Assert.Equal(
+            ["the record names no class: a row closes by the record of each class it closes, and an empty one closes none"],
+            ClassClosureRules.Judge([], [], manual).Problems);
+
+        // A run whose item decides no class and whose builder found none answers an empty record, and it passes.
+        Assert.True(ClassClosureRules.Judge([], [], RunProof(changed: [], calls: [])).Passed);
+    }
+
+    /// <summary>A run's proof: the paths the agent changed, the calls its streams hold, what its worktree declares, no arms registry, a home audit asked of one touch by others and a hotspot at five.</summary>
+    private static ClassClosureProof RunProof(IReadOnlyList<string> changed, IReadOnlyList<DssHarness.Core.Agents.AgentStreamCall> calls, Func<string, string, bool>? declares = null)
+        => new(
+            changed,
+            calls.ToDictionary(call => call.Id, StringComparer.Ordinal),
+            declares,
+            TestDeclared: null,
+            Arms: null,
+            new Dictionary<string, int>(),
+            new Dictionary<string, int>(),
+            TouchesRequired: WorkflowStepTypes.DefaultTouches,
+            HotspotAt: WorkflowStepTypes.DefaultHotspot);
+
+    /// <summary>An agent service whose fold's dry weighing plans to write <paramref name="written"/>, and nothing else.</summary>
+    private static DssHarness.Core.Orchestration.IAgentService Weighing(params string[] written)
+    {
+        var agents = Substitute.For<DssHarness.Core.Orchestration.IAgentService>();
+        agents.FoldAsync(Arg.Any<DssHarness.Core.Orchestration.FoldAgentRequest>(), Arg.Any<CancellationToken>())
+            .Returns(DssHarness.Core.Application.UseCaseResult<DssHarness.Core.Orchestration.AgentVerbFacts>.From(
+                new CommandOutcome(HarnessExit.Success, "dry run")
+                {
+                    Facts = new DssHarness.Core.Orchestration.AgentVerbFacts(0, "dry run", false, null, null, [], [], []) { Planned = new DssHarness.Core.Orchestration.AgentPlanned([], [], [], [], null) { Written = written } },
+                }));
+
+        return agents;
+    }
+
+    /// <summary>The class-closure runner over the kit's own services, the agent service and the graph given.</summary>
+    private static ClassClosureStepRunner Closure(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService? graphs = null)
+        => new(
+            kit.Harness.ContextLoader,
+            kit.Harness.Platform,
+            kit.Harness.OrchestrationStore,
+            kit.Harness.FileSystem,
+            agents,
+            graphs ?? Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>(),
+            kit.Harness.GitClient,
+            new DssHarness.Core.Mutations.ArmListingReader(SyncKit.Service(kit.Harness), kit.Harness.FileSystem, kit.Harness.Platform));
+
+    /// <summary>A class-closure step of the kit's run, working in the agent 'builder', judging <paramref name="record"/> against the one class <paramref name="planned"/>.</summary>
+    private static FlowStepRun ClosureRun(OrchestrationKit kit, JsonObject planned, params JsonObject[] record)
+        => Run(
+            new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = "HEAD" },
+            kit.Main,
+            read: new Dictionary<string, FlowValue>
+            {
+                ["classes"] = FlowValue.Of(new JsonArray(planned)),
+                ["record"] = FlowValue.Of(new JsonArray([.. record])),
+            },
+            worksIn: "builder",
+            instance: "rounds#1.items[0].class-closure",
+            run: OrchestrationKit.Orchestrator);
 
     /// <summary>One planned class of the item's plan, as the plan's own check reads it.</summary>
     private static JsonObject Class(string id, string home, string symbol, string? site = null)

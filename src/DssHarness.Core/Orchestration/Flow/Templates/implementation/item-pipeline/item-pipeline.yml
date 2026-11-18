@@ -180,7 +180,7 @@ steps:
       step: class-closure
       outcome: failure
       codes: [1]
-    then: class-closure
+    then: item-blocked
     maxVisits: 2
     retries: 3
     backoffSeconds: 30
@@ -196,7 +196,7 @@ steps:
       step: class-closure
       outcome: failure
       codes: [2]
-    then: class-closure
+    then: item-blocked
     maxVisits: 2
     retries: 3
     backoffSeconds: 30
@@ -476,7 +476,7 @@ steps:
               step: reclass-closure
               outcome: failure
               codes: [1]
-            then: reclass-closure
+            then: reverify
             maxVisits: 2
             retries: 3
             backoffSeconds: 30
@@ -492,7 +492,7 @@ steps:
               step: reclass-closure
               outcome: failure
               codes: [2]
-            then: reclass-closure
+            then: reverify
             maxVisits: 2
             retries: 3
             backoffSeconds: 30

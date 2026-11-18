@@ -2564,6 +2564,57 @@ public sealed class ImplementationFlowTests
         }
 
         /// <summary>
+        /// The class-closure check's repairs change code - close-class consolidates a site into its home, home-audit
+        /// refactors the home and its callers - so each goes back through the item's tests before anything is folded: the
+        /// record's problems go to the builder on the closure-record prompt and a missing home audit on the home-audit
+        /// prompt, and after each the verify runs again before the check does; the fold comes only after a verify of the
+        /// code it folds.
+        /// </summary>
+        [Fact]
+        public async Task TheClassClosureChecksRepairs_GoBackThroughTheItemsTests_BeforeTheFold()
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(
+                temp,
+                ground: new Ground(Legs: true),
+                machine: steps => steps.Queue(
+                    "class-closure",
+                    Closure(ClassClosureExit.Findings, "class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Old'"),
+                    Closure(ClassClosureExit.HomeAudit, "class 'c-rate': home touched 1 times in this run by other work")));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+
+            // The builder was resumed on the closure-record prompt, then on the home-audit prompt.
+            var implementer = kit.Agents.Of("implementer");
+
+            Assert.Equal(3, implementer.Count);
+            Assert.StartsWith("Your work was checked against the classes your item closes, and the check found the record does not close them.", implementer[1].Prompt, StringComparison.Ordinal);
+            Assert.StartsWith("Your work was checked against the classes your item closes, and one of their homes has been touched by other work", implementer[2].Prompt, StringComparison.Ordinal);
+
+            // Each check of the record came after a verify of the code it judged, and the fold after the last of them.
+            var order = kit.Steps.Runs
+                .Where(run => run.Step.Name is "verify" or "class-closure" or "fold")
+                .Select(run => run.Step.Name)
+                .ToList();
+
+            Assert.Equal(["verify", "class-closure", "verify", "class-closure", "verify", "class-closure", "fold"], order);
+        }
+
+        /// <summary>A class-closure check that found red, with the code its repair is raised by and the problem it found.</summary>
+        private static FlowStepResult Closure(int code, string problem)
+            => new()
+            {
+                Asked = null,
+                Passed = true,
+                Red = true,
+                Exit = code,
+                Error = problem,
+                Output = new JsonObject { ["passed"] = false, ["problems"] = new JsonArray(problem), ["hotspots"] = new JsonArray(), ["touches"] = new JsonArray() },
+            };
+
+        /// <summary>
         /// A verify that stays red past its mender's three visits is left to the recovery: no fourth mend is raised, the
         /// diagnostician reads the failure, and what stands in its way is put to the person - answered retry, the verify
         /// runs again as it is and comes back green, the run reaching its end.

@@ -16,26 +16,26 @@ public sealed class AgentArmRegistryTests
 {
     private const string Agent = "ag";
 
-    private const string Registry = "mutations/arms.txt";
+    internal const string Registry = "mutations/arms.txt";
 
-    private const string Texts = "mutations/texts";
+    internal const string Texts = "mutations/texts";
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>The configuration naming the registry and its texts' directory.</summary>
-    private static HarnessConfig Config => new()
+    internal static HarnessConfig Config => new()
     {
         Worktrees = OrchestrationKit.Settings,
         Mutations = new MutationSettings { Registry = Registry, TextDirectory = Texts },
     };
 
     /// <summary>An arm's two rows: what it mutates, and the case it reddens.</summary>
-    private static string Arm(string id, string? @case = null)
+    internal static string Arm(string id, string? @case = null)
         => $"A | {id} | src/{id}.cpp | {Texts}/{id}.before | {Texts}/{id}.after | TEST-RED | app | app_tests | 1 | {Texts}/{id}.diag | the {id} is pinned\n"
             + $"C | {id} | {@case ?? $"Suite.{id}"} | red\n";
 
     /// <summary>A registry of <paramref name="arms"/>, under a heading.</summary>
-    private static string Text(params string[] arms) => "# arms\n\n" + string.Concat(arms);
+    internal static string Text(params string[] arms) => "# arms\n\n" + string.Concat(arms);
 
     private static string Crlf(string text) => text.Replace("\n", "\r\n", StringComparison.Ordinal);
 
@@ -49,7 +49,7 @@ public sealed class AgentArmRegistryTests
     private static string Digest(string text) => FileContentHash.Of(Encoding.UTF8.GetBytes(text));
 
     /// <summary>Writes the three texts arm <paramref name="id"/> cites into <paramref name="root"/>.</summary>
-    private static void WriteTexts(string root, string id)
+    internal static void WriteTexts(string root, string id)
     {
         OrchestrationKit.Write(root, $"{Texts}/{id}.before", $"x <= {id}");
         OrchestrationKit.Write(root, $"{Texts}/{id}.after", $"x < {id}");

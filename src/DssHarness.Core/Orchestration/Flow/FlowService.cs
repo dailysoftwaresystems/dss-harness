@@ -1410,7 +1410,7 @@ public sealed class FlowService(
                         }
 
                         outcome = (await _agents.DeleteAsync(
-                            new DeleteAgentRequest(context.Layout.MainCheckoutRoot, layout.Name, agent, new FoldAllowances(), Apply: true, DiscardUncommitted: false),
+                            new DeleteAgentRequest(context.Layout.MainCheckoutRoot, layout.Name, agent, new FoldAllowances(), Apply: true, DiscardUncommitted: false) { ByRun = true },
                             token).ConfigureAwait(false)).Outcome;
                     }
                     catch (HarnessException refused)

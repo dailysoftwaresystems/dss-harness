@@ -2998,19 +2998,31 @@ words as why - and answered with the verdict as the ledger spells it, the run's 
 `measures/<call id>/` of the step's directory (`AgentMeasureSupport.RecordsOf`: the ledger, a red leg's log in an
 agent's worktree, and what the call answered, read back by `AgentMeasureSupport.RecordOf`), under the id the stored
 stream records the call by on every client - what the record's `measuredBy` cites. Before every fold of an
-item, the `class-closure` check (`ClassClosureStepRunner`) judges the record by `ClassClosureRules` - the one owner of
-the judgement - against the classes the plan declares, the item's stored streams (`OrchestrationStore.ReadStepStream`,
-every step of the agent's own directory), the paths the agent changed (the fold's own dry weighing,
-`IAgentService.FoldAsync`), the graph's view of the worktree or its text, the arms registry (`ArmListingReader`) and
-each home's touches since the base (`IGitClient.CountTouchesAsync`, the item's own commits left out by the fold ledger
-through `FlowInstanceId.ItemOf`): every planned site accounted for and a deleted site no longer declaring its symbol,
-every search a tool call of the streams whose input holds its query, every neighbour measured or reasoned, the pin's
-tests declared, the arm one of the registry's and mutating the home's own file, the claim naming every axis; a record
-without a home audit is refused where the home was touched by other work or the class was reopened twice, and a home
-touched often enough is a hotspot in the check's answer. The record's problems (1) are repaired by `close-class` and a
-missing audit (2) by `home-audit`, reason steps that go on with the implementation; the same rules judge a manual
-lane's `closure.json` where `anchors.closure` says `required` (`AgentService.ClosureProblemsAsync`, a refusal of its
-own kind `RefusalKind.Closure` that no consent lifts, the searches and measurements read as given).
+item, the `class-closure` check (`ClassClosureStepRunner`, its `in` required) judges the record by `ClassClosureRules` -
+the one owner of the judgement - against the classes the plan declares, the item's stored streams (every step of the
+agent's own directory, read by the one reading of a stream's calls, `AgentStreamCalls`: each call paired with its answer
+by its id, its tool named as the runtime names it - Claude Code's `mcp__dssharness__measure` the runtime's `measure`
+- and its input's texts unescaped), the paths the agent changed (what the fold's own dry weighing would write, remove or
+merge, `IAgentService.FoldAsync` asked as a run's, and what the run's ledger says its earlier folds of the agent
+changed, `FoldLedger.Changed`), the graph's view of the worktree - synced where the check starts - or its text, the arms
+the registry of the agent's worktree declares (`ArmListingReader.DeclaredArmsAsync`, the registry alone, an arm the work
+adds among them) and each home's touches since the base (`IGitClient.CountTouchesAsync`, the item's own commits left out
+by the fold ledger through `FlowInstanceId.ItemOf`, the whole id a step of no `forEach`'s item): every planned site
+accounted for and the planned home kept or its move said, a deleted site no longer declaring its symbol, a site that
+reads its home among the paths changed, every search citing a tool call of the streams one of whose input's texts holds
+its query, every neighbour measured by a `measure` call or reasoned, the pin's tests declared, the arm one of the
+registry's and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every
+planned axis and the claim naming each; a record without a home audit is refused where the home was touched by other
+work, and a home touched often enough is a hotspot in the check's answer. A dry weighing it cannot make fails it with the
+weighing's own code: nothing it could not read is read as none (`ClassClosureProof` leaves null only what a manual lane
+reads as given). The record's problems (1) are repaired by `close-class` and a missing audit (2) by `home-audit`, reason
+steps that go on with the implementation and so change its code: each goes back through the item's tests - `then:
+item-blocked`, whose verify runs again, and `reverify` in the review loop's revise - before the check runs again and
+anything is folded. The same rules judge a manual lane's `closure.json` where `anchors.closure` says `required`
+(`AgentService.ClosureProblemsAsync`, a refusal of its own kind `RefusalKind.Closure` that no consent lifts, the searches
+and measurements read as given, a record naming no class refused, its arms against the registry its worktree holds); a
+run's own folds - its `fold` and `delete-agent` steps, the engine's own deleting of an agent and the check's weighing,
+each request `ByRun` - are held to no `closure.json`, for the builder's answer is their record and the check judged it.
 `CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both
@@ -4509,8 +4521,9 @@ with the base's link result, and the next sync links again from it (`Relink`) - 
 where nothing changed; a process begun again links its first sync whole, from the extracts.
 
 The engine syncs on its own, through `FlowGraphSyncs`, only where the run has a graph and under the claim its step already
-holds: `FlowStepRunners` syncs a reason step's view where it starts - its agent's, the one the step it goes on with
-works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), the base for one that reads; `fold` and
+holds: `FlowStepRunners` syncs the view of a step that reads it where it starts (`FlowStepRunners.ReadsViewAtStart`: a
+reason step, and a `class-closure` check, which reads what the worktree still declares) - its agent's, the one the step it
+goes on with works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), the base for one that reads; `fold` and
 `delete-agent` sync the base by every path the run's folds changed that the graph has not taken yet
 (`FoldLedger.Ungraphed`, `FoldLedger.Changed`) - before each attempt does anything and after its apply - and record each
 fold it took (`graphed` in `folds.json`), so a sync that failed, was stopped or was cut off by a crash is owed until one
