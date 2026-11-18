@@ -5851,8 +5851,13 @@ leg that has run. Its refusal is a configuration's, which ends the run in the fi
 heavy leg of the machine would meet it (`AdmissionReading.RuleInForce`), never one leg's defect; a light
 leg asks no rule, and runs, its page cache left where the rule could not be read, saying why. Only the
 count of slots is read again at each look of the slots' record, which turns a refusal of the file into
-that record's own (`HeavyLegSlots`), so every reader of the line - a dry run naming a tree's holders
-among them - says it could not be read rather than failing. Each
+that record's own (`HeavyLegSlots`): a dry run reading the line - naming a tree's holders among them -
+says it could not be read rather than failing, and a leg's own admission, before its work, is refused by
+it. A unit of a leg whose work has begun - an arm of a sweep, a worker made - asks for its slot carrying
+the reading that work began by (`AdmissionRequest.WorkBegunBy`, kept by its `SlotPlace`), and a look
+that cannot read the file weighs it by the count that reading's file declared, or by each entry's own
+where it declared none, the refusal said once until the file reads again: refused there, a file put
+wrong mid-sweep would end the run with a configuration's error, losing the leg's line and its verdict. Each
 field it declares wins over the machine's section in every tree's `config.json`, which wins over
 `defaults.admission`, which wins over the built-in value (`AdmissionSettings.InForce`), so a field it
 leaves out is still the repository's to say. Every command this user runs on the machine reads it,
@@ -5993,12 +5998,21 @@ it read it counts as made. A build directory is one below a tree's
 whatever the tree's configuration says now; a link there is left. Each is removed as `clean --legs`
 removes a leg's own, by the one owner of that removal (`BuildDirectoryRemoval`): the directory renamed
 aside under the mutex a run needs to take the lock a build of it takes, so none starts in between, into
-an aside named by the removing process (`.<variant>.removing-<pid>`, `RemovalAside.Of`), and removed
+an aside named by the removing process (`.<variant>.removing-<pid>-<stamp>`, `RemovalAside.Of`) - its
+id and the stamp that tells it from a later holder of that id, as the run lock names a holder, each
+character of the stamp but a letter, digit or dash spelt `_` and its four-digit code - and removed
 from there by that process alone - so a clean of a build and another tree's leg making room, removing
 it at once, never delete one aside together, nor count what the other freed. What an earlier removal
 left aside - one that stopped part way, named by a process no longer running, or a build's before this
-one, named by none - is finished by the next removal of the directory, taken first into its own aside
-by a rename only one removal can make. One a run's lock names, a sweep of its variant in that tree
+one, named by none or by an id alone - is finished by the next removal of the directory, taken first
+into its own aside by a rename only one removal can make. Whether the process an aside names still
+runs is told by its id and its stamp (`IProcessIdentity.IsAlive`), so one an id's later holder carries
+is never taken for it: named by the id alone, a removal killed part way left an aside every clean and
+reclaim passed over for as long as any process carried that id, which on Windows comes back within
+minutes. An aside naming the removing process's own id under another stamp is an ended process's, and
+taken over. A dry run lists exactly what the removal removes besides the directory
+(`BuildDirectoryRemoval.LeftAside`), its own process's aside first. One a run's lock names, a sweep of
+its variant in that tree
 holds, or whose tree's lock cannot be read, is left and said; the leg's own tree, and the copies
 its legs work in, are never among them, nor a sweep's workers, which are the sweep's to reuse. The
 trees are the ones the leg's process has on its machine (`IRepositoryTrees.HereAsync`): here the main
@@ -6555,7 +6569,12 @@ while a gate ran turned a green suite red, with four test processes live at once
   both, a directory it was in that is not there (a drive or a share not mounted), one this user may
   not look in - and is never read as gone: its copies stay recorded, refused, exit 13, a line saying
   why, a claim of one by a sync is refused as one of a tree still there is, and `list-worktree` says
-  it with why and never names the clean for it. The copies a gone tree left are removed alone by
+  it with why and never names the clean for it. The sync's refusal names the remedy its cause allows
+  (`TreeLook.SpeltForAnotherSystem`): for a path spelt for the other system, that the copy was last
+  synced from there and may be this same worktree as that system spells it, to be synced from there
+  or, once that tree is really gone, cleaned there with `clean --gone-copies` - never deleting "the
+  other" worktree, which there may be the one being synced; for a directory not there or not to be
+  looked in, renaming this worktree or deleting the other where it can be looked at. The copies a gone tree left are removed alone by
   `clean --gone-copies` (`IHostCopyRemover.RemoveGoneAsync`), told by the tree the record names -
   a directory seen to be gone from this machine - never by the name they are kept under, which a
   worktree here, a live agent's among them, may bear now, and whose deletion would take them with it. It is driven by the record, not by

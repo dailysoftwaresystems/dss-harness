@@ -410,6 +410,13 @@ public sealed record TreeLook(TreePresence Presence, string Why)
 
         return new TreeLook(TreePresence.Untold, why);
     }
+
+    /// <summary>
+    /// Whether it could not be told because the record spells the tree as another system does - written by a sync run
+    /// there, which recorded the copy last - so the tree it names may be the very tree asking, as that system spells it:
+    /// one checkout used from Windows and from WSL. False for a tree spelt for this machine, absent or unreadable here.
+    /// </summary>
+    public bool SpeltForAnotherSystem { get; init; }
 }
 
 /// <summary>Another tree's entry that holds a copy a sync would claim, and what looking for that tree found.</summary>
@@ -487,7 +494,7 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
 
         if (!System.IO.Path.IsPathFullyQualified(tree))
         {
-            return TreeLook.Untold($"'{tree}' is no whole path on this machine, so it may be another system's spelling of a tree");
+            return TreeLook.Untold($"'{tree}' is no whole path on this machine, so it may be another system's spelling of a tree") with { SpeltForAnotherSystem = true };
         }
 
         var at = System.IO.Path.TrimEndingDirectorySeparator(tree);

@@ -242,8 +242,10 @@ leg's in line, so a worktree committed before the count was raised no longer hol
 old one. Every command this user runs there reads it; an ssh host reads its own. A file that cannot
 be read, or holds what `config.json` would refuse, is refused naming it, and no heavy leg is admitted
 until it is put right; a leg's rule is read once, as its work begins, so a file put wrong while a run
-goes on never fails a leg that has run. `dssharness legs` says, for each host it reaches, the rule in
-force and where each field came from. Run `dssharness help admission` for the rules.
+goes on never fails a leg that has run - a unit of one whose work has begun, an arm of a sweep, is
+weighed by the count the file declared as that work began, its refusal said once. `dssharness legs`
+says, for each host it reaches, the rule in force and where each field came from. Run
+`dssharness help admission` for the rules.
 
 ## Design
 

@@ -3596,6 +3596,58 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
+    /// A copy a worktree of the same name holds whose tree the record spells for another system is never taken over either,
+    /// and the refusal says what that most often is - the copy last synced from that system, perhaps of this same worktree,
+    /// one checkout used from Windows and from WSL - and names syncing from there, or the gone-copies clean run there once
+    /// that tree is really gone, never deleting "the other", which there may be the worktree being synced. The sync and its
+    /// dry run alike, nothing made and the record as it was.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACopyHeldByATreeSpeltForAnotherSystem_IsNeverTaken_AndTheRefusalNamesSyncingFromThere(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
+        var name = HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase);
+        var copy = HostCopies.ForWorktree(Path.GetFullPath(SyncKit.CopyPath(temp)), name);
+        var otherSystems = OperatingSystem.IsWindows() ? $"/mnt/d/src/repo/{Path.GetFileName(worktree)}" : $@"D:\src\repo\{Path.GetFileName(worktree)}";
+
+        try
+        {
+            await harness.RunGitAsync(temp.Path, ["worktree", "add", "--detach", worktree], cancellationToken);
+            var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
+            var record = new HostCopyRecord(harness.FileSystem, harness.Platform.PathComparison);
+            record.Claim(context.Layout, new HostCopyEntry(name, "ssh pi", copy, otherSystems));
+            var recorded = Path.Combine(context.Layout.HostCopiesDirectory, HostCopyRecord.FileName);
+            var before = await File.ReadAllBytesAsync(recorded, cancellationToken);
+
+            var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
+                worktree, new RecordingTransport(SyncKit.Transport(harness), reports: HostId.Ssh("pi")), copy, new SyncOptions(DryRun: dryRun), cancellationToken));
+
+            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+            Assert.Equal(
+                $"ssh pi: '{copy}' is the copy of the worktree at '{otherSystems}', which is kept under the same name, '{name}', and whether "
+                + $"it is gone cannot be told: '{otherSystems}' is no whole path on this machine, so it may be another system's spelling of "
+                + "a tree. The copy was last synced from that system, and the tree it names there may be this same worktree, as that "
+                + "system spells it - one checkout used from Windows and from WSL. A copy is taken over only from a tree seen to be gone: "
+                + "synced by both, each would replace the tree the other put there. Sync this worktree from that system, or, once the "
+                + $"tree it names is really gone, run '{ToolPackage.Command} clean --gone-copies' there, which removes that copy and its "
+                + "entry. Nothing was changed.",
+                refusal.Message);
+            Assert.False(Directory.Exists(copy));
+            Assert.Equal(before, await File.ReadAllBytesAsync(recorded, cancellationToken));
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(worktree);
+        }
+    }
+
+    /// <summary>
     /// A tree written while it is read - a file rewritten after it was hashed, though to the same length; a file that
     /// appears; a file that goes - is refused by the reading's second look, naming the path, before any copy is made of
     /// it: a copy already warm from an earlier sync, which a reading of one pass would have made part one tree and part

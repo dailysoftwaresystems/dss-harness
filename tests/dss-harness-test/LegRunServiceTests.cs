@@ -3545,6 +3545,58 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// This machine's settings file put wrong while a sweep runs - between two of its arms - never fails the leg that has
+    /// run: each arm after it is admitted by the count the file declared as the leg's work began, at once though the two
+    /// legs ahead carry fewer, the file's refusal said once, and the leg ends with its own verdict. Read again at each arm's
+    /// look and refused, the next arm's admission ended the run with a configuration's error, and the sweep's line with it.
+    /// </summary>
+    [Fact]
+    public async Task ASettingsFilePutWrongBetweenTwoArms_NeverFailsTheSweep()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var settings = HostDoubles.MachineSettings(harness.FileSystem);
+        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => settings.Read().Admission?.HeavyLegs);
+        var taken = new List<(bool Admitted, double Waited)>();
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
+        await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "heavyLegs": 3, "settleSeconds": [0, 0] } }""", TestContext.Current.CancellationToken);
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "stale-first", slots: 2), AdmissionKit.Holder(harness, "stale-second", slots: 2));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Sweep },
+            admission: AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock()),
+            machineSettings: settings,
+            workAsync: async (work, token) =>
+            {
+                foreach (var arm in new[] { "first-arm", "second-arm", "third-arm" })
+                {
+                    using var unit = await work.AdmitUnit(new UnitAdmission(arm), token);
+
+                    taken.Add((unit!.Fact.Admitted, unit.Fact.WaitedSeconds));
+
+                    // Put wrong after the first arm: a count of no leg at all, out of its bounds.
+                    await File.WriteAllTextAsync(settings.Location!, """{ "admission": { "heavyLegs": 0 } }""", token);
+                }
+
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        var unread = $"This machine's settings file '{settings.Location}' could not be read: admission heavyLegs must be at least 1, found 0. ";
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("passed", Verdicts(outcome)["native"].Verdict);
+        Assert.Equal([(true, 0.0), (true, 0.0), (true, 0.0)], taken);
+        Assert.Equal(["stale-first", "stale-second"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+        Assert.Single(harness.StandardError.ToString().Split(Environment.NewLine), line => line.StartsWith($"admission: WARN - {unread}", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// A unit whose work needs room - a worker's copy made, and its first build - claims it as it is taken, by its own
     /// name, and gives it back as it is disposed.
     /// </summary>

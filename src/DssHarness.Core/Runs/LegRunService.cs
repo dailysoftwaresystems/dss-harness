@@ -960,8 +960,9 @@ public sealed class LegRunService(
             }
 
             // The rule its machine admits it by, read once as its work begins, and carried with it: its slot, its floor and
-            // the page cache dropped as it ends all answer to this reading, and nothing reads the machine's settings file
-            // again after its work - a file edited meanwhile would else fail a leg that had run.
+            // the page cache dropped as it ends all answer to this reading, nothing reads the machine's settings file again
+            // after its work, and a unit of its work that finds the file unreadable is weighed by this reading's count - a file
+            // edited meanwhile would else fail a leg that had run.
             leg = leg with { AdmittedBy = AdmittedBy(context, leg, request.Here) };
 
             // Whether the leg's work starts at all, decided before it is checked and before it waits for its slot: the
@@ -1078,7 +1079,7 @@ public sealed class LegRunService(
         LegLedger ledger,
         CancellationToken cancellationToken)
         => WaitsForASlotHere(leg, request)
-            ? await AskAsync(context, leg, request, runId, ledger, leg.Name, leg.Need, settle: true, cancellationToken).ConfigureAwait(false)
+            ? await AskAsync(context, leg, request, runId, ledger, leg.Name, leg.Need, settle: true, workBegunBy: null, cancellationToken).ConfigureAwait(false)
             : null;
 
     /// <summary>
@@ -1152,8 +1153,9 @@ public sealed class LegRunService(
 
     /// <summary>
     /// Asks the machine <paramref name="leg"/>'s work runs on to take <paramref name="asking"/> - the leg, or a unit of its
-    /// work - where this process is on that machine and the machine declares admission; <see langword="null"/> where either
-    /// is not so.
+    /// work, which carries the reading that work began by (<paramref name="workBegunBy"/>,
+    /// <see cref="AdmissionRequest.WorkBegunBy"/>) - where this process is on that machine and the machine declares
+    /// admission; <see langword="null"/> where either is not so.
     /// </summary>
     /// <remarks>See <see cref="AdmitAsync"/> for which process asks, on which machine.</remarks>
     private async Task<Admission?> AskAsync(
@@ -1165,6 +1167,7 @@ public sealed class LegRunService(
         string asking,
         RoomNeed? room,
         bool settle,
+        AdmissionReading? workBegunBy,
         CancellationToken cancellationToken)
     {
         if (AdmissionHere(leg, request) is not { } rule)
@@ -1188,6 +1191,7 @@ public sealed class LegRunService(
                     room)
                 {
                     Settle = settle,
+                    WorkBegunBy = workBegunBy,
 
                     // What this machine counts as in use and could have back: the page cache of WSL's virtual machine, which
                     // holds what every distribution's builds read and wrote until it idles for minutes.
@@ -1593,7 +1597,8 @@ public sealed class LegRunService(
             return await work(
                 new LegWork(runsAs, runsIn, runId, runDirectory, request.Time)
                 {
-                    AdmitUnit = (unit, admitted) => AskAsync(context, runsAs, request, runId, ledger, $"{runsAs.Name}/{unit.Unit}", unit.Room, unit.Settle, admitted),
+                    // Each unit by the reading the leg's work began by, should the machine's settings file be put wrong as it runs.
+                    AdmitUnit = (unit, admitted) => AskAsync(context, runsAs, request, runId, ledger, $"{runsAs.Name}/{unit.Unit}", unit.Room, unit.Settle, runsAs.AdmittedBy, admitted),
                     Progress = message => ledger.Transition(runsAs.Name, message),
                     DeveloperEnvironment = setUp?.Fact,
                     KeepGoing = request.KeepGoing,

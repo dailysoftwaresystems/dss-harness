@@ -212,6 +212,49 @@ public sealed class MachineSettingsTests
     }
 
     /// <summary>
+    /// A settings file that cannot be read at a look refuses a leg's own admission, before its work - a configuration's
+    /// error in the file's words, its place given back - while a unit of a leg whose work has begun, an arm of a sweep, is
+    /// weighed by the count the file declared as that work began: taken at once by that count though the two legs ahead
+    /// carry fewer, and the refusal said once however many units look. Refused at a unit's look as well, a file put wrong
+    /// mid-sweep ended a leg that had run with a configuration's error.
+    /// </summary>
+    [Fact]
+    public async Task ASettingsFileUnreadAtALook_RefusesALegsOwnAdmission_AndWeighsAUnitByTheCountItsWorkBeganBy()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var record = temp.Combine("admission.json");
+        const string Unread = "This machine's settings file '/u/settings.json' could not be read: admission heavyLegs must be at least 1, found 0.";
+        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => throw new ConfigException(Unread));
+        var admission = AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock());
+        var rule = AdmissionKit.Rule(heavyLegs: 3, settleLeast: 0, settleMost: 0, maxWaitMinutes: 1);
+        var begun = new AdmissionReading(null, new AdmissionSettings { HeavyLegs = 3 }, null);
+        var taken = new List<(bool Admitted, double Waited)>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "stale-first", slots: 2), AdmissionKit.Holder(harness, "stale-second", slots: 2));
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => admission.AdmitAsync(AdmissionKit.Request(rule, [], leg: "mine"), cancellationToken));
+
+        foreach (var arm in new[] { "first-arm", "second-arm" })
+        {
+            using var unit = await admission.AdmitAsync(AdmissionKit.Request(rule, [], leg: $"mine/{arm}") with { WorkBegunBy = begun }, cancellationToken);
+
+            taken.Add((unit.Fact.Admitted, unit.Fact.WaitedSeconds));
+        }
+
+        Assert.Equal((HarnessExit.ConfigInvalid, Unread), (refused.ExitCode, refused.Message));
+        Assert.Equal([(true, 0.0), (true, 0.0)], taken);
+        Assert.Equal(["stale-first", "stale-second"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+        Assert.Equal(
+            [
+                $"admission: WARN - {Unread} The units of a leg whose work had begun - the arms of a sweep - are still admitted, each by the "
+                    + "count the file declared as that work began.",
+            ],
+            harness.StandardError.ToString().Split(Environment.NewLine).Where(line => line.Contains("WARN", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
     /// The settings file of a WSL distribution's machine travels with its leg, as what the host reads its floor by: carried
     /// beside the command, never on its line, and read back as it was sent.
     /// </summary>

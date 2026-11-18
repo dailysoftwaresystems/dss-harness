@@ -151,6 +151,15 @@ public sealed record AdmissionRequest(
     public bool Settle { get; init; } = true;
 
     /// <summary>
+    /// The reading of its machine's rule the leg's work began by (<see cref="Runs.PlacedLeg.AdmittedBy"/>), where what asks
+    /// is a unit of that work - an arm of a sweep: a look at the slots that cannot read the machine's settings file weighs
+    /// the unit by the count that reading's file declared, rather than end a leg that has run with a configuration's error
+    /// (<see cref="SlotPlace.WorkBegunBy"/>). <see langword="null"/> for a leg's own admission, before its work, which such a
+    /// file refuses.
+    /// </summary>
+    public AdmissionReading? WorkBegunBy { get; init; }
+
+    /// <summary>
     /// Drops what this machine counts as in use and could have back at once - the page cache of WSL's virtual machine - as
     /// the leg is about to wait on the memory: at most once a minute in the process, whichever leg is about to wait, the
     /// memory then read again once what the drop gives back has reached this machine's count. <see langword="null"/> where
@@ -252,7 +261,8 @@ public sealed class LegAdmission(
     /// <param name="request">The leg, and what its machine admits by.</param>
     /// <param name="cancellationToken">Stops the wait, giving the leg's place back.</param>
     /// <exception cref="Results.HarnessException">
-    /// The machine's record of its slots, or of the room its heavy legs claim, could not be named, read or written.
+    /// The machine's record of its slots, or of the room its heavy legs claim, could not be named, read or written; or, for a
+    /// leg's own admission, its settings file could not be read (<see cref="AdmissionRequest.WorkBegunBy"/>).
     /// </exception>
     public async Task<Admission> AdmitAsync(AdmissionRequest request, CancellationToken cancellationToken)
     {
@@ -260,7 +270,7 @@ public sealed class LegAdmission(
 
         var rule = request.Rule;
         var started = _clock.GetTimestamp();
-        var place = _slots.Ask(request.RunId, request.Command, request.Leg, request.Host, request.Tree, request.Variant, rule.HeavyLegs);
+        var place = _slots.Ask(request.RunId, request.Command, request.Leg, request.Host, request.Tree, request.Variant, rule.HeavyLegs, request.WorkBegunBy);
 
         // The room as this wait last read it, the legs claiming it as a line last named them, and whether it stopped being
         // readable since.

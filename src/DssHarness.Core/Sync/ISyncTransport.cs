@@ -232,7 +232,11 @@ public interface ISyncTransport
     /// <c>&lt;repositoryPath&gt;.worktree-&lt;name&gt;</c> - with what each one's marker says and how many bytes its
     /// files hold, in the order of their names. None where the directory they would be kept in is not there.
     /// </summary>
-    /// <param name="repositoryPath">Where the host keeps the main checkout's copy, as the configuration declares it.</param>
+    /// <param name="repositoryPath">
+    /// The copy of the main checkout the copies are kept beside, as the host spells it: where the host keeps this machine's
+    /// copies now (<see cref="HostCopies.RepositoryPathOf"/>), or an earlier place a recorded copy names
+    /// (<see cref="HostCopyEntry.KeptBeside()"/>) - taken as it is given, never resolved again against what config.json declares.
+    /// </param>
     /// <param name="cancellationToken">Stops the listing between copies.</param>
     Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default);
 

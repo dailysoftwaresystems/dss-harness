@@ -300,6 +300,39 @@ public sealed class IdleBuildsTests
     }
 
     /// <summary>
+    /// A removal's aside is named by its process's id and stamp, and read back by both: one an ended removal left under an id
+    /// a running process carries now - under another stamp - is taken over, as is one naming this process's own id under
+    /// another stamp, while one the running holder of the id named stays its own, and one named by that id alone, which
+    /// cannot be told from it, is never taken. What the removal removes besides the directory is exactly what a dry run
+    /// lists, this process's own aside first. Named by the id alone, a crashed removal's aside was passed over for as long
+    /// as any process carried its id, and the dry run never listed this process's own.
+    /// </summary>
+    [Fact]
+    public void AnAsideUnderAReusedId_IsTakenOver_AndTheDryRunListsWhatTheRemovalRemoves()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var identity = new StampedProcesses(harness.Identity, 4242, "1001");
+        var removal = new BuildDirectoryRemoval(new RunLock(harness.FileSystem, harness.Output, identity), harness.FileSystem);
+        var tree = Built(temp, "tree", Older);
+        var own = Path.GetFileName(removal.AsideOf(tree.Build))[("." + Variant + RemovalAside.Suffix).Length..];
+        var mine = Aside(temp, "tree", own, 50);
+        var reused = Aside(temp, "tree", "-4242-1000", 200);
+        var myIdBefore = Aside(temp, "tree", $"-{harness.Identity.CurrentId}-999", 300);
+        var running = Aside(temp, "tree", "-4242-1001", 400);
+        var byIdAlone = Aside(temp, "tree", "-4242", 500);
+        var build = Size(tree.Build);
+
+        Assert.Equal([mine, .. new[] { reused, myIdBefore }.Order(StringComparer.Ordinal)], removal.LeftAside(tree.Build));
+
+        var removed = removal.Remove(MainLayout(temp), tree.Root, tree.Build, PlacedLeg.BuildLock(HostId.Local, tree.Root, Variant, RunId.New(), "clean"));
+
+        Assert.Equal(new BuildDirectoryRemoved(build + 50 + 200 + 300, Moved: true, HeldBy: null), removed);
+        Assert.Equal([false, false, false, false], new[] { tree.Build, mine, reused, myIdBefore }.Select(Directory.Exists));
+        Assert.Equal((400, 500), (Size(running), Size(byIdAlone)));
+    }
+
+    /// <summary>
     /// The trees a leg may make room from are every one of its machine's but its own: never its tree, the copy its work
     /// runs in, nor any copy its tree keeps in .legs - while another tree's copies are another tree's. The note names the
     /// leg by the tree its work runs in.
@@ -402,6 +435,30 @@ public sealed class IdleBuildsTests
         public string? StampOf(int processId) => processId == real.CurrentId ? real.StampOf(processId) : null;
 
         public bool IsSame(int processId, string stamp) => processId == real.CurrentId && real.IsSame(processId, stamp);
+    }
+
+    /// <summary>
+    /// This machine's processes as <paramref name="real"/> tells them, but for <paramref name="id"/>, carried now by a process
+    /// started as <paramref name="stamp"/> says - one recorded under that stamp, or under none, running, and one recorded
+    /// under another ended, as the real identity tells them - and every other id ended.
+    /// </summary>
+    private sealed class StampedProcesses(IProcessIdentity real, int id, string stamp) : IProcessIdentity
+    {
+        public int CurrentId => real.CurrentId;
+
+        public string CurrentMachine => real.CurrentMachine;
+
+        public string? Current => real.Current;
+
+        public bool IsAlive(int processId, string? recorded)
+            => processId == real.CurrentId
+                ? real.IsAlive(processId, recorded)
+                : processId == id && (recorded is null || string.Equals(recorded, stamp, StringComparison.Ordinal));
+
+        public string? StampOf(int processId) => processId == id ? stamp : processId == real.CurrentId ? real.StampOf(processId) : null;
+
+        public bool IsSame(int processId, string recorded)
+            => processId == id ? string.Equals(recorded, stamp, StringComparison.Ordinal) : processId == real.CurrentId && real.IsSame(processId, recorded);
     }
 
     /// <summary>The repository whose main checkout holds the lock of every tree the test makes.</summary>

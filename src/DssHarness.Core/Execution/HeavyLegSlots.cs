@@ -1,3 +1,4 @@
+using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Output;
@@ -202,8 +203,11 @@ internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holde
 /// joins the line. Where the machine's settings file declares its own count (<see cref="Configuration.MachineSettings"/>),
 /// that count is every leg's, read again at each look: what a machine can hold is the machine's, and a worktree whose
 /// config.json was committed before the machine's count was raised would else hold every leg behind it to the old one.
-/// The entries keep the members a build before this one reads - one that found a member it does not know would refuse
-/// the record - and such a build still weighs each entry's own count.
+/// A file that cannot be read at a look refuses a leg's own admission, before its work; a unit of a leg whose work has
+/// begun - an arm of a sweep - is weighed instead by the count the file declared as that work began, which its place
+/// carries (<see cref="SlotPlace.WorkBegunBy"/>), and the refusal said once: a file put wrong mid-sweep would else end a
+/// leg that has run with a configuration's error. The entries keep the members a build before this one reads - one that
+/// found a member it does not know would refuse the record - and such a build still weighs each entry's own count.
 /// </para>
 /// <para>
 /// Named by what tells this machine from every other, never by its name, which a Mac takes from each network it joins:
@@ -236,7 +240,8 @@ internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holde
 /// <param name="path">Names the slots' record, asked the first time a leg asks for a slot; the room's is named beside it.</param>
 /// <param name="machineSlots">
 /// The count of heavy legs this machine's settings file declares, read at each look, or <see langword="null"/> where it
-/// declares none; none is read where left out.
+/// declares none; none is read where left out. Refused with the file's <see cref="Configuration.ConfigException"/> where
+/// the file cannot be read.
 /// </param>
 public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, Func<string> path, Func<int?>? machineSlots = null)
 {
@@ -260,6 +265,10 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     private readonly IProcessIdentity _identity = identity;
     private readonly Func<int?> _machineSlots = machineSlots ?? (() => null);
     private readonly Lazy<MachineWideList<SlotEntry>> _record = new(() => Record<SlotEntry>(fileSystem, path, Subject, Consequence));
+
+    // The settings file's refusal last said at a look that weighed a unit by the count its leg's work began by: said once,
+    // whichever unit looks and however often, until the file reads again or is refused in other words.
+    private string? _unreadSaid;
 
     // Named beside the slots' record as that was named, never by naming it again: where the machine is told only by its
     // name, naming it again says so a second time.
@@ -373,14 +382,34 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <summary>
     /// The count of heavy legs this machine's settings file declares, read now, or <see langword="null"/> where it declares
     /// none - a file that cannot be read refused as every reader of this record handles a refusal: as the record's own
-    /// could not be read, with the settings file's words, and the exit of a configuration that is wrong.
+    /// could not be read, with the settings file's words, and the exit of a configuration that is wrong. But for a look at
+    /// <paramref name="place"/>, where it is a unit of a leg whose work has begun (<see cref="SlotPlace.WorkBegunBy"/>):
+    /// that unit is weighed by the count the file declared as that work began, and the refusal said once, until the file
+    /// reads again - refused, a file put wrong mid-sweep would end a leg that has run with a configuration's error, losing
+    /// its line and its verdict.
     /// </summary>
-    /// <exception cref="HarnessException">This machine's settings file could not be read.</exception>
-    private int? MachineSlots()
+    /// <param name="place">The place looked at; <see langword="null"/> for a reading of the whole line.</param>
+    /// <exception cref="HarnessException">This machine's settings file could not be read, and no leg's work began by it.</exception>
+    private int? MachineSlots(SlotPlace? place)
     {
         try
         {
-            return _machineSlots();
+            var read = _machineSlots();
+
+            Volatile.Write(ref _unreadSaid, null);
+            return read;
+        }
+        catch (Configuration.ConfigException ex) when (place?.WorkBegunBy is { } begun)
+        {
+            if (!string.Equals(Interlocked.Exchange(ref _unreadSaid, ex.Message), ex.Message, StringComparison.Ordinal))
+            {
+                _output.Warn(
+                    CommandName,
+                    $"{ex.Message} The units of a leg whose work had begun - the arms of a sweep - are still admitted, each by the "
+                    + "count the file declared as that work began.");
+            }
+
+            return begun.SettingsFile?.HeavyLegs;
         }
         catch (Configuration.ConfigException ex)
         {
@@ -398,8 +427,12 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <param name="tree">The tree it works in, on that host.</param>
     /// <param name="variant">Its build variant, where it has one.</param>
     /// <param name="slots">How many heavy legs the command's configuration lets this machine run at once.</param>
+    /// <param name="workBegunBy">
+    /// The reading of the machine's rule the leg's work began by, where what asks is a unit of that work; see
+    /// <see cref="SlotPlace.WorkBegunBy"/>.
+    /// </param>
     /// <exception cref="HarnessException">The record could not be named, read or written.</exception>
-    internal SlotPlace Ask(string runId, string command, string leg, string host, string tree, string? variant, int slots)
+    internal SlotPlace Ask(string runId, string command, string leg, string host, string tree, string? variant, int slots, AdmissionReading? workBegunBy = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(slots, 1);
 
@@ -418,7 +451,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 
         File.Change((entries, afterwards) => [.. Live(entries, entry => entry, "a heavy-leg slot", afterwards), entry]);
 
-        return new SlotPlace(this, entry);
+        return new SlotPlace(this, entry, workBegunBy);
     }
 
     /// <summary>
@@ -427,14 +460,16 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// </summary>
     /// <param name="place">The place a leg was given, and has not given back.</param>
     /// <exception cref="ObjectDisposedException">The place was given back: a leg that gave its place back asks again.</exception>
-    /// <exception cref="HarnessException">The record, or this machine's settings file, could not be read, or the record written.</exception>
+    /// <exception cref="HarnessException">
+    /// The record could not be read or written, or this machine's settings file could not be read for a leg's own admission.
+    /// </exception>
     internal SlotStanding Look(SlotPlace place)
     {
         ArgumentNullException.ThrowIfNull(place);
         ObjectDisposedException.ThrowIf(place.Left, place);
 
         // Read before the record is taken, and at each look: a machine whose count is raised while legs wait takes them by it.
-        var machine = MachineSlots();
+        var machine = MachineSlots(place);
 
         return File.Update((entries, afterwards) =>
         {
@@ -574,7 +609,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <exception cref="HarnessException">The record could not be named, read or written, or this machine's settings file could not be read.</exception>
     public IReadOnlyList<SlotInLine> Line()
     {
-        var machine = MachineSlots();
+        var machine = MachineSlots(place: null);
 
         return File.Update<IReadOnlyList<SlotInLine>>((entries, _) =>
         {
@@ -637,14 +672,23 @@ public sealed class SlotPlace : IDisposable
 {
     private readonly HeavyLegSlots _slots;
 
-    internal SlotPlace(HeavyLegSlots slots, SlotEntry entry)
+    internal SlotPlace(HeavyLegSlots slots, SlotEntry entry, AdmissionReading? workBegunBy = null)
     {
         _slots = slots;
         Entry = entry;
+        WorkBegunBy = workBegunBy;
     }
 
     /// <summary>What the record holds for the leg.</summary>
     public SlotEntry Entry { get; }
+
+    /// <summary>
+    /// The reading of the machine's rule its leg's work began by (<see cref="Runs.PlacedLeg.AdmittedBy"/>), where the place
+    /// is a unit's of that work - an arm of a sweep: a look that cannot read the machine's settings file weighs it by the
+    /// count the file declared then (<see cref="AdmissionReading.SettingsFile"/>), or by each entry's own where it declared
+    /// none. <see langword="null"/> for a leg's own place, asked before its work, which such a file refuses.
+    /// </summary>
+    internal AdmissionReading? WorkBegunBy { get; }
 
     /// <summary>Whether the place was given back, after which it is never looked at, nor held, again.</summary>
     internal bool Left { get; private set; }

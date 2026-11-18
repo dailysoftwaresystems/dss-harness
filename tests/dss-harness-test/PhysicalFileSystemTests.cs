@@ -7,6 +7,7 @@ using System.Security.Principal;
 using System.Text;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
+using Microsoft.Win32.SafeHandles;
 
 namespace DssHarness.Tests;
 
@@ -1256,6 +1257,40 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
+    /// A removal never goes into a directory a volume is mounted on, whichever system says one is: deleting a tree with one
+    /// in it, or emptying the directory it is in, is refused there, naming it, and nothing on that volume is removed - nor
+    /// the tree, which still holds it. Emptied, a dataset bind-mounted in a worktree would go with the worktree. No test may
+    /// mount a volume, nor go near the contents of one a system mounts, so the system's answer is stood in for, for one
+    /// ordinary directory of a scratch tree, which is all a removal that went into it could reach.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ADirectoryAVolumeIsMountedOn_IsNeverGoneInto_ByADeletionOrAnEmptying(bool emptying)
+    {
+        using var temp = new TempDirectory();
+        var precious = temp.WriteFile(Path.Combine("tree", "mounted", "deep", "precious.txt"), "the volume's");
+        var mounted = temp.Combine("tree", "mounted");
+        using var held = HeldDirectory.Hold(new MountedOn(HeldDirectory.SystemNative, mounted), temp.Path, emptying ? temp.Combine("tree") : temp.Path, make: false);
+
+        var refused = Assert.Throws<JunctionRemovalException>(() =>
+        {
+            if (emptying)
+            {
+                held.Empty([], TestContext.Current.CancellationToken);
+            }
+            else
+            {
+                held.DeleteDirectory("tree", TestContext.Current.CancellationToken);
+            }
+        });
+
+        Assert.Equal((mounted, HeldDirectory.MountedThere, 0), (refused.Path, refused.Reason, refused.Removed.Count));
+        Assert.Equal([precious], Directory.EnumerateFileSystemEntries(temp.Combine("tree"), "*", SearchOption.AllDirectories).Where(File.Exists));
+        Assert.Equal("the volume's", File.ReadAllText(precious));
+    }
+
+    /// <summary>
     /// A walk of a tree never descends through a directory link: one leads out of the tree, to files
     /// it does not contain, and one leads back into it, round and round. Both are here - a link out,
     /// and a link to the tree's own root - and the walk lists the tree's own file and ends. The links
@@ -1637,6 +1672,51 @@ public sealed class PhysicalFileSystemTests
         SpinWait.SpinUntil(() => (held = Create().FindHeld(tree, TestContext.Current.CancellationToken)).Count == 0, TimeSpan.FromSeconds(10));
 
         return held;
+    }
+
+    /// <summary>
+    /// This system's way of acting on held directories, but that it says a volume is mounted on <paramref name="mounted"/>, an
+    /// ordinary directory: what a removal would destroy, going into it, is a test's own scratch files.
+    /// </summary>
+    private sealed class MountedOn(IHeldNative system, string mounted) : IHeldNative
+    {
+        public SafeFileHandle OpenAnchor(string path) => system.OpenAnchor(path);
+
+        public HeldOpen OpenDirectory(SafeFileHandle parent, string name, string path) => system.OpenDirectory(parent, name, path);
+
+        public SafeFileHandle MakeDirectory(SafeFileHandle parent, string name, string path)
+            => system.MakeDirectory(parent, name, path);
+
+        public PathKind KindOf(SafeFileHandle parent, string name, string path) => system.KindOf(parent, name, path);
+
+        public IReadOnlyList<HeldName> Entries(SafeFileHandle directory, string path) => system.Entries(directory, path);
+
+        public SafeFileHandle OpenFile(SafeFileHandle parent, string name, string path)
+            => system.OpenFile(parent, name, path);
+
+        public SafeFileHandle CreateFile(SafeFileHandle parent, string name, string path)
+            => system.CreateFile(parent, name, path);
+
+        public void KeepMode(SafeFileHandle parent, string name, SafeFileHandle written)
+            => system.KeepMode(parent, name, written);
+
+        public void Replace(SafeFileHandle parent, string temporary, SafeFileHandle written, string name, string path)
+            => system.Replace(parent, temporary, written, name, path);
+
+        public void Rename(
+            SafeFileHandle fromParent,
+            string fromName,
+            SafeFileHandle toParent,
+            string toName,
+            bool replace,
+            string from,
+            string to)
+            => system.Rename(fromParent, fromName, toParent, toName, replace, from, to);
+
+        public void Remove(SafeFileHandle parent, string name, bool directory, string path) => system.Remove(parent, name, directory, path);
+
+        public bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path)
+            => string.Equals(path, mounted, StringComparison.Ordinal) || system.IsMountedOn(parent, child, path);
     }
 
     /// <summary>
