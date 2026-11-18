@@ -169,6 +169,10 @@ public sealed class GraphPageStoreTests
         Assert.Throws<ArgumentException>(() => store.Keep(Kept("find M") with { Digest = " " }));
         Assert.Throws<ArgumentException>(() => store.Keep(Kept("find M") with { Read = [new GraphFileRead("a.cs", "")] }));
         Assert.Throws<ArgumentException>(() => store.Keep(Kept("find M") with { Reads = "0123456789abcdef" }));
+
+        // A member left null is asked of as any other: said as what is wrong, never thrown from reading it.
+        Assert.Equal("its leading lines are lines", Assert.Throws<ArgumentException>(() => store.Keep(Kept("find M") with { Leading = null! })).Message.Split(" (")[0]);
+        Assert.Equal("it holds a list of sections", Assert.Throws<ArgumentException>(() => store.Keep(Kept("find M") with { Sections = null! })).Message.Split(" (")[0]);
         Assert.Empty(Directory.EnumerateFileSystemEntries(temp.Path));
     }
 

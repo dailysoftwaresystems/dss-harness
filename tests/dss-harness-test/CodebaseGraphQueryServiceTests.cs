@@ -188,6 +188,14 @@ public sealed class CodebaseGraphQueryServiceTests
         }
 
         Assert.Equal(69, pages.Sum(page => page["entries"]!.AsArray().Sum(entry => entry!["counts"]!.GetValue<int>())));
+
+        // A body's head says something and counts nothing; each line it serves counts one, all of them the node's.
+        var body = JsonNode.Parse(Assert.Single((await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Body = ["Twice"] }, json: true, Token)).Data))!.AsObject();
+
+        Assert.Equal(
+            [(0, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)")],
+            body["entries"]!.AsArray().Select(entry => (entry!["counts"]!.GetValue<int>(), entry["node"]!.GetValue<string>())));
+        Assert.Equal(4, body["total"]!.GetValue<int>());
         Assert.Equal((HarnessExit.UsageError, "page 5 of 'find M': it has 4 pages (1 to 4)"), (past.ExitCode, past.Message));
         Assert.Equal((5, 4, 69, graph), (pastDocument["page"]!.GetValue<int>(), pastDocument["pages"]!.GetValue<int>(), pastDocument["total"]!.GetValue<int>(), pastDocument["graph"]!.GetValue<string>()));
         Assert.Empty(pastDocument["entries"]!.AsArray());
