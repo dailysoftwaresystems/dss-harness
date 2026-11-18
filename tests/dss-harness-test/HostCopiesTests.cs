@@ -2455,6 +2455,10 @@ public sealed class HostCopiesTests
             temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, ".env"), env);
             temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, ".key"), "not a real key\n");
             temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, "known_hosts"), $"{item}.invalid ssh-ed25519 AAAA\n");
+
+            // Private, as a key must be where the system keeps permissions: one other users may read leaves the item
+            // unread, and so its copies unknown.
+            harness.FileSystem.ProtectSecretFile(temp.Combine(".harness-config", "sshItems", item, ".key"));
         }
 
         // A copy beside each place config.json names, and one beside the item's: only the item's is this machine's.
