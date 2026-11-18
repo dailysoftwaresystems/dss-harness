@@ -552,14 +552,20 @@ public static class OrchestrationReports
                     ? $"and the agent's is written over the registries', accepted with {AnchorBatchRequest.AcceptOverOption} {over.Cell}"
                     : $"and the agent's is written only with {AnchorBatchRequest.AcceptOverOption} {over.Cell}";
 
+                // A cell weighed as both changed for the verdict it carries says so, since the agent, or the registries, may
+                // not have changed it at all.
+                var why = over.Verdict is { } split
+                    ? $"carries the row's one verdict with its {AnchorCellNames.HeadingOf(AnchorCellMerge.OtherVerdictCell(over.Cell.Cell))}, and the registries "
+                        + $"changed one of the two since its earlier fold and the agent the other, so that, taken one from each, the row would state two verdicts ({split}): it is weighed as both changed"
+                    : "was changed by the registries and by the agent since its earlier fold";
+
                 if (!over.Cell.IsProse)
                 {
-                    yield return $"    its {heading} was changed by the registries and by the agent since its earlier fold - then '{over.Earlier}', the registries "
-                        + $"'{over.Registries}', the agent '{over.Agent}' - {consent}";
+                    yield return $"    its {heading} {why} - then '{over.Earlier}', the registries '{over.Registries}', the agent '{over.Agent}' - {consent}";
                     continue;
                 }
 
-                yield return $"    its {heading} was changed by the registries and by the agent since its earlier fold, {consent}";
+                yield return $"    its {heading} {why}, {consent}";
                 yield return $"      the registries: {AnchorCellComparison.WordDiff(over.Earlier, over.Registries)}";
                 yield return $"      the agent:      {AnchorCellComparison.WordDiff(over.Earlier, over.Agent)}";
                 yield return $"      written over the registries': {AnchorCellComparison.WordDiff(over.Registries, over.Agent)}";

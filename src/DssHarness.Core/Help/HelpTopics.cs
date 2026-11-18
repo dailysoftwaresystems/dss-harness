@@ -4243,7 +4243,8 @@ public static class HelpTopics
         builder.AppendLine("so. The default is 'off', and a row closes as it always did.");
         builder.AppendLine("No verdict is read from the prose beside the Status, unless anchors.triggerCarriesVerdict");
         builder.AppendLine("is true: then a closed row's Trigger opens with the closed mark and no other row's");
-        builder.AppendLine("does, write-anchor and set-anchor refuse a row whose two cells disagree, and");
+        builder.AppendLine("does, write-anchor and set-anchor refuse a row whose two cells disagree, fold-agent");
+        builder.AppendLine("weighs the two as the one verdict they state (see 'help orchestrators'), and");
         builder.AppendLine("read-anchors --lint and check-anchor-balance report one. A closed row's Trigger may");
         builder.AppendLine($"open with {bookkeeping} instead, the closed mark and then the bookkeeping mark, when its");
         builder.AppendLine("closure only repairs the mark of work done before the change that closes it.");
@@ -4919,7 +4920,16 @@ public static class HelpTopics
             + "both changed otherwise is written over the registries' only where --accept-over <ID>:<cell> names it, the dry run "
             + "showing the three texts - what --accept-over consents to includes what the registries' text loses. The fold never "
             + "writes the agent's own row files: before it changes a kept cell, the agent writes the registries' text into it, or "
-            + "its change is two changes of one cell. An --accept-over naming a cell not both changed is refused, as is one naming "
+            + "its change is two changes of one cell. The verdict is one decision: where anchors.triggerCarriesVerdict holds, a "
+            + "row's status and its trigger state it together, so where the registries changed one of the two and the agent the "
+            + "other, and the row taken one from each would state two verdicts though the agent's states one - a row the main tree "
+            + "reopened that the agent closes again with its trigger, its status file closed as it was, or a row the main tree "
+            + "closed that the agent keeps open - both are weighed as both changed, each line of the dry run saying why, and "
+            + "written, the agent's together, only where --accept-over <ID>:status and --accept-over <ID>:trigger name them; "
+            + "until both are named nothing of the row is written, and the registries' verdict stands. A row the agent declares "
+            + "with two verdicts itself is refused for them, no consent asked. Where the setting does not hold, the status alone "
+            + "carries the verdict and is weighed as any cell is: one the agent's file holds as it declared it then is kept, "
+            + "whatever its trigger says. An --accept-over naming a cell not both changed is refused, as is one naming "
             + "a row the agent did not file, and one naming a row declared as its earlier fold recorded it is let stand; a row an "
             + "earlier fold applied that the registries no longer hold is refused, to be set by hand.");
         builder.AppendLine();

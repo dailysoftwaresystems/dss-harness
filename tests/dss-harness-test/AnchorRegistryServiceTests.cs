@@ -1403,6 +1403,234 @@ public sealed class AnchorRegistryServiceTests
         Assert.Equal(AnchorRowAction.Untouched, Assert.Single(stood.Rows).Action);
     }
 
+    /// <summary>
+    /// The verdict is one decision. Where a Trigger carries its row's verdict, a row the registries reopened since the
+    /// earlier fold - its status and its trigger - that the agent closes again with its trigger, its status declared closed
+    /// as it was then, would state two verdicts taken a cell from each side: its status is weighed as both changed beside its
+    /// trigger, refused until --accept-over names each, saying why, with nothing written - its status named alone is no
+    /// decision - and named, the agent's two are written together, the row moved to the done registry as set-anchor moves it.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_WeighsTheStatusAndTheTriggerAsOneVerdict_WhereTheRegistriesReopenedARowTheAgentClosesAgain()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, triggerCarriesVerdict: true);
+        var earlier = new AnchorRowDeclaration(One, "closed", $"{AnchorStatus.ClosedMark} closed by the lane", "work", "refs");
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, new AnchorWriteRequest(One, "P1", earlier.Trigger) { Status = "closed", ClosingWork = "work", CrossRefs = "refs" }, dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "open", Trigger = "reopened: the fix did not hold" }, dryRun: false, cancellationToken);
+        var weighed = new AnchorBatchRequest([earlier with { Trigger = $"{AnchorStatus.ClosedMark} closed again by the lane" }])
+        {
+            Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = earlier },
+        };
+        var (pending, done) = (File.ReadAllBytes(PendingPath(temp)), File.ReadAllBytes(DonePath(temp)));
+
+        var planned = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed, AnchorBatchMode.Plan, cancellationToken);
+        var refused = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed, AnchorBatchMode.Apply, cancellationToken);
+        var statusAlone = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed with { AcceptOver = [new(One, "status")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        const string Split = $"the Trigger opens with the closed mark, {AnchorStatus.ClosedMark}, and the Status does not read closed";
+        var trigger = $"{One}: its trigger was changed by the registries and by the agent since an earlier fold of this agent applied it, so the agent's text is written "
+            + $"over the registries' only with {AnchorBatchRequest.AcceptOverOption} {One}:trigger; the dry run shows the three texts.";
+        Assert.True(planned.Succeeded, string.Join("; ", planned.Problems));
+        Assert.Equal([new AnchorRowCell(One, "status"), new AnchorRowCell(One, "trigger")], planned.UnacceptedOver);
+        Assert.Empty(planned.Rows[0].Kept);
+
+        // The status is both changed for the verdict it carries, the trigger in its own right: each line says which.
+        Assert.Equal([Split, null], planned.Rows[0].Over.Select(cell => cell.Verdict));
+        Assert.Equal(
+            [
+                $"{One}: its status carries the row's one verdict with its trigger, and the registries changed one of the two since an earlier fold of this agent applied it "
+                    + $"and the agent the other, so that, taken one from each, the row would state two verdicts ({Split}): it is weighed as both changed, and the agent's "
+                    + $"text is written over the registries' only with {AnchorBatchRequest.AcceptOverOption} {One}:status; the dry run shows the three texts.",
+                trigger,
+            ],
+            refused.Problems);
+        Assert.Equal([trigger], statusAlone.Problems);
+        Assert.Equal(pending, File.ReadAllBytes(PendingPath(temp)));
+        Assert.Equal(done, File.ReadAllBytes(DonePath(temp)));
+
+        var applied = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, weighed with { AcceptOver = [new(One, "status"), new(One, "trigger")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.True(applied.Succeeded, string.Join("; ", applied.Problems));
+        Assert.Empty(Rows(harness, PendingPath(temp)));
+        var row = Assert.Single(Rows(harness, DonePath(temp)));
+        Assert.Equal(AnchorStatus.Render(AnchorState.Closed), row.Status);
+        Assert.Equal($"{AnchorStatus.ClosedMark} closed again by the lane", row.Trigger);
+    }
+
+    /// <summary>
+    /// The mirror: a row the registries closed since the earlier fold - its status and its trigger - whose trigger the agent
+    /// restated without the closed mark, its status declared open as it was then, is one verdict too, refused until both are
+    /// named; named, the agent's open row is written and moved back to the pending registry.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_WeighsTheStatusAndTheTriggerAsOneVerdict_WhereTheRegistriesClosedARowTheAgentKeepsOpen()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, triggerCarriesVerdict: true);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "closed", Trigger = $"{AnchorStatus.ClosedMark} closed by hand" }, dryRun: false, cancellationToken);
+        var earlier = Declared(One, "open", "work");
+        var weighed = new AnchorBatchRequest([earlier with { Trigger = "the lane found more to do" }])
+        {
+            Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = earlier },
+        };
+
+        var refused = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed, AnchorBatchMode.Apply, cancellationToken);
+        var applied = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, weighed with { AcceptOver = [new(One, "status"), new(One, "trigger")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.Equal(
+            [
+                $"{One}: its status carries the row's one verdict with its trigger, and the registries changed one of the two since an earlier fold of this agent applied it "
+                    + "and the agent the other, so that, taken one from each, the row would state two verdicts (the Status reads closed, and the Trigger does not open with "
+                    + $"the closed mark, {AnchorStatus.ClosedMark}): it is weighed as both changed, and the agent's text is written over the registries' only with "
+                    + $"{AnchorBatchRequest.AcceptOverOption} {One}:status; the dry run shows the three texts.",
+                $"{One}: its trigger was changed by the registries and by the agent since an earlier fold of this agent applied it, so the agent's text is written "
+                    + $"over the registries' only with {AnchorBatchRequest.AcceptOverOption} {One}:trigger; the dry run shows the three texts.",
+            ],
+            refused.Problems);
+        Assert.True(applied.Succeeded, string.Join("; ", applied.Problems));
+        Assert.Empty(Rows(harness, DonePath(temp)));
+        var row = Assert.Single(Rows(harness, PendingPath(temp)));
+        Assert.Equal(AnchorStatus.Render(AnchorState.Open), row.Status);
+        Assert.Equal("the lane found more to do", row.Trigger);
+    }
+
+    /// <summary>
+    /// A trigger only the agent changed carries the verdict too. An earlier fold recorded a closed row whose trigger stated
+    /// no verdict - applied before the repository held a Trigger to one - the registries reopened it, and the agent, its
+    /// status declared closed as it was then, opened its trigger with the closed mark: taken a cell from each side the row
+    /// would state two verdicts, so its status and its trigger are both weighed as both changed for the verdict, and named,
+    /// the agent's closed row is written.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_WeighsATriggerOnlyTheAgentChanged_AsBothChanged_WhereBesideTheStatusTheRegistriesTookItWouldStateTwoVerdicts()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, triggerCarriesVerdict: true);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        var earlier = Declared(One, "closed", "work");
+        var weighed = new AnchorBatchRequest([earlier with { Trigger = $"{AnchorStatus.ClosedMark} trigger for {One}" }])
+        {
+            Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = earlier },
+        };
+
+        var planned = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed, AnchorBatchMode.Plan, cancellationToken);
+        var applied = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, weighed with { AcceptOver = [new(One, "status"), new(One, "trigger")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        const string Split = $"the Trigger opens with the closed mark, {AnchorStatus.ClosedMark}, and the Status does not read closed";
+        Assert.True(planned.Succeeded, string.Join("; ", planned.Problems));
+        Assert.Equal([new AnchorRowCell(One, "status"), new AnchorRowCell(One, "trigger")], planned.UnacceptedOver);
+        Assert.Equal([Split, Split], planned.Rows[0].Over.Select(cell => cell.Verdict));
+        Assert.True(applied.Succeeded, string.Join("; ", applied.Problems));
+        var row = Assert.Single(Rows(harness, DonePath(temp)));
+        Assert.Equal(AnchorStatus.Render(AnchorState.Closed), row.Status);
+        Assert.Equal($"{AnchorStatus.ClosedMark} trigger for {One}", row.Trigger);
+    }
+
+    /// <summary>
+    /// The verdict is weighed as one only where taking a cell from each side would have the row state two: a status the
+    /// registries changed since the earlier fold that agrees with the trigger the agent restated is kept, as any cell only
+    /// they changed is, and the trigger written, with no consent asked.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_KeepsAStatusTheRegistriesChanged_WhereTheTriggerTheAgentRestatedStatesTheSameVerdict()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, triggerCarriesVerdict: true);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "gated" }, dryRun: false, cancellationToken);
+        var earlier = Declared(One, "open", "work");
+
+        var applied = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([earlier with { Trigger = $"trigger for {One} as the lane restated it" }])
+            {
+                Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = earlier },
+            },
+            AnchorBatchMode.Apply,
+            cancellationToken);
+
+        Assert.True(applied.Succeeded, string.Join("; ", applied.Problems));
+        Assert.Equal(AnchorCellNames.Status, Assert.Single(applied.Rows[0].Kept).Cell);
+        Assert.Empty(applied.Rows[0].Over);
+        var row = Assert.Single(Rows(harness, PendingPath(temp)));
+        Assert.Equal(AnchorStatus.Render(AnchorState.Gated), row.Status);
+        Assert.Equal($"trigger for {One} as the lane restated it", row.Trigger);
+    }
+
+    /// <summary>
+    /// A declaration that states two verdicts itself is no one decision to take: its cells are weighed on their own and the
+    /// row is refused for the two verdicts, as any row stating two is, with no consent asked that could not mend it.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_RefusesADeclarationThatStatesTwoVerdictsItself_AskingNoConsent()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, triggerCarriesVerdict: true);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "gated" }, dryRun: false, cancellationToken);
+        var earlier = Declared(One, "open", "work");
+
+        var checkedOnly = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([earlier with { Trigger = $"{AnchorStatus.ClosedMark} trigger for {One}" }])
+            {
+                Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = earlier },
+            },
+            AnchorBatchMode.Check,
+            cancellationToken);
+
+        Assert.Equal(
+            [
+                $"{One}: The row would state two verdicts: the Trigger opens with the closed mark, {AnchorStatus.ClosedMark}, and the Status does not read closed. "
+                    + $"anchors.triggerCarriesVerdict holds a row's Trigger to the verdict its Status states: open a closed row's Trigger with {AnchorStatus.ClosedMark}, "
+                    + "and no other row's, or set the status the Trigger means.",
+            ],
+            checkedOnly.Problems);
+    }
+
+    /// <summary>
+    /// Where a Trigger carries no verdict, the status alone states it and is weighed as any cell: a status the agent's file
+    /// still declares as it did at its earlier fold is no decision of the agent's, so the registries' reopening of the row is
+    /// kept, whatever the agent's trigger says, and an --accept-over naming that status is refused as naming a cell not both
+    /// changed.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_WhereATriggerCarriesNoVerdict_KeepsAStatusTheRegistriesReopened_WhateverTheAgentsTriggerSays()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var earlier = new AnchorRowDeclaration(One, "closed", $"{AnchorStatus.ClosedMark} closed by the lane", "work", "refs");
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, new AnchorWriteRequest(One, "P1", earlier.Trigger) { Status = "closed", ClosingWork = "work", CrossRefs = "refs" }, dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "open", Trigger = "reopened: the fix did not hold" }, dryRun: false, cancellationToken);
+        var weighed = new AnchorBatchRequest([earlier with { Trigger = $"{AnchorStatus.ClosedMark} closed again by the lane" }])
+        {
+            Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = earlier },
+        };
+
+        var stray = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, weighed with { AcceptOver = [new(One, "status"), new(One, "trigger")] }, AnchorBatchMode.Plan, cancellationToken);
+        var applied = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed with { AcceptOver = [new(One, "trigger")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.Equal([$"{AnchorBatchRequest.AcceptOverOption} {One}:status names a cell the registries and the agent did not both change since its earlier fold: drop it, or correct it."], stray.Problems);
+        Assert.True(applied.Succeeded, string.Join("; ", applied.Problems));
+        Assert.Equal(AnchorCellNames.Status, Assert.Single(applied.Rows[0].Kept).Cell);
+        Assert.Null(Assert.Single(applied.Rows[0].Over).Verdict);
+        var row = Assert.Single(Rows(harness, PendingPath(temp)));
+        Assert.Equal(AnchorStatus.Render(AnchorState.Open), row.Status);
+        Assert.Equal($"{AnchorStatus.ClosedMark} closed again by the lane", row.Trigger);
+    }
+
     private static AnchorRowDeclaration Declared(string id, string status, string closing)
         => new(id, status, $"trigger for {id}", closing, "refs");
 

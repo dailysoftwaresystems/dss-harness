@@ -26,7 +26,8 @@ public sealed class AnchorSettings
     /// <summary>
     /// Whether a row's Trigger carries its verdict too. When true, a closed row's Trigger opens with the
     /// closed mark, as its Status does, and no other row's does: write-anchor and set-anchor refuse a row
-    /// whose two cells disagree, and read-anchors --lint and check-anchor-balance report one. A closed row's
+    /// whose two cells disagree, fold-agent weighs the two as the one verdict they state
+    /// (<see cref="Anchors.AnchorCellMerge"/>), and read-anchors --lint and check-anchor-balance report one. A closed row's
     /// Trigger may open with the bookkeeping pair instead, the closed mark and then the bookkeeping mark, to
     /// say its closure only repairs the mark of work done before the change that closes it:
     /// check-anchor-balance counts the anchor closed and credits that change with nothing. False, the

@@ -1588,7 +1588,22 @@ agent changed is written; one only the registries changed is kept, said, and kep
 changes it, since the record stays the declaration rather than what the registries held - recording theirs would make
 the agent's unchanged file read as its change; one both changed alike is left; one both changed otherwise is shown
 with its three texts and written only where `--accept-over` names it, which consents too to what the registries'
-text loses. The row the registries are to hold (`AnchorRowOutcome.Effective`) is composed and judged by the same code
+text loses. The verdict is one decision, and `AnchorCellMerge` alone weighs it so, given the anchor settings: where
+`anchors.triggerCarriesVerdict` holds, a row's status and trigger state its verdict together
+(`AnchorCellMerge.VerdictCells`), so where the registries changed one of the two and the agent the other - one kept,
+the other the agent's alone or both changed - and the row merged cell by cell would state two verdicts
+(`AnchorStatus.SplitVerdict`) though the agent's declaration states one, both are `Both`, each carrying the two
+verdicts it resolves (`AnchorCellWeighed.Verdict`, `AnchorOverCell.Verdict`) so the dry run's line and the refusal say
+why a cell one side never changed asks for a consent. Named, the agent's two are written together and the row moves as
+set-anchor would move it: a row the orchestrator reopened that the agent closes again with its trigger, its status file
+closed as it was, goes back to the done registry, and its mirror, a row the orchestrator closed that the agent keeps
+open, to the pending one. Until both are named nothing of the row is written, so the registries' verdict stands and no
+row of two verdicts is ever written; a fold step of a run asks for them as for any cell both changed. A declaration
+that states two verdicts itself is no one decision to take: its cells are weighed on their own and the row is refused
+for the two verdicts, no consent asked that could not mend it. Where the setting does not hold, the trigger carries no
+verdict and the status alone states it, weighed as any cell is: a status the agent's file holds as it declared it at
+its earlier fold is no decision of the agent's, so the registries' change of it is kept, whatever the agent's trigger
+says, and an `--accept-over` naming it is refused as naming a cell not both changed. The row the registries are to hold (`AnchorRowOutcome.Effective`) is composed and judged by the same code
 as any change, so every rule about a status, a closure or a move between the registries judges it, and the rows read
 back are compared with it, not with what was declared. A declared cell is compared with a stored one through one
 `AnchorRowCells`, as a row stores it. A row an earlier fold applied that the registries no longer hold is refused, to
@@ -4595,7 +4610,8 @@ while a row wrongly read as closed disappears from every count. Nothing is infer
 the prose cells to decide a verdict or a count. A registry whose rows open a closed Trigger
 with the closure itself can say
 so with `anchors.triggerCarriesVerdict`: a closed row's Trigger then opens with ✅ and no
-other row's does, the writing commands refuse a row whose two cells disagree, and the lint
+other row's does, the writing commands refuse a row whose two cells disagree, a fold weighs
+the two as the one verdict they state (see "Seeding and folding", above), and the lint
 and the balance report one, so that a row states its verdict once, even where it states it
 twice. A closed row's Trigger may open with ✅ and then 🧾 instead, the bookkeeping pair, when
 its closure only repairs the mark of work done before the change that closes it (see the

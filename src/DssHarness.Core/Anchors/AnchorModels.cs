@@ -433,8 +433,9 @@ public sealed record AnchorBatchRequest(IReadOnlyList<AnchorRowDeclaration> Rows
     public IReadOnlyDictionary<string, AnchorRowDeclaration> Earlier { get; init; } = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer);
 
     /// <summary>
-    /// The cells of rows with an earlier record it may write over the registries' where both changed them since -
-    /// accepting, for a prose cell, the loss of what the registries hold.
+    /// The cells of rows with an earlier record it may write over the registries' where both changed them since, or
+    /// where they carry a row's verdict weighed so (<see cref="AnchorCellMerge"/>) - accepting, for a prose cell, the loss
+    /// of what the registries hold.
     /// </summary>
     public IReadOnlyCollection<AnchorRowCell> AcceptOver { get; init; } = [];
 
@@ -463,15 +464,24 @@ public sealed record AnchorDifference(string Id, string How);
 public sealed record AnchorKeptCell(string Cell, string? Agent, string Registries);
 
 /// <summary>
-/// A cell of a row the registries and the agent both changed since its earlier fold, each otherwise: the agent's written
-/// over the registries' only where <see cref="AnchorBatchRequest.AcceptOverOption"/> names it.
+/// A cell of a row the registries and the agent both changed since its earlier fold, each otherwise - or one that carries
+/// the row's verdict, weighed as both changed (<see cref="AnchorCellMerge"/>): the agent's written over the registries' only
+/// where <see cref="AnchorBatchRequest.AcceptOverOption"/> names it.
 /// </summary>
 /// <param name="Cell">The row's cell.</param>
 /// <param name="Earlier">What both started from: the agent's declaration at its earlier fold, as a row stores it.</param>
 /// <param name="Registries">What the registries hold.</param>
 /// <param name="Agent">What the agent's file holds.</param>
 /// <param name="Accepted">Whether the request names it.</param>
-public sealed record AnchorOverCell(AnchorRowCell Cell, string Earlier, string Registries, string Agent, bool Accepted);
+public sealed record AnchorOverCell(AnchorRowCell Cell, string Earlier, string Registries, string Agent, bool Accepted)
+{
+    /// <summary>
+    /// Where it is weighed as both changed because it carries the row's verdict - the registries changed one of the two
+    /// cells that carry it and the agent the other - the two verdicts the row taken a cell from each would state
+    /// (<see cref="AnchorCellWeighed.Verdict"/>); null for a cell both changed in its own right.
+    /// </summary>
+    public string? Verdict { get; init; }
+}
 
 /// <summary>What applying one declared row does.</summary>
 public enum AnchorRowAction
@@ -510,7 +520,10 @@ public sealed record AnchorRowOutcome(string Id, AnchorRowAction Action, AnchorC
     /// <summary>The cells the registries changed since the agent's earlier fold and the agent did not: theirs kept.</summary>
     public IReadOnlyList<AnchorKeptCell> Kept { get; init; } = [];
 
-    /// <summary>The cells both changed since, each otherwise: the agent's written only where the request names it.</summary>
+    /// <summary>
+    /// The cells both changed since, each otherwise, and those that carry the row's verdict weighed so: the agent's written
+    /// only where the request names it.
+    /// </summary>
     public IReadOnlyList<AnchorOverCell> Over { get; init; } = [];
 }
 

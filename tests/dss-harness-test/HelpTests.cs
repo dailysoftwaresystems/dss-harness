@@ -5207,6 +5207,18 @@ public sealed partial class HelpTests
             text,
             StringComparison.Ordinal);
         Assert.Contains(
+            "The verdict is one decision: where anchors.triggerCarriesVerdict holds, a row's status and its trigger state it "
+            + "together, so where the registries changed one of the two and the agent the other, and the row taken one from each "
+            + "would state two verdicts though the agent's states one - a row the main tree reopened that the agent closes again "
+            + "with its trigger, its status file closed as it was, or a row the main tree closed that the agent keeps open - both "
+            + "are weighed as both changed, each line of the dry run saying why, and written, the agent's together, only where "
+            + "--accept-over <ID>:status and --accept-over <ID>:trigger name them; until both are named nothing of the row is "
+            + "written, and the registries' verdict stands. A row the agent declares with two verdicts itself is refused for "
+            + "them, no consent asked. Where the setting does not hold, the status alone carries the verdict and is weighed as "
+            + "any cell is: one the agent's file holds as it declared it then is kept, whatever its trigger says.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "since every --apply of it ends so, its dry run exits " + HarnessExit.Incomplete + " too, naming the same command and keeping nothing.",
             text,
             StringComparison.Ordinal);

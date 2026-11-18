@@ -287,7 +287,7 @@ public sealed class AnchorRegistryService(
                             // written, never as they were when a command looked first.
                             if (earlier is not null)
                             {
-                                weighed = AnchorCellMerge.Of(AnchorRowCells.Of(declared), AnchorRowCells.Of(earlier), AnchorRowCells.Of(existing));
+                                weighed = AnchorCellMerge.Of(AnchorRowCells.Of(declared), AnchorRowCells.Of(earlier), AnchorRowCells.Of(existing), settings);
                                 effective = AnchorCellMerge.Effective(declared, existing, weighed);
                             }
 
@@ -307,7 +307,7 @@ public sealed class AnchorRegistryService(
                             .Select(cell =>
                             {
                                 var one = new AnchorRowCell(declared.Id, cell.Cell);
-                                return new AnchorOverCell(one, cell.Earlier!, cell.Registries!, cell.Agent!, over.Contains(one));
+                                return new AnchorOverCell(one, cell.Earlier!, cell.Registries!, cell.Agent!, over.Contains(one)) { Verdict = cell.Verdict };
                             })];
                         bothChanged.UnionWith(both.Select(cell => cell.Cell));
 
@@ -356,10 +356,15 @@ public sealed class AnchorRegistryService(
 
                                 foreach (var cell in both.Where(cell => !cell.Accepted))
                                 {
+                                    var why = cell.Verdict is { } split
+                                        ? $"carries the row's one verdict with its {AnchorCellMerge.OtherVerdictCell(cell.Cell.Cell)}, and the registries changed one of "
+                                            + "the two since an earlier fold of this agent applied it and the agent the other, so that, taken one from each, the row "
+                                            + $"would state two verdicts ({split}): it is weighed as both changed, and"
+                                        : "was changed by the registries and by the agent since an earlier fold of this agent applied it, so";
+
                                     refusals.Refuse(
-                                        $"its {cell.Cell.Cell} was changed by the registries and by the agent since an earlier fold of this agent applied it, so "
-                                        + $"the agent's text is written over the registries' only with {AnchorBatchRequest.AcceptOverOption} {cell.Cell}; the dry "
-                                        + "run shows the three texts.");
+                                        $"its {cell.Cell.Cell} {why} the agent's text is written over the registries' only with {AnchorBatchRequest.AcceptOverOption} "
+                                        + $"{cell.Cell}; the dry run shows the three texts.");
                                 }
                             }
 
