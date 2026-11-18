@@ -1,4 +1,6 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using NSubstitute;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -9,6 +11,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
+using DssHarness.Core.Secrets;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
@@ -240,6 +243,77 @@ public sealed class LegsServiceTests
         Assert.DoesNotContain("did not answer", outcome.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// legs names, for each host, what config.json never says of it: where it keeps the copy of the tree the command was
+    /// typed in for this machine and what set that - an item's REPOSITORY_PATH over config.json's repositoryPath - and a
+    /// WSL host's distribution, from its item, on WSL hosts alone; in text, and in --json.
+    /// </summary>
+    [Fact]
+    public async Task EachHost_IsNamedWithWhereItKeepsTheCopyAndWhatSetIt_AndAWslHostWithItsDistribution()
+    {
+        var secrets = Substitute.For<IHostSecretsStore>();
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), HostId.Wsl("Ubuntu")).Returns(new ItemFacts
+        {
+            File = ".harness-config/wslDistros/Ubuntu/.env",
+            Present = true,
+            Distribution = "Example-Linux",
+            RepositoryPath = "~/mine/repo",
+        });
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), HostId.Ssh("pi")).Returns(new ItemFacts { File = ".harness-config/sshItems/pi/.env", Present = true });
+        var fixture = Create(
+            new()
+            {
+                ["x64"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" },
+                ["arm"] = HostDoubles.Leg("linux", "arm64"),
+            },
+            items: HostItems.Reading(secrets, new HarnessLayout(Root, Root)));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
+        var text = LegsReports.Render(report, json: false).Details!;
+        using var json = JsonDocument.Parse(Assert.Single(LegsReports.Render(report, json: true).Data!));
+        var hosts = json.RootElement.GetProperty("hosts").EnumerateArray().ToDictionary(host => host.GetProperty("host").GetString()!);
+
+        Assert.Contains("wsl Ubuntu: distribution 'Example-Linux'", text);
+        Assert.Contains("wsl Ubuntu: keeps this tree's copy at '~/mine/repo', as REPOSITORY_PATH in '.harness-config/wslDistros/Ubuntu/.env' sets", text);
+        Assert.Contains("ssh pi: keeps this tree's copy at '/home/pi/repo', as repositoryPath in '.harness-config/config.json' sets", text);
+        Assert.DoesNotContain(text, line => line.StartsWith("ssh pi: distribution", StringComparison.Ordinal));
+
+        Assert.Equal("Example-Linux", hosts["wsl Ubuntu"].GetProperty("distribution").GetString());
+        Assert.Equal("~/mine/repo", hosts["wsl Ubuntu"].GetProperty("copy").GetString());
+        Assert.Equal("~/mine/repo", hosts["wsl Ubuntu"].GetProperty("repositoryPath").GetString());
+        Assert.Equal("REPOSITORY_PATH in '.harness-config/wslDistros/Ubuntu/.env'", hosts["wsl Ubuntu"].GetProperty("repositoryPathFrom").GetString());
+        Assert.False(hosts["ssh pi"].TryGetProperty("distribution", out _));
+        Assert.Equal("repositoryPath in '.harness-config/config.json'", hosts["ssh pi"].GetProperty("repositoryPathFrom").GetString());
+        Assert.False(hosts["local"].TryGetProperty("copy", out _));
+    }
+
+    /// <summary>
+    /// A host whose item cannot be read is never said to keep its copies where config.json says: legs says why where it
+    /// keeps them is not known, in text and as copyUnplaced in --json.
+    /// </summary>
+    [Fact]
+    public async Task AHostWhoseItemCannotBeRead_IsSaidNotToHaveItsCopyKnown_NeverPlacedWhereConfigJsonSays()
+    {
+        var secrets = Substitute.For<IHostSecretsStore>();
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), Arg.Any<HostId>()).Returns(new ItemFacts
+        {
+            File = ".harness-config/sshItems/pi/.env",
+            Present = true,
+            Problem = "REPOSITORY_PATH 'src/repo' in '.harness-config/sshItems/pi/.env' must be absolute, or start with ~/ for the home directory",
+        });
+        var fixture = Create(new() { ["arm"] = HostDoubles.Leg("linux", "arm64") }, items: HostItems.Reading(secrets, new HarnessLayout(Root, Root)));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
+        var unplaced = "Where host ssh pi keeps its copies for this machine is not known, since its item cannot be read: "
+            + "REPOSITORY_PATH 'src/repo' in '.harness-config/sshItems/pi/.env' must be absolute, or start with ~/ for the home directory";
+        using var json = JsonDocument.Parse(Assert.Single(LegsReports.Render(report, json: true).Data!));
+        var pi = json.RootElement.GetProperty("hosts").EnumerateArray().Single(host => host.GetProperty("host").GetString() == "ssh pi");
+
+        Assert.Contains($"ssh pi: {unplaced}", LegsReports.Render(report, json: false).Details!);
+        Assert.Equal(unplaced, pi.GetProperty("copyUnplaced").GetString());
+        Assert.False(pi.TryGetProperty("copy", out _));
+    }
+
     /// <summary>Every host answering is an unqualified OK, which is the whole point of the other one.</summary>
     [Fact]
     public void EveryHostAnswering_IsStillSuccess()
@@ -379,17 +453,21 @@ public sealed class LegsServiceTests
 
     /// <summary>
     /// A host running a leg another machine sent it measures a worktree copy's first build against the main checkout's copy
-    /// there, where the configuration says it keeps it: its own tree is a repository of its own, whose main checkout is
-    /// itself, and measured against itself the build needed nothing anyone said, and claimed no room.
+    /// there, the one its copy is kept beside: its own tree is a repository of its own, whose main checkout is itself, and
+    /// measured against itself the build needed nothing anyone said, and claimed no room. Never where config.json's
+    /// repositoryPath says - the machine that sent the leg may keep its copies where its own item's .env says.
     /// </summary>
     [Fact]
     public async Task AHostRunningALegItWasSent_MeasuresItAgainstTheMainCopyThere()
     {
+        var main = Path.Combine(Root, "repo");
+        var copy = main + ".worktree-o1--xa";
         var fixture = Create(
             new() { ["leg"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Ssh = "pi" } },
-            rooms: (_, path) => path.StartsWith("/home/pi/repo", StringComparison.Ordinal)
+            rooms: (_, path) => path.StartsWith(main, StringComparison.Ordinal) && !path.StartsWith(copy, StringComparison.Ordinal)
                 ? Room(path, exists: true, recorded: 6L << 30, free: 30)
-                : Room(path, exists: false, recorded: null, free: 30));
+                : Room(path, exists: false, recorded: null, free: 30),
+            root: copy);
 
         var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Ssh("pi"), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -894,7 +972,9 @@ public sealed class LegsServiceTests
         Func<HostId, string, BuildDirectoryRoom>? rooms = null,
         KnownTrees? trees = null,
         AdmissionSettings? defaultsAdmission = null,
-        AdmissionSettings? localAdmission = null)
+        AdmissionSettings? localAdmission = null,
+        string? root = null,
+        HostItems? items = null)
     {
         var config = new HarnessConfig
         {
@@ -920,7 +1000,7 @@ public sealed class LegsServiceTests
         var error = new StringWriter();
 
         var service = new LegsService(
-            HostDoubles.Loader(config, Root),
+            HostDoubles.Loader(config, root ?? Root, items: items),
             inspector,
             trees ?? new KnownTrees(),
             HostDoubles.Platform(),

@@ -37,6 +37,8 @@ public static class HarnessExit
     /// A host the command was pointed at could not be used: it could not be reached, it has no
     /// .NET SDK, DssHarness could not be brought to this machine's version there, or its copy of
     /// the repository does not exist. Distinct from <see cref="CommandFailed"/>: nothing ran there.
+    /// Distinct from <see cref="InternalError"/> too: a DssHarness there that failed as a defect is the
+    /// harness failing, and a leg it ran is <c>poisoned</c>, never skipped as a host not reached.
     /// </summary>
     public const int HostUnavailable = 15;
 
@@ -108,7 +110,7 @@ public static class HarnessExit
             [nameof(ConfigInvalid)] = "config.json is missing, unparseable, or failed validation.",
             [nameof(Refused)] = "A precondition refused the request (dirty tree, name taken, lock held).",
             [nameof(ToolMissing)] = "A required external tool is not installed, or could not be started.",
-            [nameof(HostUnavailable)] = "A host could not be reached, or DssHarness could not run there; nothing ran on it.",
+            [nameof(HostUnavailable)] = "A host could not be reached, or DssHarness could not be brought to run there; nothing ran on it. A DssHarness there that failed as a defect is 70.",
             [nameof(CommandFailed)] = "The wrapped command ran and reported failure.",
             [nameof(Incomplete)] = "Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not finished within its bound, or its download not reached), or a remote workflow's fetch was not finished within its bound or the workflow cache could not be read, written or locked within its window; it is not a pass, and running it again, once what it names is dealt with, finishes it.",
             [nameof(InternalError)] = "The harness itself failed unexpectedly; this is a defect in the tool.",

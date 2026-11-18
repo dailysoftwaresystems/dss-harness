@@ -110,6 +110,9 @@ public sealed record LedgerLine(
     /// <summary>Each control of the leg's sweep that did not pass, as <see cref="LegEntry.Controls"/> says.</summary>
     public IReadOnlyList<ControlEntry> Controls { get; init; } = [];
 
+    /// <summary>What each start of the leg's command on its host that failed before anything ran said, as <see cref="LegEntry.Retried"/> says.</summary>
+    public IReadOnlyList<string> Retried { get; init; } = [];
+
     /// <summary>
     /// The project whose tests the leg counted, as the test that reached its runner recorded it;
     /// <see langword="null"/> where no test counted any, or the leg resolves no project.
@@ -400,6 +403,7 @@ public sealed class LedgerReport
                     Tree = entry.Tree,
                     PendingSweep = entry.PendingSweep,
                     Controls = entry.Controls,
+                    Retried = entry.Retried,
                     Project = entry.Project,
                     TestSet = entry.TestSet,
                     TestCountNote = counts.GetValueOrDefault(entry.Leg),
@@ -466,7 +470,7 @@ public sealed class LedgerReport
             line.Leg,
             Verdicts.Display(line.Verdict),
             FormatDuration(line.Duration),
-            Marked(line.Detail, line.Tree, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.SetUps, line.Admission, line.TestCountNote, line.FailedUnits),
+            Marked(line.Detail, line.Tree, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.SetUps, line.Admission, line.TestCountNote, line.FailedUnits, line.Retried),
             leg,
             verdict,
             duration)));
@@ -904,6 +908,9 @@ public sealed class LedgerReport
 
                 // Only for a leg a sweep stopped a control of: each control that did not pass, with what ctest registers for its red cases.
                 Controls = line.Controls.Count > 0 ? line.Controls.Select(control => ControlDocument(control, show)) : null,
+
+                // Only for a leg whose host's DssHarness failed as it started and was started once more: what each such start said.
+                Retried = line.Retried.Count > 0 ? line.Retried.Select(show) : null,
                 Timings = line.Timings.Select(timing => new
                 {
                     timing.Phase,
@@ -1138,6 +1145,7 @@ public sealed class LedgerReport
     /// <param name="admission">How its machine took it, where it is heavy and the machine declares admission.</param>
     /// <param name="testCountNote">Why its test count stands apart from its siblings', if it does.</param>
     /// <param name="failedUnits">The units its build failed to build, where its build's own tool failed it.</param>
+    /// <param name="retried">What each start of its command on its host that failed before anything ran said, if any did.</param>
     /// <remarks>
     /// Composed here, from fields that travel beside the detail rather than inside it, so a ledger a
     /// host reported and this machine reports again names each once.
@@ -1151,7 +1159,8 @@ public sealed class LedgerReport
         IReadOnlyList<SetUps.SetUpFact> setUps,
         AdmissionFact? admission,
         string? testCountNote,
-        Build.FailedUnits? failedUnits = null)
+        Build.FailedUnits? failedUnits = null,
+        IReadOnlyList<string>? retried = null)
     {
         var parts = new List<string>();
 
@@ -1194,6 +1203,13 @@ public sealed class LedgerReport
         if (testCountNote is { Length: > 0 })
         {
             parts.Add("test count differs: " + testCountNote);
+        }
+
+        // Whatever the leg reached: a host whose DssHarness failed as it started, and answered the next start, is a failure
+        // that happened, and a reader seeing it twice knows the host's tool is not settled.
+        if (retried is { Count: > 0 })
+        {
+            parts.Add($"retried {(retried.Count == 1 ? "once" : $"{retried.Count} times")}: " + string.Join("; ", retried));
         }
 
         if (notes.Count > 0)

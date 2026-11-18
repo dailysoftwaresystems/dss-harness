@@ -49,6 +49,23 @@ public sealed record HostReport
     public string? ToolPath { get; init; }
 
     /// <summary>
+    /// The distribution a WSL host's item names, spelt as WSL lists it - what <c>wsl.exe -d</c> takes, which config.json
+    /// never says, since it names the item alone - read from the item, never its credential; <see langword="null"/> for any
+    /// other host, and where the item could not be read. Said by <c>legs</c>.
+    /// </summary>
+    public string? Distribution { get; init; }
+
+    /// <summary>
+    /// Where the host keeps the copy of the tree the command was typed in for this machine, and what set where it keeps the
+    /// main checkout's (<see cref="Sync.HostCopies.RepositoryOf"/>); <see langword="null"/> for this machine, and where that
+    /// is not known (<see cref="CopyUnplaced"/>). Said by <c>legs</c>.
+    /// </summary>
+    public Sync.HostCopyPlace? CopyPlace { get; init; }
+
+    /// <summary>Why where the host keeps its copies for this machine is not known, where it is not.</summary>
+    public string? CopyUnplaced { get; init; }
+
+    /// <summary>
     /// The command that keeps this host awake, as the configuration declares it for the host, or empty
     /// where it declares none.
     /// </summary>

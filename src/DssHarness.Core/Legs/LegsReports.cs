@@ -71,6 +71,22 @@ public static class LegsReports
                 details.Add($"{host.Host}: admission: {unread}");
             }
 
+            // What config.json never says of a host: the distribution a WSL item names, which a repository's own program
+            // starting 'wsl.exe -d' needs, and where its copies are for this machine, which an item's .env may set.
+            if (host.Distribution is { } distribution)
+            {
+                details.Add($"{host.Host}: distribution '{distribution}'");
+            }
+
+            if (host.CopyPlace is { } place)
+            {
+                details.Add($"{host.Host}: {place.Describe()}");
+            }
+            else if (host.CopyUnplaced is { } unplaced)
+            {
+                details.Add($"{host.Host}: {unplaced}");
+            }
+
             // Asked for with -v: a host that is nearly full shows before a run that fills it, and before the
             // legs its builds would no longer fit are turned away.
             if (verbose && Room(host) is { } room)
@@ -124,6 +140,15 @@ public static class LegsReports
             host.Processor,
             host.ToolVersion,
             host.ToolPath,
+
+            // For a WSL distribution alone, the distribution its item names; and for a WSL or ssh host, where it keeps the
+            // copy of the tree the command was typed in for this machine, where the main checkout's is and what set that,
+            // or why none of it is known.
+            host.Distribution,
+            Copy = host.CopyPlace?.Copy,
+            RepositoryPath = host.CopyPlace?.Repository.Path,
+            RepositoryPathFrom = host.CopyPlace?.Repository.From,
+            host.CopyUnplaced,
             host.Actions,
 
             // The room where its copies are kept - the main checkout, for this machine -

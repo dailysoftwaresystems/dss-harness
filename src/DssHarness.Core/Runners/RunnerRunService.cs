@@ -692,7 +692,7 @@ public sealed class RunnerRunService(
             // inputs alone this refused a run line naming a runner value directory's own value — the
             // same check-against-a-different-set defect as before, inverted. Each step's own inputs
             // are its alone: a run line naming another step's is refused as naming nothing.
-            RefuseUnknownNames(file, step => SuppliedTo(step).Keys);
+            RefuseUnknownNames(file, step => SuppliedTo(step).Keys, request.Identity);
 
             // Before anything changes the tree, and over the steps this leg runs alone.
             RefuseUnbuilt(request, BuildCause.AllOf(runner, file));
@@ -915,6 +915,7 @@ public sealed class RunnerRunService(
     /// values, the action's declared inputs and the step's own, already resolved, so the check refuses
     /// exactly what the expansion would not fill in.
     /// </param>
+    /// <param name="identity">Which leg the steps run for, whose distributions a step may name; <see langword="null"/> where the run reaches no leg.</param>
     /// <exception cref="HarnessException">A step names a placeholder nothing supplies.</exception>
     /// <remarks>
     /// Over the whole file and before the first program starts, so a file whose last step names
@@ -927,7 +928,7 @@ public sealed class RunnerRunService(
     /// and is never touched, and a brace meant literally is written <c>{{</c>.
     /// </para>
     /// </remarks>
-    private static void RefuseUnknownNames(ActionFile file, Func<ActionStep, IEnumerable<string>> fillable)
+    private static void RefuseUnknownNames(ActionFile file, Func<ActionStep, IEnumerable<string>> fillable, LegIdentity? identity)
     {
         foreach (var step in file.Steps)
         {
@@ -937,6 +938,13 @@ public sealed class RunnerRunService(
             foreach (var (text, setting) in step.Written)
             {
                 LegPathNames.RefuseUnknown(text, setting, extra: declared, unvalued: unvalued);
+
+                // A distribution the leg has nothing for - {distribution} on a leg in no WSL distribution, an item not
+                // declared or not read - is refused here too, over the whole file, rather than at the step that names it.
+                if (identity is not null)
+                {
+                    LegPathNames.RefuseAbsentDistributions(text, setting, identity);
+                }
             }
         }
     }

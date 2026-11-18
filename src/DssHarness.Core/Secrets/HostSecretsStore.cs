@@ -28,6 +28,15 @@ public interface IHostSecretsStore
 
     /// <summary>The command that makes <paramref name="path"/> readable and writable by its owner alone.</summary>
     string HowToProtect(string path);
+
+    /// <summary>
+    /// What <paramref name="host"/>'s item on this machine declares that is no credential - where it keeps its copy of the
+    /// main checkout, and a WSL item's distribution - read as the item is read to connect, so an item that cannot be used
+    /// says why; or nothing, where this machine holds no item for it.
+    /// </summary>
+    /// <param name="layout">Where the repository's harness state lives.</param>
+    /// <param name="host">A WSL distribution or an ssh host; this machine holds no item, and has none.</param>
+    ItemFacts ReadFacts(HarnessLayout layout, Hosts.HostId host);
 }
 
 /// <inheritdoc cref="IHostSecretsStore"/>
@@ -53,6 +62,13 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
     /// </summary>
     public const string SuperuserKey = "SUDO_PASSWORD";
 
+    /// <summary>
+    /// The key naming where the host keeps its copy of the main checkout for whoever's machine holds the item, over the
+    /// <c>repositoryPath</c> config.json declares for it, which stays the default a fresh clone uses. Optional, and held to
+    /// the rule that path is (<see cref="Configuration.RepositoryPaths"/>).
+    /// </summary>
+    public const string RepositoryPathKey = "REPOSITORY_PATH";
+
     /// <summary>The keys an ssh item's <c>.env</c> declares.</summary>
     private static readonly ItemKey[] SshKeys =
     [
@@ -60,6 +76,7 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
         new(UserKey, "the user ssh logs in as"),
         new(PortKey, "the port ssh connects to", SshItem.DefaultPort.ToString(CultureInfo.InvariantCulture)),
         new(SuperuserKey, "the superuser credential a privileged install needs", Secret: true, Optional: true),
+        new(RepositoryPathKey, "where this host keeps its copy of the main checkout, over config.json's repositoryPath", Optional: true),
     ];
 
     /// <summary>The keys a WSL item's <c>.env</c> declares.</summary>
@@ -67,6 +84,7 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
     [
         new(DistributionKey, "the distribution, spelt as WSL lists it"),
         new(SuperuserKey, "the superuser credential a privileged install needs", Secret: true, Optional: true),
+        new(RepositoryPathKey, "where this distribution keeps its copy of the main checkout, over config.json's repositoryPath", Optional: true),
     ];
 
     private readonly IFileSystem _fileSystem = fileSystem;
@@ -133,6 +151,12 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
                     + $"port number; give it a number from 1 to 65535, or leave it out for {SshItem.DefaultPort}");
             }
 
+            // An ssh host may run Windows, so a drive or a share names its copy too, as in config.json.
+            if (RepositoryPathProblem(layout, directory, values, allowWindowsPaths: true) is { } badPath)
+            {
+                return new SecretsRead<SshItem>(null, badPath);
+            }
+
             return new SecretsRead<SshItem>(
                 new SshItem
                 {
@@ -143,6 +167,7 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
                     KeyFile = keyFile,
                     KnownHostsFile = knownHostsFile,
                     Superuser = Credential(values),
+                    RepositoryPath = RepositoryPath(values),
                 },
                 string.Empty);
         }
@@ -165,10 +190,15 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
         {
             var (values, problem) = ReadEnvironment(layout, directory, WslKeys);
 
-            return values is null
-                ? new SecretsRead<WslItem>(null, problem)
+            if (values is null)
+            {
+                return new SecretsRead<WslItem>(null, problem);
+            }
+
+            return RepositoryPathProblem(layout, directory, values, allowWindowsPaths: false) is { } badPath
+                ? new SecretsRead<WslItem>(null, badPath)
                 : new SecretsRead<WslItem>(
-                    new WslItem { Name = name, Distribution = values[DistributionKey], Superuser = Credential(values) },
+                    new WslItem { Name = name, Distribution = values[DistributionKey], Superuser = Credential(values), RepositoryPath = RepositoryPath(values) },
                     string.Empty);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -229,6 +259,56 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
 
     private static HostCredential? Credential(IReadOnlyDictionary<string, string> values)
         => values.TryGetValue(SuperuserKey, out var value) && value.Length > 0 ? new HostCredential(value) : null;
+
+    /// <summary>The repository path the item sets, or <see langword="null"/> where it leaves the key out or blank.</summary>
+    private static string? RepositoryPath(IReadOnlyDictionary<string, string> values)
+        => values.TryGetValue(RepositoryPathKey, out var value) && value.Length > 0 ? value : null;
+
+    /// <summary>
+    /// Why the repository path the item sets cannot be where its host keeps a copy, by the rule config.json's is held to,
+    /// naming the file to fix; <see langword="null"/> where it sets none, or a good one.
+    /// </summary>
+    private static string? RepositoryPathProblem(HarnessLayout layout, string directory, IReadOnlyDictionary<string, string> values, bool allowWindowsPaths)
+        => RepositoryPath(values) is { } path && Configuration.RepositoryPaths.Problem(path, allowWindowsPaths) is { } problem
+            ? $"{RepositoryPathKey} '{path}' in '{Show(layout, EnvironmentFile(directory))}' {problem}"
+            : null;
+
+    /// <inheritdoc/>
+    public ItemFacts ReadFacts(HarnessLayout layout, Hosts.HostId host)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(host);
+
+        if (host.Kind == Hosts.HostKind.Local)
+        {
+            return new ItemFacts();
+        }
+
+        var file = EnvironmentFile(host.Kind == Hosts.HostKind.Wsl ? layout.WslDistroDirectory(host.Name) : layout.SshItemDirectory(host.Name));
+        var shown = Show(layout, file);
+
+        // An item this machine does not hold declares nothing here, and its host's copies are where config.json says: a
+        // host's own copy of the tree holds none, by design, and a host never reached from here has none to read.
+        if (!_fileSystem.FileExists(file))
+        {
+            return new ItemFacts { File = shown };
+        }
+
+        if (host.Kind == Hosts.HostKind.Wsl)
+        {
+            var wsl = ReadWslItem(layout, host.Name);
+
+            return wsl.Item is { } item
+                ? new ItemFacts { File = shown, Present = true, RepositoryPath = item.RepositoryPath, Distribution = item.Distribution }
+                : new ItemFacts { File = shown, Present = true, Problem = wsl.Problem };
+        }
+
+        var ssh = ReadSshItem(layout, host.Name);
+
+        return ssh.Item is { } read
+            ? new ItemFacts { File = shown, Present = true, RepositoryPath = read.RepositoryPath }
+            : new ItemFacts { File = shown, Present = true, Problem = ssh.Problem };
+    }
 
     private static string EnvironmentFile(string directory) => Path.Combine(directory, HarnessLayout.ItemEnvFileName);
 

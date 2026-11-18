@@ -662,7 +662,7 @@ public sealed class ActionFileParser(
     /// </remarks>
     private static void RefuseShadowedInput(YamlNode node, string name, List<string> problems)
     {
-        if (!LegPathNames.All.Contains(name, StringComparer.Ordinal))
+        if (!LegPathNames.IsOwned(name))
         {
             return;
         }

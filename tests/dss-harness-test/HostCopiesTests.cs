@@ -114,10 +114,59 @@ public sealed class HostCopiesTests
     [Fact]
     public void AHostDeclaringNoRepositoryPath_HasNowhereToKeepACopy()
     {
-        var refusal = Assert.Throws<HarnessException>(() => HostCopies.RepositoryPathOf(new HarnessConfig(), Pi));
+        var refusal = Assert.Throws<HarnessException>(() => HostCopies.RepositoryPathOf(new HarnessContext(new HarnessLayout("/repo", "/repo"), new HarnessConfig()), Pi));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Contains("ssh pi declares no repositoryPath", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Where a host keeps this machine's copies is one answer: the REPOSITORY_PATH its item's .env sets, over config.json's
+    /// repositoryPath, said as written with what set it; config.json's where the item sets none; and, where the item cannot
+    /// be read, not known - the host unavailable, never config.json's in its place, where a sync would write and a clean or
+    /// a removal delete what that item's user keeps there. A worktree's copy is beside whichever it is.
+    /// </summary>
+    [Theory]
+    [InlineData("item", "~/mine/repo", "REPOSITORY_PATH in '.harness-config/sshItems/pi/.env'")]
+    [InlineData("none", "/home/pi/repo", "repositoryPath in '.harness-config/config.json'")]
+    [InlineData("unread", null, null)]
+    public void WhereAHostKeepsItsCopies_IsTheItemsOverConfigJsons_AndNotKnownWhereTheItemCannotBeRead(string @case, string? path, string? from)
+    {
+        var secrets = Substitute.For<DssHarness.Core.Secrets.IHostSecretsStore>();
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), Pi).Returns(@case switch
+        {
+            "item" => new DssHarness.Core.Secrets.ItemFacts { File = ".harness-config/sshItems/pi/.env", Present = true, RepositoryPath = "~/mine/repo" },
+            "none" => new DssHarness.Core.Secrets.ItemFacts { File = ".harness-config/sshItems/pi/.env", Present = true },
+            _ => new DssHarness.Core.Secrets.ItemFacts { File = ".harness-config/sshItems/pi/.env", Present = true, Problem = "other users can change '.harness-config/sshItems/pi/.env'" },
+        });
+        var root = Path.GetFullPath("/repo");
+        var layout = new HarnessLayout(root, root);
+        var context = new HarnessContext(
+            layout,
+            new HarnessConfig { Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = "/home/pi/repo" } } } })
+        {
+            HostItems = DssHarness.Core.Secrets.HostItems.Reading(secrets, layout),
+        };
+
+        if (path is null)
+        {
+            var unknown = Assert.Throws<HarnessException>(() => HostCopies.RepositoryOf(context, Pi));
+
+            Assert.Equal(HarnessExit.HostUnavailable, unknown.ExitCode);
+            Assert.Equal(
+                "Where host ssh pi keeps its copies for this machine is not known, since its item cannot be read: "
+                    + "other users can change '.harness-config/sshItems/pi/.env'.",
+                unknown.Message);
+            return;
+        }
+
+        var worktree = Path.Combine(layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root), "feature");
+        var place = HostCopyPlace.Of(context, Pi, worktree, StringComparison.Ordinal);
+
+        Assert.Equal(new HostRepositoryPath(path, from!), HostCopies.RepositoryOf(context, Pi));
+        Assert.Equal(path + ".worktree-feature", place.Copy);
+        Assert.Equal($"keeps this tree's copy at '{path}.worktree-feature', beside '{path}', as {from} sets", place.Describe());
+        Assert.Equal($"keeps this tree's copy at '{path}', as {from} sets", HostCopyPlace.Of(context, Pi, root, StringComparison.Ordinal).Describe());
     }
 
     /// <summary>
@@ -2313,6 +2362,40 @@ public sealed class HostCopiesTests
             $"  /home/pi/repo.worktree-lfprobe  1 KiB  gone from '/gone/lfprobe': 'dssharness clean --gone-copies' {expected}",
             report.Details ?? [],
             StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// A gone tree's copy is measured where the host keeps this machine's copies, as every reader of them asks it: under
+    /// the REPOSITORY_PATH the host's item sets, never config.json's repositoryPath beside it - read there, the dry run
+    /// found nothing and said the copy would only be forgotten, while the clean it measured removes it.
+    /// </summary>
+    [Fact]
+    public async Task AGoneTreesCopy_IsMeasuredWhereTheHostsItemKeepsItsCopies()
+    {
+        using var temp = new TempDirectory();
+        using var hosts = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, hosts.Path);
+        var mine = hosts.Combine("pi", "mine", "repo");
+        temp.WriteFile(Path.Combine(".harness-config", "sshItems", "pi", ".env"), $"ADDRESS=pi.invalid\nUSER=dev\nREPOSITORY_PATH={mine}\n");
+        temp.WriteFile(Path.Combine(".harness-config", "sshItems", "pi", ".key"), "not a real key\n");
+        temp.WriteFile(Path.Combine(".harness-config", "sshItems", "pi", "known_hosts"), "pi.invalid ssh-ed25519 AAAA\n");
+        var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
+        var record = Record(harness);
+        var formerAlpha = temp.Combine("trees", "gone", "alpha");
+
+        await Local(harness).CreateRootAsync(mine + ".worktree-alpha", CopyMark.Complete, cancellationToken);
+        record.Claim(context.Layout, new HostCopyEntry("alpha", Pi.ToString(), mine + ".worktree-alpha", formerAlpha));
+
+        var remover = new HostCopyRemover(new RecordingInspector(Answering), new LocalHosts(harness, harness.FileSystem), Lock(harness), harness.FileSystem, harness.Platform);
+        var size = DiskSpace.Size(harness.FileSystem.DirectorySize(mine + ".worktree-alpha"));
+
+        var measured = await remover.RemoveGoneAsync(context, Pi.ToString(), measureOnly: true, cancellationToken);
+
+        Assert.Equal([$"ssh pi: would remove its copy at '{mine}.worktree-alpha', of the worktree that was at '{formerAlpha}', {size}"], measured.Lines);
+        Assert.Equal(HarnessExit.Success, measured.ExitCode);
+        Assert.True(Directory.Exists(mine + ".worktree-alpha"));
+        Assert.Single(record.All(context.Layout));
     }
 
     /// <summary>

@@ -54,19 +54,22 @@ public sealed record RepositoryTree(string Root, string Name)
 
     /// <summary>
     /// Where the main checkout of <paramref name="context"/>'s repository is on this machine: the main checkout itself,
-    /// or, on a host running legs another machine sent it, the copy of it the configuration says this host keeps - spelt
-    /// with this host's home where it is kept under it, as every host's copy is spelt where it is read: a path below a
-    /// directory called '~' is nowhere.
+    /// or, on a host running legs another machine sent it, the copy of it kept beside the copy the legs were sent to run
+    /// in - that copy itself where it is the main checkout's (<see cref="HostCopies.MainCopyOfTree"/>).
     /// </summary>
+    /// <remarks>
+    /// Read from where the machine that sent the legs put them, never from config.json's repositoryPath: that machine
+    /// may keep its copies where its own item's .env says, which a host's copy holds no item to read, and a host looking
+    /// where config.json says would measure, and list, copies that are not the ones it runs in.
+    /// </remarks>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="here">The host this machine is to the machine that sent the legs here, or <see langword="null"/>.</param>
-    /// <exception cref="HarnessException">The host declares nowhere to keep its copy (<see cref="HostCopies.RepositoryPathOf"/>).</exception>
     public static string MainCheckoutOf(HarnessContext context, HostId? here)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        return HostCopies.KeptAs(here) is { } kept
-            ? LocalSyncTransport.Home(HostCopies.RepositoryPathOf(context.Config, kept))
+        return HostCopies.KeptAs(here) is not null
+            ? HostCopies.MainCopyOfTree(context.Layout.MainCheckoutRoot)
             : context.Layout.MainCheckoutRoot;
     }
 
@@ -94,26 +97,26 @@ public interface IRepositoryTrees
     /// <summary>
     /// The trees of <paramref name="context"/>'s repository on this machine: where this machine holds the repository, the
     /// main checkout, every worktree git records and every agent's repository below the worktrees root; on a host running legs another machine sent it, the main checkout's
-    /// copy, where the configuration says this host keeps it, and each worktree's copy beside it
-    /// (<see cref="HostCopies.KeptAs"/>).
+    /// copy, beside which the copy the legs were sent to run in is kept (<see cref="RepositoryTree.MainCheckoutOf"/>), and
+    /// each worktree's copy beside it (<see cref="HostCopies.KeptAs"/>).
     /// </summary>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="here">The host this machine is to the machine that sent the legs here, or <see langword="null"/>.</param>
     /// <param name="cancellationToken">Stops the listing.</param>
-    /// <remarks>
-    /// A host declaring nowhere to keep its copy holds none: nothing could have been sent to it, since a sync keeps its copy
-    /// there. Its trees are said as a listing that could not be made, with why, and never thrown, so no leg's work stops
-    /// for them.
-    /// </remarks>
     Task<RepositoryTreesFound> HereAsync(HarnessContext context, HostId? here, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The copies of <paramref name="context"/>'s repository this machine knows <paramref name="host"/> to keep: the main
-    /// checkout's, where the configuration says, and each worktree's this machine's record of host copies holds there.
+    /// checkout's, where it keeps it for this machine (<see cref="HostCopies.RepositoryOf"/>), and each worktree's this
+    /// machine's record of host copies holds there.
     /// </summary>
-    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
     /// <param name="host">A WSL distribution or an ssh host.</param>
-    /// <remarks>A host declaring nowhere to keep its copy holds none, said as <see cref="HereAsync"/> says it.</remarks>
+    /// <remarks>
+    /// A host where it keeps its copies is not known for - none declared, or an item that cannot be read - holds none this
+    /// machine could have sent it, since a sync keeps its copy there. Its trees are said as a listing that could not be
+    /// made, with why, and never thrown, so no leg's work stops for them.
+    /// </remarks>
     RepositoryTreesFound On(HarnessContext context, HostId host);
 }
 
@@ -143,16 +146,7 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
 
         if (HostCopies.KeptAs(here) is not null)
         {
-            string main;
-
-            try
-            {
-                main = RepositoryTree.MainCheckoutOf(context, here);
-            }
-            catch (HarnessException ex)
-            {
-                return Nowhere(ex);
-            }
+            var main = RepositoryTree.MainCheckoutOf(context, here);
 
             try
             {
@@ -238,7 +232,7 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
 
         try
         {
-            main = new RepositoryTree(HostCopies.RepositoryPathOf(context.Config, host), RepositoryTree.MainCheckout);
+            main = new RepositoryTree(HostCopies.RepositoryPathOf(context, host), RepositoryTree.MainCheckout);
         }
         catch (HarnessException ex)
         {

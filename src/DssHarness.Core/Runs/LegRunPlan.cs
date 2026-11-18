@@ -212,7 +212,22 @@ public sealed record PlacedLeg(
         Config: Variant.Config,
         Variant: Variant.DirectoryName,
         Host: Named.ToString(),
-        RunId: runId);
+        RunId: runId)
+    {
+        // The leg's own item by the name the machine that placed it knows its host by: to the distribution itself, it is
+        // this machine.
+        InWsl = Named.Kind == HostKind.Wsl,
+        Distribution = Named.Kind == HostKind.Wsl ? Distributions.GetValueOrDefault(Named.Name) : null,
+        Distributions = Distributions,
+    };
+
+    /// <summary>
+    /// Each WSL item the configuration declares, by its name, with the distribution it names as read where the leg was
+    /// placed - on a host, as the machine that sent it told it - or <see langword="null"/> where it could not be read there:
+    /// what its run lines' <c>{distribution}</c> and <c>{distribution.&lt;item&gt;}</c> are filled with, and what a leg
+    /// sent to a host carries there.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?> Distributions { get; init; } = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The one file this leg's build is declared to produce, and why there is none when there is
@@ -466,6 +481,7 @@ public static class LegRunPlan
             Named = named,
             LocalCopy = tree.LocalCopy,
             KeptIn = tree.KeptIn,
+            Distributions = context.HostItems.Distributions(config.WslDistros),
         };
     }
 

@@ -814,6 +814,35 @@ public sealed class ConfigStoreTests
         Assert.Contains(fragment, exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A test invocation may name a WSL item's distribution, <c>{distribution.&lt;item&gt;}</c>, for an item wslDistros
+    /// declares, matched ignoring case as the item is; one it does not declare is refused when the file is read, naming
+    /// the declared ones - never left to a leg's build to find nothing there.
+    /// </summary>
+    [Theory]
+    [InlineData("""["-d", "{distribution.Debian}"]""", "test.all.args names '{distribution.Debian}', and no WSL item 'Debian' is declared under wslDistros: the declared ones are 'Ubuntu'.")]
+    [InlineData("""["-d", "{distribution.ubuntu}", "{distribution}"]""", null)]
+    public void Load_AWslItemsDistributionNamed_IsOneWslDistrosDeclares(string args, string? refused)
+    {
+        var json = $$"""
+            {
+              "buildConfigs": { "debug": {} },
+              "wslDistros": ["Ubuntu"],
+              "hosts": { "wsl": { "Ubuntu": { "repositoryPath": "/home/dev/repo" } } },
+              "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "args": {{args}} } } } ]
+            }
+            """;
+
+        if (refused is null)
+        {
+            Assert.Equal(["-d", "{distribution.ubuntu}", "{distribution}"], LoadValid(json).Projects.Single().Test!.All!.Args);
+        }
+        else
+        {
+            Assert.Contains(refused, LoadInvalid(json).Message, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void Load_KeepsWhatAFailedRunNames_UnderTheBuildDirectory()
     {

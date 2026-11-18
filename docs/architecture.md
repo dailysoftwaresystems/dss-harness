@@ -5320,6 +5320,21 @@ build, or has no copy of the repository.
   made by hand unless `--adopt` names that host, and reports what taking it over would cost
   either way.
 
+A leg run on a host (`RemoteLegRunner`) takes its line from the host's ledger. A host that never
+said how its command finished, or ended it with no line for the leg and a code that is neither a
+refusal of the run nor a defect, leaves the leg `skipped-unavailable`: nothing about the code is
+known. A DssHarness there that failed as a defect (70) with no line for the leg is the harness
+failing, so the leg is `poisoned`, its line naming the host, the code and what the host said, and
+whether its work had begun. Where it failed so before anything ran there - no run named, no note
+written, and no ledger, or one with no line, no run, no directory of records and no set-up left
+running - the command is started there once more (`RemoteLegRunner.MostRestarts`, 1), which is
+safe since nothing ran: a consumer's leg met a DssHarness in a WSL distribution that could not load
+one of the runtime's own assemblies, once, as the runtime or the tool there was replaced while it
+started, and the next run was fine. A start that then answers is the leg's line, which says what the
+failed start said (`retried once: ...`, and `retried` in `--json`), so a failure the second start
+did not meet is never hidden; one that fails so again is `poisoned`, saying it was retried. Once
+anything ran there, the command is never started again.
+
 ### A host's home is `~`
 
 A host answering another machine writes into that machine's output: its terminal, its
@@ -5355,9 +5370,9 @@ PowerShell there, which all read a leading `~` as the home.
   is written as the host prints it. An address the host's name resolved to is the one thing
   rewritten in all of them, to the address declared (see "Names that resolve").
 - **A copy's path this machine builds is said as configured.** The sync line, a lock held on a
-  host's copy and delete-worktree's lines name the copy from `repositoryPath` as the
-  configuration writes it, so `"repositoryPath": "~/src/app"` keeps the account out of those
-  too. `keptOutputs` is relative to the tree already.
+  host's copy and delete-worktree's lines name the copy from `repositoryPath` - or the item's
+  `REPOSITORY_PATH` that wins over it - as it is written, so `"repositoryPath": "~/src/app"` keeps
+  the account out of those too. `keptOutputs` is relative to the tree already.
 
 ### Installing what a host is missing
 
@@ -5522,7 +5537,7 @@ from the report.
 | `refused-locked` | Another run holds the lock for this leg, or its host's tree | **yes** |
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran; or a unit of a sweep - a worker, an arm - waited so, and each arm the sweep had left once its machine refused one | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
-| `poisoned` | The harness could not produce a verdict; one an exception ended names it, and how much memory the harness held as it gave the leg up. A mutation arm whose site could not be put back as it was, or whose driving ended in a failure nobody named | **yes** |
+| `poisoned` | The harness could not produce a verdict; one an exception ended names it, and how much memory the harness held as it gave the leg up; a host's DssHarness failed as a defect with no line for the leg, after one more start where it failed before anything ran there. A mutation arm whose site could not be put back as it was, or whose driving ended in a failure nobody named | **yes** |
 | `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a filesystem a heavy leg's build fills had less free than its machine's `minFreeGiB`; or a mutation arm was not driven to a verdict: its sweep stopped, or ended by a refusal of the run, while it was driven or before; its own build, or its paired control's, stopped from outside; no worker left to run it; or the unmutated run of its test binary not passing | no: incomplete |
 | `violated` | A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than the tree spells it or is no file the sweep's reading of the tree holds; its before-text is not in its site exactly once, or is replaced by itself; its target or its runner is not built, or no object they build depends on a site; its mutation reddened other cases than its C rows, ran another number of cases, left a G row's case unrun or left out its diagnostic; a mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired control did not | **yes** |
 | `survived` | A mutation arm's mutation built and ran, and no case reddened | **yes** |
@@ -5709,7 +5724,7 @@ field it declares wins over the machine's section in every tree's `config.json`,
 leaves out is still the repository's to say. Every command this user runs on the machine reads it,
 whichever tree it runs in; an ssh host reads its own, as it admits the legs sent to it; a WSL leg is
 admitted by this machine's, which is sent with it for its floor (`HostAgentRequest.MachineAdmission`,
-since protocol 13), since the distribution's own is another machine's to it. `legs` says, for each host
+since protocol 14), since the distribution's own is another machine's to it. `legs` says, for each host
 it reaches, the rule in force and where each field came from, or why the settings file could not be
 read: an ssh host answers its own file in the survey's answer (`HostAgentInfo.MachineSettings`), its
 home written `~`, and `--json` gives each host's `settingsFile`, its `admission` fields (`key`,
@@ -6401,6 +6416,20 @@ while a gate ran turned a green suite red, with four test processes live at once
   could carry a change nobody has committed. It is made a git repository because the host's
   DssHarness finds everything through git, and sync never writes into a directory it did not
   create, because it deletes whatever the source does not have.
+- Where a host keeps this machine's copies is one answer (`HostCopies.RepositoryOf`): the
+  `REPOSITORY_PATH` its item's `.env` sets, else the `repositoryPath` `config.json` declares, which
+  stays required as the default a fresh clone uses. `config.json` is shared by every machine, and
+  two of them reaching one host each keep their own copies there. The item's is held to the
+  configuration's rules (`RepositoryPaths.Problem`, the one owner of both) and said as written;
+  an item that cannot be read makes where the host keeps its copies unknown, `15`, and never falls
+  back to `config.json`'s, since a sync would write, and a clean or removal delete, where its user
+  keeps something else. Sync, a leg placed there, `host-exec`, `legs`, `list-worktree --hosts` and
+  `clean` all ask it, and `legs` names each host's copy of the tree it was typed in and
+  what set it (`copy`, `repositoryPath` and `repositoryPathFrom` in `--json`). A host running legs
+  finds its main copy beside the copy it was sent (`HostCopies.MainCopyOfTree`, a leg copy in its
+  `.legs` included), never from `config.json`, which there names another machine's default. An
+  item's `.env` declaring a key it is not read for is refused (`ItemEnvironment.Read`), naming the
+  keys it is: a misspelt `REPOSITORY_PATH` would otherwise leave the copies where they were.
 - A remote tree's identity is its content manifest. Every sync that finishes confirms the copy
   equal to the reading of the tree it was made from - in a run, the reading taken as the run
   began; one that stops because the tree moved confirms nothing, and no leg runs on its copy.
@@ -7111,6 +7140,22 @@ written, and is filled in - or refused, as above - once the leg is built and bef
 starts. Under `test --no-build` it is filled in from what the build already in the leg's directory
 identified, which is what built the binaries it tests. A sweep of mutation arms fills it in from each worker's own build, which is what the
 worker's tests run against.
+
+**A WSL distribution is named by its item, never guessed from its name.** `config.json` names a WSL
+item alone; the distribution it reaches is the item's `.env` `DISTRO`, beside its credential, which
+no program the repository runs may read. A consumer's driver that passed the item's name to
+`wsl.exe -d` reached no distribution, the item being named otherwise. So `legs` says each WSL
+host's distribution - in text, and as `distribution` in `--json`, on WSL hosts alone - and a run
+line writes `{distribution}` on a WSL leg (its own item's) or `{distribution.<item>}` on any leg
+(`LegPathNames.Distribution`, `ItemDistributionPrefix`). They are read where the leg is placed, from
+the command's one reading of the items (`HostItems`, never a credential), carried on the leg's
+identity (`LegIdentity.Distribution`, `Distributions`), and told to a host running a leg another
+machine sent it beside the request (`HostAgentRequest.Distributions`, read into
+`HostItems.Told`; protocol 14), since a host's copy holds no item. An item `wslDistros` does not
+declare is refused naming the declared ones - in a test invocation when `config.json` is read, in
+an action's run line before its first step runs - as are `{distribution}` on a leg in no WSL
+distribution and an item whose `.env` could not be read where the leg was placed
+(`LegPathNames.RefuseAbsentDistributions`, by the rule the expansion refuses each by).
 
 **A runner is refused on a leg the run did not build, where what it runs reads the build.** The run
 decides the build, and says to each runner it starts - its own and each a run check starts - whether
@@ -8388,7 +8433,7 @@ with "the harness could not run", because the remedies differ.
 | 12 | Invalid configuration |
 | 13 | Refused: precondition not met (dirty tree, lock held, name taken, a host runs a newer DssHarness) |
 | 14 | A required tool is missing, or could not be started |
-| 15 | A host could not be reached, DssHarness could not run there, or a command run there never reported how it finished |
+| 15 | A host could not be reached, DssHarness could not be brought to run there, or a command run there never reported how it finished; a DssHarness there that failed as a defect is 70, and a leg it ran `poisoned` |
 | 20 | The wrapped command ran and failed |
 | 21 | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not finished within its bound, or its download not reached), or a remote workflow's fetch was not finished within its bound or the workflow cache could not be read, written or locked within its window; it is not a pass, and running it again, once what it names is dealt with, finishes it |
 | 70 | The harness itself failed unexpectedly (a defect in the tool) |

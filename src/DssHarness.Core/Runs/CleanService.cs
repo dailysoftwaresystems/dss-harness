@@ -346,7 +346,7 @@ public sealed class CleanService(
                 // Asked of the host from its home, where its copies are kept together: every copy of the repository there
                 // may be gone - an agent's, removed by a version that removed only the workers kept in it - and the
                 // workers beside them still there.
-                var main = HostCopies.RepositoryPathOf(context.Config, leg.Host.Host);
+                var main = HostCopies.RepositoryPathOf(context, leg.Host.Host);
 
                 looked = $"'{main}' or a copy beside it";
                 removal = await _transports

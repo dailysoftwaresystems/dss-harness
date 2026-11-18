@@ -820,9 +820,9 @@ public sealed class SyncService(
     /// <summary>Where <paramref name="host"/> keeps the copy of the tree the command runs in: see <see cref="HostCopies"/>.</summary>
     /// <param name="context">The tree, and the configuration that declares the host.</param>
     /// <param name="host">The host.</param>
-    /// <exception cref="HarnessException">The host declares no repository path.</exception>
+    /// <exception cref="HarnessException">Where the host keeps its copies is not known (<see cref="HostCopies.RepositoryOf"/>).</exception>
     private string CopyOf(HarnessContext context, Hosts.HostReport host)
-        => HostCopies.Of(context.Config, host.Host, context.Layout, context.Layout.RepositoryRoot, _platform.PathComparison);
+        => HostCopies.Of(context, host.Host, context.Layout.RepositoryRoot, _platform.PathComparison);
 
     /// <inheritdoc/>
     public async Task<SyncResult> SyncAsync(

@@ -255,15 +255,32 @@ public sealed class HostCopyLister(
         };
     }
 
-    /// <summary>What <paramref name="host"/> keeps beside <paramref name="repositoryPath"/>, set against the record.</summary>
+    /// <summary>
+    /// What <paramref name="host"/> keeps beside where it keeps the main checkout's copy for this machine
+    /// (<see cref="HostCopies.RepositoryOf"/>), set against the record; where that is not known, why, beside
+    /// <paramref name="declared"/>, the repositoryPath config.json declares.
+    /// </summary>
     private async Task<HostCopiesAnswer> AskAsync(
         HarnessContext context,
         HostId host,
-        string repositoryPath,
+        string declared,
         IReadOnlyList<HostCopyEntry> recorded,
         IReadOnlyList<WorktreeListing> worktrees,
         CancellationToken cancellationToken)
     {
+        string repositoryPath;
+
+        try
+        {
+            repositoryPath = HostCopies.RepositoryPathOf(context, host);
+        }
+        catch (HarnessException ex)
+        {
+            // Never listed beside config.json's in its place: an item set to keep the copies elsewhere would have this
+            // machine's copies there read as none, and whatever else is there as copies.
+            return new HostCopiesAnswer(host, declared) { Unasked = ex.Message, ExitCode = ex.ExitCode };
+        }
+
         var asked = new HostCopiesAnswer(host, repositoryPath);
         IReadOnlyList<HostCopyFound> found;
 
@@ -355,7 +372,7 @@ public sealed class HostCopyLister(
 
     /// <summary>
     /// The hosts that can keep copies - each WSL distribution and ssh host the configuration declares - with where
-    /// each keeps the main checkout's, in the order a reader looks them up.
+    /// config.json says each keeps the main checkout's, in the order a reader looks them up.
     /// </summary>
     private static IReadOnlyList<(HostId Host, string RepositoryPath)> Declared(HarnessConfig config)
         =>

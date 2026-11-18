@@ -333,15 +333,29 @@ public static class HelpTopics
         builder.AppendLine("machine nobody set up here.");
         builder.AppendLine();
         builder.AppendLine($"  .harness-config/{HarnessLayout.SshItemsDirectoryName}/<name>/{HarnessLayout.ItemEnvFileName}");
-        builder.AppendLine("                                     ADDRESS=, USER=, PORT= (optional), and the");
-        builder.AppendLine($"                                     superuser credential as {HostSecretsStore.SuperuserKey}= (optional)");
+        builder.AppendLine("                                     ADDRESS=, USER=, PORT= (optional), the");
+        builder.AppendLine($"                                     superuser credential as {HostSecretsStore.SuperuserKey}= (optional),");
+        builder.AppendLine($"                                     and {HostSecretsStore.RepositoryPathKey}= (optional, below)");
         builder.AppendLine($"  .harness-config/{HarnessLayout.SshItemsDirectoryName}/<name>/{HarnessLayout.ItemKeyFileName}");
         builder.AppendLine("                                     the private key");
         builder.AppendLine($"  .harness-config/{HarnessLayout.SshItemsDirectoryName}/<name>/{HarnessLayout.ItemKnownHostsFileName}");
         builder.AppendLine("                                     the host keys ssh may accept");
         builder.AppendLine($"  .harness-config/{HarnessLayout.WslDistrosDirectoryName}/<name>/{HarnessLayout.ItemEnvFileName}");
-        builder.AppendLine("                                     the distribution, and the superuser credential");
-        builder.AppendLine("                                     install-missing-tools needs");
+        builder.AppendLine($"                                     the distribution as {HostSecretsStore.DistributionKey}=, as wsl.exe");
+        builder.AppendLine("                                     lists it, the superuser credential");
+        builder.AppendLine($"                                     install-missing-tools needs, and {HostSecretsStore.RepositoryPathKey}=");
+        builder.AppendLine("                                     (optional, below)");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{HostSecretsStore.RepositoryPathKey} is where that host keeps the main checkout's copy for this machine, over the "
+            + "repositoryPath config.json declares for every machine: config.json is shared, and two machines sharing one "
+            + "host each keep their own copies there. It is held to repositoryPath's rules - absolute or under ~/, no '.' "
+            + "or '..' segment, never a home or root directory - and refused, naming the file, where it breaks one. Every "
+            + $"reader of a host's copies - sync, a leg placed there, host-exec, legs, list-worktree --hosts, clean - reads this "
+            + $"one answer, and '{ToolPackage.Command} legs' says each host's copy and what set it. A key the item is not read "
+            + "for is refused, naming the keys it is read for, never passed over: a misspelt one would leave what it was "
+            + "written to change as it was.");
         builder.AppendLine();
         builder.AppendLine("hosts.ssh and hosts.wsl are keyed by these names, and a host declared without an");
         builder.AppendLine("item is refused when config.json is read: it could never be reached, and failing");
@@ -514,6 +528,13 @@ public static class HelpTopics
         builder.AppendLine("  {leg} {os} {processor}              which leg this is, derived rather than typed:");
         builder.AppendLine("  {toolchain} {config} {variant}      an instrument that records what it measured");
         builder.AppendLine("  {host} {runId}                      cannot then be labelled wrongly by hand");
+        builder.AppendLine($"  {{{LegPathNames.Distribution}}}                      the distribution the leg's own WSL item");
+        builder.AppendLine("                                      names, as wsl.exe lists it: what 'wsl.exe -d'");
+        builder.AppendLine("                                      takes. Refused on a leg that runs in no WSL");
+        builder.AppendLine("                                      distribution");
+        builder.AppendLine($"  {{{LegPathNames.ItemDistributionPrefix}<item>}}               the distribution WSL item <item> names, on");
+        builder.AppendLine("                                      any leg. Refused where wslDistros declares no");
+        builder.AppendLine("                                      such item");
         builder.AppendLine("  {product}                           the one file this build is declared to make.");
         builder.AppendLine("                                      Refused where the project declares none or");
         builder.AppendLine("                                      several, rather than guessing which");
@@ -553,6 +574,15 @@ public static class HelpTopics
             + "the words are named and neither is filled in. A test invocation's args, coresArgs and workingDirectory may "
             + "name one too: the check made before the build lets the name stand, and it is filled in, or refused, once "
             + "the leg is built - under test --no-build, from what the build already in its directory identified.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{{{LegPathNames.Distribution}}} and {{{LegPathNames.ItemDistributionPrefix}<item>}} are read from the WSL item's "
+            + $".env - its {Secrets.HostSecretsStore.DistributionKey}, never its credential - where the leg is placed, and a "
+            + "host running a leg another machine sent it is told them beside the leg: config.json names a WSL item alone, "
+            + "and an item named otherwise than its distribution, given to 'wsl.exe -d', reaches none. Where the leg was "
+            + "placed, an item whose .env cannot be read has no distribution, and a line naming it is refused before the "
+            + $"first step runs, saying so; '{Hosts.ToolPackage.Command} legs' names each WSL host's distribution.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2063,6 +2093,18 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
+            $"A leg whose host's {ToolPackage.Id} fails as a defect (exit {HarnessExit.InternalError}) with no line for it is poisoned - the "
+            + "harness failing, never a host that could not be reached - its line naming the host, the code and what the host "
+            + "said. Where it failed so before anything ran there - no run named, no note written, and no ledger, or one with no "
+            + "line, no run and no set-up left running - the leg is started there again, "
+            + $"{(RemoteLegRunner.MostRestarts == 1 ? "once" : $"{RemoteLegRunner.MostRestarts} times")} at most, which is safe since "
+            + "nothing ran: a runtime or a tool replaced there while it started fails that way once. "
+            + "A start that then answers is the leg's line, which says what the failed start said ('retried once: ...', and "
+            + "retried in --json); one that fails so again is poisoned, saying it was retried. Once anything ran there, the leg "
+            + "is never started again.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             $"This machine's own {ToolPackage.Id} is updated through '{ToolPackage.Command} {ToolUpdateService.CommandName}', never by a "
             + $"'dotnet tool update' typed beside running commands: an update beside a running {ToolPackage.Id} fails on Windows after "
             + "taking the tool away for ten seconds, and takes its files from under it elsewhere, and whatever anybody types "
@@ -2138,17 +2180,21 @@ public static class HelpTopics
         builder.AppendLine("typed on the host names its paths in full; and under host-exec a document other than");
         builder.AppendLine("a ledger is written as the host prints it - but for an address the host's name");
         builder.AppendLine("resolved to, which reads as the address declared. A copy's path this machine builds");
-        builder.AppendLine("from repositoryPath is said as that is written: '~/src/app' keeps the account out of");
-        builder.AppendLine("it.");
+        builder.AppendLine($"from repositoryPath, or an item's {HostSecretsStore.RepositoryPathKey}, is said as that is written:");
+        builder.AppendLine("'~/src/app' keeps the account out of it.");
         builder.AppendLine();
         builder.AppendLine("A host keeps a copy of each tree whose legs it runs: the main checkout's at its");
-        builder.AppendLine($"repositoryPath, and each worktree's beside it, at <repositoryPath>{HostCopies.WorktreeSuffix}<name>,");
-        builder.AppendLine("named for the worktree's directory. So worktrees do not share a copy on a host, or");
-        builder.AppendLine("the lock on it, and their legs there run side by side; each worktree's first sync to");
-        builder.AppendLine("a host carries its whole tree. A worktree made elsewhere, under the name of one that");
-        builder.AppendLine("has a copy, is refused that copy while the other exists. This machine records which");
-        builder.AppendLine($"hosts hold a copy of which worktree, in {HarnessLayout.HostCopiesDirectoryRelative} in the main");
-        builder.AppendLine("checkout, and delete-worktree asks each of them to remove it.");
+        builder.AppendLine($"repositoryPath - or the {HostSecretsStore.RepositoryPathKey} its item's .env sets, which wins ('help");
+        builder.AppendLine($"secrets') - and each worktree's beside it, at <repositoryPath>{HostCopies.WorktreeSuffix}<name>,");
+        builder.AppendLine("named for the worktree's directory. 'legs' names, for each host, where it keeps the");
+        builder.AppendLine("copy of the tree it was typed in, and what set that; a host running legs finds its");
+        builder.AppendLine("main copy beside the copy it was sent, never from config.json. So worktrees do not");
+        builder.AppendLine("share a copy on a host, or the lock on it, and their legs there run side by side;");
+        builder.AppendLine("each worktree's first sync to a host carries its whole tree. A worktree made");
+        builder.AppendLine("elsewhere, under the name of one that has a copy, is refused that copy while the");
+        builder.AppendLine("other exists. This machine records which hosts hold a copy of which worktree, in");
+        builder.AppendLine($"{HarnessLayout.HostCopiesDirectoryRelative} in the main checkout, and delete-worktree asks each of");
+        builder.AppendLine("them to remove it.");
         builder.AppendLine();
         builder.AppendLine("An emulator declares the hosts it runs on (hostOs, hostProcessor), the processor it");
         builder.AppendLine("runs programs for, the launcher placed in front of each program (such as");
@@ -6306,10 +6352,10 @@ public static class HelpTopics
         ($"{HarnessLayout.RunnerDirectoryRelative}/{HarnessLayout.RunnerSecretsDirectoryName}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; secret values actions read"),
         ($"{HarnessLayout.DirectoryName}/{HarnessLayout.SshItemsDirectoryName}/<name>/",
-            $"ignored, and written by you, not init: {HarnessLayout.ItemEnvFileName} (address, user, port), "
+            $"ignored, and written by you, not init: {HarnessLayout.ItemEnvFileName} (address, user, port, copies' path), "
             + $"{HarnessLayout.ItemKeyFileName}, {HarnessLayout.ItemKnownHostsFileName}"),
         ($"{HarnessLayout.DirectoryName}/{HarnessLayout.WslDistrosDirectoryName}/<name>/",
-            $"ignored; {HarnessLayout.ItemEnvFileName} (distribution, credential)"),
+            $"ignored; {HarnessLayout.ItemEnvFileName} (distribution, credential, copies' path)"),
         ($"{WorktreeSettings.SeededRoot}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the worktrees, at worktrees.root, which init writes as this"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/",

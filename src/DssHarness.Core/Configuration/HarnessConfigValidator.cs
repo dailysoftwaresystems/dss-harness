@@ -2074,11 +2074,12 @@ public static partial class HarnessConfigValidator
             // exist is its own business: ctest says it cannot change into it and exits 1, which reads
             // as a suite that failed. Found here it names the line to fix, and has cost nobody the
             // build that would have preceded it.
-            CheckPlaceholders(invocation.Args, $"{setting}.args", problems);
+            CheckPlaceholders(invocation.Args, $"{setting}.args", problems, wslItems: config.WslDistros);
             CheckPlaceholders(
                 invocation.WorkingDirectory is null ? null : [invocation.WorkingDirectory],
                 $"{setting}.workingDirectory",
-                problems);
+                problems,
+                wslItems: config.WslDistros);
 
             // The one setting where the core count's own name belongs. It is spliced by the rule that
             // owns it and only into these, so the same name in 'args' reaches the runner as literal
@@ -2087,7 +2088,8 @@ public static partial class HarnessConfigValidator
                 invocation.CoresArgs,
                 $"{setting}.coresArgs",
                 problems,
-                [CoreCounts.PlaceholderName]);
+                [CoreCounts.PlaceholderName],
+                config.WslDistros);
 
             // What a run that did not pass keeps of the files its build directory holds, as evidence beside its verdict.
             // Given empty it is refused as every such list is; an entry that is not a path inside the build directory,
@@ -2313,40 +2315,12 @@ public static partial class HarnessConfigValidator
         }
     }
 
-    /// <summary>
-    /// Checks where a host keeps its copy of the repository. It is named absolutely, or from the
-    /// home directory of the user the host is reached as: a relative path would resolve against
-    /// whatever directory a transport happens to start in. A home or root directory itself is
-    /// refused, because the copy is kept identical to the repository, and everything else in the
-    /// directory would have to go.
-    /// </summary>
+    /// <summary>Checks where a host keeps its copy of the repository, by the one rule an item's .env is held to as well (<see cref="RepositoryPaths"/>).</summary>
     private static void CheckRepositoryPath(string path, string owner, bool allowWindowsPaths, List<string> problems)
     {
-        var trimmed = path.TrimEnd('/', '\\');
-        var isHome = trimmed == "~";
-        var isRoot = trimmed.Length == 0 || (trimmed.Length == 2 && PlatformPaths.NamesADrive(trimmed));
-
-        // A POSIX path, or one from the home directory - or, where the host may run Windows, a drive
-        // or a share.
-        var isAbsolute = PlatformPaths.IsHomeRelative(path)
-            || PlatformPaths.IsAbsoluteOn(path, PlatformNames.Linux)
-            || (allowWindowsPaths && PlatformPaths.IsWindowsAbsolute(path));
-
-        if (string.IsNullOrWhiteSpace(path) || (!isAbsolute && !isHome))
+        if (RepositoryPaths.Problem(path, allowWindowsPaths) is { } problem)
         {
-            problems.Add(
-                $"{owner} repositoryPath '{path}' must be absolute, or start with ~/ for the home directory"
-                + (allowWindowsPaths ? string.Empty : " inside the distribution"));
-        }
-        else if (path.Split('/', '\\').Any(segment => segment is "." or ".."))
-        {
-            // Compared as written, a path that steps back up, such as ~/src/.., could still name the home
-            // or root directory the next check refuses.
-            problems.Add($"{owner} repositoryPath '{path}' has a '.' or '..' segment; name the directory directly");
-        }
-        else if (isHome || isRoot)
-        {
-            problems.Add($"{owner} repositoryPath '{path}' is a home or root directory; name a directory of its own for the copy");
+            problems.Add($"{owner} repositoryPath '{path}' {problem}");
         }
     }
 
@@ -2509,17 +2483,19 @@ public static partial class HarnessConfigValidator
     /// Names that are legal in this setting beyond the leg's directories, such as the core count's
     /// own name in <c>coresArgs</c>.
     /// </param>
+    /// <param name="wslItems">The WSL items the configuration declares, the only ones whose distribution a string may name.</param>
     private static void CheckPlaceholders(
         IReadOnlyList<string>? values,
         string setting,
         List<string> problems,
-        IReadOnlyCollection<string>? extra = null)
+        IReadOnlyCollection<string>? extra = null,
+        IReadOnlyCollection<string>? wslItems = null)
     {
         foreach (var value in values ?? [])
         {
             try
             {
-                LegPathNames.RefuseUnknown(value, setting, PlaceholderPolicy.Refuse, extra);
+                LegPathNames.RefuseUnknown(value, setting, PlaceholderPolicy.Refuse, extra, wslItems: wslItems);
             }
             catch (HarnessException ex)
             {

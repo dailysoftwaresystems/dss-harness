@@ -658,11 +658,21 @@ internal static class HostDoubles
     /// <param name="root">The tree the context is for.</param>
     /// <param name="mainCheckoutRoot">The main checkout, where it is not <paramref name="root"/>.</param>
     /// <param name="syncedCopy">Whether the tree is a copy the harness synced to a host.</param>
-    public static IHarnessContextLoader Loader(HarnessConfig config, string root, string? mainCheckoutRoot = null, bool syncedCopy = false)
+    /// <param name="items">What the hosts' items declare; nothing, where none is given.</param>
+    public static IHarnessContextLoader Loader(
+        HarnessConfig config,
+        string root,
+        string? mainCheckoutRoot = null,
+        bool syncedCopy = false,
+        Core.Secrets.HostItems? items = null)
     {
         var loader = Substitute.For<IHarnessContextLoader>();
         loader.LoadAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new HarnessContext(new HarnessLayout(root, mainCheckoutRoot ?? root), config) { IsSyncedCopy = syncedCopy }));
+            .Returns(Task.FromResult(new HarnessContext(new HarnessLayout(root, mainCheckoutRoot ?? root), config)
+            {
+                IsSyncedCopy = syncedCopy,
+                HostItems = items ?? Core.Secrets.HostItems.None,
+            }));
         loader.RepositoryOfAsync(Arg.Any<HarnessContext>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(Path.TrimEndingDirectorySeparator(Path.GetFullPath(call.Arg<HarnessContext>().Layout.MainCheckoutRoot))));
         return loader;
@@ -673,8 +683,9 @@ internal static class HostDoubles
 }
 
 /// <summary>
-/// The trees of the repository each machine holds, as a test says them: the main checkout - here, or a host's copy of it
-/// where the configuration says the host keeps one - and whatever <see cref="Beside"/> adds on each.
+/// The trees of the repository each machine holds, as a test says them: the main checkout - here, or on a host running legs
+/// another machine sent it the copy of it beside the copy it runs in, or another host's copy of it where this machine says
+/// the host keeps one - and whatever <see cref="Beside"/> adds on each.
 /// </summary>
 internal sealed class KnownTrees : IRepositoryTrees
 {
@@ -685,19 +696,19 @@ internal sealed class KnownTrees : IRepositoryTrees
     public string? Unlisted { get; init; }
 
     public Task<RepositoryTreesFound> HereAsync(HarnessContext context, HostId? here, CancellationToken cancellationToken = default)
-        => Task.FromResult(HostCopies.KeptAs(here) is { } kept ? Copies(context, kept, HostId.Local) : Found(context.Layout.MainCheckoutRoot, HostId.Local));
+        => Task.FromResult(Found(RepositoryTree.MainCheckoutOf(context, here), HostId.Local));
 
-    public RepositoryTreesFound On(HarnessContext context, HostId host) => Copies(context, host, host);
+    public RepositoryTreesFound On(HarnessContext context, HostId host) => Copies(context, host);
 
     /// <summary>
-    /// The copies <paramref name="keeper"/> keeps, with the trees the test puts beside them on <paramref name="host"/>: none
-    /// where it declares nowhere to keep one, said as the listing says it.
+    /// The copies <paramref name="host"/> keeps, with the trees the test puts beside them there: none where where it keeps
+    /// them is not known, said as the listing says it.
     /// </summary>
-    private RepositoryTreesFound Copies(HarnessContext context, HostId keeper, HostId host)
+    private RepositoryTreesFound Copies(HarnessContext context, HostId host)
     {
         try
         {
-            return Found(HostCopies.RepositoryPathOf(context.Config, keeper), host);
+            return Found(HostCopies.RepositoryPathOf(context, host), host);
         }
         catch (HarnessException ex)
         {

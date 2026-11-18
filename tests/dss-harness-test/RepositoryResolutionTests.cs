@@ -6,6 +6,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Secrets;
 
 namespace DssHarness.Tests;
 
@@ -220,6 +221,8 @@ public sealed class HarnessContextLoaderTests
             _fileSystem,
             new HostPlatform(),
             output,
-            new SyncedCopyToolCheck(new PublishedVersionsDouble(), new RunningToolDouble(), CommandOrigin.Typed, output));
+            new SyncedCopyToolCheck(new PublishedVersionsDouble(), new RunningToolDouble(), CommandOrigin.Typed, output),
+            Substitute.For<IHostSecretsStore>(),
+            CommandOrigin.Typed);
     }
 }

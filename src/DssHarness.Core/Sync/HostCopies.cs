@@ -47,29 +47,16 @@ public static partial class HostCopies
     }
 
     /// <summary>
-    /// Where <paramref name="host"/> keeps the copy of <paramref name="treeRoot"/>, by the repositoryPath
-    /// <paramref name="config"/> declares for it.
+    /// Where <paramref name="host"/> keeps the copy of <paramref name="treeRoot"/>, a tree of <paramref name="context"/>'s
+    /// repository, beside where it keeps the main checkout's for this machine (<see cref="RepositoryOf"/>).
     /// </summary>
-    /// <param name="config">The configuration that declares the host.</param>
+    /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
     /// <param name="host">The host.</param>
-    /// <param name="layout">The repository the tree belongs to.</param>
     /// <param name="treeRoot">The tree: the main checkout, or one of its worktrees.</param>
     /// <param name="comparison">How this machine compares paths.</param>
-    /// <param name="worktreesDirectory">The worktrees root; the configured one, where none is given.</param>
-    /// <exception cref="HarnessException">The host declares no repositoryPath.</exception>
-    public static string Of(
-        HarnessConfig config,
-        HostId host,
-        HarnessLayout layout,
-        string treeRoot,
-        StringComparison comparison,
-        string? worktreesDirectory = null)
-        => For(
-            RepositoryPathOf(config, host),
-            layout,
-            treeRoot,
-            worktreesDirectory ?? layout.WorktreesDirectoryUnder(config.Worktrees.Root),
-            comparison);
+    /// <exception cref="HarnessException">Where the host keeps its copies is not known: see <see cref="RepositoryOf"/>.</exception>
+    public static string Of(HarnessContext context, HostId host, string treeRoot, StringComparison comparison)
+        => HostCopyPlace.Of(context, host, treeRoot, comparison).Copy;
 
     /// <summary>
     /// Where a host whose main copy is at <paramref name="repositoryPath"/> keeps the copy of
@@ -195,14 +182,73 @@ public static partial class HostCopies
             : copy;
     }
 
-    /// <summary>Where a host keeps the main checkout's copy, as the configuration declares it.</summary>
-    /// <param name="config">The configuration that declares the host.</param>
+    /// <summary>
+    /// The host's copy of the main checkout that <paramref name="tree"/> - a tree a host was sent legs to run in: its copy
+    /// of a tree, or a leg's own copy of one kept in that copy's .legs - belongs to (<see cref="MainCopyOf"/>).
+    /// </summary>
+    /// <param name="tree">The tree, as the host spells it.</param>
+    public static string MainCopyOfTree(string tree)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        var whole = Path.TrimEndingDirectorySeparator(tree);
+
+        return Path.GetDirectoryName(whole) is { } slot
+            && string.Equals(Path.GetFileName(slot), HarnessLayout.LegsDirectoryName, StringComparison.Ordinal)
+            && Path.GetDirectoryName(slot) is { Length: > 0 } holder
+                ? MainCopyOf(holder)
+                : MainCopyOf(whole);
+    }
+
+    /// <summary>Where a host keeps the main checkout's copy for this machine: see <see cref="RepositoryOf"/>.</summary>
+    /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
     /// <param name="host">The host.</param>
-    /// <exception cref="HarnessException">The host declares no repositoryPath.</exception>
-    public static string RepositoryPathOf(HarnessConfig config, HostId host)
-        => DeclaredFor(config, host)?.RepositoryPath ?? throw new HarnessException(
-            HarnessExit.ConfigInvalid,
-            $"Host {host} declares no repositoryPath, so there is nowhere to keep its copy.");
+    /// <exception cref="HarnessException">Where the host keeps its copies is not known: see <see cref="RepositoryOf"/>.</exception>
+    public static string RepositoryPathOf(HarnessContext context, HostId host) => RepositoryOf(context, host).Path;
+
+    /// <summary>
+    /// Where a host keeps the main checkout's copy for this machine, and what says so: the <c>REPOSITORY_PATH</c> its item's
+    /// .env sets, which is this machine's own; else the repositoryPath config.json declares, the default a fresh clone uses.
+    /// The one answer every reader of a host's copies asks - a sync, a leg placed there, host-exec, a listing, a clean - so
+    /// none of them reads config.json's past an item that sets its own.
+    /// </summary>
+    /// <remarks>
+    /// Asked on the machine that reaches the host, which holds its item: a host's own copy holds none, and a DssHarness
+    /// there finds its copies from the copy it was sent to run in (<see cref="MainCopyOf"/>), never from config.json.
+    /// </remarks>
+    /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
+    /// <param name="host">The host.</param>
+    /// <exception cref="HarnessException">
+    /// The host's item this machine holds cannot be read (<see cref="HarnessExit.HostUnavailable"/>), so where it keeps its
+    /// copies for this machine is not known; or neither the item nor config.json says (<see cref="HarnessExit.ConfigInvalid"/>).
+    /// </exception>
+    public static HostRepositoryPath RepositoryOf(HarnessContext context, HostId host)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(host);
+
+        var item = context.HostItems.Of(host);
+
+        // Never config.json's in its place: an item set by its user to keep the copy elsewhere would see a sync write, and
+        // a clean or a removal delete, where that user keeps something else.
+        if (item.Problem is { } problem)
+        {
+            throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"Where host {host} keeps its copies for this machine is not known, since its item cannot be read: {problem}.");
+        }
+
+        if (item.RepositoryPath is { } set)
+        {
+            return new HostRepositoryPath(set, $"{Secrets.HostSecretsStore.RepositoryPathKey} in '{item.File}'");
+        }
+
+        return DeclaredFor(context.Config, host)?.RepositoryPath is { } declared
+            ? new HostRepositoryPath(declared, $"repositoryPath in '{HarnessLayout.ConfigFileRelative}'")
+            : throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"Host {host} declares no repositoryPath, so there is nowhere to keep its copy.");
+    }
 
     /// <summary>What <paramref name="config"/> declares for <paramref name="host"/>, or <see langword="null"/> where it declares nothing.</summary>
     /// <param name="config">The configuration.</param>
@@ -227,6 +273,49 @@ public static partial class HostCopies
 
     [GeneratedRegex(@"^[a-z0-9]+(-+[a-z0-9]+)*\z", RegexOptions.CultureInvariant)]
     private static partial Regex CopyName();
+}
+
+/// <summary>Where a host keeps the main checkout's copy for this machine, and what says so.</summary>
+/// <param name="Path">The path, as it is written: <c>~/src/app</c> keeps the account out of it.</param>
+/// <param name="From">
+/// What set it, as a reader goes to change it: <c>REPOSITORY_PATH in '.harness-config/wslDistros/ubuntu/.env'</c>, or
+/// <c>repositoryPath in '.harness-config/config.json'</c>.
+/// </param>
+public sealed record HostRepositoryPath(string Path, string From);
+
+/// <summary>Where a host keeps the copy of one tree for this machine, and where it keeps the main checkout's beside it.</summary>
+/// <param name="Copy">The tree's copy, as it is written.</param>
+/// <param name="Repository">Where the main checkout's is, and what set it.</param>
+public sealed record HostCopyPlace(string Copy, HostRepositoryPath Repository)
+{
+    /// <summary>
+    /// Where <paramref name="host"/> keeps the copy of <paramref name="treeRoot"/>, a tree of <paramref name="context"/>'s
+    /// repository, for this machine (<see cref="HostCopies.RepositoryOf"/>).
+    /// </summary>
+    /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
+    /// <param name="host">A WSL distribution or an ssh host.</param>
+    /// <param name="treeRoot">The tree.</param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    /// <exception cref="HarnessException">Where the host keeps its copies is not known.</exception>
+    public static HostCopyPlace Of(HarnessContext context, HostId host, string treeRoot, StringComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var repository = HostCopies.RepositoryOf(context, host);
+
+        return new HostCopyPlace(
+            HostCopies.For(repository.Path, context.Layout, treeRoot, context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root), comparison),
+            repository);
+    }
+
+    /// <summary>
+    /// The place as a line says it: <c>keeps this tree's copy at '~/src/app', as REPOSITORY_PATH in '...' sets</c>, with
+    /// the main checkout's beside a worktree's.
+    /// </summary>
+    public string Describe()
+        => $"keeps this tree's copy at '{Copy}'"
+            + (string.Equals(Copy, Repository.Path, StringComparison.Ordinal) ? string.Empty : $", beside '{Repository.Path}'")
+            + $", as {Repository.From} sets";
 }
 
 /// <summary>One worktree's copy on one host.</summary>

@@ -182,6 +182,11 @@ public sealed class LegsService(
             _output.Warn(CommandName, $"leg '{placement.Leg.Name}' cannot run: {placement.Reason}");
         }
 
+        foreach (var host in reports.Keys.Where(host => host.Kind != HostKind.Local).ToList())
+        {
+            reports[host] = Described(context, reports[host]);
+        }
+
         return new LegsReport(placements, [.. reports.Values], selection.Named) { Here = here, LocalTrees = local, CopyOnHosts = workload.CopyOnHosts };
     }
 
@@ -226,6 +231,28 @@ public sealed class LegsService(
     }
 
     /// <summary>
+    /// <paramref name="report"/> with what this machine's items say of its host that no measuring there could: where it
+    /// keeps the copy of the tree the command was typed in for this machine, and what set it - or why that is not known -
+    /// and a WSL host's distribution, which config.json never names. Read from the items here, never their credential.
+    /// </summary>
+    private HostReport Described(HarnessContext context, HostReport report)
+    {
+        var described = report with
+        {
+            Distribution = report.Host.Kind == HostKind.Wsl ? context.HostItems.Of(report.Host).Distribution : null,
+        };
+
+        try
+        {
+            return described with { CopyPlace = HostCopyPlace.Of(context, report.Host, context.Layout.RepositoryRoot, _platform.PathComparison) };
+        }
+        catch (HarnessException ex)
+        {
+            return described with { CopyUnplaced = ex.Message.TrimEnd('.') };
+        }
+    }
+
+    /// <summary>
     /// The trees of the repository each host a leg the command builds could be placed on holds: this machine's own, and
     /// the copies this machine knows each other host to keep. A host whose trees beside the main checkout's could not be
     /// listed is said, with why, rather than taken to hold none.
@@ -249,18 +276,17 @@ public sealed class LegsService(
             .SelectMany(entry => entry.Hosts)
             .Distinct())
         {
-            // A host that declares nowhere to keep a copy holds none of the repository's, and is refused where a leg is
-            // placed on it; this machine, running legs another machine sent it, keeps them where it declares for itself.
-            var keeper = host.Kind == HostKind.Local ? HostCopies.KeptAs(here) : host;
-
-            if (keeper is not null && HostCopies.DeclaredFor(context.Config, keeper)?.RepositoryPath is not { Length: > 0 })
-            {
-                continue;
-            }
-
             var trees = host.Kind == HostKind.Local
                 ? await _trees.HereAsync(context, here, cancellationToken).ConfigureAwait(false)
                 : _trees.On(context, host);
+
+            // A host this machine knows nowhere to keep a copy for - none declared, or an item that cannot be read - holds
+            // none of the repository's, and is refused where a leg is placed on it; this machine, running legs another
+            // machine sent it, keeps them beside the copy it was sent, which it always knows.
+            if (trees.Trees.Count == 0)
+            {
+                continue;
+            }
 
             if (trees.Unlisted is { } why)
             {

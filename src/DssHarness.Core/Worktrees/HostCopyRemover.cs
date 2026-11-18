@@ -351,7 +351,7 @@ public sealed class HostCopyRemover(
                     named: false);
             }
 
-            var through = ReferenceEquals(declaring, context.Config) ? context : new HarnessContext(layout, declaring);
+            var through = ReferenceEquals(declaring, context.Config) ? context : new HarnessContext(layout, declaring) { HostItems = context.HostItems };
 
             if (measureOnly)
             {
@@ -359,7 +359,7 @@ public sealed class HostCopyRemover(
                 // from the removal, so the measuring ends as the removal would.
                 return _runLock.HeldBy(layout, RemovalLock(host, entry.Path, runId)) is { } holder
                     ? Stays(host, entry, holder, HarnessExit.Refused)
-                    : await MeasureAsync(through, host, entry, HostCopies.RepositoryPathOf(declaring, host)).ConfigureAwait(false);
+                    : await MeasureAsync(through, host, entry).ConfigureAwait(false);
             }
 
             var attempt = await _runLock
@@ -452,7 +452,7 @@ public sealed class HostCopyRemover(
         }
 
         // What measuring one copy finds: whether a sweep there keeps it, what it holds, and what removing it would do.
-        async Task<(string Said, int? Unfinished)> MeasureAsync(HarnessContext through, HostId host, HostCopyEntry entry, string repositoryPath)
+        async Task<(string Said, int? Unfinished)> MeasureAsync(HarnessContext through, HostId host, HostCopyEntry entry)
         {
             try
             {
@@ -474,7 +474,11 @@ public sealed class HostCopyRemover(
 
                 if (!measured.TryGetValue(host.ToString(), out var copies))
                 {
-                    measured[host.ToString()] = copies = await transport.ListCopiesAsync(repositoryPath, cancellationToken).ConfigureAwait(false);
+                    // Where the host keeps its copies for this machine, as every reader of them asks it: an item that cannot be
+                    // read leaves them unknown, said on this copy's line like any other reason it stays.
+                    measured[host.ToString()] = copies = await transport
+                        .ListCopiesAsync(HostCopies.RepositoryPathOf(through, host), cancellationToken)
+                        .ConfigureAwait(false);
                 }
 
                 // As the removal would deal with what it finds there, by what its marker says.

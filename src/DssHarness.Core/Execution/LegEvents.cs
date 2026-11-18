@@ -63,7 +63,8 @@ public sealed record LegFinished(string Command, LegEntry Entry) : RunEvent
             Entry.SetUps,
             Entry.Admission,
             testCountNote: null,
-            Entry.FailedUnits);
+            Entry.FailedUnits,
+            Entry.Retried);
 
         yield return new(LineKind.Info, Command, $"{Entry.Leg}: {Verdicts.Display(Entry.Verdict)}{(said.Length > 0 ? $" ({said})" : string.Empty)}");
     }

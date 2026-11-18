@@ -303,8 +303,8 @@ is enforced by tests that read the built command line itself. The
 .harness-config/runner/actions/<name>/<name>.yml tracked; one directory per action, holding its steps and whatever those steps run
 .harness-config/runner/.env/                 contents ignored, .gitkeep tracked; values actions read
 .harness-config/runner/.secrets/             contents ignored, .gitkeep tracked; secret values actions read
-.harness-config/sshItems/<name>/             ignored, and written by you, not init: .env (address, user, port), .key, known_hosts
-.harness-config/wslDistros/<name>/           ignored; .env (distribution, credential)
+.harness-config/sshItems/<name>/             ignored, and written by you, not init: .env (address, user, port, copies' path), .key, known_hosts
+.harness-config/wslDistros/<name>/           ignored; .env (distribution, credential, copies' path)
 .worktrees/                                  contents ignored, .gitkeep tracked; the worktrees, at worktrees.root, which init writes as this
 .orchestrators/                              contents ignored, .gitkeep tracked; what each orchestrator and its agents keep, in the main checkout, and never sent to a host by sync ('dssharness help orchestrators')
 .orchestrators/<o>/agent.json                ignored; the orchestrator's record
@@ -473,12 +473,22 @@ which git ignores: an `.env` naming the address, the user and the port, a `.key`
 tracked configuration never carries an address, a user, a key path or a credential. A WSL
 distribution has the same shape under `.harness-config/wslDistros/`. ssh runs in batch mode,
 so it never waits at a prompt, and a key other users can read is refused before anything
-connects, with the command that fixes it.
+connects, with the command that fixes it. An item's `.env` may set `REPOSITORY_PATH`, where
+that host keeps this machine's copies, over the `repositoryPath` the shared `config.json`
+declares - so two machines reaching one host each keep their own - held to the same rules and
+read by every command that touches a host's copies; a key the item is not read for is refused,
+naming the ones it is. `legs` names each host's copy of the tree it was typed in and what set it,
+and each WSL host's distribution, which a run line writes as `{distribution}` on a WSL leg or
+`{distribution.<item>}` on any leg (`help secrets`, `help runners`).
 
 Every WSL distribution and ssh host runs DssHarness itself, installed from nuget.org at
 this machine's exact version: a host that is behind is updated, never downgraded. Betas are
 released on GitHub rather than nuget.org, so only a stable build can bring a host to its
-version. `install-missing-tools` installs the .NET SDK, and everything `tools` declares an
+version. A leg whose host's DssHarness fails as a defect (exit 70) with no line for it is
+`poisoned` - the harness failing, never a host that could not be reached - naming the host, the
+code and what it said; where it failed so before anything ran there, the leg is started there once
+more first, and the line says what the failed start said (`retried once: ...`), whatever the leg
+then reached. `install-missing-tools` installs the .NET SDK, and everything `tools` declares an
 `install` for, on every configured leg's host; a `tools` entry with no `install` is an
 allowlist entry, reported when missing and never installed. An install that needs a superuser
 takes the password from that host's own `.env`, as `SUDO_PASSWORD`, and asks for it at the
@@ -504,7 +514,8 @@ is unknown, and nothing is installed for it. `--dry-run` asks every host and ins
 naming each command that would run; the survey it asks puts DssHarness on a host as `legs` does,
 so a host with no .NET SDK yet has every tool unknown. `sync` creates the host's copy
 of the tree it runs in and keeps it in step, deletions included: the main checkout's at the host's
-`repositoryPath`, and each worktree's beside it, so worktrees do not wait for each other on a host.
+`repositoryPath` (or its item's `REPOSITORY_PATH`), and each worktree's beside it, so worktrees do
+not wait for each other on a host.
 The copy's git HEAD names the commit this tree is at, so a step that asks git about HEAD is answered
 on a host as it is here: the commit alone by default, and every commit behind it with
 `"sync": { "history": "full" }`. A clone the sync took over has its HEAD moved, detached, where it

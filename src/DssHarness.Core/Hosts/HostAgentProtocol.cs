@@ -38,7 +38,7 @@ public static class HostAgentProtocol
     /// and its own version. With the number left as it was, the same host refuses the request over
     /// whichever field it happens not to know, which says nothing about why.
     /// </remarks>
-    public const int Version = 13;
+    public const int Version = 14;
 
     /// <summary>
     /// How often, in seconds, the machine that asked writes <see cref="BeatLine"/> on the input it holds open while a run
@@ -523,6 +523,13 @@ public sealed class HostAgentRequest
     public Configuration.AdmissionSettings? MachineAdmission { get; init; }
 
     /// <summary>
+    /// The distribution each WSL item the machine that asked declares and could read names, by the item's name: what a run
+    /// line of the leg there fills <c>{distribution}</c> and <c>{distribution.&lt;item&gt;}</c> with, which a host's copy
+    /// holds no item to read for itself. Never the item's credential. Run only; empty where that machine read none.
+    /// </summary>
+    public Dictionary<string, string> Distributions { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// How often, in seconds, the machine that asked writes a beat on the input it holds open while the request is
     /// served; zero where it writes none. Run only: a host that hears nothing for
     /// <see cref="HostAgentProtocol.BeatsMissed"/> beats takes that machine to have gone, as it does when the input ends,
@@ -626,13 +633,25 @@ public sealed record HostAgentInfo
 /// </summary>
 public sealed record Dispatch
 {
-    private Dispatch(RunId? runId, string? diskImageDrive, string? nonce, Configuration.AdmissionSettings? machineAdmission)
+    private Dispatch(
+        RunId? runId,
+        string? diskImageDrive,
+        string? nonce,
+        Configuration.AdmissionSettings? machineAdmission,
+        IReadOnlyDictionary<string, string> distributions)
     {
         RunId = runId;
         DiskImageDrive = diskImageDrive;
         Nonce = nonce;
         MachineAdmission = machineAdmission;
+        Distributions = distributions;
     }
+
+    /// <summary>
+    /// The distribution each WSL item that machine read names, by the item's name - see
+    /// <see cref="HostAgentRequest.Distributions"/>; empty where it told none.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Distributions { get; }
 
     /// <summary>The run of that machine the command runs a leg of; <see langword="null"/> where it runs none.</summary>
     public RunId? RunId { get; }
@@ -677,9 +696,23 @@ public sealed record Dispatch
                 : throw new HarnessException(HarnessExit.UsageError, $"the request names its run as '{named}', which is not a run id");
         }
 
-        return request.DiskImageDrive is { } drive && string.IsNullOrWhiteSpace(drive)
-            ? throw new HarnessException(HarnessExit.UsageError, "the request names a blank drive as where WSL keeps the distribution's disk")
-            : new Dispatch(run, request.DiskImageDrive, request.Nonce, request.MachineAdmission);
+        if (request.DiskImageDrive is { } drive && string.IsNullOrWhiteSpace(drive))
+        {
+            throw new HarnessException(HarnessExit.UsageError, "the request names a blank drive as where WSL keeps the distribution's disk");
+        }
+
+        // A distribution told blank would fill a run line with nothing, which the line's program reads as no argument at all.
+        if (request.Distributions.FirstOrDefault(told => string.IsNullOrWhiteSpace(told.Key) || string.IsNullOrWhiteSpace(told.Value)) is { Key: { } item })
+        {
+            throw new HarnessException(HarnessExit.UsageError, $"the request tells a blank distribution, or one of a blank item: '{item}'");
+        }
+
+        return new Dispatch(
+            run,
+            request.DiskImageDrive,
+            request.Nonce,
+            request.MachineAdmission,
+            new Dictionary<string, string>(request.Distributions, StringComparer.OrdinalIgnoreCase));
     }
 }
 

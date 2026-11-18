@@ -58,6 +58,12 @@ public sealed record SshItem
     /// attempted with nothing.
     /// </summary>
     public HostCredential? Superuser { get; init; }
+
+    /// <summary>
+    /// Where the host keeps its copy of the main checkout for this machine, where the item sets it - over the
+    /// <c>repositoryPath</c> config.json declares - as it is written; <see langword="null"/> where it sets none.
+    /// </summary>
+    public string? RepositoryPath { get; init; }
 }
 
 /// <summary>
@@ -75,6 +81,12 @@ public sealed record WslItem
 
     /// <summary>The superuser credential for installing tools in the distribution, when it declares one.</summary>
     public HostCredential? Superuser { get; init; }
+
+    /// <summary>
+    /// Where the distribution keeps its copy of the main checkout for this machine, where the item sets it - over the
+    /// <c>repositoryPath</c> config.json declares - as it is written; <see langword="null"/> where it sets none.
+    /// </summary>
+    public string? RepositoryPath { get; init; }
 }
 
 /// <summary>What reading one item's directory found.</summary>
