@@ -460,10 +460,11 @@ public sealed class ClaudeCodeClient(
         private readonly IReadOnlyList<string> _given = [.. tools, .. served.Select(ClaudeCodeTools.ServedName)];
 
         // Each call of the engine's tool server running, by its request's id, and each the server answered, by the call's
-        // id, with the file the runtime kept its whole answer in.
+        // id, with the file the runtime kept its whole answer in and whether its tool ran - a call the runtime refused, or
+        // whose input did not read, Claude Code gives back as any tool's error, which it says ran.
         private readonly Dictionary<string, CancellationTokenSource> _serving = new(StringComparer.Ordinal);
         private readonly List<Task> _calling = [];
-        private readonly Dictionary<string, string?> _servedFiles = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string? File, bool Ran)> _servedFiles = new(StringComparer.Ordinal);
         private AgentToolServer? _server;
         private Runtime.AgentToolRuntime? _servedBy;
         private CancellationToken _ending;
@@ -1026,12 +1027,14 @@ public sealed class ClaudeCodeClient(
                 totals.Worked = true;
 
                 // A call the engine's tool server answered was masked, cut and kept by the runtime as it answered it: what
-                // Claude Code gives back of it is told, by the file the runtime kept the whole in.
-                var (content, file) = _servedFiles.Remove(result.CallId, out var kept)
-                    ? (Masked(result.Content), kept)
+                // Claude Code gives back of it is told, by the file the runtime kept the whole in, and it ran where both
+                // Claude Code and the runtime say it did.
+                var served = _servedFiles.Remove(result.CallId, out var kept);
+                var (content, file) = served
+                    ? (Masked(result.Content), kept.File)
                     : _records!.Kept(result.CallId, result.Content);
 
-                await Emit(new ToolCallFinished(result.CallId, result.Ok, client._clock.GetElapsedTime(call.Started), call.Input, content, file)).ConfigureAwait(false);
+                await Emit(new ToolCallFinished(result.CallId, result.Ok, client._clock.GetElapsedTime(call.Started), call.Input, content, file, result.Ran && (!served || kept.Ran))).ConfigureAwait(false);
 
                 // A file tool's call Claude Code's own deny rules refused as it read the call - never asked of the engine - is
                 // told by its result alone: it is Claude Code's refusal as one its permission_denied line tells.
@@ -1640,7 +1643,7 @@ public sealed class ClaudeCodeClient(
 
             if (served.Result is { } result)
             {
-                _servedFiles[served.Call.CallId!] = result.File;
+                _servedFiles[served.Call.CallId!] = (result.File, result.Ran);
             }
 
             Control(McpAnswer(served.RequestId, served.Reply));

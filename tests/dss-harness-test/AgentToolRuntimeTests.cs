@@ -1253,6 +1253,51 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
+    /// Every call's answer, and its end in the stream, says whether its tool ran, apart from whether it succeeded: a
+    /// command that started ran however it exited - grep, rg and git grep exit 1 finding nothing, and that is a search
+    /// made - as a search that matched no line did; a call refused, one whose input does not hold, one whose search is no
+    /// pattern or has no directory to search, and a command that could not be started or has no directory to start in did
+    /// none of their work. What a closing record cites as a search is held to it.
+    /// </summary>
+    [Fact]
+    public async Task EveryCallSaysWhetherItsToolRan_ApartFromWhetherItSucceeded()
+    {
+        var runtime = Open(restrictions: [Restriction("Read(secret.txt)")]);
+        Write("a.txt", "alpha\n");
+
+        var (failProgram, failArguments) = Shell("exit 1", "exit 1");
+        var answers = new[]
+        {
+            await Call(runtime, AgentTools.RunCommand, "exited", ("program", failProgram), ("args", failArguments)),
+            await Call(runtime, AgentTools.SearchFiles, "unmatched", ("pattern", "zeta")),
+            await Call(runtime, AgentTools.ViewFile, "refused", ("path", "secret.txt")),
+            await runtime.RunAsync(new AgentToolCallRequest("unheld", AgentTools.ViewFile, "{}"), Token),
+            await Call(runtime, AgentTools.SearchFiles, "no-pattern", ("pattern", "(")),
+            await Call(runtime, AgentTools.FindFiles, "no-directory", ("pattern", "*"), ("path", "nope")),
+            await Call(runtime, AgentTools.RunCommand, "unstarted", ("program", "dh-no-such-program-7f3")),
+            await Call(runtime, AgentTools.RunCommand, "nowhere", ("program", "git"), ("cwd", "nope")),
+        };
+
+        Assert.Equal(
+            [
+                ("exited", false, true),
+                ("unmatched", true, true),
+                ("refused", false, false),
+                ("unheld", false, false),
+                ("no-pattern", false, false),
+                ("no-directory", false, false),
+                ("unstarted", false, false),
+                ("nowhere", false, false),
+            ],
+            answers.Select(answer => (answer.Id, answer.Ok, answer.Ran)));
+
+        // The stream says it of each call as the answer does.
+        Assert.Equal(
+            answers.Select(answer => (answer.Id, (bool?)answer.Ran)),
+            _events.All.OfType<ToolCallFinished>().Select(finished => (finished.Id, finished.Ran)));
+    }
+
+    /// <summary>
     /// A command is decided with the input its call writes it: a program that reads its script from its input is refused
     /// where the call gives one, and nothing of it runs.
     /// </summary>

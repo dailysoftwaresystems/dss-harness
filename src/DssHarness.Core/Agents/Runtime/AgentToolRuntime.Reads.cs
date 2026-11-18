@@ -279,7 +279,7 @@ public sealed partial class AgentToolRuntime
 
         if (GlobPattern.Problem(text) is { } wrong)
         {
-            return Answer.Failed($"pattern '{text}' {wrong}");
+            return Answer.NotRun($"pattern '{text}' {wrong}");
         }
 
         var pattern = GlobPattern.Parse(text);
@@ -295,7 +295,7 @@ public sealed partial class AgentToolRuntime
 
         if (!_host.FileSystem.DirectoryExists(directory))
         {
-            return Answer.Failed($"there is no directory at '{Said(directory)}'");
+            return Answer.NotRun($"there is no directory at '{Said(directory)}'");
         }
 
         var found = new List<string>();
@@ -357,12 +357,12 @@ public sealed partial class AgentToolRuntime
 
         if (context is < 0 or > AgentTools.MostSearchContext)
         {
-            return Answer.Failed($"context is {context}, and is 0 to {AgentTools.MostSearchContext}");
+            return Answer.NotRun($"context is {context}, and is 0 to {AgentTools.MostSearchContext}");
         }
 
         if (most is < 1 or > AgentTools.MostSearchResults)
         {
-            return Answer.Failed($"max_results is {most}, and is 1 to {AgentTools.MostSearchResults}");
+            return Answer.NotRun($"max_results is {most}, and is 1 to {AgentTools.MostSearchResults}");
         }
 
         Regex pattern;
@@ -373,7 +373,7 @@ public sealed partial class AgentToolRuntime
         }
         catch (ArgumentException ex)
         {
-            return Answer.Failed($"pattern '{text}' is no .NET regular expression: {ex.Message.TrimEnd('.')}");
+            return Answer.NotRun($"pattern '{text}' is no .NET regular expression: {ex.Message.TrimEnd('.')}");
         }
 
         GlobPattern? glob = null;
@@ -382,7 +382,7 @@ public sealed partial class AgentToolRuntime
         {
             if (GlobPattern.Problem(globText) is { } wrong)
             {
-                return Answer.Failed($"glob '{globText}' {wrong}");
+                return Answer.NotRun($"glob '{globText}' {wrong}");
             }
 
             glob = GlobPattern.Parse(globText);
@@ -400,7 +400,7 @@ public sealed partial class AgentToolRuntime
 
         if (!_host.FileSystem.DirectoryExists(directory))
         {
-            return Answer.Failed($"there is no directory at '{Said(directory)}'");
+            return Answer.NotRun($"there is no directory at '{Said(directory)}'");
         }
 
         AgentSearch search;

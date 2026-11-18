@@ -872,6 +872,81 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// A class's paths are read as the plan check that took them reads them - either separator - and compared as this
+    /// machine compares paths, so a path the plan check took is never another file here for its spelling: a plan that
+    /// writes the home and the site with backslashes and in another case than git does names the record's home and site
+    /// where the machine does not tell case apart, and a record that copies the plan's spelling names the paths git gives
+    /// the work - the paths the agent changed, the arm's site and the home's touches. Compared by their every character, a
+    /// machine that tells case apart, the separators still read as one and the spellings in another case name other files.
+    /// </summary>
+    [Fact]
+    public void AClassesPaths_AreReadAsThePlanCheckReadsThem_AndComparedAsThisMachineComparesPaths()
+    {
+        var planned = PlannedClass.In(Class("c-rate", home: "src\\rates\\home.cs", symbol: "Home", site: "src\\rates\\old.cs"))!;
+        var gits = Record("src/Rates/Home.cs", "src/Rates/Old.cs");
+        var plans = Record("src\\rates\\home.cs", "src\\rates\\old.cs");
+
+        // A machine that does not tell case apart: each spelling is the one file, and the home's touches by other work ask
+        // its audit whichever spelling the record keeps.
+        foreach (var record in new[] { gits, plans })
+        {
+            var judged = ClassClosureRules.Judge([planned], [record], Proof(StringComparison.OrdinalIgnoreCase));
+
+            Assert.Empty(judged.Problems);
+            Assert.Equal(["class 'c-rate': home touched 2 times in this run by other work"], judged.Audits);
+            Assert.Equal([new ClassClosureTouch("c-rate", record.HomePath, 2, 3)], judged.Touches);
+        }
+
+        Assert.Equal(("src/rates/home.cs", "src/rates/old.cs"), (plans.HomePath, plans.Sites.Single().Path));
+
+        // A machine that tells case apart: git's spelling is not the plan's, and the plan's is not the paths git gave the
+        // work, whose touches it then has none of.
+        var byCase = ClassClosureRules.Judge([planned], [gits], Proof(StringComparison.Ordinal));
+
+        Assert.Equal(
+            [
+                "class 'c-rate': the home is 'Home' in 'src/Rates/Home.cs', not the planned 'Home' in 'src/rates/home.cs', and the record says not why it moved (homeMoved)",
+                "class 'c-rate': the site 'src/rates/old.cs' has no after in the record",
+            ],
+            byCase.Problems);
+
+        var copied = ClassClosureRules.Judge([planned], [plans], Proof(StringComparison.Ordinal));
+
+        Assert.Equal(
+            [
+                "class 'c-rate': the site 'src/rates/old.cs' reads its home, but the agent changed nothing at it",
+                "class 'c-rate': the arm 'rate' mutates 'src/Rates/Home.cs', not the home 'src/rates/home.cs'",
+            ],
+            copied.Problems);
+        Assert.Empty(copied.Audits);
+        Assert.Equal([new ClassClosureTouch("c-rate", "src/rates/home.cs", 0, 0)], copied.Touches);
+
+        static ClassClosureRecord Record(string home, string site)
+        {
+            var entry = Entry("c-rate", home, sites: [(site, "Old", "reads-home")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+            entry["arm"] = new JsonObject { ["id"] = "rate" };
+
+            return ClassClosureRecord.In(entry)!;
+        }
+
+        // The paths git gives the work: what the agent changed, the registry's arm and the home's touches, each spelt as git
+        // spells the files.
+        static ClassClosureProof Proof(StringComparison comparison)
+            => new(
+                Changed: ["src/Rates/Old.cs"],
+                Calls: new Dictionary<string, DssHarness.Core.Agents.AgentStreamCall>(),
+                Measures: new Dictionary<string, ClassClosureMeasure>(),
+                Declares: null,
+                TestDeclared: null,
+                Arms: [("rate", "src/Rates/Home.cs")],
+                TouchesByOthers: new Dictionary<string, int> { ["src/Rates/Home.cs"] = 2 },
+                TouchesAll: new Dictionary<string, int> { ["src/Rates/Home.cs"] = 3 },
+                TouchesRequired: 1,
+                HotspotAt: 5,
+                comparison);
+    }
+
+    /// <summary>
     /// A run's proof reads none of what it read as given: no change at a site that reads its home is a problem, and a call
     /// its streams do not hold is not made, the streams holding none at all. A manual lane's proof reads them as given, its
     /// command lines - but a search cites a call, a measurement names one, and its record names a class: an empty record
@@ -900,7 +975,7 @@ public sealed class CheckStepRunnerTests : IDisposable
             ],
             ClassClosureRules.Judge([], [entry], RunProof(changed: [], calls: [])).Problems);
 
-        var manual = ClassClosureProof.Manual(arms: null);
+        var manual = ClassClosureProof.Manual(arms: null, StringComparison.Ordinal);
 
         Assert.True(manual.ByHand);
         Assert.Equal(
@@ -972,7 +1047,7 @@ public sealed class CheckStepRunnerTests : IDisposable
             ClassClosureRules.Judge([], [entry], RunProof(changed: [], calls: [], measures: measures)).Problems);
 
         // A manual lane's measurements are its command lines, read as given.
-        Assert.Empty(ClassClosureRules.Judge([], [entry], ClassClosureProof.Manual(arms: null)).Problems);
+        Assert.Empty(ClassClosureRules.Judge([], [entry], ClassClosureProof.Manual(arms: null, StringComparison.Ordinal)).Problems);
     }
 
     /// <summary>
@@ -1094,6 +1169,64 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// A search is made by a call whose tool ran, however its program exited: grep, rg and git grep exit 1 finding nothing,
+    /// a call that did not succeed and the very evidence a class of one site rests on, so a search citing it stands. A call
+    /// that never ran - refused, or its input unread - searched nothing, and a search citing it is refused as one; so is a
+    /// call that did not succeed in a stream written before its client said whether it ran, read by whether it went through.
+    /// </summary>
+    [Fact]
+    public async Task ASearch_IsMadeByACallThatRan_HoweverItsProgramExited()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+
+        WriteStream(
+            kit.Harness,
+            kit.Layout,
+            "builder",
+            [
+                new DssHarness.Core.Agents.ToolCallStarted("toolu_7", "run_command", DssHarness.Core.Agents.AgentToolRunner.Harness),
+                new DssHarness.Core.Agents.ToolCallFinished("toolu_7", Ok: false, TimeSpan.Zero, """{"program":"rg","args":["-n","RateOf","src"]}""", "exit 1, after 0.1 s; it printed nothing", Ran: true),
+                new DssHarness.Core.Agents.ToolCallStarted("toolu_8", "Grep", DssHarness.Core.Agents.AgentToolRunner.ClaudeCode),
+                new DssHarness.Core.Agents.ToolCallFinished("toolu_8", Ok: false, TimeSpan.Zero, """{"pattern":"RateOf"}""", "denied by the policy", Ran: false),
+                new DssHarness.Core.Agents.ToolCallStarted("toolu_9", "run_command", DssHarness.Core.Agents.AgentToolRunner.Harness),
+                new DssHarness.Core.Agents.ToolCallFinished("toolu_9", Ok: false, TimeSpan.Zero, """{"program":"rg","args":["RateOf"]}""", "exit 1"),
+            ]);
+
+        var judged = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
+            ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), Searching(("the callers", "RateOf", "toolu_7"), ("the readers", "RateOf", "toolu_8"), ("the writers", "RateOf", "toolu_9"))),
+            Token);
+
+        Assert.Equal(
+            [
+                "class 'c-rate': the search for 'the readers' cites the call 'toolu_8', which never ran: a call refused, or whose input did not read, searched nothing",
+                "class 'c-rate': the search for 'the writers' cites the call 'toolu_9', which never ran: a call refused, or whose input did not read, searched nothing",
+            ],
+            [.. judged.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+
+        // The search that found nothing closes the class on its own.
+        var found = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
+            ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), Searching(("the callers", "RateOf", "toolu_7"))),
+            Token);
+
+        Assert.Empty(found.Output!["problems"]!.AsArray());
+        Assert.Equal((true, false, HarnessExit.Success), (found.Output["passed"]!.GetValue<bool>(), found.Red, found.Exit));
+
+        static JsonObject Searching(params (string Data, string Query, string Call)[] searches)
+            => Entry(
+                "c-rate",
+                home: "src/Home.cs",
+                sites: [("src/Home.cs", "Home", "home")],
+                searches: searches,
+                neighbours: [],
+                tests: [],
+                axes: ["format"],
+                claim: "The rate holds over every format");
+    }
+
+    /// <summary>
     /// The events of a stored stream of measure calls, as the tool runtime's own calls record them: each started and
     /// finished under its id, finished as having gone through or not as given.
     /// </summary>
@@ -1119,7 +1252,7 @@ public sealed class CheckStepRunnerTests : IDisposable
     /// <summary>
     /// A run's proof: the paths the agent changed, the calls its streams hold and what each measure call of them measured
     /// (none, where none are given), what its worktree declares, no arms registry, a home audit asked of one touch by others
-    /// and a hotspot at five.
+    /// and a hotspot at five, its paths compared by their every character.
     /// </summary>
     private static ClassClosureProof RunProof(
         IReadOnlyList<string> changed,
@@ -1136,7 +1269,8 @@ public sealed class CheckStepRunnerTests : IDisposable
             new Dictionary<string, int>(),
             new Dictionary<string, int>(),
             TouchesRequired: WorkflowStepTypes.DefaultTouches,
-            HotspotAt: WorkflowStepTypes.DefaultHotspot);
+            HotspotAt: WorkflowStepTypes.DefaultHotspot,
+            StringComparison.Ordinal);
 
     /// <summary>An agent service whose fold's dry weighing plans to write <paramref name="written"/>, and nothing else.</summary>
     private static DssHarness.Core.Orchestration.IAgentService Weighing(params string[] written)

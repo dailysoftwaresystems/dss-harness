@@ -675,18 +675,22 @@ an item, the `class-closure` check judges the record with no model - every plann
 for and the planned home kept or its move said (`homeMoved`), a deleted site no longer declaring
 its symbol in the worktree (the graph's view of it, synced where the check starts, or its text), a
 site that reads its home among the paths the agent changed (what its fold would write and what its
-earlier folds of the run changed), every search a tool call of the item's stored streams one of
-whose input's texts holds its query, every neighbour measured by a `measure` call - whichever
-client called it, whatever it answered - whose own record (`measures/<call id>/measure.json` of
-the step whose stream holds it, never the builder's word or the stream's capped text of the
-answer) can be read, names the neighbour's cell and answered its result (`failed` for
-`failed-fixed`, whose fix another `measure` call of the cell shows: one that answered `passed`,
-its record written after the failing call's), or reasoned why not, every test of the pin
-declared, the arm one of the registry the worktree holds and mutating the home's own file or a
-reason the class has nothing to mutate, the universe holding every planned axis and the claim
-naming each - and each home's touches since the run's start commit, the item's own commits left
-out: a home touched by other work must carry a home audit. A fold it cannot weigh fails the
-check. The record's problems are repaired by `close-class`, which goes on with the
+earlier folds of the run changed), every search a tool call of the item's stored streams that
+ran, however its program exited (`rg`, `grep` and `git grep` exit 1 finding nothing), and never
+one refused or whose input did not read, one of whose input's texts holds its query, every
+neighbour measured by a `measure` call - whichever client called it, whatever it answered - whose
+own record (`measures/<call id>/measure.json` of the step whose stream holds it, never the
+builder's word or the stream's capped text of the answer) can be read, names the neighbour's
+cell and answered its result (`failed` for `failed-fixed`, whose fix another `measure` call of
+the cell shows: one that answered `passed`, its record written after the failing call's), or
+reasoned why not, every test of the pin declared, the arm one of the registry the worktree holds
+and mutating the home's own file or a reason the class has nothing to mutate, the universe
+holding every planned axis and the claim naming each - and each home's touches since the run's
+start commit, the item's own commits left out: a home touched by other work must carry a home
+audit. A class's paths - the plan's and the record's, the paths changed, an arm's site and the
+touches - are read as the plan check reads them, either separator, and compared as the machine
+compares paths, so the plan's spelling of a file and git's are one. A fold it cannot weigh fails
+the check. The record's problems are repaired by `close-class`, which goes on with the
 implementation, and a missing audit by `home-audit`, which reads the whole home and makes its
 invariants structural; each changes code, so each goes back through the item's tests - its
 verify, or reverify in the review loop - before the check runs again and anything is folded; a

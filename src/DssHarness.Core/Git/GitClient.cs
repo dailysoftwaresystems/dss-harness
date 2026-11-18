@@ -1076,6 +1076,7 @@ public sealed partial class GitClient(
         string from,
         string to,
         IReadOnlyList<string> paths,
+        StringComparison comparison,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(from);
@@ -1102,7 +1103,7 @@ public sealed partial class GitClient(
 
         Ensure(result, $"count the commits between {from} and {to} that touched {ReportText.Counted(paths.Count, "path")}");
 
-        var watched = paths.ToHashSet(StringComparer.Ordinal);
+        var watched = paths.ToHashSet(StringComparer.FromComparison(comparison));
         var touches = new List<GitTouch>();
         var records = Records(result.StandardOutput);
         string? commit = null;

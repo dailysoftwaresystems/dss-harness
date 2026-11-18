@@ -184,7 +184,7 @@
                 },
                 "call": {
                   "type": "string",
-                  "description": "The id of the tool call in this item's stored streams that made the search. Every search cites the call that made it - a reading of files is made by a call too - and a search that cites none is refused, for a search that was not made does not count."
+                  "description": "The id of the tool call in this item's stored streams that made the search. Every search cites the call that made it - a reading of files is made by a call too - and a search that cites none is refused, for a search that was not made does not count. A call that ran made its search however its program exited - a search that found nothing exits 1 - and one refused, or whose input did not read, made none."
                 }
               }
             }

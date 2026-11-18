@@ -2900,7 +2900,7 @@ public sealed class AgentService(
             }
 
             List<ClassClosureRecord> entries = [.. (read as System.Text.Json.Nodes.JsonArray ?? []).Select(ClassClosureRecord.In).OfType<ClassClosureRecord>()];
-            var verdict = ClassClosureRules.Judge([], entries, ClassClosureProof.Manual(arms));
+            var verdict = ClassClosureRules.Judge([], entries, ClassClosureProof.Manual(arms, _platform.PathComparison));
 
             foreach (var problem in verdict.Problems)
             {

@@ -3021,25 +3021,35 @@ item, the `class-closure` check (`ClassClosureStepRunner`, its `in` required) ju
 the one owner of the judgement - against the classes the plan declares, the item's stored streams (every step of the
 agent's own directory, read by the one reading of a stream's calls, `AgentStreamCalls`: each call paired with its answer
 by its id, its tool named as the runtime names it - Claude Code's `mcp__dssharness__measure` the runtime's
-`measure` - and its input's texts unescaped; the calls that went through, `AgentStreamCalls.Of`, for the searches,
-and every measure call answered, `AgentStreamCalls.Answered` - a cell that failed or went unmeasured answers that its
-call did not succeed - each with what its own record in the directory of the step whose stream holds it says it
-measured and when that record was written, `ClassClosureMeasure`), the paths the agent changed (what the fold's own dry weighing would write, remove or
-merge, `IAgentService.FoldAsync` asked as a run's, and what the run's ledger says its earlier folds of the agent
-changed, `FoldLedger.Changed`), the graph's view of the worktree - synced where the check starts - or its text, the arms
-the registry of the agent's worktree declares (`ArmListingReader.DeclaredArmsAsync`, the registry alone, an arm the work
-adds among them) and each home's touches since the base (`IGitClient.CountTouchesAsync`, the item's own commits left out
-by the fold ledger through `FlowInstanceId.ItemOf`, the whole id a step of no `forEach`'s item): every planned site
-accounted for and the planned home kept or its move said, a deleted site no longer declaring its symbol, a site that
-reads its home among the paths changed, every search citing a tool call of the streams one of whose input's texts holds
-its query, every neighbour measured by a `measure` call whose record can be read, names the neighbour's cell and
+`measure` - and its input's texts unescaped; every call answered, `AgentStreamCalls.Answered`, each with whether its
+tool ran, for the searches - `ToolCallFinished.Ran`, which every client writes: the tool runtime's false for a call
+refused and one its tool did none of its work for (`Answer.NotRun`: an input that did not read or that its tool does
+not take, a program that could not be started), Claude Code's by its own stamp of a call it did not run and, of a call
+of the engine's tool server, by the runtime's too; a stream written before it was said read by whether the call went
+through - and every measure call answered - a cell that failed or went unmeasured answers that its call did not
+succeed - each with what its own record in the directory of the step whose stream holds it says it measured and when
+that record was written, `ClassClosureMeasure`), the paths the agent changed (what the fold's own dry weighing would
+write, remove or merge, `IAgentService.FoldAsync` asked as a run's, and what the run's ledger says its earlier folds of
+the agent changed, `FoldLedger.Changed`), the graph's view of the worktree - synced where the check starts - or its
+text, the arms the registry of the agent's worktree declares (`ArmListingReader.DeclaredArmsAsync`, the registry alone,
+an arm the work adds among them) and each home's touches since the base (`IGitClient.CountTouchesAsync`, its paths
+matched as the machine compares paths, the item's own commits left out by the fold ledger through
+`FlowInstanceId.ItemOf`, the whole id a step of no `forEach`'s item): every planned site accounted for and the planned
+home kept or its move said, a deleted site no longer declaring its symbol, a site that reads its home among the paths
+changed, every search citing a tool call of the streams that ran, however its program exited - `rg`, `grep` and
+`git grep` exit 1 finding nothing - one of whose input's texts holds its query, a call that never ran refused as one
+that searched nothing, every neighbour measured by a `measure` call whose record can be read, names the neighbour's cell and
 answered its result (`failed` for `failed-fixed`: the measurement showed the failure, the fix is the item's, and another
 `measure` call of the streams shows it - one that measured the same cell and answered `passed`, its record written after
 the failing call's, by `IFileSystem.LastWriteTimeUtc`, which `ClassClosureMeasure.Of` reads with the record; never the
 builder's word or the stream's capped text of the answer), or reasoned, the pin's tests declared, the arm one of the
 registry's and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every
 planned axis and the claim naming each; a record without a home audit is refused where the home was touched by other
-work, and a home touched often enough is a hotspot in the check's answer. A dry weighing it cannot make fails it with the
+work, and a home touched often enough is a hotspot in the check's answer. A class's paths - the plan's and the record's,
+read with either separator made forward (`ClassClosureReading.PathOf`, `PathPatterns.Normalize`), the paths changed, an
+arm's site and the touches - are compared by `ClassClosureProof.SamePath` under the machine's
+`IHostPlatform.PathComparison`, as the plan check that took them reads them, so the plan's spelling of a file and git's
+are one. A dry weighing it cannot make fails it with the
 weighing's own code: nothing it could not read is read as none (`ClassClosureProof` leaves null only what a manual lane
 reads as given). The record's problems (1) are repaired by `close-class` and a missing audit (2) by `home-audit`, reason
 steps that go on with the implementation and so change its code: each goes back through the item's tests - `then:

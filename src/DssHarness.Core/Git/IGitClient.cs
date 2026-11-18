@@ -385,7 +385,11 @@ public interface IGitClient
     /// <param name="directory">The repository.</param>
     /// <param name="from">The commit the count starts after.</param>
     /// <param name="to">The commit it counts to.</param>
-    /// <param name="paths">The paths counted, as git names them.</param>
+    /// <param name="paths">The paths counted, from the tree's root with forward separators.</param>
+    /// <param name="comparison">
+    /// How a path git names is matched to one of <paramref name="paths"/>: as the machine compares paths, so where it does
+    /// not tell case apart a path asked in another case than git's is counted - each pair names the path as git does.
+    /// </param>
     /// <param name="cancellationToken">Stops the walk.</param>
     /// <exception cref="HarnessException">git could not walk the history.</exception>
     Task<IReadOnlyList<GitTouch>> CountTouchesAsync(
@@ -393,6 +397,7 @@ public interface IGitClient
         string from,
         string to,
         IReadOnlyList<string> paths,
+        StringComparison comparison,
         CancellationToken cancellationToken = default);
 
     /// <summary>

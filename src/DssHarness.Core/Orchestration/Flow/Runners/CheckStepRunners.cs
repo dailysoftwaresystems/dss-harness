@@ -192,9 +192,9 @@ public sealed class ClassClosureStepRunner(
         ];
 
         // Every tool call of the agent's stored streams - each step of its own directory - by the one reading of a stream's
-        // calls: paired with its answer by its id, its tool by the runtime's name, whichever client made it. Each measure
-        // call, whatever it answered, with what its own record - kept in the directory of the step whose stream holds it -
-        // says it measured, and when the record was written.
+        // calls: paired with its answer by its id, its tool by the runtime's name, whichever client made it, each with
+        // whether its tool ran. Each measure call, whatever it answered, with what its own record - kept in the directory of
+        // the step whose stream holds it - says it measured, and when the record was written.
         var calls = new Dictionary<string, Agents.AgentStreamCall>(StringComparer.Ordinal);
         var measures = new Dictionary<string, ClassClosureMeasure>(StringComparer.Ordinal);
 
@@ -204,10 +204,7 @@ public sealed class ClassClosureStepRunner(
             {
                 foreach (var call in Agents.AgentStreamCalls.Answered(store.ReadStepStream(step)))
                 {
-                    if (call.Ok)
-                    {
-                        calls[call.Id] = call;
-                    }
+                    calls[call.Id] = call;
 
                     if (call.Tool == Agents.AgentMeasureSupport.ToolName)
                     {
@@ -266,7 +263,7 @@ public sealed class ClassClosureStepRunner(
         var tree = worktree is null ? context : await contextLoader.LoadAsync(worktree, cancellationToken).ConfigureAwait(false);
         var arms = await listings.DeclaredArmsAsync(tree, Type, cancellationToken).ConfigureAwait(false);
 
-        List<string> homes = [.. entries.Select(entry => entry.HomePath).Distinct(StringComparer.Ordinal)];
+        List<string> homes = [.. entries.Select(entry => entry.HomePath).Distinct(platform.PathComparer())];
         var touches = await TouchesAsync(place, layout, store, run, homes, cancellationToken).ConfigureAwait(false);
 
         var judged = ClassClosureRules.Judge(planned, entries, new ClassClosureProof(
@@ -279,7 +276,8 @@ public sealed class ClassClosureStepRunner(
             TouchesByOthers: touches.ByOthers,
             TouchesAll: touches.All,
             TouchesRequired: run.Step.Touches ?? WorkflowStepTypes.DefaultTouches,
-            HotspotAt: run.Step.Hotspot ?? WorkflowStepTypes.DefaultHotspot));
+            HotspotAt: run.Step.Hotspot ?? WorkflowStepTypes.DefaultHotspot,
+            platform.PathComparison));
 
         var output = new JsonObject
         {
@@ -355,7 +353,7 @@ public sealed class ClassClosureStepRunner(
             return (new Dictionary<string, int>(), new Dictionary<string, int>());
         }
 
-        var touches = await gitClient.CountTouchesAsync(place.Repository, run.Step.Base.Trim(), "HEAD", paths, cancellationToken).ConfigureAwait(false);
+        var touches = await gitClient.CountTouchesAsync(place.Repository, run.Step.Base.Trim(), "HEAD", paths, platform.PathComparison, cancellationToken).ConfigureAwait(false);
         var ledger = store.ReadFolds(layout);
         var item = FlowInstanceId.ItemOf(run.Instance);
 

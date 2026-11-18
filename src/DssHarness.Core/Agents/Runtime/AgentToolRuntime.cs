@@ -29,7 +29,11 @@ public sealed record AgentToolCallRequest(string Id, string Name, string Input);
 /// <param name="Ok">Whether it did what it was asked; false for a refusal and a failure, whose text says why.</param>
 /// <param name="Text">What the model is given: the answer, masked, cut where it is too large for its event.</param>
 /// <param name="File">The file the whole answer is kept in: a command's log, and any other answer where it was cut; null where there is none.</param>
-public sealed record AgentToolCallResult(string Id, bool Ok, string Text, string? File);
+/// <param name="Ran">
+/// Whether its tool ran, however it ended - a command that exited non-zero among them - or did nothing: false for a
+/// refusal, recorded as every denial is, and for an input that did not read.
+/// </param>
+public sealed record AgentToolCallResult(string Id, bool Ok, string Text, string? File, bool Ran);
 
 /// <summary>
 /// What may cut a turn's calls short - the run pausing, the step past its time, its budget spent before they began - and
@@ -472,10 +476,10 @@ public sealed partial class AgentToolRuntime : IDisposable
             ? (_run.Mask.Redact(answer.Text), kept)
             : _records.Kept(call.Id, answer.Text);
 
-        return new AgentToolCallResult(call.Id, answer.Ok, shown, file);
+        return new AgentToolCallResult(call.Id, answer.Ok, shown, file, answer.Ran);
     }
 
-    /// <summary>A call's end emitted, as the model is given it.</summary>
+    /// <summary>A call's end emitted, as the model is given it, with whether its tool ran.</summary>
     private async Task<AgentToolCallResult> EndedAsync(AgentToolCallRequest call, AgentToolCallResult result, long started)
     {
         await _events.EmitAsync(new ToolCallFinished(
@@ -484,7 +488,8 @@ public sealed partial class AgentToolRuntime : IDisposable
             _host.Clock.GetElapsedTime(started),
             _run.Mask.Redact(call.Input),
             result.Text,
-            result.File)).ConfigureAwait(false);
+            result.File,
+            result.Ran)).ConfigureAwait(false);
 
         return result;
     }
@@ -509,12 +514,12 @@ public sealed partial class AgentToolRuntime : IDisposable
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
-            return Answer.Failed($"{call.Name}'s input does not read as JSON ({ex.Message.TrimEnd('.')}); {Usage(tool)}");
+            return Answer.NotRun($"{call.Name}'s input does not read as JSON ({ex.Message.TrimEnd('.')}); {Usage(tool)}");
         }
 
         if (JsonSchemaSubset.Problems(_schemas[tool.Name], input) is [_, ..] problems)
         {
-            return Answer.Failed($"{call.Name}'s input does not hold: {string.Join("; ", problems)}; {Usage(tool)}");
+            return Answer.NotRun($"{call.Name}'s input does not hold: {string.Join("; ", problems)}; {Usage(tool)}");
         }
 
         return tool.Name switch
@@ -735,8 +740,12 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// <summary>A place decided: the place, or why it may not be reached.</summary>
     private sealed record Decided(string? Full, AgentPolicyAnswer.Denied? Denied);
 
-    /// <summary>What a call answered, before it is recorded.</summary>
-    private sealed record Answer(bool Ok, string Text, string? File, (string Subject, AgentPolicyAnswer.Denied Denied)? Denial)
+    /// <summary>
+    /// What a call answered, before it is recorded, and whether its tool ran: every answer but a refusal and one its tool
+    /// gave before doing any of its work (<see cref="NotRun"/>) is one of a tool that ran, however it ended - a command
+    /// that exited non-zero among them.
+    /// </summary>
+    private sealed record Answer(bool Ok, string Text, string? File, (string Subject, AgentPolicyAnswer.Denied Denied)? Denial, bool Ran = true)
     {
         /// <summary>A call that did what it was asked, saying <paramref name="text"/>.</summary>
         public static Answer Done(string text) => new(true, text, null, null);
@@ -744,8 +753,15 @@ public sealed partial class AgentToolRuntime : IDisposable
         /// <summary>A call that failed, saying why.</summary>
         public static Answer Failed(string text) => new(false, text, null, null);
 
-        /// <summary>A call refused by <paramref name="denied"/>, of <paramref name="subject"/>: recorded as every denial is.</summary>
-        public static Answer Refused(string subject, AgentPolicyAnswer.Denied denied) => new(false, denied.Reason, null, (subject, denied));
+        /// <summary>
+        /// A call that failed before its tool did any of its work, saying why: its input did not read, or is not one its tool
+        /// takes - a value out of its range, a pattern that does not compile, a place that is not there to search or start
+        /// in - or the program it was to run could not be started.
+        /// </summary>
+        public static Answer NotRun(string text) => new(false, text, null, null, Ran: false);
+
+        /// <summary>A call refused by <paramref name="denied"/>, of <paramref name="subject"/>: recorded as every denial is, its tool never run.</summary>
+        public static Answer Refused(string subject, AgentPolicyAnswer.Denied denied) => new(false, denied.Reason, null, (subject, denied), Ran: false);
 
         /// <summary>An answer whose whole is kept in <paramref name="file"/> already: a command's log.</summary>
         public static Answer Kept(bool ok, string text, string file) => new(ok, text, file, null);

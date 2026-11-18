@@ -22,9 +22,9 @@ public static class ClassClosureExit
 /// </summary>
 /// <param name="Id">Its id, unique in the plan.</param>
 /// <param name="Invariant">What it decides, in one sentence.</param>
-/// <param name="HomePath">The file its one home is declared in, as git names it.</param>
+/// <param name="HomePath">The file its one home is declared in, from the tree's root, read as the plan check reads it: either separator, made forward (<see cref="ClassClosureReading.PathOf"/>).</param>
 /// <param name="HomeSymbol">The symbol its one home is declared as.</param>
-/// <param name="Sites">Each path it is decided at today: the file, the symbol, and what the plan says of it after.</param>
+/// <param name="Sites">Each path it is decided at today, read as <paramref name="HomePath"/> is: the file, the symbol, and what the plan says of it after.</param>
 /// <param name="Axes">The names of its universe's axes.</param>
 public sealed record PlannedClass(
     string Id,
@@ -44,7 +44,7 @@ public sealed record PlannedClass(
             ? new PlannedClass(
                 id,
                 Text(entry["invariant"]) ?? string.Empty,
-                Text(home["path"]) ?? string.Empty,
+                ClassClosureReading.PathOf(Text(home["path"])),
                 Text(home["symbol"]) ?? string.Empty,
                 ReadSites(entry["sites"] as JsonArray),
                 ReadAxes(entry["universe"] as JsonObject))
@@ -58,7 +58,7 @@ public sealed record PlannedClass(
         {
             if (node is JsonObject site && Text(site["path"]) is { } path)
             {
-                read.Add((path, Text(site["symbol"]) ?? string.Empty, Text(site["then"])));
+                read.Add((ClassClosureReading.PathOf(path), Text(site["symbol"]) ?? string.Empty, Text(site["then"])));
             }
         }
 
@@ -92,6 +92,14 @@ internal static class ClassClosureReading
     /// <summary>The text a node holds, or null where it holds none.</summary>
     public static string? Text(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    /// <summary>
+    /// A class's path - a home's or a site's, of the plan or of the record - as the plan check reads it: either separator,
+    /// made forward, read past at either end (<see cref="Repository.PathPatterns.Normalize"/>), so git's spelling of the
+    /// file and the one the plan check took are one; empty where none is given.
+    /// </summary>
+    /// <param name="path">The path as it is written.</param>
+    public static string PathOf(string? path) => Repository.PathPatterns.Normalize(path);
 }
 
 /// <summary>
@@ -101,10 +109,10 @@ internal static class ClassClosureReading
 /// </summary>
 /// <param name="Class">The class it closes, by the id the plan knows it by.</param>
 /// <param name="Invariant">What the class decides, in one sentence.</param>
-/// <param name="HomePath">The file its home is declared in, as git names it.</param>
+/// <param name="HomePath">The file its home is declared in, from the tree's root, read as a plan's is: either separator, made forward (<see cref="ClassClosureReading.PathOf"/>).</param>
 /// <param name="HomeSymbol">The symbol its home is declared as.</param>
 /// <param name="HomeMoved">Why the work moved the home off the one the plan named, where it says so; null where it says nothing.</param>
-/// <param name="Sites">Each path it was decided at: the file, the symbol, what decided there before, and what decides there after.</param>
+/// <param name="Sites">Each path it was decided at, read as <paramref name="HomePath"/> is: the file, the symbol, what decided there before, and what decides there after.</param>
 /// <param name="Searches">Each search the data was searched by: what was searched, how, the query, and the call that made it.</param>
 /// <param name="Axes">The names of the universe the record pins.</param>
 /// <param name="PinTests">Each test the pin names.</param>
@@ -139,7 +147,7 @@ public sealed record ClassClosureRecord(
             ? new ClassClosureRecord(
                 declared,
                 Text(entry["invariant"]) ?? string.Empty,
-                Text(entry["home"]?["path"]) ?? string.Empty,
+                ClassClosureReading.PathOf(Text(entry["home"]?["path"])),
                 Text(entry["home"]?["symbol"]) ?? string.Empty,
                 Text(entry["homeMoved"]?["why"]),
                 ReadSites(entry["sites"] as JsonArray),
@@ -161,7 +169,7 @@ public sealed record ClassClosureRecord(
         {
             if (node is JsonObject site && Text(site["path"]) is { } path)
             {
-                read.Add((path, Text(site["symbol"]) ?? string.Empty, Text(site["before"]) ?? string.Empty, Text(site["after"]) ?? string.Empty));
+                read.Add((ClassClosureReading.PathOf(path), Text(site["symbol"]) ?? string.Empty, Text(site["before"]) ?? string.Empty, Text(site["after"]) ?? string.Empty));
             }
         }
 
@@ -288,8 +296,9 @@ public sealed record ClassClosureMeasure(string Record, (string Cell, string Res
 /// Null for a manual lane, whose sites that read their home are read as given.
 /// </param>
 /// <param name="Calls">
-/// Every tool call of the item's stored streams that went through, by the id a record cites - empty where they hold none,
-/// so a call cited is never read as made. Null for a manual lane, whose searches are read as given, their command lines.
+/// Every tool call of the item's stored streams that was answered, by the id a record cites, each with whether its tool
+/// ran - empty where they hold none, so a call cited is never read as made. Null for a manual lane, whose searches are read
+/// as given, their command lines.
 /// </param>
 /// <param name="Measures">
 /// Every measure call of the item's stored streams, by the id a record's <c>measuredBy</c> cites - answered passed, failed
@@ -310,6 +319,7 @@ public sealed record ClassClosureMeasure(string Record, (string Cell, string Res
 /// <param name="TouchesAll">How often each home path was touched in this run, this item's own commits among them.</param>
 /// <param name="TouchesRequired">How many touches by others require a home audit; 0 where none is required.</param>
 /// <param name="HotspotAt">How many touches name a home a hotspot; never reached, nothing is listed.</param>
+/// <param name="PathComparison">How this machine compares paths (<see cref="Platform.IHostPlatform.PathComparison"/>), as the plan check compares a class's.</param>
 public sealed record ClassClosureProof(
     IReadOnlyList<string>? Changed,
     IReadOnlyDictionary<string, Agents.AgentStreamCall>? Calls,
@@ -320,17 +330,31 @@ public sealed record ClassClosureProof(
     IReadOnlyDictionary<string, int> TouchesByOthers,
     IReadOnlyDictionary<string, int> TouchesAll,
     int TouchesRequired,
-    int HotspotAt)
+    int HotspotAt,
+    StringComparison PathComparison)
 {
     /// <summary>Whether the record is a manual lane's, judged by hand: no stored stream holds its calls.</summary>
     public bool ByHand => Calls is null;
+
+    /// <summary>
+    /// Whether <paramref name="path"/> and <paramref name="other"/> name one file of the tree, as the plan check that held
+    /// the class's paths reads them: either separator (<see cref="ClassClosureReading.PathOf"/>), compared as this machine
+    /// compares paths. The one comparison of a class's paths - its home's and its sites', in the plan and in the record,
+    /// the paths the agent changed, an arm's site and a home's touches - so a path the plan check took is never another
+    /// file here for its spelling.
+    /// </summary>
+    /// <param name="path">A path from the tree's root.</param>
+    /// <param name="other">Another.</param>
+    public bool SamePath(string path, string other)
+        => string.Equals(ClassClosureReading.PathOf(path), ClassClosureReading.PathOf(other), PathComparison);
 
     /// <summary>
     /// A proof that reads nothing but the record itself and the registry: a manual lane's, judged by hand, its sites that
     /// read their home, its searches and its measurements read as given.
     /// </summary>
     /// <param name="arms">Each arm the registry of the lane's worktree declares, with its own site; null where it declares none.</param>
-    public static ClassClosureProof Manual(IReadOnlyList<(string Id, string Site)>? arms)
+    /// <param name="pathComparison">How this machine compares paths, an arm's site against a home.</param>
+    public static ClassClosureProof Manual(IReadOnlyList<(string Id, string Site)>? arms, StringComparison pathComparison)
         => new(
             Changed: null,
             Calls: null,
@@ -341,7 +365,8 @@ public sealed record ClassClosureProof(
             new Dictionary<string, int>(),
             new Dictionary<string, int>(),
             TouchesRequired: 0,
-            HotspotAt: int.MaxValue);
+            HotspotAt: int.MaxValue,
+            pathComparison);
 }
 
 /// <summary>One home the run touched often enough to name: the path, the class whose home it is, and how often.</summary>
@@ -378,14 +403,16 @@ public sealed record ClassClosureJudged(
 /// class has an entry, and a manual lane's record names one at least; a planned class's home is the plan's, or the record
 /// says why it moved; every planned site is accounted for, a deleted site no longer declaring its symbol in the worktree
 /// and a site that reads its home among the paths the agent changed; every search was made - it cites the call that made
-/// it, a tool call of the item's stored streams one of whose input's texts holds its query - and every neighbour was
-/// measured - its measurement a <c>measure</c> call of the same streams whose own record says it measured the neighbour's
-/// cell and answered its result (failed for failed-fixed, the fix shown by another call of the cell that answered passed,
-/// its record written after the failing call's), or reasoned where it says it was not; every test
-/// of the pin is declared in the worktree; where the worktree's configuration declares an arms registry, the arm is one of
-/// its arms and mutates the home's own file, or the record says why the class has none; the universe holds every axis the
-/// plan names, and the claim names every axis of it; and where the home was touched by other work, the record carries a
-/// home audit.
+/// it, a tool call of the item's stored streams whose tool ran, however it ended, one of whose input's texts holds its
+/// query - and every neighbour was measured - its measurement a <c>measure</c> call of the same streams whose own record
+/// says it measured the neighbour's cell and answered its result (failed for failed-fixed, the fix shown by another call
+/// of the cell that answered passed, its record written after the failing call's), or reasoned where it says it was not;
+/// every test of the pin is declared in the worktree; where the worktree's configuration declares an arms registry, the
+/// arm is one of its arms and mutates the home's own file, or the record says why the class has none; the universe holds
+/// every axis the plan names, and the claim names every axis of it; and where the home was touched by other work, the
+/// record carries a home audit. A class's paths - in the plan and in the record, the paths changed, an arm's site and the
+/// touches - are read as the plan check reads them, either separator, and compared as this machine compares paths
+/// (<see cref="ClassClosureProof.SamePath"/>).
 /// </summary>
 public static class ClassClosureRules
 {
@@ -447,9 +474,11 @@ public static class ClassClosureRules
     {
         List<string> problems = [];
 
-        // The plan named the class's one home: a record that names another moved it, and says why or is refused.
+        // The plan named the class's one home: a record that names another moved it, and says why or is refused. Its path is
+        // another only as the plan check reads paths (SamePath): the plan's spelling of the file, which that check took, and
+        // git's in the record are one file.
         if (planned is not null
-            && (!string.Equals(entry.HomePath, planned.HomePath, StringComparison.Ordinal) || !string.Equals(entry.HomeSymbol, planned.HomeSymbol, StringComparison.Ordinal))
+            && (!proof.SamePath(entry.HomePath, planned.HomePath) || !string.Equals(entry.HomeSymbol, planned.HomeSymbol, StringComparison.Ordinal))
             && string.IsNullOrWhiteSpace(entry.HomeMoved))
         {
             problems.Add($"class '{entry.Class}': the home is '{entry.HomeSymbol}' in '{entry.HomePath}', not the planned '{planned.HomeSymbol}' in '{planned.HomePath}', and the record says not why it moved (homeMoved)");
@@ -457,7 +486,7 @@ public static class ClassClosureRules
 
         foreach (var (path, _, _) in planned?.Sites ?? [])
         {
-            if (!entry.Sites.Any(site => string.Equals(site.Path, path, StringComparison.Ordinal)))
+            if (!entry.Sites.Any(site => proof.SamePath(site.Path, path)))
             {
                 problems.Add($"class '{entry.Class}': the site '{path}' has no after in the record");
             }
@@ -473,7 +502,7 @@ public static class ClassClosureRules
                 problems.Add($"class '{entry.Class}': the site '{site.Path}' is deleted, but it still declares '{symbol}'");
             }
 
-            if (site.After == "reads-home" && proof.Changed is { } changed && !changed.Contains(site.Path, StringComparer.Ordinal))
+            if (site.After == "reads-home" && proof.Changed is { } changed && !changed.Any(path => proof.SamePath(path, site.Path)))
             {
                 problems.Add($"class '{entry.Class}': the site '{site.Path}' reads its home, but the agent changed nothing at it");
             }
@@ -496,6 +525,15 @@ public static class ClassClosureRules
             if (!calls.TryGetValue(call, out var cited))
             {
                 problems.Add($"class '{entry.Class}': the search for '{data}' cites the call '{call}', which is not a tool call of this item's stored streams");
+                continue;
+            }
+
+            // A search is made by a call whose tool ran, however it ended: a search that found nothing exits 1 as grep, rg
+            // and git grep do, and is the evidence a class of one site rests on. A call refused, or whose input did not
+            // read, searched nothing.
+            if (!cited.Ran)
+            {
+                problems.Add($"class '{entry.Class}': the search for '{data}' cites the call '{call}', which never ran: a call refused, or whose input did not read, searched nothing");
                 continue;
             }
 
@@ -586,7 +624,7 @@ public static class ClassClosureRules
                 {
                     problems.Add($"class '{entry.Class}': the arm '{armId}' is not an arm of the registry its worktree holds");
                 }
-                else if (!string.Equals(named.Site, entry.HomePath, StringComparison.Ordinal))
+                else if (!proof.SamePath(named.Site, entry.HomePath))
                 {
                     problems.Add($"class '{entry.Class}': the arm '{armId}' mutates '{named.Site}', not the home '{entry.HomePath}'");
                 }
@@ -629,11 +667,14 @@ public static class ClassClosureRules
     /// <param name="result">The neighbour's result, as the record spells it.</param>
     private static string AnswerOf(string result) => result == "failed-fixed" ? "failed" : result;
 
-    /// <summary>The audits one entry requires, and its home's touches and hotspots.</summary>
+    /// <summary>
+    /// The audits one entry requires, and its home's touches and hotspots: the touches of every path that is its home's as
+    /// the class's paths are compared (<see cref="ClassClosureProof.SamePath"/>), git's spelling of the file among them.
+    /// </summary>
     private static void AuditsAndTouches(ClassClosureRecord entry, ClassClosureProof proof, List<string> audits, List<ClassClosureHotspot> hotspots, List<ClassClosureTouch> touches)
     {
-        var byOthers = proof.TouchesByOthers.TryGetValue(entry.HomePath, out var others) ? others : 0;
-        var all = proof.TouchesAll.TryGetValue(entry.HomePath, out var every) ? every : 0;
+        var byOthers = proof.TouchesByOthers.Where(touched => proof.SamePath(touched.Key, entry.HomePath)).Sum(touched => touched.Value);
+        var all = proof.TouchesAll.Where(touched => proof.SamePath(touched.Key, entry.HomePath)).Sum(touched => touched.Value);
         touches.Add(new ClassClosureTouch(entry.Class, entry.HomePath, byOthers, all));
 
         if (all >= proof.HotspotAt)

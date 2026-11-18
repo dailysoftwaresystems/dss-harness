@@ -381,7 +381,12 @@ public sealed record ToolCallInputDelta(string Id, string Fragment) : AgentEvent
 /// <param name="Input">Its input, whole.</param>
 /// <param name="Result">Its result, masked and capped; the cap's overflow is <paramref name="ResultFile"/>.</param>
 /// <param name="ResultFile">Where a result too large for the event is kept whole; null where it was not.</param>
-public sealed record ToolCallFinished(string Id, bool Ok, TimeSpan Duration, string Input, string Result, string? ResultFile = null) : AgentEvent;
+/// <param name="Ran">
+/// Whether its tool ran, however it ended - a command that exited 1, a search that found nothing - or did nothing: false
+/// for a call refused (a denial of the policy, a tool the step is not given, a call made where no tool runs) or whose
+/// input did not read. Null in a stream written before its client said so, where whether it succeeded stands for it.
+/// </param>
+public sealed record ToolCallFinished(string Id, bool Ok, TimeSpan Duration, string Input, string Result, string? ResultFile = null, bool? Ran = null) : AgentEvent;
 
 /// <summary>A permission the agent asked for was denied.</summary>
 /// <param name="Tool">The tool it asked to run.</param>

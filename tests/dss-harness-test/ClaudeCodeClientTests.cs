@@ -1746,7 +1746,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.False(Assert.Single(sink.Of<ToolCallFinished>()).Ok);
+
+        // The denied call never ran, as Claude Code stamps it, and its end in the stream says so.
+        var ended = Assert.Single(sink.Of<ToolCallFinished>());
+        Assert.Equal((false, (bool?)false), (ended.Ok, ended.Ran));
         Assert.Equal(1, result.Denials);
 
         var faulty = Path.Combine(kit.Worktree, "faulty.txt");
@@ -1790,7 +1793,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(AgentToolRunner.Harness, Assert.Single(sink.Of<ToolCallStarted>()).Runner);
 
         var finished = Assert.Single(sink.Of<ToolCallFinished>());
-        Assert.True(finished.Ok);
+        Assert.Equal((true, (bool?)true), (finished.Ok, finished.Ran));
         Assert.Contains("the page's text", finished.Result, StringComparison.Ordinal);
         Assert.Contains("<web-page", finished.Result, StringComparison.Ordinal);
         Assert.Equal("https://example.test/page", Assert.Single(endpoint.Asked).Address.ToString());
@@ -1825,8 +1828,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal((1, 1), (result.Denials, result.WebRequests));
         Assert.Empty(endpoint.Asked);
 
+        // Claude Code gives the refusal back as any tool's error, which it says ran; the runtime that refused it says it
+        // never did, and the stream holds the runtime's word.
         var finished = Assert.Single(sink.Of<ToolCallFinished>());
-        Assert.False(finished.Ok);
+        Assert.Equal((false, (bool?)false), (finished.Ok, finished.Ran));
         Assert.Contains("Web(example.test)", finished.Result, StringComparison.Ordinal);
 
         var denied = Assert.Single(sink.Of<PermissionDenied>());

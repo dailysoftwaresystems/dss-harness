@@ -258,9 +258,34 @@ public sealed class GitClientTests
         await harness.CommitAllAsync(temp.Path, "the home changes", cancellationToken);
         var changed = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
 
-        var touches = await harness.GitClient.CountTouchesAsync(temp.Path, start, "HEAD", ["src/Home.cs", "src/Old.cs"], cancellationToken);
+        var touches = await harness.GitClient.CountTouchesAsync(temp.Path, start, "HEAD", ["src/Home.cs", "src/Old.cs"], StringComparison.Ordinal, cancellationToken);
 
         Assert.Equal([new GitTouch(changed, "src/Home.cs"), new GitTouch(renamed, "src/Home.cs")], touches);
+    }
+
+    /// <summary>
+    /// A path asked is matched to the paths git names as the comparison given compares them: on a machine that does not
+    /// tell case apart, a home asked in another case than git's is touched by the same commits, each named as git names
+    /// the file; compared by its every character, it is touched by none.
+    /// </summary>
+    [Fact]
+    public async Task CountTouchesAsync_MatchesThePathsAsked_AsTheComparisonGivenComparesThem()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("src/Home.cs", "one\n");
+        await harness.CommitAllAsync(temp.Path, "the home", cancellationToken);
+        var start = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        temp.WriteFile("src/Home.cs", "two\n");
+        await harness.CommitAllAsync(temp.Path, "the home changes", cancellationToken);
+        var changed = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+
+        Assert.Equal(
+            [new GitTouch(changed, "src/Home.cs")],
+            await harness.GitClient.CountTouchesAsync(temp.Path, start, "HEAD", ["SRC/home.cs"], StringComparison.OrdinalIgnoreCase, cancellationToken));
+        Assert.Empty(await harness.GitClient.CountTouchesAsync(temp.Path, start, "HEAD", ["SRC/home.cs"], StringComparison.Ordinal, cancellationToken));
     }
 
     [Fact]

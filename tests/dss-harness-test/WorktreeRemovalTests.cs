@@ -1472,8 +1472,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         string from,
         string to,
         IReadOnlyList<string> paths,
+        StringComparison comparison,
         CancellationToken cancellationToken = default)
-        => Call(() => inner.CountTouchesAsync(directory, from, to, paths, Token(cancellationToken)));
+        => Call(() => inner.CountTouchesAsync(directory, from, to, paths, comparison, Token(cancellationToken)));
 
     public Task<bool> HasStashAsync(string gitDirectory, CancellationToken cancellationToken = default)
         => Call(() => inner.HasStashAsync(gitDirectory, Token(cancellationToken)));
