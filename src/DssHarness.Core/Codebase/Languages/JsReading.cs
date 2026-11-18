@@ -501,7 +501,7 @@ internal sealed class JsReading
             at = _scan.Next(at);
         }
 
-        var imported = _scan.IsName(at) ? _scan.Text(at) : IsText(at) ? Unquoted(_scan.Text(at)) : null;
+        var imported = _scan.IsName(at) ? _scan.Text(at) : IsText(at) ? _scan.Value(at) : null;
 
         if (imported is not { Length: > 0 })
         {
@@ -817,10 +817,6 @@ internal sealed class JsReading
 
     /// <summary>The specifier the text at <paramref name="at"/> holds; <see langword="null"/> where it is none - empty, interpolated, or left open.</summary>
     private string? Specifier(int at) => SpecifierOf(_scan, at);
-
-    /// <summary><paramref name="text"/>, a string, without its quotes; <see langword="null"/> where it is left open or holds an escape.</summary>
-    private static string? Unquoted(string text)
-        => text.Length >= 2 && text[0] is '\'' or '"' or '`' && text[^1] == text[0] && !text.Contains('\\', StringComparison.Ordinal) ? text[1..^1] : null;
 
     // ---- Statements: what stands at a module's top and in a namespace ----
 
@@ -1421,7 +1417,7 @@ internal sealed class JsReading
 
         foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, inner, _types))
         {
-            var member = _scan.IsName(pieceStart) ? _scan.Text(pieceStart) : IsText(pieceStart) ? Unquoted(_scan.Text(pieceStart)) : null;
+            var member = _scan.IsName(pieceStart) ? _scan.Text(pieceStart) : IsText(pieceStart) ? _scan.Value(pieceStart) : null;
 
             if (member is not { Length: > 0 })
             {
@@ -1738,7 +1734,7 @@ internal sealed class JsReading
         }
 
         var name = _scan.IsName(at) ? _scan.Text(at)
-            : IsText(at) ? Unquoted(_scan.Text(at))
+            : IsText(at) ? _scan.Value(at)
             : _scan[at].Kind == ScanTokenKind.Number ? _scan.Text(at)
             : null;
 
@@ -2303,6 +2299,14 @@ internal sealed class JsReading
         Overriding(key, name, nameAt, modifiers);
         DecoratorCalls(key, decorators, frame.Owner);
 
+        // What its parameters' decorators call, and what their defaults read and hold.
+        DecoratorCalls(key, [.. parameters.Decorators], frame.Owner);
+
+        foreach (var (defaultStart, defaultEnd) in parameters.Defaults)
+        {
+            Calls(_text, defaultStart, defaultEnd, key, new Locals(), frame.Owner, depth: 0);
+        }
+
         if (function.Body >= 0)
         {
             var typeParameters = _typeParameters.Concat(function.Own).ToList();
@@ -2646,9 +2650,17 @@ internal sealed class JsReading
     /// <summary>
     /// A callable's parameters: how many a call gives - in TypeScript its required ones the fewest and all of them the
     /// most, none where a rest one takes any; in JavaScript any number - the spans of their types, the names each binds
-    /// with the type it is declared with, those of a function type, and the parameter properties a constructor declares.
+    /// with the type it is declared with, those of a function type, the parameter properties a constructor declares, and
+    /// each parameter's decorators and default, whose code is the callable's.
     /// </summary>
-    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Functions, IReadOnlyList<ParameterProperty> Properties);
+    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Functions, IReadOnlyList<ParameterProperty> Properties)
+    {
+        /// <summary>Each parameter's decorators, each from its <c>@</c> to past it.</summary>
+        public IReadOnlyList<(int Start, int End)> Decorators { get; init; } = [];
+
+        /// <summary>Each parameter's default, from past its <c>=</c> to its end.</summary>
+        public IReadOnlyList<(int Start, int End)> Defaults { get; init; } = [];
+    }
 
     /// <summary>The parameters between the parentheses at <paramref name="open"/> and <paramref name="close"/>.</summary>
     private Parameters ParametersOf(ScannedText scan, int open, int close)
@@ -2660,10 +2672,12 @@ internal sealed class JsReading
         var locals = new Dictionary<string, string?>(StringComparer.Ordinal);
         var functions = new HashSet<string>(StringComparer.Ordinal);
         var properties = new List<ParameterProperty>();
+        var decorators = new List<(int Start, int End)>();
+        var defaults = new List<(int Start, int End)>();
 
         foreach (var (start, end) in ScanCalls.Split(scan, open + 1, close, _types))
         {
-            var at = SkipDecorators(scan, start, end);
+            var at = SkipDecorators(scan, start, end, decorators);
             var modifiers = new List<string>();
 
             while (scan.IsName(at) && ParameterModifiers.Contains(scan.Text(at)) && scan.Next(at) < end && (scan.IsName(scan.Next(at)) || scan.Opens(scan.Next(at))))
@@ -2708,6 +2722,11 @@ internal sealed class JsReading
             var typeEnd = typeStart >= 0 ? assign : -1;
             optional |= assign < end;
 
+            if (assign < end)
+            {
+                defaults.Add((assign + 1, end));
+            }
+
             if (typeStart >= 0)
             {
                 spans.Add((typeStart, typeEnd));
@@ -2736,18 +2755,20 @@ internal sealed class JsReading
             }
         }
 
-        return _typescript
+        return (_typescript
             ? new Parameters(least, rest ? null : most, spans, locals, functions, properties)
-            : new Parameters(0, null, spans, locals, functions, properties);
+            : new Parameters(0, null, spans, locals, functions, properties)) with { Decorators = decorators, Defaults = defaults };
     }
 
-    /// <summary>Past the decorators of a parameter at <paramref name="at"/>, within <paramref name="end"/>.</summary>
-    private static int SkipDecorators(ScannedText scan, int at, int end)
+    /// <summary>Past the decorators of a parameter at <paramref name="at"/>, within <paramref name="end"/>, each from its <c>@</c> to past it among <paramref name="decorators"/>.</summary>
+    private static int SkipDecorators(ScannedText scan, int at, int end, List<(int Start, int End)> decorators)
     {
         while (at < end && scan.Is(at, "@") && scan.IsName(scan.Next(at)))
         {
             var (_, past) = ChainAt(scan, scan.Next(at), end);
+            var decorator = at;
             at = scan.Is(past, "(") ? Math.Min(scan.Past(past), end) : past;
+            decorators.Add((decorator, at));
         }
 
         return at;
@@ -2828,10 +2849,11 @@ internal sealed class JsReading
 
             if (token.Kind == ScanTokenKind.Text)
             {
-                // The literal's constant parts - a template's holes are code, read as code - are its data.
-                foreach (var value in text.LiteralParts(token))
+                // The literal's constant parts - a template's holes are code, read as code - are its data; markup holds
+                // none but its attributes' strings.
+                foreach (var (value, part) in scan.LiteralParts(token))
                 {
-                    _extract.Literal(value, token.Line);
+                    _extract.Literal(value, part, key);
                 }
 
                 if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
@@ -3192,20 +3214,23 @@ internal sealed class JsReading
     };
 
     /// <summary>
-    /// A member read or written without a call of it - <c>x.y</c>, <c>x?.y</c> - or a bare name the code reads: a use of
-    /// the member by its name, qualified by what its receiver is where the file says. A local, a parameter, a function
-    /// value or a word of the language is its own or none, and no use; a name an object literal or an annotation writes
-    /// before a colon is a key, not a read.
+    /// A member read or written without a call of it - <c>x.y</c>, <c>x?.y</c> - or a bare name the code reads, the first
+    /// of a receiver's chain among them: a use of the member by its name, qualified by what its receiver is where the file
+    /// says. A local, a parameter, a function value and a word of the language are its own or none, and no use, and so is
+    /// a name a member is reached through that is no value - a type's, one the language declares among them, and a
+    /// namespace an import binds; a name an object literal, a label or an annotation writes before a colon is a key, not a
+    /// read, where one a case or a conditional writes there is.
     /// </summary>
     private void Used(ScannedText scan, int previous, bool member, Func<string> key, Locals locals, string word, int line, int next)
     {
         if (member)
         {
-            _extract.Reference(key(), CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, previous, locals, out _, most: 8));
+            _extract.Reference(key(), CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, previous, locals, out _));
             return;
         }
 
-        if ((scan.Is(next, ":") && !scan.Is(previous, "case")) || scan.Is(next, ".") || scan.Is(next, "?.") || scan.Is(next, "[")
+        if ((scan.Is(next, ":") && !scan.Is(previous, "case") && !ScanCalls.IsConditionalColon(scan, next)) || scan.Is(next, "[")
+            || (IsMember(scan, next) && (Builtins.Contains(word) || IsTypeName(word) || (_bindings.TryGetValue(word, out var binding) && binding is { Prefixed: true, Export: null })))
             || BareTypeWords.Contains(word)
             || locals.Types.ContainsKey(word) || locals.Functions.Contains(word) || locals.LocalFunctions.Contains(word) || NoCalls.Contains(word))
         {
@@ -3260,7 +3285,7 @@ internal sealed class JsReading
     /// type a local is declared with or made of, an import's prefix, a type's name, a value by its name, or a type a
     /// <c>new</c> makes - <paramref name="anyValue"/> the local's name where it is typed <c>any</c>.
     /// </summary>
-    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? anyValue, int most = int.MaxValue)
+    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? anyValue)
     {
         anyValue = null;
         var names = new List<string>();
@@ -3269,7 +3294,7 @@ internal sealed class JsReading
 
         while (scan.IsName(at))
         {
-            if (names.Count == most)
+            if (names.Count == FileExtract.MostReceiverNames)
             {
                 return new ExtractQualifier(CodeQualifierKinds.Value);
             }
@@ -3594,12 +3619,15 @@ internal sealed class JsReading
 
         var qualified = $"{_path}.(module)";
 
-        return _moduleKey = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, "(module)", qualified, 1, Math.Max(1, _text.Lines.Starts.Count), "(module)")
+        _moduleKey = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, "(module)", qualified, 1, Math.Max(1, _text.Lines.Starts.Count), "(module)")
         {
             SubKind = "module",
             Scope = _scope,
             SeenIn = _module ? _path : null,
         });
+
+        _extract.Top(_moduleKey);
+        return _moduleKey;
     }
 
     // ---- Exports a list or an assignment names ----
@@ -3804,16 +3832,7 @@ internal sealed class JsReading
     private bool IsText(int at) => IsText(_scan, at);
 
     /// <summary>The specifier the text at <paramref name="at"/> of <paramref name="scan"/> holds (<see cref="Specifier(int)"/>).</summary>
-    private static string? SpecifierOf(ScannedText scan, int at)
-    {
-        if (!IsText(scan, at))
-        {
-            return null;
-        }
-
-        var text = scan.Text(at);
-        return text.StartsWith('`') && text.Contains("${", StringComparison.Ordinal) ? null : Unquoted(text) is { Length: > 0 } unquoted ? unquoted : null;
-    }
+    private static string? SpecifierOf(ScannedText scan, int at) => scan.Value(at) is { Length: > 0 } value ? value : null;
 
     /// <summary>
     /// The specifier the call whose parenthesis is at <paramref name="open"/> is given as its whole first argument - one

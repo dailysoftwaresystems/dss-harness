@@ -656,6 +656,34 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         Assert.Contains(new CodeEdge("typescript:src/c.ts.go", "typescript:src/c.ts.take", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), linked.Edges);
     }
 
+    /// <summary>
+    /// A parameter's decorators and its default are the code of the callable it is written on - what a decorator calls
+    /// and holds, what a default reads and holds - and a conditional's branches are uses, its type annotations none.
+    /// </summary>
+    [Fact]
+    public void AParametersDecoratorsAndDefault_AreItsCallablesCode()
+    {
+        var extract = Read("src/api.ts", """
+            export class Api {
+              constructor(@Inject('api_token') private readonly token: string, retries: number = DEFAULT_RETRIES) {}
+
+              get(path: string = '/default/path'): string {
+                return enabled ? path : FALLBACK;
+              }
+            }
+            """);
+
+        const string Constructor = "typescript:src/api.ts.Api.constructor";
+        const string Get = "typescript:src/api.ts.Api.get";
+
+        Assert.Equal(
+            [new ExtractLiteral("api_token", 2) { Node = Constructor }, new ExtractLiteral("/default/path", 4) { Node = Get }],
+            extract.Literals);
+        Assert.Equal(
+            [(Constructor, CodeEdgeKinds.Calls, "Inject", 2), (Constructor, CodeEdgeKinds.Uses, "DEFAULT_RETRIES", 2), (Get, CodeEdgeKinds.Uses, "enabled", 5), (Get, CodeEdgeKinds.Uses, "FALLBACK", 5)],
+            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
+    }
+
     private static FileExtract Read(string path, string text) => new TypeScriptExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

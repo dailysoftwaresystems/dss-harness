@@ -577,13 +577,13 @@ internal static class CssLexer
         private int Literal(int start, int from, char close, int end)
         {
             var literals = new LiteralStack<char>(this, start);
-            literals.OpenLiteral(close);
+            literals.OpenLiteral(close, from);
             var at = from;
 
             if (close == '\0')
             {
                 at += 2;
-                literals.OpenCode(at);
+                literals.OpenCode(from, at);
             }
 
             while (at < end && literals.Open)
@@ -598,7 +598,7 @@ internal static class CssLexer
                     }
                     else if (character is '"' or '\'')
                     {
-                        literals.OpenLiteral(character);
+                        literals.OpenLiteral(character, at + 1);
                         at++;
                     }
                     else
@@ -614,7 +614,7 @@ internal static class CssLexer
                 if (top == '\0')
                 {
                     // The interpolation's code closed: so is the token.
-                    literals.CloseLiteral();
+                    literals.CloseLiteral(at);
                 }
                 else if (character == '\\')
                 {
@@ -622,12 +622,12 @@ internal static class CssLexer
                 }
                 else if (Hole(at, end))
                 {
+                    literals.OpenCode(at, at + 2);
                     at += 2;
-                    literals.OpenCode(at);
                 }
                 else if (character == top)
                 {
-                    literals.CloseLiteral();
+                    literals.CloseLiteral(at);
                     at++;
                 }
                 else if (LineBreakAt(text, at, end) > 0)

@@ -275,6 +275,37 @@ internal static class ScanCalls
     }
 
     /// <summary>
+    /// Whether the colon at <paramref name="colon"/> is a conditional's - <c>c ? a : b</c> - as more question marks than
+    /// colons before it say, back to the start of its operand: its statement's, its group's or a comma's at the top. A
+    /// label's, a case's, a key's, a named argument's and a type's are not; a language whose <c>?.</c>, <c>??</c> or
+    /// <c>?-&gt;</c> is a token of its own holds no lone question mark but a conditional's or a nullable type's.
+    /// </summary>
+    /// <param name="scan">The text.</param>
+    /// <param name="colon">The index of the colon.</param>
+    public static bool IsConditionalColon(ScannedText scan, int colon)
+    {
+        var open = 0;
+
+        for (var at = scan.Previous(colon); at >= 0 && !scan.Is(at, ";") && !scan.Is(at, "}") && !scan.Is(at, ",") && !scan.Opens(at); at = scan.Previous(at))
+        {
+            if ((scan.Is(at, ")") || scan.Is(at, "]")) && scan.Match(at) is var match and >= 0)
+            {
+                at = match;
+                continue;
+            }
+
+            open += scan.Is(at, "?") ? 1 : scan.Is(at, ":") ? -1 : 0;
+
+            if (open > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// The index of the last token of what begins at <paramref name="at"/> as one piece within <paramref name="end"/> -
     /// a group, or a type's arguments after a name - and <paramref name="at"/> itself where neither begins there.
     /// </summary>

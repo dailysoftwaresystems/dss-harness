@@ -4,12 +4,15 @@ namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
 /// The lexical rules of Dart for the structural scanner: comments (<c>//</c>, <c>///</c>, and <c>/* */</c>, which nest)
-/// and a first line's script tag (<c>#!</c>) kept apart; a string - in single or double quotes, triple-quoted over lines, raw (<c>r'...'</c>) - as one token with
-/// every interpolation it holds (<c>$name</c>, <c>${...}</c> with braces and strings of its own), never read as code;
-/// names that may hold <c>$</c>; numbers with their separators; <c>?..</c>, <c>...?</c>, <c>...</c>, <c>??=</c>,
-/// <c>?.</c>, <c>..</c>, <c>=&gt;</c> and <c>??</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two
-/// lists of type arguments. Where a string's interpolations hold code (<c>${...}</c>), the lexer says where, so that
-/// code is read in its turn as a text of its own.
+/// and a first line's script tag (<c>#!</c>) kept apart; a string - in single or double quotes, triple-quoted over
+/// lines, raw (<c>r'...'</c>) - as one token with every interpolation it holds (<c>$name</c>, <c>${...}</c> with braces
+/// and strings of its own), never read as code, and where its value's constant parts are written - between its quotes,
+/// a triple-quoted one's past a first line of white space alone, and its holes - and how they are decoded
+/// (<see cref="ScanLiteral"/>): a raw one's as written, any other's by Dart's escapes; names that may hold <c>$</c>;
+/// numbers with their separators; <c>?..</c>, <c>...?</c>, <c>...</c>, <c>??=</c>, <c>?.</c>, <c>..</c>, <c>=&gt;</c>
+/// and <c>??</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two lists of type arguments. Where a
+/// string's interpolations hold code (<c>$name</c>, <c>${...}</c>), the lexer says where, so that code is read in its
+/// turn as a text of its own.
 /// </summary>
 internal static class DartLexer
 {
@@ -32,7 +35,7 @@ internal static class DartLexer
     {
         var lexing = new Lexing(text, lines);
         lexing.Run(start, end);
-        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments), lexing.Interpolations, lines);
+        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments, literals: lexing.Literals), lexing.Interpolations, lines);
     }
 
     /// <summary>One run of the lexer over a text.</summary>
@@ -131,8 +134,10 @@ internal static class DartLexer
         /// <summary>
         /// A string whose first quote is at <paramref name="quote"/>, a raw one's <c>r</c> at <paramref name="start"/>: to its
         /// closing quote or quotes, past every interpolation it holds - each <c>${</c> code to its own <c>}</c>, which may hold
-        /// braces, comments and strings of their own - read with a stack of what it is in, never a call into itself, so no
-        /// nesting reaches past the reader's stack. A string of one line left open ends at its line, and what holds it with it.
+        /// braces, comments and strings of their own, and each bare <c>$name</c> (<see cref="ScanLexing.BareHole"/>) - read
+        /// with a stack of what it is in, never a call into itself, so no nesting reaches past the reader's stack; its value's
+        /// parts between its quotes and its holes, a raw one's as written. A string of one line left open ends at its line,
+        /// and what holds it with it.
         /// </summary>
         private int Literal(int start, int quote, bool raw, int end)
         {
@@ -169,25 +174,18 @@ internal static class DartLexer
                 }
                 else if (!top.Raw && character == '$' && at + 1 < end && text[at + 1] == '{')
                 {
+                    literals.OpenCode(at, at + 2);
                     at += 2;
-                    literals.OpenCode(at);
                 }
-                else if (!top.Raw && character == '$' && at + 1 < end && IsNameStart(text[at + 1]))
+                else if (!top.Raw && character == '$' && BareHole(text, at, end, variable: false) is { } hole)
                 {
                     // A bare $name: a run of code of its own, a value the string reads.
-                    var name = at + 1;
-
-                    while (name < end && IsNamePart(text[name]))
-                    {
-                        name++;
-                    }
-
-                    Interpolated(start, at + 1, name);
-                    at = name;
+                    literals.Hole(at, hole.Start, hole.End, hole.Past);
+                    at = hole.Past;
                 }
                 else if (character == top.Mark && (!top.Triple || (at + 2 < end && text[at + 1] == character && text[at + 2] == character)))
                 {
-                    literals.CloseLiteral();
+                    literals.CloseLiteral(at);
                     at += top.Triple ? 3 : 1;
                 }
                 else if (!top.Triple && LineBreakAt(text, at, end) > 0)
@@ -202,18 +200,40 @@ internal static class DartLexer
 
             at = Math.Min(at, end);
             literals.End(at);
+            KeepLiteral(start, new ScanLiteral(literals.Parts, raw ? ScanEscapes.None : ScanEscapes.Dart) { Interpolated = literals.Holes, LeftOpen = literals.Open });
             Add(ScanTokenKind.Text, start, at);
             return at;
         }
 
-        /// <summary>Opens the string whose first quote is at <paramref name="quote"/> on <paramref name="literals"/>; answers where its text begins.</summary>
+        /// <summary>
+        /// Opens the string whose first quote is at <paramref name="quote"/> on <paramref name="literals"/>; answers where its
+        /// text begins - a triple-quoted one's past a first line of white space alone, which Dart leaves out of its value.
+        /// </summary>
         private int Open(LiteralStack<Quote> literals, int quote, bool raw, int end)
         {
             var mark = text[quote];
             var triple = quote + 2 < end && text[quote + 1] == mark && text[quote + 2] == mark;
+            var content = quote + (triple ? 3 : 1);
 
-            literals.OpenLiteral(new Quote(mark, triple, raw));
-            return quote + (triple ? 3 : 1);
+            literals.OpenLiteral(new Quote(mark, triple, raw), triple ? PastBlankFirstLine(content, end) : content);
+            return content;
+        }
+
+        /// <summary>
+        /// Past the first line of a triple-quoted string from <paramref name="at"/> where it holds nothing but white space -
+        /// each blank possibly after a backslash - and its line break: where the string's value begins, as Dart reads it;
+        /// <paramref name="at"/> where the line holds anything else.
+        /// </summary>
+        private int PastBlankFirstLine(int at, int end)
+        {
+            var index = at;
+
+            while (index < end && (text[index] is ' ' or '\t' || (text[index] == '\\' && index + 1 < end && text[index + 1] is ' ' or '\t' or '\r' or '\n')))
+            {
+                index++;
+            }
+
+            return LineBreakAt(text, index, end) is var width and > 0 ? index + width : at;
         }
 
         /// <summary>How long the punctuator at <paramref name="at"/> is: one of <see cref="Whole"/>, else one character; 0 where none is.</summary>

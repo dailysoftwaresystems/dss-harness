@@ -1715,6 +1715,12 @@ internal sealed class CFamilyReading
             _extract.Reference(key, CodeEdgeKinds.Overrides, head.Name, _scan[head.Open].Line, parameters.Types.Count, new ExtractQualifier(CodeQualifierKinds.Base));
         }
 
+        // What its parameters' defaults read and hold.
+        foreach (var (defaultStart, defaultEnd) in parameters.Defaults)
+        {
+            Calls(_scan, defaultStart, defaultEnd, key, new Dictionary<string, string?>(StringComparer.Ordinal), [], owner);
+        }
+
         if (body < 0)
         {
             return;
@@ -1768,7 +1774,11 @@ internal sealed class CFamilyReading
     }
 
     /// <summary>A function's parameters: their types as its id names them, the spans of those types, its arity, and the names each binds with its type.</summary>
-    private sealed record Parameters(IReadOnlyList<string> Types, IReadOnlyList<(int Start, int End)> TypeSpans, int? Least, int? Most, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Pointers);
+    private sealed record Parameters(IReadOnlyList<string> Types, IReadOnlyList<(int Start, int End)> TypeSpans, int? Least, int? Most, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Pointers)
+    {
+        /// <summary>Each parameter's default, from past its <c>=</c> to its end: code of the function's.</summary>
+        public IReadOnlyList<(int Start, int End)> Defaults { get; init; } = [];
+    }
 
     private Parameters ParametersOf(FunctionName head)
     {
@@ -1782,7 +1792,7 @@ internal sealed class CFamilyReading
         var spans = new List<(int, int)>();
         var locals = new Dictionary<string, string?>(StringComparer.Ordinal);
         var pointers = new HashSet<string>(StringComparer.Ordinal);
-        var defaults = 0;
+        var defaults = new List<(int Start, int End)>();
         var packs = 0;
         var variadic = false;
         var pieces = ScanCalls.Split(_scan, open + 1, close, _types);
@@ -1815,7 +1825,10 @@ internal sealed class CFamilyReading
             }
 
             var stop = ScanCalls.TopLevel(_scan, start, end, "=", _types, SpellsOperator);
-            defaults += stop < end ? 1 : 0;
+            if (stop < end)
+            {
+                defaults.Add((stop + 1, end));
+            }
 
             var declared = Declarator(start, stop);
             var typeEnd = declared.Name is null ? stop : declared.TypeEnd;
@@ -1833,7 +1846,7 @@ internal sealed class CFamilyReading
             }
         }
 
-        return new Parameters(types, spans, types.Count - defaults - packs, variadic ? null : types.Count, locals, pointers);
+        return new Parameters(types, spans, types.Count - defaults.Count - packs, variadic ? null : types.Count, locals, pointers) { Defaults = defaults };
     }
 
     /// <summary>
@@ -1934,8 +1947,17 @@ internal sealed class CFamilyReading
 
         TypeReferences(key, start, declared.TypeEnd);
 
-        // What its initializer calls.
-        Calls(_scan, declared.At + 1, Math.Min(declared.End, last + 1), key, new Dictionary<string, string?>(StringComparer.Ordinal), [], frame.Owner);
+        // What its bounds and its initializer read and call; a function pointer's parameters, between, are its type's.
+        var from = declared.At + 1;
+        var to = Math.Min(declared.End, last + 1);
+
+        if (declared.Pointer && declared.Function && _scan.Match(declared.TypeEnd) is var close and >= 0 && close < to)
+        {
+            Calls(_scan, from, close, key, new Dictionary<string, string?>(StringComparer.Ordinal), [], frame.Owner);
+            from = Math.Min(_scan.Past(_scan.Next(close)), to);
+        }
+
+        Calls(_scan, from, to, key, new Dictionary<string, string?>(StringComparer.Ordinal), [], frame.Owner);
     }
 
     /// <summary>
@@ -1973,22 +1995,39 @@ internal sealed class CFamilyReading
         {
             if (scan[at].Kind != ScanTokenKind.Name)
             {
-                if (scan[at].Kind == ScanTokenKind.Text && scan[at].Start + scan[at].Length - 1 is var end && end > scan[at].Start)
+                // A string's value, as its lexer read its form and its escapes, is its data.
+                foreach (var (value, part) in scan.LiteralParts(scan[at]))
                 {
-                    // The string's value between its quotes is its data; a string written with an escape is left out, its
-                    // value not its text between the quotes.
-                    var value = scan.Source[(scan[at].Start + 1)..end];
-
-                    if (!value.Contains('\\', StringComparison.Ordinal))
-                    {
-                        _extract.Literal(value, scan[at].Line);
-                    }
+                    _extract.Literal(value, part, key);
                 }
 
                 if (scan.Is(at, "(") && scan.Next(at) is var star && scan.Is(star, "*") && scan.IsName(scan.Next(star)) && scan.Is(scan.Next(scan.Next(star)), ")")
-                    && scan.Is(scan.Next(scan.Next(scan.Next(star))), "(") && !Declares(scan, scan.Previous(at), close: -1))
+                    && scan.Next(scan.Next(scan.Next(star))) is var parameters && scan.Is(parameters, "("))
                 {
-                    _extract.Dynamic(scan[at].Line, $"a call through the function pointer {scan.Text(scan.Next(star))}");
+                    if (!Declares(scan, scan.Previous(at), close: -1))
+                    {
+                        _extract.Dynamic(scan[at].Line, $"a call through the function pointer {scan.Text(scan.Next(star))}");
+                    }
+                    else
+                    {
+                        // A function pointer it declares - int (*fallback)(struct lexer *) - is a pointer of its own, and
+                        // the names of its parameters are its type's: none is a value read.
+                        Local(scan, scan.Next(star), locals, pointers);
+                        at = Math.Min(scan.Past(parameters), to) - 1;
+                    }
+                }
+                else if (_cpp && scan.Is(at, "[") && Bindings(scan, at) is var bound and >= 0)
+                {
+                    // A structured binding's names - auto& [key, value] - are its own variables.
+                    for (var name = at + 1; name < bound; name++)
+                    {
+                        if (scan.IsName(name))
+                        {
+                            locals[scan.Text(name)] = null;
+                        }
+                    }
+
+                    at = bound;
                 }
                 else if ((scan.Is(at, ".") || scan.Is(at, "->")) && scan.Is(scan.Next(at), "*"))
                 {
@@ -2021,7 +2060,7 @@ internal sealed class CFamilyReading
 
             if (ScanCalls.At(scan, at, _calls) is not { } call)
             {
-                Used(scan, at, key, locals);
+                Used(scan, at, key, locals, pointers, taken);
                 continue;
             }
 
@@ -2091,19 +2130,22 @@ internal sealed class CFamilyReading
 
     /// <summary>
     /// A member read or written without a call of it - <c>s.field</c>, <c>p-&gt;field</c>, <c>Enum::member</c> - or a bare
-    /// name the code reads: a use of the member by its name, qualified by what its receiver is where the file says. A
-    /// local, a word of the language or a label is none; a name a <c>case</c> writes before its colon is a constant the
-    /// code reads, and is.
+    /// name the code reads, the first of a receiver's chain among them: a use of the member by its name, qualified by what
+    /// its receiver is where the file says. A local, a function pointer the code declares, a parameter of the macro it is
+    /// the text of (<paramref name="taken"/>), a word of the language, a label and a type - one <c>struct</c>,
+    /// <c>union</c>, <c>enum</c> or <c>class</c> names, one a declaration's name follows, a scope a <c>::</c> follows - is
+    /// none; a name a <c>case</c> or a conditional writes before its colon is a value the code reads, and is.
     /// </summary>
-    private void Used(ScannedText scan, int at, string key, Dictionary<string, string?> locals)
+    private void Used(ScannedText scan, int at, string key, Dictionary<string, string?> locals, HashSet<string> pointers, IReadOnlySet<string>? taken)
     {
         var word = scan.Text(at);
         var previous = scan.Previous(at);
+        var next = scan.Next(at);
         var line = scan[at].Line;
 
         if (scan.Is(previous, ".") || scan.Is(previous, "->"))
         {
-            _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, previous, locals, most: 8));
+            _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, previous, locals));
             return;
         }
 
@@ -2113,17 +2155,41 @@ internal sealed class CFamilyReading
             return;
         }
 
-        if (locals.ContainsKey(word) || _keywords.Contains(word) || StatementWords.Contains(word) || Builtins.Contains(word) || scan.Is(scan.Next(at), ".") || scan.Is(scan.Next(at), "->"))
+        if (locals.ContainsKey(word) || pointers.Contains(word) || taken?.Contains(word) == true || _keywords.Contains(word) || StatementWords.Contains(word) || Builtins.Contains(word)
+            || scan.Is(previous, "struct") || scan.Is(previous, "union") || scan.Is(previous, "enum") || scan.Is(previous, "class")
+            || (scan.IsName(next) && !_keywords.Contains(scan.Text(next))) || scan.Is(next, "::"))
         {
             return;
         }
 
-        if (scan.Is(scan.Next(at), ":") && !scan.Is(previous, "case"))
+        if (scan.Is(next, ":") && !scan.Is(previous, "case") && !ScanCalls.IsConditionalColon(scan, next))
         {
             return;
         }
 
         _extract.Reference(key, CodeEdgeKinds.Uses, word, line);
+    }
+
+    /// <summary>
+    /// Where the <c>]</c> of the structured binding whose <c>[</c> is at <paramref name="open"/> stands -
+    /// <c>auto [a, b] = pair</c>, <c>auto&amp; [key, value] : map</c>; -1 where it opens none.
+    /// </summary>
+    private static int Bindings(ScannedText scan, int open)
+    {
+        var before = scan.Previous(open);
+
+        while (scan.Is(before, "&") || scan.Is(before, "&&"))
+        {
+            before = scan.Previous(before);
+        }
+
+        if (!scan.Is(before, "auto") || scan.Match(open) is not (var close and >= 0))
+        {
+            return -1;
+        }
+
+        var after = scan.Next(close);
+        return scan.Is(after, "=") || scan.Is(after, ":") || scan.Is(after, "{") || scan.Is(after, "(") ? close : -1;
     }
 
     /// <summary>
@@ -2314,7 +2380,7 @@ internal sealed class CFamilyReading
         }
 
         if (before < 0 || scan.Is(before, ";") || scan.Is(before, "{") || scan.Is(before, "}") || scan.Is(before, "else") || scan.Is(before, "do")
-            || (scan.Is(before, ":") && !IsConditionalColon(scan, before)))
+            || (scan.Is(before, ":") && !ScanCalls.IsConditionalColon(scan, before)))
         {
             return Opening.Statement;
         }
@@ -2332,35 +2398,8 @@ internal sealed class CFamilyReading
             : Opening.None;
     }
 
-    /// <summary>
-    /// Whether the colon at <paramref name="colon"/> is a conditional's - <c>c ? a : b</c> - as more question marks than
-    /// colons before it, back to the start of its statement or its group, say; a label's or a case's is not.
-    /// </summary>
-    private static bool IsConditionalColon(ScannedText scan, int colon)
-    {
-        var open = 0;
-
-        for (var at = scan.Previous(colon); at >= 0 && !scan.Is(at, ";") && !scan.Is(at, "}") && !scan.Opens(at); at = scan.Previous(at))
-        {
-            if ((scan.Is(at, ")") || scan.Is(at, "]")) && scan.Match(at) is var match and >= 0)
-            {
-                at = match;
-                continue;
-            }
-
-            open += scan.Is(at, "?") ? 1 : scan.Is(at, ":") ? -1 : 0;
-
-            if (open > 0)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     /// <summary>What a call on the receiver before <paramref name="dot"/> is qualified by: <c>this</c>, the type a value is declared with, or the value itself.</summary>
-    private static ExtractQualifier Receiver(ScannedText scan, int dot, Dictionary<string, string?> locals, int most = int.MaxValue)
+    private static ExtractQualifier Receiver(ScannedText scan, int dot, Dictionary<string, string?> locals)
     {
         var names = new List<string>();
         var at = scan.Previous(dot);
@@ -2368,7 +2407,7 @@ internal sealed class CFamilyReading
 
         while (scan.IsName(at))
         {
-            if (names.Count == most)
+            if (names.Count == FileExtract.MostReceiverNames)
             {
                 return new ExtractQualifier(CodeQualifierKinds.Value);
             }

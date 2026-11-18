@@ -1621,15 +1621,14 @@ public static class CodeGraphLinker
                     continue;
                 }
 
-                var declarations = _owners[file].Values.OrderBy(declaration => declaration.Node.Start).ToList();
-
                 foreach (var literal in literals)
                 {
                     var joined = Distinct((bySegment.TryGetValue(literal.Value, out var byName) ? byName : []).Concat(byPath.TryGetValue(literal.Value, out var named) ? named : []));
 
+                    // The node whose code holds the literal, as its implementation said it; the file's own where none does.
                     foreach (var key in joined.Count <= CodeConfidences.MostCandidates ? joined : [])
                     {
-                        _edges.Add(new CodeEdge(OwnerOf(declarations, file, literal.Line), key.Id, CodeEdgeKinds.Uses, literal.Line, CodeConfidences.Candidates));
+                        _edges.Add(new CodeEdge(literal.Node ?? CodeGraphIds.FileId(file.Path), key.Id, CodeEdgeKinds.Uses, literal.Line, CodeConfidences.Candidates));
                     }
                 }
             }
@@ -1691,25 +1690,6 @@ public static class CodeGraphLinker
             }
 
             return names;
-        }
-
-        /// <summary>
-        /// The node of <paramref name="file"/> the line <paramref name="line"/> is declared in - the innermost whose lines
-        /// hold it - else the file's own node: what a literal's edge to a key is made from.
-        /// </summary>
-        private static string OwnerOf(IReadOnlyList<Declaration> declarations, CodeGraphFile file, int line)
-        {
-            Declaration? inner = null;
-
-            foreach (var declaration in declarations)
-            {
-                if (declaration.Node.Start <= line && line <= declaration.Node.End && (inner is null || declaration.Node.Start > inner.Node.Start))
-                {
-                    inner = declaration;
-                }
-            }
-
-            return inner?.Id ?? CodeGraphIds.FileId(file.Path);
         }
 
         /// <summary>

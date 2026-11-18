@@ -121,7 +121,7 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
         var script = Assert.Single(extract.Nodes, node => node.Id == "html:open");
 
         Assert.Equal(17, script.Start);
-        Assert.Contains(new ExtractLiteral("done", 18), extract.Literals ?? []);
+        Assert.Contains(new ExtractLiteral("done", 18) { Node = "html:open" }, extract.Literals ?? []);
         Assert.Equal([("site.css", 5), ("rel.html", 15)], extract.Imports.Select(import => (import.Target, import.Line)));
     }
 

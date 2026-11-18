@@ -390,11 +390,12 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
     ];
 
     /// <summary>
-    /// Text outside PHP's tags, comments, strings, heredocs, nowdocs and attributes are never read as code, and a string's
-    /// or a heredoc's interpolation is - a nowdoc's not.
+    /// Text outside PHP's tags, comments, strings, heredocs and nowdocs are never read as code, and a string's or a
+    /// heredoc's interpolation is - a nowdoc's not; an attribute calls nothing itself, but its arguments are read as the
+    /// code they are, a closure's the code it is written in.
     /// </summary>
     [Fact]
-    public void TextCommentsStringsAndAttributes_AreNeverReadAsCode_ButAnInterpolationIs()
+    public void TextCommentsAndStrings_AreNeverReadAsCode_ButAnInterpolationAndAnAttributesArgumentsAre()
     {
         var extract = Read("src/a.php", """
             <p>first()</p>
@@ -416,7 +417,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             }
             """);
 
-        Assert.Equal(["seventh", "tenth", "fourteenth", "sixteenth"], Calls(extract, "php:go"));
+        Assert.Equal(["seventh", "tenth", "fourteenth", "fifteenth", "sixteenth"], Calls(extract, "php:go"));
         Assert.Equal((3, 17), Lines(extract, "php:go"));
     }
 
@@ -1104,7 +1105,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
     /// <summary>
     /// An inclusion's path the code computes is read as the code it is; <c>dirname(__DIR__, n)</c> climbs from 1 to 31
-    /// levels, and none else; and a text with an escape is computed, one with a <c>$</c> in single quotes not.
+    /// levels, and none else; and a text is the path its quotes say, its escapes read as PHP reads them - <c>'c\\d.php'</c>
+    /// is <c>c\d.php</c> - and a <c>$</c> in single quotes no variable.
     /// </summary>
     [Fact]
     public void AComputedInclusionsCode_IsRead_AndOnlyAPlainTextIsAPath()
@@ -1119,8 +1121,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             """);
 
         Assert.Equal(["base_path", "dirname", "dirname"], Calls(extract, "php:src/i.php.(script)"));
-        Assert.Equal([2, 3, 4, 5], extract.Dynamic.Select(dynamic => dynamic.Line));
-        Assert.Equal(["e$f.php"], extract.Imports.Select(import => import.Target));
+        Assert.Equal([2, 3, 4], extract.Dynamic.Select(dynamic => dynamic.Line));
+        Assert.Equal(["c\\d.php", "e$f.php"], extract.Imports.Select(import => import.Target));
     }
 
     /// <summary>
@@ -1140,6 +1142,111 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         // The call is one; every member the chain reads is a use of it, in a time of the chain's length.
         Assert.Equal(CodeQualifierKinds.Value, Assert.Single(chain.References, reference => reference.Kind == CodeEdgeKinds.Calls).Qualifier?.Kind);
         Assert.Equal(200_000, chain.References.Count(reference => reference.Kind == CodeEdgeKinds.Uses && reference.Name == "$a"));
+    }
+
+    /// <summary>
+    /// A string's value is what PHP reads of it: a single-quoted one's escapes <c>\\</c> and <c>\'</c> alone, a
+    /// double-quoted one's every escape, a heredoc's and a nowdoc's lines past their closing indentation from the line after
+    /// their label - a nowdoc's as written - and an interpolated one's constant parts each a literal of its own: a bare
+    /// hole from its <c>$</c>, with one <c>-&gt;name</c> or one <c>[...]</c> after it, a <c>${name}</c> a variable read by its
+    /// name and no code, a key in brackets the hole's own.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsWhatPhpReadsOfIt_HeredocsNowdocsAndHolesAmongThem()
+    {
+        var extract = Read("src/t.php", """
+            <?php
+            function greet($user, $items, $row)
+            {
+                $a = "Hello $user";
+                $b = "Dear $user->name, welcome";
+                $c = "$items[0] left $row[key] end";
+                $d = "${name} and {$user->title}";
+                $e = 'C:\temp \'quoted\'';
+                $f = "Tab\there \u{48}\x49 \$x";
+                $g = <<<EOT
+                    first line
+                      second line
+                    EOT;
+                $h = <<<'EOT'
+                    raw $x\n
+                    EOT;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                new ExtractLiteral("Hello ", 4) { Node = "php:greet" },
+                new ExtractLiteral("Dear ", 5) { Node = "php:greet" },
+                new ExtractLiteral(", welcome", 5) { Node = "php:greet" },
+                new ExtractLiteral(" left ", 6) { Node = "php:greet" },
+                new ExtractLiteral(" end", 6) { Node = "php:greet" },
+                new ExtractLiteral(" and ", 7) { Node = "php:greet" },
+                new ExtractLiteral("C:\\temp 'quoted'", 8) { Node = "php:greet" },
+                new ExtractLiteral("Tab\there HI $x", 9) { Node = "php:greet" },
+                new ExtractLiteral("first line\n  second line", 11) { Node = "php:greet" },
+                new ExtractLiteral("raw $x\\n", 15) { Node = "php:greet" },
+            ],
+            extract.Literals);
+        Assert.Equal(
+            [("$name", 5, CodeQualifierKinds.Value), ("$title", 7, CodeQualifierKinds.Value)],
+            extract.References.Select(reference => (reference.Name, reference.Line, reference.Qualifier?.Kind)));
+    }
+
+    /// <summary>
+    /// A use is of a value the code reads: a nullsafe read's property by its <c>$</c>, each branch of a conditional and a
+    /// short one, a named argument's value and not its name; a word or a type of the language - <c>true</c>, a cast's, a
+    /// closure's return type - is none; and a constant's, a property's, an enum case's, an attribute's and a parameter's
+    /// default value is the code of what it is written on.
+    /// </summary>
+    [Fact]
+    public void AUseIsOfAValueTheCodeReads_DeclaredValuesAndAttributesTheirDeclarations()
+    {
+        var extract = Read("src/Users.php", """
+            <?php
+            namespace App;
+
+            #[Route('/users')]
+            class Users
+            {
+                public const GREETING = 'hello world';
+                protected $table = 'users';
+
+                #[Get('/list')]
+                public function list(User $user, $mode = DEFAULT_MODE): ?string
+                {
+                    $n = $user?->name;
+                    $t = $debug ? DEBUG_LEVEL : INFO_LEVEL;
+                    $u = $x ?: FALLBACK_LEVEL;
+                    $v = fn ($x): ?Model => (string) $x;
+                    build(named: VALUE);
+                    return true;
+                }
+            }
+
+            enum Status: string
+            {
+                case Active = 'active';
+            }
+            """);
+
+        const string List = "php:App.Users.list";
+
+        Assert.Equal(
+            [
+                new ExtractLiteral("/users", 4) { Node = "php:App.Users" },
+                new ExtractLiteral("hello world", 7) { Node = "php:App.Users.GREETING" },
+                new ExtractLiteral("users", 8) { Node = "php:App.Users.$table" },
+                new ExtractLiteral("/list", 10) { Node = List },
+                new ExtractLiteral("active", 24) { Node = "php:App.Status.Active" },
+            ],
+            extract.Literals);
+        Assert.Equal(
+            [
+                (List, "DEFAULT_MODE", 11, ""), (List, "$name", 13, "type App.User"), (List, "DEBUG_LEVEL", 14, ""), (List, "INFO_LEVEL", 14, ""), (List, "FALLBACK_LEVEL", 15, ""),
+                (List, "VALUE", 17, ""),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }
 
     private static FileExtract Read(string path, string text) => new PhpExtractor().Extract(new CodeFileInput(path, text));

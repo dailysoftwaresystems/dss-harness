@@ -126,7 +126,7 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
         var pay = Assert.Single(extract.Nodes, node => node.Name == "pay");
 
         Assert.Equal((13, 15, "src/Cart.vue"), (pay.Start, pay.End, pay.Scope));
-        Assert.Contains(new ExtractLiteral("done", 14), extract.Literals ?? []);
+        Assert.Contains(new ExtractLiteral("done", 14) { Node = "vue:src/Cart.vue.pay" }, extract.Literals ?? []);
 
         var members = new ExtractQualifier(CodeQualifierKinds.This);
 

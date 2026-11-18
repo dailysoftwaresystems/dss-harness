@@ -36,15 +36,34 @@ internal sealed class ScannedText
     /// <param name="tokens">Its tokens, in order.</param>
     /// <param name="comments">Its comments, in order.</param>
     /// <param name="closer">A token that ends a statement as a <c>;</c> does, where the language has one - PHP's <c>?&gt;</c>.</param>
-    public ScannedText(string source, IReadOnlyList<ScanToken> tokens, IReadOnlyList<ScanComment> comments, string? closer = null)
+    /// <param name="literals">Its string literals, by where each token begins, as its lexer read them (<see cref="ScanLexing.Literals"/>).</param>
+    public ScannedText(string source, IReadOnlyList<ScanToken> tokens, IReadOnlyList<ScanComment> comments, string? closer = null, IReadOnlyDictionary<int, ScanLiteral>? literals = null)
     {
         _closer = closer;
+        _literals = literals ?? new Dictionary<int, ScanLiteral>();
         Source = source;
         Tokens = tokens;
         Comments = comments;
         (_match, _stranded, _heads) = Matched(source, tokens);
         Stranded = [.. Enumerable.Range(0, tokens.Count).Where(at => _stranded[at])];
     }
+
+    private readonly IReadOnlyDictionary<int, ScanLiteral> _literals;
+
+    /// <summary>
+    /// The constant parts of the string literal <paramref name="token"/> is, each decoded with the line it begins on: a
+    /// plain string's one value, an interpolated one's parts between its holes, a markup element's attribute strings;
+    /// none of a token that is no string - a character literal, a regular expression, a directive.
+    /// </summary>
+    public IEnumerable<(string Value, int Line)> LiteralParts(ScanToken token)
+        => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) ? literal.Values(Source) : [];
+
+    /// <summary>
+    /// The value of the string literal at <paramref name="at"/>, decoded, where it is one string with no holes - what an
+    /// import, an include or a directive names; <see langword="null"/> where the token is no such string.
+    /// </summary>
+    public string? Value(int at)
+        => at >= 0 && at < Tokens.Count && Tokens[at].Kind == ScanTokenKind.Text && _literals.TryGetValue(Tokens[at].Start, out var literal) ? literal.Whole(Source) : null;
 
     /// <summary>The indices of the brackets a conditional's branch left open that stand for none after it, in order.</summary>
     public IReadOnlyList<int> Stranded { get; }

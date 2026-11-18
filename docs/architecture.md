@@ -4298,16 +4298,24 @@ language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type a
 the scope whose declarations alone see it (`SeenIn`) among what they say - the scopes they are put in (open to
 other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address, path ending or directory (a scope every file under a directory imports), with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
 address roots, references by name with their qualifiers, the string literals the file holds - each of at least
-`FileExtract.LeastLiteral` characters with its line, at most `FileExtract.MostLiterals` kept and the rest counted, an
-interpolated or template string's constant parts, its holes read as code - and five marks - a prototype, a test, a
-part of a declaration other files hold parts of too (`Part`), generated code with why, and each line it saw something it
-cannot bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three. Beside the calls, every reader of C#, JavaScript, TypeScript, PHP, Dart, C and C++
-gives each member a member reads or writes without calling it - a field, a property, a constant, an enum member, any
-name a `nameof` names - as a `uses` reference, qualified as its receiver is where the file says, and a use that names
-nothing the repository declares is the common case and counts nowhere: a use is recall, never a doubt, so it makes
-neither a node `unsure` nor a file's unsureness. A use is looked for as a member of any arity or a type (the same
-steps as a call), and `query-codebase-graph`'s `node` answers a node's `users` and `uses` groups beside its callers
-and callees.
+`FileExtract.LeastLiteral` characters with its line and the node whose code holds it (none where the file's own
+does), at most `FileExtract.MostLiterals` kept and the rest counted, each its value as the language reads it: one
+collector (`ExtractLiterals`) keeps them for every reader, the C# reader taking the compiler's value and the scanned
+readers the value `ScanLiteral` decodes from what each lexer saw of the literal's form - a prefix, a raw string's
+delimiter, a triple quote, a heredoc's label and closing indentation - by its language's escapes; an interpolated or
+template string's constant parts each a literal of its own, its holes read as code, a character constant, a regular
+expression and JSX markup none, a JSX attribute's text one - and five marks - a prototype, a test, a part of a
+declaration other files hold parts of too (`Part`), generated code with why, and each line it saw something it cannot
+bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three. Beside the calls, every
+reader of C#, JavaScript, TypeScript, PHP, Dart, C and C++ gives each member a member reads or writes without calling
+it - a field, a property, a constant, an enum member, any name a `nameof` names, the first name of a receiver's chain
+where the reader takes it for a value, a conditional's branches - as a `uses` reference, qualified as its receiver is
+where the file says, a chain no longer than `FileExtract.MostReceiverNames` names; a declaration is no use - a type it
+is written with, a macro's parameter, a function pointer's own parameters, a structured binding, a discard - nor is a
+type or a namespace a member is reached through. A use that names nothing the repository declares is the common case
+and counts nowhere: a use is recall, never a doubt, so it makes neither a node `unsure` nor a file's unsureness. A use
+is looked for as a member of any arity or a type (the same steps as a call), and `query-codebase-graph`'s `node`
+answers a node's `users` and `uses` groups beside its callers and callees.
 
 The data a repository's code is configured by is read too, every data file's nodes made by one owner (`DataNodes`):
 a key a member node of SubKind `key`, an element one of SubKind `element`, each counted against `FileExtract.MostKeys`

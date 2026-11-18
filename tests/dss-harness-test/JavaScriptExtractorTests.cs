@@ -970,6 +970,50 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
     public void AShebang_IsNoSummary()
         => Assert.Null(Assert.Single(Read("bin/cli.js", "#!/usr/bin/env node\nexport function main() {}").Nodes).Summary);
 
+    /// <summary>
+    /// A string's value is what JavaScript reads of it, its escapes decoded; a template's constant parts are each a literal
+    /// of their own, a <c>$</c> before a hole's <c>${</c> one of them; a regular expression is none, nor is a JSX element's
+    /// markup, whose attributes' quoted texts are, their character references decoded; and a parameter's default is its
+    /// function's code. A use is of a value the code reads: a receiver's first name where it is a value - a namespace an
+    /// import binds and a type the language declares not - each branch of a conditional, and no key of an object literal.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsWhatJavaScriptReadsOfIt_AndAUseIsOfAValueTheCodeReads()
+    {
+        var extract = Read("src/price.jsx", """
+            import * as ns from './ns';
+            import { config } from './config';
+
+            export function Price({ amount }, label = 'parameter default') {
+              const re = /a\/b"c/g;
+              const tab = 'a\tb \u{41}\x42C';
+              const total = `USD $${amount} due`;
+              const view = <Badge title="Tom &amp; Jerry &#33;" kind='second'>{label} text</Badge>;
+              const port = config.port;
+              ns.helper();
+              Math.max(1, 2);
+              const big = isBig ? LIMIT : SMALL;
+              return { key: value, other: 2 };
+            }
+            """);
+
+        const string Price = "javascript:src/price.jsx.Price";
+
+        Assert.Equal(
+            [
+                new ExtractLiteral("parameter default", 4) { Node = Price },
+                new ExtractLiteral("a\tb ABC", 6) { Node = Price },
+                new ExtractLiteral("USD $", 7) { Node = Price },
+                new ExtractLiteral(" due", 7) { Node = Price },
+                new ExtractLiteral("Tom & Jerry !", 8) { Node = Price },
+                new ExtractLiteral("second", 8) { Node = Price },
+            ],
+            extract.Literals);
+        Assert.Equal(
+            [("config", 9, ""), ("port", 9, "value config"), ("isBig", 12, ""), ("LIMIT", 12, ""), ("SMALL", 12, ""), ("value", 13, "")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
     private static FileExtract Read(string path, string text) => new JavaScriptExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

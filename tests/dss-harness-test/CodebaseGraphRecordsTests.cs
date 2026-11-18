@@ -60,6 +60,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Null(sound.Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Summary = "An \U0001F600 A." }] }).Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Exports = ["default"] }], AddressRoots = [new ExtractAddressRoot("pkg", "src/index.ts") { Whole = true }] }).Problem("toy", 3));
+        Assert.Null((sound with { Literals = [new ExtractLiteral("held by a node", 2) { Node = "toy:A.b" }, new ExtractLiteral("held by the file", 3)] }).Problem("toy", 3));
 
         var wrong = new (FileExtract Extract, string Problem)[]
         {
@@ -125,6 +126,7 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Generated = " " }, "it says it is generated and not why"),
             (sound with { Dynamic = [new ExtractDynamic(1, "")] }, "it marks a line dynamic and not why"),
             (sound with { Dynamic = [new ExtractDynamic(9, "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
+            (sound with { Literals = [new ExtractLiteral("value", 2) { Node = "toy:Z" }] }, "its literal 'value' is held by 'toy:Z', which it holds no node of"),
         };
 
         Assert.All(wrong, pair => Assert.Contains(pair.Problem, pair.Extract.Problem("toy", 3), StringComparison.Ordinal));

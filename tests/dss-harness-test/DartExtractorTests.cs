@@ -917,6 +917,83 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         Assert.Equal(("main", null), (main.Name, main.Summary));
     }
 
+    /// <summary>
+    /// A string's value is what Dart reads of it: a raw one's as written, a triple-quoted one's past a first line of white
+    /// space alone and from the line after it, its escapes decoded - a quote, a <c>\u{...}</c>, a <c>\x</c>, a <c>\u</c> -
+    /// and an interpolated one's constant parts each a literal of its own, its holes none of them.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsWhatDartReadsOfIt_RawTripleAndEscapedOnesAmongThem()
+    {
+        var extract = Read("lib/t.dart", """
+            const re = r'^\d+$';
+            const query = '''
+            SELECT * FROM t''';
+            const done = 'It\'s done';
+            const codes = '\u{1F600} and \x41B';
+            String show(String prefix, int id) => 'item $prefix: ${id + 1} left\nnow';
+            """);
+
+        Assert.Equal(
+            [
+                new ExtractLiteral("^\\d+$", 1) { Node = "dart:lib/t.dart.re" },
+                new ExtractLiteral("SELECT * FROM t", 3) { Node = "dart:lib/t.dart.query" },
+                new ExtractLiteral("It's done", 4) { Node = "dart:lib/t.dart.done" },
+                new ExtractLiteral("\U0001F600 and AB", 5) { Node = "dart:lib/t.dart.codes" },
+                new ExtractLiteral("item ", 6) { Node = "dart:lib/t.dart.show" },
+                new ExtractLiteral(" left\nnow", 6) { Node = "dart:lib/t.dart.show" },
+            ],
+            extract.Literals);
+        Assert.Empty(extract.References);
+    }
+
+    /// <summary>
+    /// A use is of a value the code reads: each bare hole of a string - <c>'$a$b'</c> two - a map's key, a named argument's
+    /// value and not its name, a receiver's first name where it is a value - an import's prefix and a type's name not -
+    /// and each branch of a conditional; and an annotation's arguments and a parameter's default are the code of what they
+    /// are written on.
+    /// </summary>
+    [Fact]
+    public void AUseIsOfAValueTheCodeReads_AnnotationsAndDefaultsTheirDeclarations()
+    {
+        var extract = Read("lib/user.dart", """
+            import 'shapes.dart' as p;
+
+            const kRed = 1;
+
+            class User {
+              @JsonKey(name: 'user_id')
+              final int id;
+              User({this.id = 0, String label = 'parameter default'});
+
+              String show(bool isDark) {
+                final both = '$prefix$id';
+                final colors = {kRed: 1};
+                format(name: darkColor);
+                config.verbose = true;
+                p.helper();
+                Square.unit();
+                return isDark ? darkColor : lightColor;
+              }
+            }
+            """);
+
+        const string Show = "dart:lib/user.dart.User.show";
+
+        Assert.Equal(
+            [
+                new ExtractLiteral("user_id", 6) { Node = "dart:lib/user.dart.User.id" },
+                new ExtractLiteral("parameter default", 8) { Node = "dart:lib/user.dart.User.new" },
+            ],
+            extract.Literals);
+        Assert.Equal(
+            [
+                (Show, "prefix", 11, ""), (Show, "id", 11, ""), (Show, "kRed", 12, ""), (Show, "darkColor", 13, ""), (Show, "config", 14, ""), (Show, "verbose", 14, "value config"),
+                (Show, "darkColor", 17, ""), (Show, "lightColor", 17, ""),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
     private static FileExtract Read(string path, string text) => new DartExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

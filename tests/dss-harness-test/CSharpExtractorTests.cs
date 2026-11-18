@@ -1115,6 +1115,124 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     }
 
     /// <summary>
+    /// Every string the file holds is kept with the node whose code holds it, wherever it is written: a type's, a field's -
+    /// its declaration's first variable's - an enum member's and a record's positional parameter's attributes, a delegate's
+    /// parameter's, the file's own for an assembly's attribute; a raw string over lines from the line after its quotes,
+    /// an interpolated string's constant parts each one of its own; and an enum member's value reads what it names.
+    /// </summary>
+    [Fact]
+    public void EveryStringIsKeptWithItsNode_AttributesAndAnEnumMembersValueAmongThem()
+    {
+        var extract = Extractor.Extract(new CodeFileInput("src/Orders.cs", """"
+            [assembly: InternalsVisibleTo("Friends.Tests")]
+
+            namespace App;
+
+            [Route("api/orders")]
+            public class Orders
+            {
+                [JsonPropertyName("user_id")] public int UserId, OtherId;
+
+                public string Show(int id)
+                {
+                    var raw = """
+                        raw "text"
+                        """;
+                    return $"order {id} of {UserId}";
+                }
+            }
+
+            public enum Flags { Read = 1, Write = 2, [EnumMember(Value = "all_flags")] All = Read | Write }
+
+            public record Point([property: JsonPropertyName("x_pos")] int X, int Y = Defaults.Y);
+
+            public delegate void Handler([Named("handler_arg")] int value);
+            """"));
+
+        Assert.Equal(
+            [
+                new ExtractLiteral("Friends.Tests", 1),
+                new ExtractLiteral("api/orders", 5) { Node = "csharp:App.Orders" },
+                new ExtractLiteral("user_id", 8) { Node = "csharp:App.Orders.UserId" },
+                new ExtractLiteral("raw \"text\"", 13) { Node = "csharp:App.Orders.Show(int)" },
+                new ExtractLiteral("order ", 15) { Node = "csharp:App.Orders.Show(int)" },
+                new ExtractLiteral(" of ", 15) { Node = "csharp:App.Orders.Show(int)" },
+                new ExtractLiteral("all_flags", 19) { Node = "csharp:App.Flags.All" },
+                new ExtractLiteral("x_pos", 21) { Node = "csharp:App.Point.X" },
+                new ExtractLiteral("handler_arg", 23) { Node = "csharp:App.Handler" },
+            ],
+            extract.Literals);
+        Assert.Equal(
+            [
+                ("csharp:App.Orders.Show(int)", "UserId", 15, ""), ("csharp:App.Flags.All", "Value", 19, "type EnumMemberAttribute"), ("csharp:App.Flags.All", "Read", 19, ""),
+                ("csharp:App.Flags.All", "Write", 19, ""), ("csharp:App.Point.Y", "Y", 21, "named Defaults"),
+            ],
+            Uses(extract));
+    }
+
+    /// <summary>
+    /// A use is of a value the code reads: a named argument's value and not its name, an initializer's and a <c>with</c>'s
+    /// members and a property pattern's as their type's, no anonymous type's name, no discard and no primary constructor's
+    /// parameter; <c>this.x</c> is the type's own; a receiver's first name is read where it is a field or a value of no
+    /// capital, a type's name not; and a chain past <see cref="FileExtract.MostReceiverNames"/> names is a value of no
+    /// type the file says, read no further.
+    /// </summary>
+    [Fact]
+    public void AUseIsOfAValueTheCodeReads_QualifiedAsWhatHoldsIt()
+    {
+        var extract = Extractor.Extract(new CodeFileInput("src/Invoice.cs", """
+            namespace App;
+
+            public class Invoice(int seed) : Base(seed)
+            {
+                public int Total { get; set; }
+                private readonly List<string> _items = new();
+                private int count;
+
+                public Invoice Make(Board board)
+                {
+                    Configure(timeout: DefaultTimeout);
+                    var order = new Order { Total = 5 };
+                    var copy = order with { Total = 6 };
+                    var anon = new { Id = seed };
+                    _ = _items.Count;
+                    this.count = Math.Max(1, 2);
+                    if (board is { Name: "x" }) { }
+                    return a.b.c.d.e.f.g.h.i.j;
+                }
+            }
+            """));
+
+        const string Make = "csharp:App.Invoice.Make(Board)";
+
+        Assert.Equal(
+            [
+                (Make, "DefaultTimeout", 11, ""), (Make, "Total", 12, "type Order"), (Make, "Total", 13, "type Order"), (Make, "Count", 15, "type List`1"), (Make, "_items", 15, ""),
+                (Make, "count", 16, "this"), (Make, "Name", 17, "type Board"), (Make, "j", 18, "value"), (Make, "i", 18, "value a.b.c.d.e.f.g.h"), (Make, "h", 18, "value a.b.c.d.e.f.g"),
+                (Make, "g", 18, "value a.b.c.d.e.f"), (Make, "f", 18, "value a.b.c.d.e"), (Make, "e", 18, "value a.b.c.d"), (Make, "d", 18, "value a.b.c"), (Make, "c", 18, "value a.b"),
+                (Make, "b", 18, "value a"), (Make, "a", 18, ""),
+            ],
+            Uses(extract));
+    }
+
+    /// <summary>
+    /// An extract keeps <see cref="FileExtract.MostLiterals"/> strings at most, in the order the file holds them, and counts
+    /// the rest; a string shorter than <see cref="FileExtract.LeastLiteral"/> characters is neither kept nor counted.
+    /// </summary>
+    [Fact]
+    public void AnExtractKeepsTheMostLiteralsItMay_AndCountsTheRest()
+    {
+        var strings = string.Join(", ", Enumerable.Range(0, FileExtract.MostLiterals + 3).Select(index => $"\"v{index:D4}\""));
+        var extract = Extractor.Extract(new CodeFileInput("src/Many.cs", $"class Many {{ string[] All = [{strings}, \"ab\"]; }}"));
+
+        Assert.Equal(Enumerable.Range(0, FileExtract.MostLiterals).Select(index => $"v{index:D4}"), (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal(3, extract.LiteralsBeyond);
+    }
+
+    private static IEnumerable<(string From, string Name, int Line, string Qualifier)> Uses(FileExtract extract)
+        => extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim()));
+
+    /// <summary>
     /// A use of a name the repository declares nowhere is left with no edge and no count: a use is recall, never a doubt.
     /// </summary>
     [Fact]

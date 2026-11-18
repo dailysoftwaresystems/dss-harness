@@ -7,8 +7,11 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <c>&lt;?</c> and <c>?&gt;</c> - kept as a token, since it ends a statement - the rest of the file text no token holds;
 /// comments (<c>//</c>, <c>#</c>, <c>/* */</c>) kept apart, a line's ending at its line or at <c>?&gt;</c>; an attribute's
 /// <c>#[</c> a <c>#</c> before its bracket; a string - in single or double quotes, in backticks, a heredoc or a nowdoc - as
-/// one token, never read as code, but where it holds code (<c>{$...}</c>, <c>${...}</c>), which the lexer says, so it is
-/// read in its turn as a text of its own; a variable (<c>$name</c>, <c>$$name</c>) one name; a name with PHP's separator
+/// one token, never read as code, but where it holds code (<c>{$...}</c>, <c>${...}</c>, a bare <c>$name</c>), which the
+/// lexer says, so it is read in its turn as a text of its own, and where its value's constant parts are written - between
+/// its quotes or its labels and its holes, a heredoc's and a nowdoc's closing indentation no part of them - and how they
+/// are decoded (<see cref="ScanLiteral"/>): by the escapes its form reads, a nowdoc's as written; a variable
+/// (<c>$name</c>, <c>$$name</c>) one name; a name with PHP's separator
 /// of namespaces (<c>App\Models\User</c>, <c>\strlen</c>) one name; numbers with their separators; and <c>?-&gt;</c>,
 /// <c>-&gt;</c>, <c>::</c>, <c>=&gt;</c>, <c>...</c> and the comparisons and assignments of more than one character whole.
 /// </summary>
@@ -42,7 +45,7 @@ internal static class PhpLexer
     {
         var lexing = new Lexing(text, lines);
         lexing.Run(start, end, code);
-        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments, closer: "?>"), lexing.Interpolations, lines);
+        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments, closer: "?>", literals: lexing.Literals), lexing.Interpolations, lines);
     }
 
     /// <summary>Whether <paramref name="character"/> may begin a PHP name: a letter - any past ASCII among them - or <c>_</c>, and no <c>$</c>, which only a variable's name is written after.</summary>
@@ -313,6 +316,7 @@ internal static class PhpLexer
             var body = past + LineBreakAt(text, past, end);
             var close = end;
             var closeEnd = end;
+            var indent = 0;
 
             for (var line = body; line < end;)
             {
@@ -328,6 +332,7 @@ internal static class PhpLexer
                 {
                     close = line;
                     closeEnd = first + written.Length;
+                    indent = first - line;
                     break;
                 }
 
@@ -340,26 +345,40 @@ internal static class PhpLexer
                 }
             }
 
+            // The value runs to the line break before the closing label's line, the closing label's indentation taken
+            // off each of its lines.
+            var content = close > body && close < end ? close - BreakBefore(close, body) : close;
+
             if (quote == '\'')
             {
+                KeepLiteral(at, new ScanLiteral([Part(body, content)], ScanEscapes.None) { Indent = indent, Content = body, LeftOpen = close == end });
                 Add(ScanTokenKind.Text, at, closeEnd);
                 return closeEnd;
             }
 
-            Literal(at, body, '\0', close, end);
+            Literal(at, body, '\0', content, end, indent, leftOpen: close == end);
             Add(ScanTokenKind.Text, at, closeEnd);
             return closeEnd;
         }
 
+        /// <summary>How wide the line break that ends just before <paramref name="at"/> is, no further back than <paramref name="floor"/>: 2 for CR LF, 1 for CR or LF, 0 where none does.</summary>
+        private int BreakBefore(int at, int floor)
+            => at - 2 >= floor && text[at - 2] == '\r' && text[at - 1] == '\n' ? 2
+                : at - 1 >= floor && text[at - 1] is '\r' or '\n' ? 1
+                : 0;
+
         /// <summary>
         /// A string beginning at <paramref name="start"/>, its text at <paramref name="from"/>: in single quotes to the one
         /// that closes it, only <c>\\</c> and <c>\'</c> escaped; in double quotes or backticks - or a heredoc's lines, to
-        /// <paramref name="stop"/>, where <paramref name="mark"/> is none - to its closing quote, past each escape and each
-        /// interpolation whose code it says (<c>{$...}</c> from its <c>$</c>, <c>${...}</c> after its brace), code that may
-        /// hold braces, comments and strings of its own, read with a stack of what it is in. A heredoc's token is its
-        /// caller's; any other's is added. Answers where the text goes on.
+        /// <paramref name="stop"/>, where <paramref name="mark"/> is none, <paramref name="indent"/> blanks of each line no
+        /// part of its value - to its closing quote, past each escape and each interpolation whose code it says
+        /// (<c>{$...}</c> from its <c>$</c>, <c>${...}</c> after its brace, a bare <c>$name</c> as
+        /// <see cref="ScanLexing.BareHole"/> reads it), code that may hold braces, comments and strings of its own, read
+        /// with a stack of what it is in; its value's parts between its quotes and its holes. A heredoc's token is its
+        /// caller's, and so is whether its label closed it (<paramref name="leftOpen"/>); any other's is added. Answers
+        /// where the text goes on.
         /// </summary>
-        private int Literal(int start, int from, char mark, int stop, int end)
+        private int Literal(int start, int from, char mark, int stop, int end, int indent = 0, bool leftOpen = false)
         {
             if (mark == '\'')
             {
@@ -370,13 +389,14 @@ internal static class PhpLexer
                     at += text[at] == '\\' && at + 1 < end ? 2 : 1;
                 }
 
+                KeepLiteral(start, new ScanLiteral([Part(from, Math.Min(at, end))], ScanEscapes.PhpSingle) { LeftOpen = at >= end });
                 at = Math.Min(at + 1, end);
                 Add(ScanTokenKind.Text, start, at);
                 return at;
             }
 
             var literals = new LiteralStack<char>(this, start);
-            literals.OpenLiteral(mark);
+            literals.OpenLiteral(mark, from);
             var index = from;
 
             while (index < stop && literals.Open)
@@ -393,7 +413,7 @@ internal static class PhpLexer
 
                     if (character is '\'' or '"')
                     {
-                        literals.OpenLiteral(character);
+                        literals.OpenLiteral(character, index + 1);
                     }
 
                     index++;
@@ -406,28 +426,27 @@ internal static class PhpLexer
                 {
                     index += 2;
                 }
+                else if (top != '\'' && character == '$' && index + 1 < stop && text[index + 1] == '{' && VariableNamed(index + 2, stop) is var named and > 0)
+                {
+                    // ${name}: the variable $name, read by its name - no code the graph reads.
+                    literals.Hole(index, named);
+                    index = named;
+                }
                 else if (top != '\'' && ((character == '{' && index + 1 < stop && text[index + 1] == '$') || (character == '$' && index + 1 < stop && text[index + 1] == '{')))
                 {
                     // {$x}: the $ is the code's own; ${x}: the code is after the brace.
-                    literals.OpenCode(character == '{' ? index + 1 : index + 2);
+                    literals.OpenCode(index, character == '{' ? index + 1 : index + 2);
                     index += character == '{' ? 1 : 2;
                 }
-                else if (top != '\'' && character == '$' && index + 1 < stop && StartsName(text[index + 1]))
+                else if (top != '\'' && character == '$' && BareHole(text, index, stop, variable: true) is { } hole)
                 {
                     // A bare $name: a run of code of its own, a variable the string reads.
-                    var name = index + 1;
-
-                    while (name < stop && InName(text[name]))
-                    {
-                        name++;
-                    }
-
-                    Interpolated(start, index + 1, name);
-                    index = name;
+                    literals.Hole(index, hole.Start, hole.End, hole.Past);
+                    index = hole.Past;
                 }
                 else if (top != '\0' && character == top)
                 {
-                    literals.CloseLiteral();
+                    literals.CloseLiteral(index);
                     index++;
                 }
                 else
@@ -439,12 +458,33 @@ internal static class PhpLexer
             index = Math.Min(index, stop);
             literals.End(index);
 
+            var escapes = mark switch { '"' => ScanEscapes.PhpDouble, '`' => ScanEscapes.PhpBacktick, _ => ScanEscapes.PhpHeredoc };
+            KeepLiteral(start, new ScanLiteral(literals.Parts, escapes) { Interpolated = literals.Holes, Indent = indent, Content = from, LeftOpen = mark == '\0' ? leftOpen : literals.Open });
+
             if (mark != '\0')
             {
                 Add(ScanTokenKind.Text, start, index);
             }
 
             return index;
+        }
+
+        /// <summary>Past the <c>}</c> of a <c>${name}</c> whose name begins at <paramref name="at"/>: a name alone, then the brace; 0 where anything else stands.</summary>
+        private int VariableNamed(int at, int stop)
+        {
+            if (at >= stop || !StartsName(text[at]))
+            {
+                return 0;
+            }
+
+            var past = at + 1;
+
+            while (past < stop && InName(text[past]))
+            {
+                past++;
+            }
+
+            return past < stop && text[past] == '}' ? past + 1 : 0;
         }
     }
 }

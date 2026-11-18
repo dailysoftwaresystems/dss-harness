@@ -2439,7 +2439,7 @@ public sealed class CodeGraphLinkerTests
             new CodeGraphFile("app.json", "json", new FileExtract([key])),
             new CodeGraphFile("reader.c", "c", new FileExtract([reader, bySegment, byPath, property])
             {
-                Literals = [new ExtractLiteral("callingConvention", 3), new ExtractLiteral("targets.x64.callingConvention", 5)],
+                Literals = [new ExtractLiteral("callingConvention", 3) { Node = bySegment.Id }, new ExtractLiteral("targets.x64.callingConvention", 5) { Node = byPath.Id }],
             }),
         ]);
 

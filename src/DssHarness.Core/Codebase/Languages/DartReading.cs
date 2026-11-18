@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using DssHarness.Core.Codebase.Languages.Scanning;
 
 namespace DssHarness.Core.Codebase.Languages;
@@ -116,6 +117,9 @@ internal sealed class DartReading
 
     /// <summary>The prefixes the file imports by (<c>as p</c>).</summary>
     private readonly HashSet<string> _prefixes = new(StringComparer.Ordinal);
+
+    /// <summary>The bracket each comma passed stands in, by the comma's index, for each text read: <see cref="Enclosing"/>'s.</summary>
+    private readonly ConditionalWeakTable<ScannedText, Dictionary<int, int>> _enclosing = new();
 
     /// <summary>The names of the type parameters in force: no type the repository declares.</summary>
     private readonly HashSet<string> _typeParameters = new(StringComparer.Ordinal);
@@ -377,28 +381,8 @@ internal sealed class DartReading
     /// <summary>Whether <paramref name="uri"/> begins with a scheme: letters, then a colon, before any slash.</summary>
     private static bool HasScheme(string uri) => uri.IndexOf(':', StringComparison.Ordinal) is var colon and > 1 && uri[..colon].All(char.IsAsciiLetter);
 
-    /// <summary>The URI the string at <paramref name="at"/> holds; <see langword="null"/> where it is none - empty, interpolated, or left open.</summary>
-    private string? Uri(int at)
-    {
-        var text = _scan.Text(at);
-        var raw = text.StartsWith('r');
-        var body = raw ? text[1..] : text;
-
-        if (body.Length < 2)
-        {
-            return null;
-        }
-
-        var quote = body.Length >= 6 && body[1] == body[0] && body[2] == body[0] ? 3 : 1;
-
-        if (body.Length < quote * 2 || !body.EndsWith(body[..quote], StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        var uri = body[quote..^quote];
-        return uri.Length == 0 || (!raw && uri.Contains('$', StringComparison.Ordinal)) ? null : uri;
-    }
+    /// <summary>The URI the string at <paramref name="at"/> holds, its value as Dart reads it; <see langword="null"/> where it is none - empty, interpolated, or left open.</summary>
+    private string? Uri(int at) => _scan.Value(at) is { Length: > 0 } uri ? uri : null;
 
     private bool IsText(int at) => at < _scan.Count && _scan[at].Kind == ScanTokenKind.Text;
 
@@ -495,9 +479,28 @@ internal sealed class DartReading
     /// </summary>
     private static int Annotations(ScannedText scan, int at, int end, List<string>? marks)
     {
+        foreach (var (written, _, past) in Annotated(scan, at, end))
+        {
+            marks?.Add("@" + written);
+            at = past;
+        }
+
+        return at;
+    }
+
+    /// <summary>
+    /// The annotations written at <paramref name="at"/> one after another - <c>@name</c>, <c>@p.name</c>, each with its
+    /// type's arguments and its own - each by its name as written, the parenthesis of its arguments (-1 where it has none)
+    /// and where the text goes on past it.
+    /// </summary>
+    private static List<(string? Written, int Arguments, int Past)> Annotated(ScannedText scan, int at, int end)
+    {
+        var annotations = new List<(string?, int, int)>();
+
         while (at < end && scan.Is(at, "@") && scan.IsName(scan.Next(at)))
         {
             var (written, past) = Chain(scan, scan.Next(at), end);
+            var arguments = -1;
 
             if (scan.Is(past, "<"))
             {
@@ -506,14 +509,30 @@ internal sealed class DartReading
 
             if (scan.Is(past, "("))
             {
+                arguments = past;
                 past = scan.Past(past);
             }
 
-            marks?.Add("@" + written);
+            annotations.Add((written, arguments, past));
             at = past;
         }
 
-        return at;
+        return annotations;
+    }
+
+    /// <summary>
+    /// What the arguments of the annotations from <paramref name="at"/> to <paramref name="end"/> read and hold -
+    /// <c>@JsonKey(name: 'user_id')</c> - as code of the node of <paramref name="key"/> they mark.
+    /// </summary>
+    private void AnnotationArguments(int at, int end, string key, string? owner)
+    {
+        foreach (var (_, arguments, _) in Annotated(_scan, at, end))
+        {
+            if (arguments >= 0)
+            {
+                Calls(_text, arguments + 1, Math.Min(_scan.CloseOf(arguments), end), key, new Locals(), owner, depth: 0);
+            }
+        }
     }
 
     // ---- Types ----
@@ -804,9 +823,14 @@ internal sealed class DartReading
         return (_scan.IsName(nameAt) && nameAt >= at ? nameAt : -1, -1, stop);
     }
 
-    /// <summary>A type node over the tokens from <paramref name="start"/> to <paramref name="last"/>, its signature the tokens from <paramref name="head"/> before <paramref name="signatureEnd"/>; answers its key.</summary>
+    /// <summary>
+    /// A type node over the tokens from <paramref name="start"/> to <paramref name="last"/>, its signature the tokens from
+    /// <paramref name="head"/> before <paramref name="signatureEnd"/>, what its annotations' arguments hold its own; answers
+    /// its key.
+    /// </summary>
     private string DeclareType(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, string? seenIn = null)
-        => _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(head, signatureEnd))
+    {
+        var key = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(head, signatureEnd))
         {
             SubKind = subKind,
             Scope = frame.Scope,
@@ -816,6 +840,10 @@ internal sealed class DartReading
             Modifiers = [.. modifiers, .. marks],
             SeenIn = seenIn ?? (IsPrivate(name) ? _library : null),
         });
+
+        AnnotationArguments(start, head, key, frame.Owner);
+        return key;
+    }
 
     /// <summary>
     /// A type's clauses from <paramref name="at"/> to <paramref name="end"/>: <c>extends</c> an <c>inherits</c> edge,
@@ -924,6 +952,7 @@ internal sealed class DartReading
                 SeenIn = IsPrivate(_scan.Text(name)) ? _library : null,
             });
 
+            AnnotationArguments(pieceStart, name, key, frame.Owner);
             var next = _scan.Next(name);
 
             if (_scan.Is(next, "<"))
@@ -1088,7 +1117,7 @@ internal sealed class DartReading
 
         if (subKind == "getter")
         {
-            parameters = new Parameters(null, null, [], new Dictionary<string, string?>(), new HashSet<string>());
+            parameters = new Parameters(null, null, [], new Dictionary<string, string?>(), new HashSet<string>(), []);
             signatureEnd = at;
         }
         else if (_scan.Is(at, "(") && _scan.Match(at) is var close and > 0)
@@ -1157,6 +1186,8 @@ internal sealed class DartReading
         }
 
         Overriding(key, name, nameAt, marks);
+        AnnotationArguments(start, head, key, frame.Owner);
+        Signed(parameters, key, frame.Owner);
 
         if (body >= 0)
         {
@@ -1254,6 +1285,9 @@ internal sealed class DartReading
             TypeReferences(key, spanStart, spanEnd);
         }
 
+        AnnotationArguments(start, head, key, frame.Owner);
+        Signed(parameters, key, frame.Owner);
+
         if (redirect >= 0)
         {
             Redirect(key, _scan.Next(redirect), last);
@@ -1288,6 +1322,20 @@ internal sealed class DartReading
 
         Defer(Read);
         return last + 1;
+    }
+
+    /// <summary>What each of <paramref name="parameters"/>' annotations and default holds, as code of the node of <paramref name="key"/>: <c>{String name = 'x'}</c>, <c>@Default(1) int n</c>.</summary>
+    private void Signed(Parameters parameters, string key, string? owner)
+    {
+        foreach (var (start, annotated, written, end) in parameters.Written)
+        {
+            AnnotationArguments(start, annotated, key, owner);
+
+            if (written >= 0)
+            {
+                Calls(_text, written + 1, end, key, new Locals(), owner, depth: 0);
+            }
+        }
     }
 
     /// <summary>The constructor a redirecting factory names from <paramref name="at"/>: <c>= Other;</c> instantiates it, <c>= Other.named;</c> calls that one.</summary>
@@ -1384,6 +1432,12 @@ internal sealed class DartReading
 
             TypeReferences(key, typeStart, typeEnd);
             Overriding(key, name, nameAt, marks);
+
+            // The declaration's annotations are its first variable's.
+            if (pieceStart == firstStart)
+            {
+                AnnotationArguments(start, head, key, frame.Owner);
+            }
 
             if (assign < pieceEnd)
             {
@@ -1532,8 +1586,16 @@ internal sealed class DartReading
     }
 
     /// <summary>Whether the brace at <paramref name="at"/> in an initializer list is a collection's - a map's or a set's - and no body: what comes before it is no part of a list's end.</summary>
-    private bool IsCollection(int at)
-        => _scan.Previous(at) is var before && (_scan.Is(before, "=") || _scan.Is(before, "(") || _scan.Is(before, ",") || _scan.Is(before, ":") || _scan.Is(before, ">") || _scan.Is(before, "const"));
+    private bool IsCollection(int at) => IsCollection(_scan, at);
+
+    /// <summary>
+    /// Whether the brace at <paramref name="at"/> is a collection's - a map's or a set's - and no body nor block: what comes
+    /// before it begins a value.
+    /// </summary>
+    private static bool IsCollection(ScannedText scan, int at)
+        => scan.Previous(at) is var before && (scan.Is(before, "=") || scan.Is(before, "(") || scan.Is(before, ",") || scan.Is(before, ":") || scan.Is(before, ">") || scan.Is(before, "const")
+            || scan.Is(before, "=>") || scan.Is(before, "[") || scan.Is(before, "?") || scan.Is(before, "??") || scan.Is(before, "return") || scan.Is(before, "yield") || scan.Is(before, "await")
+            || scan.Is(before, "...") || scan.Is(before, "...?") || scan.Is(before, "in"));
 
     /// <summary>The names of the type parameters the list at <paramref name="less"/> declares.</summary>
     private List<string> TypeParameters(int less, int end)
@@ -1548,8 +1610,12 @@ internal sealed class DartReading
 
     // ---- Parameters ----
 
-    /// <summary>A callable's parameters: how many a call gives - its required positional and named ones the fewest - the spans of their types, and the names each binds.</summary>
-    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Functions);
+    /// <summary>
+    /// A callable's parameters: how many a call gives - its required positional and named ones the fewest - the spans of
+    /// their types, the names each binds, and where each is written: its start, the end of its annotations, its default's
+    /// <c>=</c> or <c>:</c> (-1 where it has none) and its end, what its annotations and its default hold read from there.
+    /// </summary>
+    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Functions, IReadOnlyList<(int Start, int Annotated, int Default, int End)> Written);
 
     /// <summary>
     /// The parameters between the parentheses at <paramref name="open"/> and <paramref name="close"/>: positional ones, then
@@ -1563,6 +1629,7 @@ internal sealed class DartReading
         var spans = new List<(int, int)>();
         var locals = new Dictionary<string, string?>(StringComparer.Ordinal);
         var functions = new HashSet<string>(StringComparer.Ordinal);
+        var written = new List<(int, int, int, int)>();
 
         void One(int start, int end, bool optional, bool named)
         {
@@ -1572,6 +1639,8 @@ internal sealed class DartReading
             {
                 return;
             }
+
+            var annotated = at;
 
             var required = false;
 
@@ -1585,6 +1654,7 @@ internal sealed class DartReading
             least += (named && required) || (!optional && !named) ? 1 : 0;
 
             var stop = Math.Min(ScanCalls.TopLevel(scan, at, end, "=", DartTypes), ScanCalls.TopLevel(scan, at, end, ":", DartTypes));
+            written.Add((start, annotated, stop < end ? stop : -1, end));
 
             if ((scan.Is(at, "this") || scan.Is(at, "super")) && scan.Is(scan.Next(at), "."))
             {
@@ -1644,7 +1714,7 @@ internal sealed class DartReading
             }
         }
 
-        return new Parameters(least, most, spans, locals, functions);
+        return new Parameters(least, most, spans, locals, functions, written);
     }
 
     // ---- What a body calls ----
@@ -1696,9 +1766,9 @@ internal sealed class DartReading
             if (token.Kind == ScanTokenKind.Text)
             {
                 // The literal's constant parts - an interpolation's holes are code, read as code - are its data.
-                foreach (var value in text.LiteralParts(token))
+                foreach (var (value, part) in scan.LiteralParts(token))
                 {
-                    _extract.Literal(value, token.Line);
+                    _extract.Literal(value, part, key);
                 }
 
                 if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
@@ -1820,9 +1890,11 @@ internal sealed class DartReading
 
     /// <summary>
     /// A member read or written without a call of it - <c>x.y</c>, <c>x?.y</c>, a cascade - or a bare name the code
-    /// reads: a use of the member by its name, qualified by what its receiver is where the file says. A local, a
-    /// parameter, a function value or a word of the language is its own or none, and no use; a name a named argument or
-    /// a map writes before a colon is a key, not a read.
+    /// reads, the first of a receiver's chain among them: a use of the member by its name, qualified by what its receiver
+    /// is where the file says. A local, a parameter, a function value or a word of the language is its own or none, and no
+    /// use, and so is a name a member is reached through that is no value - an import's prefix, a type's; a name a named
+    /// argument, a record or a label writes before a colon is a name, not a read, where one a map's key, a case or a
+    /// conditional writes there is.
     /// </summary>
     private void Used(ScannedText scan, int at, string key, Locals locals, string word, int line)
     {
@@ -1830,11 +1902,12 @@ internal sealed class DartReading
 
         if (IsMember(scan, previous))
         {
-            _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, previous, locals, out _, most: 8));
+            _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, previous, locals, out _));
             return;
         }
 
-        if ((scan.Is(scan.Next(at), ":") && !scan.Is(previous, "case")) || scan.Is(scan.Next(at), ".") || scan.Is(scan.Next(at), "?.") || scan.Is(scan.Next(at), "..") || scan.Is(scan.Next(at), "?..")
+        if ((scan.Is(scan.Next(at), ":") && !scan.Is(previous, "case") && !ScanCalls.IsConditionalColon(scan, scan.Next(at)) && !IsMapKey(scan, at))
+            || (IsMember(scan, scan.Next(at)) && (_prefixes.Contains(word) || IsTypeName(word)))
             || word == "_" || NoTypes.Contains(word) || Builtins.Contains(word)
             || locals.Types.ContainsKey(word) || locals.Functions.Contains(word) || locals.LocalFunctions.Contains(word) || NoCalls.Contains(word))
         {
@@ -1842,6 +1915,57 @@ internal sealed class DartReading
         }
 
         _extract.Reference(key, CodeEdgeKinds.Uses, word, line);
+    }
+
+    /// <summary>Whether the name at <paramref name="at"/>, a colon after it, is a map's key - <c>{kRed: 1}</c> - an entry's first, of a brace that is a collection's.</summary>
+    private bool IsMapKey(ScannedText scan, int at)
+        => scan.Previous(at) is var before && (scan.Is(before, "{") || scan.Is(before, ","))
+            && Enclosing(scan, at) is var open and >= 0 && scan.Is(open, "{") && IsCollection(scan, open);
+
+    /// <summary>
+    /// The bracket the token at <paramref name="at"/> stands in: back over the groups before it to their opener; each comma
+    /// passed is kept with it, so the entries of one long list find it once, in a time of the list's length.
+    /// </summary>
+    private int Enclosing(ScannedText scan, int at)
+    {
+        var known = _enclosing.GetValue(scan, _ => []);
+        var passed = new List<int>();
+        var found = -1;
+
+        for (var index = scan.Previous(at); index >= 0; index = scan.Previous(index))
+        {
+            if (scan.Is(index, ")") || scan.Is(index, "]") || scan.Is(index, "}"))
+            {
+                if (scan.Match(index) is not (var open and >= 0))
+                {
+                    break;
+                }
+
+                index = open;
+            }
+            else if (scan.Opens(index))
+            {
+                found = index;
+                break;
+            }
+            else if (scan.Is(index, ","))
+            {
+                if (known.TryGetValue(index, out var opener))
+                {
+                    found = opener;
+                    break;
+                }
+
+                passed.Add(index);
+            }
+        }
+
+        foreach (var comma in passed)
+        {
+            known[comma] = found;
+        }
+
+        return found;
     }
 
     /// <summary>
@@ -1921,7 +2045,7 @@ internal sealed class DartReading
     /// an import's prefix, the type a local is declared with, a type a constructor's call makes, a type's name, or a
     /// value by its name - <paramref name="dynamic"/> the local's name where it is declared <c>dynamic</c>.
     /// </summary>
-    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? dynamic, int most = int.MaxValue)
+    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? dynamic)
     {
         dynamic = null;
         var names = new List<string>();
@@ -1930,7 +2054,7 @@ internal sealed class DartReading
 
         while (true)
         {
-            if (names.Count == most)
+            if (names.Count == FileExtract.MostReceiverNames)
             {
                 return new ExtractQualifier(CodeQualifierKinds.Value);
             }

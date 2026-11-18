@@ -4,15 +4,20 @@ namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
 /// The lexical rules of C and C++ for the structural scanner: comments (<c>//</c>, its line continued by a backslash,
-/// and <c>/* */</c>) kept apart; string and character literals - with their prefixes, and C++'s raw strings - as one
-/// token each, never read as code; a preprocessor line, its continuations and comments with it, as one directive,
-/// marked where it opens, continues or ends a conditional; numbers with their separators; <c>::</c>, <c>-&gt;</c> and
-/// <c>...</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two lists of type arguments.
+/// and <c>/* */</c>) kept apart; string and character literals - with their prefixes, C++'s raw strings, and a C++
+/// user-defined literal's suffix - as one token each, never read as code, each string's value said where it is written
+/// and how its escapes read (<see cref="ScanLiteral"/>); a preprocessor line, its continuations and comments with it, as
+/// one directive, marked where it opens, continues or ends a conditional; numbers with their separators; <c>::</c>,
+/// <c>-&gt;</c> and <c>...</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two lists of type
+/// arguments.
 /// </summary>
 internal static class CFamilyLexer
 {
     /// <summary>The prefixes a string or a character literal may carry.</summary>
     private static readonly HashSet<string> LiteralPrefixes = new(StringComparer.Ordinal) { "L", "u", "U", "u8" };
+
+    /// <summary>The prefixes of a wide string, whose octal and hex escapes are characters' codes and no bytes.</summary>
+    private static readonly HashSet<string> WidePrefixes = new(StringComparer.Ordinal) { "L", "u", "U", "LR", "uR", "UR" };
 
     /// <summary>The prefixes of a C++ raw string, before its quote.</summary>
     private static readonly HashSet<string> RawPrefixes = new(StringComparer.Ordinal) { "R", "LR", "uR", "UR", "u8R" };
@@ -28,7 +33,7 @@ internal static class CFamilyLexer
         var lines = CodeFileText.LineIndex(text);
         var lexing = new Lexing(text, lines, cpp, directive: false);
         lexing.Run(0, text.Length);
-        return new ScannedText(text, lexing.Tokens, lexing.Comments);
+        return new ScannedText(text, lexing.Tokens, lexing.Comments, literals: lexing.Literals);
     }
 
     /// <summary>
@@ -44,7 +49,7 @@ internal static class CFamilyLexer
     {
         var lexing = new Lexing(text, lines, cpp, directive: true);
         lexing.Run(start, end);
-        return new ScannedText(text, lexing.Tokens, lexing.Comments);
+        return new ScannedText(text, lexing.Tokens, lexing.Comments, literals: lexing.Literals);
     }
 
     /// <summary>
@@ -224,7 +229,7 @@ internal static class CFamilyLexer
                 }
                 else if (text[at] is '"' or '\'' && !(text[at] == '\'' && IsNamePart(text[at - 1])))
                 {
-                    at = Quoted(at, text[at], end);
+                    at = Quoted(at, text[at], end).Past;
                 }
                 else
                 {
@@ -291,19 +296,48 @@ internal static class CFamilyLexer
             return at;
         }
 
-        /// <summary>A literal whose quote is at <paramref name="quote"/>, its prefix from <paramref name="start"/>.</summary>
+        /// <summary>
+        /// A literal whose quote is at <paramref name="quote"/>, its prefix from <paramref name="start"/>: a string's value
+        /// what its quotes hold, its escapes read as its prefix says - a character literal, <c>'a'</c> or <c>'RIFF'</c>,
+        /// is a number and no string - and a closed one's user-defined suffix (<c>"abc"s</c>) the token's.
+        /// </summary>
         private int Literal(int start, int quote, int end)
         {
-            var at = Quoted(quote, text[quote], end);
+            var (at, closed) = Quoted(quote, text[quote], end);
+
+            if (text[quote] == '"')
+            {
+                var escapes = WidePrefixes.Contains(text[start..quote]) ? ScanEscapes.CWide : ScanEscapes.C;
+                KeepLiteral(start, new ScanLiteral([Part(quote + 1, closed ? at - 1 : at)], escapes) { LeftOpen = !closed });
+            }
+
+            at = closed ? Suffix(at, end) : at;
             Add(ScanTokenKind.Text, start, at);
+            return at;
+        }
+
+        /// <summary>Past a C++ user-defined literal's suffix at <paramref name="at"/>, written against its literal - <c>"abc"s</c>, <c>"{}"_json</c>; <paramref name="at"/> in C, or where none is.</summary>
+        private int Suffix(int at, int end)
+        {
+            if (!cpp || at >= end || !IsNameStart(text[at]))
+            {
+                return at;
+            }
+
+            while (at < end && IsNamePart(text[at]))
+            {
+                at++;
+            }
+
             return at;
         }
 
         /// <summary>
         /// Past the literal whose quote is at <paramref name="quote"/>: to its closing quote, an escaped one and a line its
-        /// backslash continues read past - or to the end of its line, where a literal left open ends.
+        /// backslash continues read past - or to the end of its line, where a literal left open ends - and whether a
+        /// closing quote ended it.
         /// </summary>
-        private int Quoted(int quote, char mark, int end)
+        private (int Past, bool Closed) Quoted(int quote, char mark, int end)
         {
             var at = quote + 1;
 
@@ -315,11 +349,11 @@ internal static class CFamilyLexer
                 }
                 else if (text[at] == mark)
                 {
-                    return at + 1;
+                    return (at + 1, true);
                 }
                 else if (LineBreakAt(text, at, end) > 0)
                 {
-                    return at;
+                    return (at, false);
                 }
                 else
                 {
@@ -327,12 +361,13 @@ internal static class CFamilyLexer
                 }
             }
 
-            return Math.Min(at, end);
+            return (Math.Min(at, end), false);
         }
 
         /// <summary>
         /// A C++ raw string whose prefix is at <paramref name="start"/> and quote at <paramref name="quote"/>: to its
-        /// <c>)delimiter"</c>, over any line; 0 where what follows the quote is no delimiter and <c>(</c>.
+        /// <c>)delimiter"</c>, over any line, its value what the parentheses hold as written; 0 where what follows the
+        /// quote is no delimiter and <c>(</c>.
         /// </summary>
         private int Raw(int start, int quote, int end)
         {
@@ -350,8 +385,9 @@ internal static class CFamilyLexer
 
             var closing = ")" + text[(quote + 1)..open] + "\"";
             var close = text.IndexOf(closing, open + 1, end - open - 1, StringComparison.Ordinal);
-            var at = close < 0 ? end : close + closing.Length;
+            var at = close < 0 ? end : Suffix(close + closing.Length, end);
 
+            KeepLiteral(start, new ScanLiteral([Part(open + 1, close < 0 ? end : close)], ScanEscapes.None) { LeftOpen = close < 0 });
             Add(ScanTokenKind.Text, start, at);
             return at;
         }

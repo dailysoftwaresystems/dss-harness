@@ -54,11 +54,11 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     public IReadOnlyList<ExtractDynamic> Dynamic { get; init; } = [];
 
     /// <summary>
-    /// The string literals the file holds, of at least <see cref="LeastLiteral"/> characters, each with its line: the
-    /// values the data of the code is written in - what the keys' join reads, a literal naming a configuration key -
-    /// interpolated and template strings giving their constant parts. At most <see cref="MostLiterals"/> of them are
-    /// kept, the rest counted in <see cref="LiteralsBeyond"/>, which an answer about the file says; <see langword="null"/>
-    /// where the file holds none.
+    /// The string literals the file holds, of at least <see cref="LeastLiteral"/> characters, each with its line and the
+    /// node whose code holds it: the values the data of the code is written in - what the keys' join reads, a literal
+    /// naming a configuration key - interpolated and template strings giving their constant parts. At most
+    /// <see cref="MostLiterals"/> of them are kept, the rest counted in <see cref="LiteralsBeyond"/>, which an answer about
+    /// the file says; <see langword="null"/> where the file holds none.
     /// </summary>
     public IReadOnlyList<ExtractLiteral>? Literals { get; init; }
 
@@ -82,6 +82,13 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>The most nodes an extract keeps of one data file - its keys, its sections and its elements alike; the keys and elements past them are counted, not kept.</summary>
     public const int MostKeys = 5000;
+
+    /// <summary>
+    /// The most names of a receiver's chain - <c>a.b.c</c> - every implementation reads a reference's qualifier from: a
+    /// longer chain is a value of no type the file says, and is read no further, so a use of each member of a long chain
+    /// costs no walk of the whole of it.
+    /// </summary>
+    public const int MostReceiverNames = 8;
 
     /// <summary>
     /// What is wrong with this extract of a file of <paramref name="lineCount"/> lines made by
@@ -173,6 +180,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             ?? (Literals ?? []).Select(literal => literal is null ? "it holds a literal that is null"
                 : string.IsNullOrEmpty(literal.Value) || literal.Value.Length < LeastLiteral ? $"its literal '{literal.Value}' is shorter than {LeastLiteral.ToString(CultureInfo.InvariantCulture)} characters, and no literal is kept that short"
                 : !Within(literal.Line, lineCount) ? $"its literal '{literal.Value}' is on line {literal.Line.ToString(CultureInfo.InvariantCulture)}, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
+                : literal.Node is { } node && !ids.ContainsKey(node) ? $"its literal '{literal.Value}' is held by '{node}', which it holds no node of"
                 : null).FirstOrDefault(found => found is not null)
             ?? (Literals is { Count: > MostLiterals } ? $"it keeps {Literals.Count.ToString(CultureInfo.InvariantCulture)} literals, past the {MostLiterals.ToString(CultureInfo.InvariantCulture)} an extract keeps" : null)
             ?? (LiteralsBeyond < 0 ? "it counts fewer than no literals past its own" : null)
@@ -242,7 +250,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
             .Concat((References ?? []).SelectMany(reference => (string?[])[reference.From, reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name]))
             .Concat((Dynamic ?? []).Select(dynamic => dynamic.Why))
-            .Concat((Literals ?? []).Select(literal => literal.Value))
+            .Concat((Literals ?? []).SelectMany(literal => (string?[])[literal.Value, literal.Node]))
             .Append(Generated)
             .OfType<string>();
 
@@ -590,7 +598,19 @@ public static class CodeQualifierKinds
 /// <param name="Why">What it saw: a call a macro writes, a member named by a string to reflection, a call through a pointer, a file that stops parsing there.</param>
 public sealed record ExtractDynamic(int Line, string Why);
 
-/// <summary>One string literal a file holds, by its value and its line.</summary>
-/// <param name="Value">The literal's value as the code writes it between its quotes, an interpolated or template string's constant parts joined.</param>
-/// <param name="Line">Its first line.</param>
-public sealed record ExtractLiteral(string Value, int Line);
+/// <summary>One string literal a file holds, by its value, its line and the node whose code holds it.</summary>
+/// <param name="Value">
+/// The literal's value as its language reads it, in every language alike: what its opener and closer hold - a prefix, a
+/// raw string's delimiter, a triple quote and a heredoc's label and closing indentation no part of it - its escapes
+/// decoded, a raw one's text as written, its line endings one newline; a constant part of an interpolated or template
+/// string, each part a literal of its own.
+/// </param>
+/// <param name="Line">The line its value begins on.</param>
+public sealed record ExtractLiteral(string Value, int Line)
+{
+    /// <summary>
+    /// The id of the node of the extract whose code holds it - the innermost declaration it is written in, or the node of
+    /// what a file's top does outside its declarations; <see langword="null"/> where none does, and the file's own holds it.
+    /// </summary>
+    public string? Node { get; init; }
+}

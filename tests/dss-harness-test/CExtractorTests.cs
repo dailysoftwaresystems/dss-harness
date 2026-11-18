@@ -663,6 +663,79 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         Assert.Empty(extract.Dynamic);
     }
 
+    /// <summary>
+    /// A string's value is what C reads of it, each kept with its line and the node whose code holds it: a prefixed one's
+    /// without its prefix, its escapes decoded - a run of byte escapes read as UTF-8, a backslash before a line break
+    /// joining the lines - and a character constant, <c>'RIFF'</c> among them, no string at all.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsWhatCReadsOfIt_APrefixedOnesAndOneWithEscapesAmongThem()
+    {
+        var extract = Read("src/t.c", """
+            const wchar_t *title = L"Main Window";
+            const char *bytes = u8"abc def";
+
+            int main(void)
+            {
+                printf("could not open %s\n", "tab\there");
+                puts("caf\xc3\xa9 \101\102C");
+                puts("one \
+            two");
+                int tag = 'RIFF';
+                return 0;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                new ExtractLiteral("Main Window", 1) { Node = "c:title" },
+                new ExtractLiteral("abc def", 2) { Node = "c:bytes" },
+                new ExtractLiteral("could not open %s\n", 6) { Node = "c:main" },
+                new ExtractLiteral("tab\there", 6) { Node = "c:main" },
+                new ExtractLiteral("caf\u00e9 ABC", 7) { Node = "c:main" },
+                new ExtractLiteral("one two", 8) { Node = "c:main" },
+            ],
+            extract.Literals);
+    }
+
+    /// <summary>
+    /// What a declaration names is no use - a macro's parameter in its text, a function pointer's own parameters, a local
+    /// function pointer, a type a <c>struct</c> or an <c>enum</c> names - while a receiver's first name the code reads is,
+    /// and so is each branch of a conditional, its colon no label's.
+    /// </summary>
+    [Fact]
+    public void ADeclarationIsNoUse_ButAReceiversFirstNameAndAConditionalsBranchesAre()
+    {
+        var extract = Read("src/t.c", """
+            #define TWICE(x) ((x) * 2)
+
+            struct lexer
+            {
+                int (*peek)(struct lexer *self, int code);
+            };
+
+            struct settings { int verbose; } config;
+
+            enum Kind { One, Two };
+
+            int take(struct lexer *lx, int c)
+            {
+                int (*fallback)(struct lexer *) = lx->peek;
+                enum Kind which = One;
+                config.verbose = TWICE(c);
+                (*fallback)(lx);
+                return c ? COUNT : LIMIT;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                ("c:take", "peek", 14, "type lexer"), ("c:take", "One", 15, ""), ("c:take", "config", 16, ""), ("c:take", "verbose", 16, "value config"),
+                ("c:take", "COUNT", 18, ""), ("c:take", "LIMIT", 18, ""),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
     private static FileExtract Read(string path, string text) => new CExtractor().Extract(new CodeFileInput(path, text));
 
     private static CodeGraphFile File(string path, string text) => new(path, "c", Read(path, text));
@@ -705,11 +778,13 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         {
             Edges =
             [
-                // A file-scope variable read bare, an enum's member in a case, and a pointer's value compared.
+                // A file-scope variable read bare, an enum's member in a case, a pointer's value compared, and a
+                // conditional's branch read.
                 new("c:take", "c:src/reads.c:count", CodeEdgeKinds.Uses, 11, CodeConfidences.Exact),
                 new("c:take", "c:One", CodeEdgeKinds.Uses, 12, CodeConfidences.Unique),
                 new("c:take", "c:One", CodeEdgeKinds.Uses, 15, CodeConfidences.Unique),
                 new("c:take", "c:greeting", CodeEdgeKinds.Uses, 18, CodeConfidences.Unique),
+                new("c:take", "c:src/reads.c:count", CodeEdgeKinds.Uses, 18, CodeConfidences.Exact),
             ],
         },
         new("src/lex.h", LexHeader)

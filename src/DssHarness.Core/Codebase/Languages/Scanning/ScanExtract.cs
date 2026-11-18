@@ -18,36 +18,27 @@ internal sealed class ScanExtract
     private readonly List<ExtractImport> _imports = [];
     private readonly List<ExtractReference> _references = [];
     private readonly List<ExtractDynamic> _dynamic = [];
-    private readonly List<ExtractLiteral> _literals = [];
+    private readonly ExtractLiterals _literals = new();
 
-    /// <summary>How many string literals the file holds past the most an extract keeps.</summary>
-    private int _literalsBeyond;
+    /// <summary>The key of the node of what the file's top does outside its declarations, where the reader made one.</summary>
+    private string? _top;
 
     /// <summary>Why the file is generated code, where the reader knows; <see langword="null"/> where it is not.</summary>
     public string? Generated { get; set; }
 
     /// <summary>
-    /// One string literal of the file, kept with its line where it is data a search asks for: of at least
-    /// <see cref="FileExtract.LeastLiteral"/> characters, and among the first <see cref="FileExtract.MostLiterals"/> -
-    /// its line endings read as one newline, so a checkout's own way of writing them moves no answer.
+    /// One string literal of the file, decoded, on <paramref name="line"/>, written in the code of the node of the key
+    /// <paramref name="from"/> - none where it is written at the file's top, outside every declaration, whose node it is
+    /// once the reader makes one (<see cref="Top"/>) - kept by the one rule every reader keeps them by
+    /// (<see cref="ExtractLiterals"/>).
     /// </summary>
-    public void Literal(string value, int line)
-    {
-        value = value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
+    public void Literal(string value, int line, string? from) => _literals.Add(value, line, from);
 
-        if (value.Length < FileExtract.LeastLiteral)
-        {
-            return;
-        }
-
-        if (_literals.Count == FileExtract.MostLiterals)
-        {
-            _literalsBeyond++;
-            return;
-        }
-
-        _literals.Add(new ExtractLiteral(value, line));
-    }
+    /// <summary>
+    /// Says the node of the key <paramref name="key"/> is what the file's top does outside its declarations - a module's,
+    /// a script's - the node of every literal written there, made the first time a reference needs it.
+    /// </summary>
+    public void Top(string key) => _top = key;
 
     /// <summary>
     /// Adds <paramref name="node"/>, whose <see cref="ExtractNode.Id"/> is the id it would take and whose
@@ -133,8 +124,8 @@ internal sealed class ScanExtract
             References = [.. _references.Select(reference => reference with { From = given[reference.From] })],
             Generated = Generated,
             Dynamic = _dynamic,
-            Literals = _literals.Count == 0 ? null : _literals,
-            LiteralsBeyond = _literalsBeyond,
+            Literals = _literals.Kept(from => from is not null ? given[from] : _top is { } top ? given[top] : null),
+            LiteralsBeyond = _literals.Beyond,
         };
     }
 

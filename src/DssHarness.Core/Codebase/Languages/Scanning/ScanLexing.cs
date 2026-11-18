@@ -18,6 +18,13 @@ internal abstract class ScanLexing(CodeLineIndex lines)
     /// <summary>For each literal that holds code, by where it begins: where each run of code it holds directly begins and ends.</summary>
     public Dictionary<int, List<(int Start, int End)>> Interpolations { get; } = [];
 
+    /// <summary>
+    /// For each string literal, by where its token begins: where each constant part of its value is written and how it is
+    /// decoded (<see cref="ScanLiteral"/>). A token the lexer keeps whole that is no string - a character literal, a
+    /// regular expression - has none.
+    /// </summary>
+    public Dictionary<int, ScanLiteral> Literals { get; } = [];
+
     /// <summary>Whether <paramref name="character"/> may begin a name: a letter - one past ASCII among them - <c>_</c> or <c>$</c>.</summary>
     public static bool IsNameStart(char character) => char.IsLetter(character) || character is '_' or '$';
 
@@ -86,10 +93,95 @@ internal abstract class ScanLexing(CodeLineIndex lines)
         }
     }
 
+    /// <summary>Records the string literal whose token begins at <paramref name="token"/>: where its value is written, and how it is decoded.</summary>
+    protected void KeepLiteral(int token, ScanLiteral literal) => Literals[token] = literal;
+
+    /// <summary>A constant part of a literal's value from <paramref name="start"/> to <paramref name="end"/>, placed on its line.</summary>
+    protected ScanLiteralPart Part(int start, int end) => new(start, Math.Max(start, end), Lines.LineAt(start));
+
+    /// <summary>
+    /// The hole a bare <c>$name</c> whose <c>$</c> is at <paramref name="sigil"/> opens in a string, within
+    /// <paramref name="stop"/>: where the code it is begins and ends, and where the string goes on past it; none where no
+    /// name follows the <c>$</c>. The one reading of it, Dart's and PHP's alike but where their grammars part. Dart's
+    /// (<paramref name="variable"/> false) is a name of no <c>$</c> - <c>'$a$b'</c> two holes - the code the name alone.
+    /// PHP's is a variable, the code from its <c>$</c>, with one <c>-&gt;name</c> or <c>?-&gt;name</c> after it, or one
+    /// <c>[...]</c> of a number or a variable; a bare word in the brackets - <c>"$row[key]"</c> - is a key the string
+    /// names, the hole's and no code's.
+    /// </summary>
+    protected static (int Start, int End, int Past)? BareHole(string text, int sigil, int stop, bool variable)
+    {
+        bool Starts(char character) => char.IsLetter(character) || character == '_' || (variable && character > '\u007f');
+        bool Continues(char character) => char.IsLetterOrDigit(character) || character == '_' || (variable && character > '\u007f');
+
+        int NameEnd(int at)
+        {
+            while (at < stop && Continues(text[at]))
+            {
+                at++;
+            }
+
+            return at;
+        }
+
+        if (sigil + 1 >= stop || !Starts(text[sigil + 1]))
+        {
+            return null;
+        }
+
+        var name = NameEnd(sigil + 2);
+
+        if (!variable)
+        {
+            return (sigil + 1, name, name);
+        }
+
+        // $x->name, $x?->name: one member of the variable.
+        foreach (var arrow in (string[])["->", "?->"])
+        {
+            var member = name + arrow.Length;
+
+            if (string.CompareOrdinal(text, name, arrow, 0, arrow.Length) == 0 && member < stop && Starts(text[member]))
+            {
+                var past = NameEnd(member + 1);
+                return (sigil, past, past);
+            }
+        }
+
+        // $x[0], $x[-1], $x[$i] - code; $x[key] - a key the string names.
+        if (name < stop && text[name] == '[')
+        {
+            var at = name + 1;
+            var code = true;
+
+            if (at < stop && text[at] == '$' && at + 1 < stop && Starts(text[at + 1]))
+            {
+                at = NameEnd(at + 2);
+            }
+            else if (at < stop && (char.IsAsciiDigit(text[at]) || (text[at] == '-' && at + 1 < stop && char.IsAsciiDigit(text[at + 1]))))
+            {
+                at = NameEnd(at + 1);
+            }
+            else if (at < stop && Starts(text[at]))
+            {
+                at = NameEnd(at + 1);
+                code = false;
+            }
+
+            if (at > name + 1 && at < stop && text[at] == ']')
+            {
+                return (sigil, code ? at + 1 : name, at + 1);
+            }
+        }
+
+        return (sigil, name, name);
+    }
+
     /// <summary>
     /// What a literal's reading is in, innermost last: the literal, an interpolation's code with how many braces it holds
     /// open, a literal that code holds, and on - one stack, never a call into itself, so no nesting reaches past the
-    /// reader's stack - each run of code the literal holds directly recorded as its own where it ends.
+    /// reader's stack - each run of code the literal holds directly recorded as its own where it ends, and each constant
+    /// part of its own value between its opener, its holes - each hole's sigil and closer the hole's - and its closer. A
+    /// literal the code holds is its own token when that code is read in its turn, and nothing of it is this one's.
     /// </summary>
     /// <typeparam name="TMark">What the lexer keeps of each literal it opens: its quote, whether it is raw, whether it is triple.</typeparam>
     /// <param name="lexing">The run the literal is read in.</param>
@@ -97,9 +189,13 @@ internal abstract class ScanLexing(CodeLineIndex lines)
     protected sealed class LiteralStack<TMark>(ScanLexing lexing, int literal)
     {
         private readonly List<(TMark Mark, bool Code, int Depth)> _frames = [];
+        private readonly List<ScanLiteralPart> _parts = [];
 
         /// <summary>Where the run of code the literal holds directly that the reading is in began; -1 outside one.</summary>
         private int _code = -1;
+
+        /// <summary>Where the constant part of the literal's own value being read began; -1 outside one.</summary>
+        private int _part = -1;
 
         /// <summary>Whether the literal is still open.</summary>
         public bool Open => _frames.Count > 0;
@@ -110,20 +206,89 @@ internal abstract class ScanLexing(CodeLineIndex lines)
         /// <summary>What the lexer keeps of the literal the reading is in.</summary>
         public TMark Mark => _frames[^1].Mark;
 
-        /// <summary>Opens a literal: the one read, or one an interpolation's code holds.</summary>
-        public void OpenLiteral(TMark mark) => _frames.Add((mark, false, 0));
+        /// <summary>The constant parts of the literal's own value read so far.</summary>
+        public IReadOnlyList<ScanLiteralPart> Parts => _parts;
 
-        /// <summary>Closes the literal the reading is in.</summary>
-        public void CloseLiteral() => _frames.RemoveAt(_frames.Count - 1);
+        /// <summary>Whether the literal holds holes of its own.</summary>
+        public bool Holes { get; private set; }
 
-        /// <summary>Opens an interpolation's code, which begins at <paramref name="at"/>.</summary>
-        public void OpenCode(int at)
+        /// <summary>
+        /// Opens a literal: the one read, its value's text beginning at <paramref name="content"/> - past its opener - or
+        /// one an interpolation's code holds.
+        /// </summary>
+        public void OpenLiteral(TMark mark, int content)
+        {
+            if (_frames.Count == 0)
+            {
+                _part = content;
+            }
+
+            _frames.Add((mark, false, 0));
+        }
+
+        /// <summary>Closes the literal the reading is in, whose closer stands at <paramref name="at"/>.</summary>
+        public void CloseLiteral(int at)
+        {
+            _frames.RemoveAt(_frames.Count - 1);
+
+            if (_frames.Count == 0)
+            {
+                EndPart(at);
+            }
+        }
+
+        /// <summary>Opens an interpolation's code, which begins at <paramref name="at"/>, its sigil at <paramref name="sigil"/>.</summary>
+        public void OpenCode(int sigil, int at)
         {
             _frames.Add((default!, true, 0));
 
             if (_frames.Count == 2)
             {
+                EndPart(sigil);
+                Holes = true;
                 _code = at;
+            }
+        }
+
+        /// <summary>
+        /// A bare hole - a <c>$name</c> with no braces (<see cref="BareHole"/>) - of the literal the reading is in, its sigil
+        /// at <paramref name="sigil"/>, its code from <paramref name="start"/> to <paramref name="end"/>, the literal going on
+        /// at <paramref name="past"/>: recorded where it is the literal's own, its code read in its turn.
+        /// </summary>
+        public void Hole(int sigil, int start, int end, int past)
+        {
+            if (_frames.Count != 1)
+            {
+                return;
+            }
+
+            EndPart(sigil);
+            Holes = true;
+            lexing.Interpolated(literal, start, end);
+            _part = past;
+        }
+
+        /// <summary>
+        /// A hole of the literal the reading is in that holds no code the graph reads - PHP's <c>${name}</c>, a variable
+        /// read by its name - from its sigil at <paramref name="sigil"/>, the literal going on at <paramref name="past"/>.
+        /// </summary>
+        public void Hole(int sigil, int past)
+        {
+            if (_frames.Count == 1)
+            {
+                EndPart(sigil);
+                Holes = true;
+                _part = past;
+            }
+        }
+
+        /// <summary>Ends the constant part being read at <paramref name="at"/>.</summary>
+        private void EndPart(int at)
+        {
+            if (_part >= 0)
+            {
+                _parts.Add(lexing.Part(_part, at));
+                _part = -1;
             }
         }
 
@@ -170,16 +335,22 @@ internal abstract class ScanLexing(CodeLineIndex lines)
             {
                 lexing.Interpolated(literal, _code, at);
                 _code = -1;
+                _part = at + 1;
             }
         }
 
-        /// <summary>Ends the reading at <paramref name="at"/>: an interpolation the text ends in is read to there.</summary>
+        /// <summary>
+        /// Ends the reading at <paramref name="at"/>: an interpolation the text ends in is read to there, and a part of the
+        /// literal's own value left open ends there.
+        /// </summary>
         public void End(int at)
         {
             if (_code >= 0)
             {
                 lexing.Interpolated(literal, _code, at);
             }
+
+            EndPart(at);
         }
     }
 
@@ -230,68 +401,4 @@ internal sealed record InterpolatedText(
     ScannedText Scan,
     IReadOnlyDictionary<int, List<(int Start, int End)>> Interpolations,
     CodeLineIndex Lines,
-    IReadOnlyDictionary<int, List<(int Start, int End)>>? Elements = null)
-{
-    /// <summary>
-    /// The constant parts of the string token <paramref name="token"/>, its quotes with it: a plain string's whole
-    /// value, a template's parts between its holes - the code a hole holds is read as code where its spans are
-    /// re-scanned. A hole's sigil (<c>${</c>, <c>{$</c>, a bare <c>$name</c>) and its closing brace are the hole's, not
-    /// a part's; a string written with an escape is left out: its value is not its text between the quotes.
-    /// </summary>
-    public IEnumerable<string> LiteralParts(ScanToken token)
-    {
-        var source = Scan.Source;
-        var end = token.Start + token.Length - 1;
-
-        if (end <= token.Start)
-        {
-            yield break;
-        }
-
-        if (!Interpolations.TryGetValue(token.Start, out var spans))
-        {
-            var plain = source[(token.Start + 1)..end];
-
-            if (!plain.Contains('\\', StringComparison.Ordinal))
-            {
-                yield return plain;
-            }
-
-            yield break;
-        }
-
-        var at = token.Start + 1;
-
-        foreach (var span in spans)
-        {
-            var hole = span.Start;
-
-            while (hole > at && (source[hole - 1] == '$' || source[hole - 1] == '{'))
-            {
-                hole--;
-            }
-
-            if (hole > at)
-            {
-                var part = source[at..hole];
-
-                if (!part.Contains('\\', StringComparison.Ordinal))
-                {
-                    yield return part;
-                }
-            }
-
-            at = span.End < end && source[span.End] == '}' ? span.End + 1 : span.End;
-        }
-
-        if (end > at)
-        {
-            var last = source[at..end];
-
-            if (!last.Contains('\\', StringComparison.Ordinal))
-            {
-                yield return last;
-            }
-        }
-    }
-}
+    IReadOnlyDictionary<int, List<(int Start, int End)>>? Elements = null);

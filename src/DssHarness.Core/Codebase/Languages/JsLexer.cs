@@ -6,12 +6,15 @@ namespace DssHarness.Core.Codebase.Languages;
 /// The lexical rules of JavaScript and TypeScript for the structural scanner: comments (<c>//</c>, <c>/* */</c>, a first
 /// line's <c>#!</c>) kept apart; a string in single or double quotes, a template literal with every <c>${...}</c> it
 /// holds (braces, strings and templates of its own inside), and a regular expression literal - told from a division by
-/// the token before it - each one token, never read as code; names that may hold <c>$</c>, and <c>#private</c> ones;
-/// numbers with their separators and suffixes; <c>?.</c>, <c>??=</c>, <c>??</c>, <c>...</c>, <c>=&gt;</c>, the
-/// equalities, <c>&amp;&amp;</c>, <c>||</c> and <c>**</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two
-/// lists of type arguments. In markup (<c>.jsx</c>, <c>.tsx</c>) an element - its tags, a component's type arguments,
-/// attributes and text - is one token, whose <c>{...}</c> alone is code. Where a literal holds code, the lexer says
-/// where, so that code is read in its turn as a text of its own, and where each tag an element opens is named.
+/// the token before it - each one token, never read as code, a string's and a template's value said by where its
+/// constant parts are written, decoded by JavaScript's escapes (<see cref="ScanLiteral"/>), a regular expression's none;
+/// names that may hold <c>$</c>, and <c>#private</c> ones; numbers with their separators and suffixes; <c>?.</c>,
+/// <c>??=</c>, <c>??</c>, <c>...</c>, <c>=&gt;</c>, the equalities, <c>&amp;&amp;</c>, <c>||</c> and <c>**</c> whole
+/// and every other punctuator alone, so <c>&gt;&gt;</c> closes two lists of type arguments. In markup (<c>.jsx</c>,
+/// <c>.tsx</c>) an element - its tags, a component's type arguments, attributes and text - is one token, whose
+/// <c>{...}</c> alone is code, and whose attributes' quoted texts, their character references decoded, are the strings
+/// it holds. Where a literal holds code, the lexer says where, so that code is read in its turn as a text of its own,
+/// and where each tag an element opens is named.
 /// </summary>
 internal static class JsLexer
 {
@@ -42,7 +45,7 @@ internal static class JsLexer
     {
         var lexing = new Lexing(text, lines, markup, depth: 0);
         lexing.Run(start, end);
-        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments), lexing.Interpolations, lines, lexing.Elements);
+        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments, literals: lexing.Literals), lexing.Interpolations, lines, lexing.Elements);
     }
 
     /// <summary>One run of the lexer over a text.</summary>
@@ -175,7 +178,7 @@ internal static class JsLexer
             };
         }
 
-        /// <summary>A string in single or double quotes from <paramref name="start"/>: to its closing quote, past escapes; to the line's end where none closes it.</summary>
+        /// <summary>A string in single or double quotes from <paramref name="start"/>: to its closing quote, past escapes, its value what the quotes hold; to the line's end where none closes it.</summary>
         private int Quoted(int start, int end)
         {
             var quote = text[start];
@@ -186,19 +189,23 @@ internal static class JsLexer
                 at += text[at] == '\\' && at + 1 < end ? 1 + Math.Max(1, LineBreakAt(text, at + 1, end)) : 1;
             }
 
-            at = Math.Min(at < end && text[at] == quote ? at + 1 : at, end);
+            at = Math.Min(at, end);
+            var closed = at < end && text[at] == quote;
+            KeepLiteral(start, new ScanLiteral([Part(start + 1, at)], ScanEscapes.JavaScript) { LeftOpen = !closed });
+            at = closed ? at + 1 : at;
             Add(ScanTokenKind.Text, start, at);
             return at;
         }
 
         /// <summary>
         /// A template literal from <paramref name="start"/>, to its closing backquote: each <c>${...}</c> it holds directly
-        /// recorded as code, which may hold braces, comments, strings and templates of its own - one stack of what is open.
+        /// recorded as code, which may hold braces, comments, strings and templates of its own - one stack of what is open -
+        /// and its value's parts between its backquotes and its holes.
         /// </summary>
         private int Template(int start, int end)
         {
             var literals = new LiteralStack<char>(this, start);
-            literals.OpenLiteral('`');
+            literals.OpenLiteral('`', start + 1);
             var at = start + 1;
 
             // The last character of the code read, which tells a regular expression's slash from a division's.
@@ -216,13 +223,13 @@ internal static class JsLexer
                     }
                     else if (character == '`')
                     {
-                        literals.CloseLiteral();
+                        literals.CloseLiteral(at);
                         at++;
                     }
                     else if (character == '$' && at + 1 < end && text[at + 1] == '{')
                     {
+                        literals.OpenCode(at, at + 2);
                         at += 2;
-                        literals.OpenCode(at);
                         last = '{';
                     }
                     else
@@ -243,7 +250,7 @@ internal static class JsLexer
                 }
                 else if (character == '`')
                 {
-                    literals.OpenLiteral('`');
+                    literals.OpenLiteral('`', at + 1);
                     at++;
                     last = character;
                 }
@@ -261,6 +268,7 @@ internal static class JsLexer
 
             at = Math.Min(at, end);
             literals.End(at);
+            KeepLiteral(start, new ScanLiteral(literals.Parts, ScanEscapes.JavaScript) { Interpolated = literals.Holes, LeftOpen = literals.Open });
             Add(ScanTokenKind.Text, start, at);
             return at;
         }
@@ -472,6 +480,7 @@ internal static class JsLexer
         private int Element(int start, int end)
         {
             var tags = new List<(int Start, int End)>();
+            var strings = new List<ScanLiteralPart>();
             var open = 0;
             var at = start;
 
@@ -503,7 +512,9 @@ internal static class JsLexer
                     }
                     else if (text[at] is '\'' or '"')
                     {
+                        // An attribute's string: a string the element holds.
                         var close = text.IndexOf(text[at], at + 1, end - at - 1);
+                        strings.Add(Part(at + 1, close < 0 ? end : close));
                         at = close < 0 ? end : close + 1;
                     }
                     else
@@ -535,6 +546,8 @@ internal static class JsLexer
                 Elements[start] = tags;
             }
 
+            // Markup is no string: what it holds as strings are its attributes' values, its text and tags none of them.
+            KeepLiteral(start, new ScanLiteral(strings, ScanEscapes.Html) { Markup = true });
             Add(ScanTokenKind.Text, start, at);
             return at;
         }

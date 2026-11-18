@@ -137,7 +137,7 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
             [("CartModel", CodeEdgeKinds.References, 3), ("CartService", CodeEdgeKinds.References, 4), ("_Total", CodeEdgeKinds.Instantiates, 6), ("_Rows", CodeEdgeKinds.Instantiates, 7)],
             extract.References.Where(reference => reference.Kind != CodeEdgeKinds.Calls && reference.Kind != CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Kind, reference.Line)).OrderBy(reference => reference.Line));
         Assert.Equal([(CodeImportForms.Scope, "Shop.Web", 2)], extract.Imports.Select(import => (import.Form, import.Target, import.Line)));
-        Assert.Contains(new ExtractLiteral("rows", 11), extract.Literals ?? []);
+        Assert.Contains(new ExtractLiteral("rows", 11) { Node = "razor:Views.Cart.Label()" }, extract.Literals ?? []);
     }
 
     /// <summary>

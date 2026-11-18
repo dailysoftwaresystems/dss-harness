@@ -54,7 +54,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "C# (.cs), through the compiler's own parser and its syntax alone, nothing built: every namespace, type and member with its signature, summary and body; usings, base lists, overrides and test attributes; each call with what its receiver is where the file says; each member a member reads or writes without calling it - a field, a property, a constant, an enum member, and any name a nameof names - and each string literal the file holds, by its value and its line",
+        "C# (.cs), through the compiler's own parser and its syntax alone, nothing built: every namespace, type and member with its signature, summary and body; usings, base lists, overrides and test attributes; each call with what its receiver is where the file says; each member a member reads or writes without calling it - a field, a property, a constant, an enum member, and any name a nameof names - and each string literal the file holds, an interpolated string's constant parts each one of its own, by its value as the compiler reads it, its line and the node it is written in",
         [
             "code under a preprocessor branch the parse does not take: it defines no symbol, so code under #if DEBUG is out",
             "the type of a value no declaration says - a var given a call's result, a lambda's parameter: a call on it is linked by its name alone",
@@ -64,6 +64,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             "a read of a member through a value no declaration types, linked by the member's name alone; a read of another file's field or property whose name its type's members also carry, linked to each of them",
             "code a source generator writes while the project builds, which is in no file of the tree",
             "two types of one name in two projects - a Program in each - which are one node, as a partial type's parts are; a record's positional property as an override of its base's",
+            "what an assembly's or a module's attribute names or reads - [assembly: InternalsVisibleTo(...)] - which no node of the file declares: only its strings are kept, held by the file",
         ]);
 
     /// <inheritdoc/>
@@ -153,6 +154,12 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     {
         /// <summary>The receiver's type of the extension block its members are declared in; <see langword="null"/> outside one.</summary>
         public TypeSyntax? Receiver { get; init; }
+
+        /// <summary>
+        /// The parameters among <see cref="Fields"/> - a class's or a struct's primary constructor's, an extension block's
+        /// receiver - which its members read by their names as fields, though no member is declared of them.
+        /// </summary>
+        public IReadOnlySet<string> Captured { get; init; } = new HashSet<string>(StringComparer.Ordinal);
     }
 
     /// <summary>The values a member's code reads by a name alone - its own variables, then its type's fields - each with the type it is declared with where the file says.</summary>
@@ -160,6 +167,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     /// <param name="Fields">Its type's fields, properties and events.</param>
     private sealed record Known(IReadOnlyDictionary<string, string?> Locals, IReadOnlyDictionary<string, string?> Fields)
     {
+        /// <summary>The parameters among <see cref="Fields"/> no member is declared of (<see cref="TypeFrame.Captured"/>).</summary>
+        public IReadOnlySet<string> Captured { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
         /// <summary>Whether <paramref name="name"/> is a value the member reads, and the type it is declared with where the file says.</summary>
         public bool TryGet(string name, out string? declared) => Locals.TryGetValue(name, out declared) || Fields.TryGetValue(name, out declared);
     }
@@ -172,34 +182,8 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         private readonly List<ExtractImport> _imports = [];
         private readonly List<ExtractReference> _references = [];
         private readonly List<ExtractDynamic> _dynamic = [];
-        private readonly List<ExtractLiteral> _literals = [];
+        private readonly ExtractLiterals _literals = new();
         private readonly ExtractIds _ids = new();
-
-        /// <summary>How many string literals the file holds past the most an extract keeps.</summary>
-        private int _literalsBeyond;
-
-        /// <summary>
-        /// One string literal of the file, kept with its line where it is data a search asks for: of at least
-        /// <see cref="FileExtract.LeastLiteral"/> characters, and among the first <see cref="FileExtract.MostLiterals"/> -
-        /// its line endings read as one newline, so a checkout's own way of writing them moves no answer.
-        /// </summary>
-        private void Literal(string value, int line)
-        {
-            value = value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
-
-            if (value.Length < FileExtract.LeastLiteral)
-            {
-                return;
-            }
-
-            if (_literals.Count == FileExtract.MostLiterals)
-            {
-                _literalsBeyond++;
-                return;
-            }
-
-            _literals.Add(new ExtractLiteral(ExtractText.Whole(value), line));
-        }
 
         /// <summary>The index in the nodes of each namespace's and type's first node, by its id, kind and parent: where a later part of it runs on.</summary>
         private readonly Dictionary<(string Id, string Kind, string? Parent), int> _parts = [];
@@ -216,6 +200,12 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             foreach (var directive in root.Usings)
             {
                 Import(directive);
+            }
+
+            // The assembly's and the module's attributes: their strings, which no declaration holds - the file's own does.
+            foreach (var node in root.AttributeLists.SelectMany(list => list.DescendantNodes()))
+            {
+                Literal(node, holder: null);
             }
 
             if (root.Members.OfType<GlobalStatementSyntax>().ToList() is { Count: > 0 } statements)
@@ -235,8 +225,8 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 References = _references,
                 Generated = Generated(),
                 Dynamic = _dynamic,
-                Literals = _literals.Count == 0 ? null : _literals,
-                LiteralsBeyond = _literalsBeyond,
+                Literals = _literals.Kept(),
+                LiteralsBeyond = _literals.Beyond,
             };
         }
 
@@ -282,7 +272,13 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
                     foreach (var inner in block.Members)
                     {
-                        Declare(inner, scope, parent, type with { Receiver = receiver?.Type, Fields = fields, TypeParameters = typeParameters });
+                        Declare(inner, scope, parent, type with
+                        {
+                            Receiver = receiver?.Type,
+                            Fields = fields,
+                            TypeParameters = typeParameters,
+                            Captured = receiver is { Identifier.ValueText.Length: > 0 } ? new HashSet<string>([.. type.Captured, receiver.Identifier.ValueText], StringComparer.Ordinal) : type.Captured,
+                        });
                     }
 
                     break;
@@ -433,16 +429,33 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 Constraints(node, typed.ConstraintClauses, typeParameters);
             }
 
-            var frame = new TypeFrame(node, idName, local, identifier, inherited, isInterface, FieldTypes(declared, typeParameters), typeParameters);
-
-            // A record's positional parameters are its properties, but for one its body declares itself.
-            if (declared is RecordDeclarationSyntax { ParameterList: { } positional } declaredRecord)
+            var frame = new TypeFrame(node, idName, local, identifier, inherited, isInterface, FieldTypes(declared, typeParameters), typeParameters)
             {
-                var own = FieldTypes(declaredRecord.WithParameterList(null), typeParameters);
+                Captured = Captured(declared, typeParameters),
+            };
 
-                foreach (var parameter in positional.Parameters.Where(parameter => parameter.Identifier.ValueText is { Length: > 0 } named && !own.ContainsKey(named)))
+            // What the type's own head reads and holds - its attributes' arguments and what it passes its base's
+            // constructor, where a primary constructor's parameter is the parameter - is the type's.
+            Walk(node, frame, [.. declared.AttributeLists, .. declared.BaseList?.Types.OfType<PrimaryConstructorBaseTypeSyntax>().Select(primary => primary.ArgumentList) ?? []], typeParameters,
+                scope: (declared as TypeDeclarationSyntax)?.ParameterList?.Parameters);
+
+            // A record's positional parameters are its properties, but for one its body declares itself; what another
+            // primary constructor's parameter holds - its attributes, its default - is the type's.
+            if (declared is TypeDeclarationSyntax { ParameterList: { } primaryParameters })
+            {
+                var positional = declared as RecordDeclarationSyntax;
+                var own = positional is not null ? FieldTypes(positional.WithParameterList(null), typeParameters) : null;
+
+                foreach (var parameter in primaryParameters.Parameters)
                 {
-                    Positional(parameter, declaredRecord, frame);
+                    if (positional is not null && own is not null && parameter.Identifier.ValueText is { Length: > 0 } named && !own.ContainsKey(named))
+                    {
+                        Positional(parameter, positional, frame);
+                    }
+                    else
+                    {
+                        Walk(node, frame, [parameter], typeParameters);
+                    }
                 }
             }
 
@@ -499,6 +512,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             Mention(node, declared.ReturnType, typeParameters);
             MentionParameters(node, declared.ParameterList, typeParameters);
             Constraints(node, declared.ConstraintClauses, typeParameters);
+            Walk(node, outer, [declared], typeParameters);
         }
 
         /// <summary>A member of <paramref name="type"/>: a method, a constructor, a property, a field and the rest.</summary>
@@ -614,6 +628,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                     });
 
                     Attributes(node, constant.AttributeLists, type.TypeParameters);
+                    Walk(node, type, [constant], type.TypeParameters);
                     break;
                 }
             }
@@ -702,6 +717,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         {
             var subKind = field is EventFieldDeclarationSyntax ? "event" : field.Modifiers.Any(SyntaxKind.ConstKeyword) ? "constant" : "field";
 
+            // The declaration's attributes are read once, by its first variable's node.
+            IEnumerable<SyntaxNode> attributes = field.AttributeLists;
+
             foreach (var variable in field.Declaration.Variables)
             {
                 var name = variable.Identifier.ValueText;
@@ -724,7 +742,8 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
                 Attributes(node, field.AttributeLists, type.TypeParameters);
                 Mention(node, field.Declaration.Type, type.TypeParameters);
-                Walk(node, type, [variable], type.TypeParameters);
+                Walk(node, type, [.. attributes, variable], type.TypeParameters);
+                attributes = [];
             }
         }
 
@@ -791,17 +810,22 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             });
 
             Mention(node, parameter.Type, type.TypeParameters);
+            Walk(node, type, [parameter], type.TypeParameters);
         }
 
         /// <summary>
         /// What <paramref name="code"/> calls, makes and names, from <paramref name="from"/>: each invocation with its
         /// receiver's kind, each <c>new</c> - a target-typed one by the type it is given to - and each type a local
-        /// variable, a <c>typeof</c>, a cast, an <c>as</c>, an <c>is</c> or a pattern names.
+        /// variable, a <c>typeof</c>, a cast, an <c>as</c>, an <c>is</c> or a pattern names. <paramref name="scope"/> are
+        /// parameters the code sees but is not part of: a primary constructor's, to its base's arguments.
         /// </summary>
-        private void Walk(ExtractNode from, TypeFrame? type, IEnumerable<SyntaxNode> code, IReadOnlySet<string> typeParameters)
+        private void Walk(ExtractNode from, TypeFrame? type, IEnumerable<SyntaxNode> code, IReadOnlySet<string> typeParameters, IEnumerable<ParameterSyntax>? scope = null)
         {
             var nodes = code.SelectMany(part => part.DescendantNodesAndSelf()).ToList();
-            var known = new Known(Locals(nodes, typeParameters), type?.Fields ?? new Dictionary<string, string?>(StringComparer.Ordinal));
+            var known = new Known(Locals([.. nodes, .. scope ?? []], typeParameters), type?.Fields ?? new Dictionary<string, string?>(StringComparer.Ordinal))
+            {
+                Captured = type?.Captured ?? new HashSet<string>(StringComparer.Ordinal),
+            };
             var functions = nodes.OfType<LocalFunctionStatementSyntax>().Select(function => function.Identifier.ValueText).ToHashSet(StringComparer.Ordinal);
 
             foreach (var node in nodes)
@@ -862,38 +886,73 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                         break;
 
                     // A member read or written without a call of it - x.Y - and x?.Y: a use of the member, qualified by
-                    // what its receiver is where the file says. A member of an invoked access is the call's, not a use.
+                    // what its receiver is where the file says. A member of an invoked access is the call's, not a use; one
+                    // a property pattern's path names past its first, a member of a value of no type the file says.
                     case MemberAccessExpressionSyntax access when access.IsKind(SyntaxKind.SimpleMemberAccessExpression) && access.Parent is not InvocationExpressionSyntax:
-                        Used(from, access.Name, access.Expression, known);
+                        Used(from, access.Name, PatternOfPath(access) is null ? Receiver(access.Expression, known) : new ExtractQualifier(CodeQualifierKinds.Value));
                         break;
 
                     case MemberBindingExpressionSyntax binding when binding.Parent is not InvocationExpressionSyntax
                         && binding.Ancestors().OfType<ConditionalAccessExpressionSyntax>().FirstOrDefault(holder => holder.WhenNotNull.Span.Contains(binding.Span)) is { } conditional:
-                        Used(from, binding.Name, conditional.Expression, known);
+                        Used(from, binding.Name, Receiver(conditional.Expression, known));
+                        break;
+
+                    // A member an object or a with initializer sets: a use of the made type's member, not the enclosing one's.
+                    case AssignmentExpressionSyntax { Left: IdentifierNameSyntax member, Parent: InitializerExpressionSyntax initializer }
+                        when initializer.IsKind(SyntaxKind.ObjectInitializerExpression) || initializer.IsKind(SyntaxKind.WithInitializerExpression):
+                        Used(from, member, Initialized(initializer, known));
+                        break;
+
+                    // A member a property pattern reads - { Name: ... } - of the type the pattern tests.
+                    case SubpatternSyntax { NameColon.Name: IdentifierNameSyntax member, Parent: PropertyPatternClauseSyntax { Parent: RecursivePatternSyntax pattern } }:
+                        Used(from, member, Tested(pattern, known));
+                        break;
+
+                    // A member an attribute's named argument sets - [Display(Name = "x")] - of the attribute's class.
+                    case AttributeArgumentSyntax { NameEquals.Name: IdentifierNameSyntax member, Parent.Parent: AttributeSyntax attribute }:
+                        Used(from, member, NameOf(attribute.Name) is { } named ? new ExtractQualifier(CodeQualifierKinds.Type, ExtractText.Qualify(named.Qualifier, AttributeClass(named.Name))) : new ExtractQualifier(CodeQualifierKinds.Value));
                         break;
 
                     case IdentifierNameSyntax read when Readable(read, known, functions, typeParameters):
-                        _references.Add(new ExtractReference(from.Id, CodeEdgeKinds.Uses, read.Identifier.ValueText, Line(read.SpanStart)));
+                        Used(from, read, PatternOfPath(read) is { } tested ? Tested(tested, known) : null);
                         break;
 
-                    case LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression):
-                        Literal(literal.Token.ValueText, Line(literal.SpanStart));
-                        break;
-
-                    // An interpolated string's constant parts are its literal parts; its holes are code, read as code.
-                    case InterpolatedStringExpressionSyntax interpolated:
-                        foreach (var part in interpolated.Contents.OfType<InterpolatedStringTextSyntax>())
-                        {
-                            Literal(part.TextToken.ValueText, Line(part.SpanStart));
-                        }
-
+                    case LiteralExpressionSyntax or InterpolatedStringExpressionSyntax:
+                        Literal(node, from.Id);
                         break;
                 }
             }
         }
 
-        /// <summary>A member read or written without a call of it: a use of the member by its name, qualified by what its receiver is where the file says.</summary>
-        private void Used(ExtractNode from, SimpleNameSyntax name, ExpressionSyntax? receiver, Known known)
+        /// <summary>
+        /// The string literal <paramref name="node"/> is, its value decoded as the compiler reads it - a raw one's as written -
+        /// or an interpolated string's constant parts, each a literal of its own, its holes code read as code: kept as held by
+        /// the node of <paramref name="holder"/>, none where the file's own holds it.
+        /// </summary>
+        private void Literal(SyntaxNode node, string? holder)
+        {
+            switch (node)
+            {
+                case LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression) || literal.IsKind(SyntaxKind.Utf8StringLiteralExpression):
+                    // A raw string over lines begins its value on the line after its quotes.
+                    _literals.Add(literal.Token.ValueText, Line(literal.SpanStart) + (literal.Token.IsKind(SyntaxKind.MultiLineRawStringLiteralToken) || literal.Token.IsKind(SyntaxKind.Utf8MultiLineRawStringLiteralToken) ? 1 : 0), holder);
+                    break;
+
+                case InterpolatedStringExpressionSyntax interpolated:
+                    foreach (var part in interpolated.Contents.OfType<InterpolatedStringTextSyntax>())
+                    {
+                        _literals.Add(part.TextToken.ValueText, Line(part.SpanStart), holder);
+                    }
+
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// A member read or written without a call of it: a use of the member by its name, qualified by
+        /// <paramref name="qualifier"/> - what its receiver is where the file says; none where it is read by its name alone.
+        /// </summary>
+        private void Used(ExtractNode from, SimpleNameSyntax name, ExtractQualifier? qualifier)
         {
             var member = name.Identifier.ValueText;
 
@@ -902,63 +961,99 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 return;
             }
 
-            _references.Add(new ExtractReference(from.Id, CodeEdgeKinds.Uses, member, Line(name.SpanStart)) { Qualifier = Receiver(receiver, known) });
+            _references.Add(new ExtractReference(from.Id, CodeEdgeKinds.Uses, member, Line(name.SpanStart)) { Qualifier = qualifier });
         }
 
         /// <summary>
-        /// Whether <paramref name="read"/> names a value the member reads by the name alone: not a call's callee, not a
-        /// member of a receiver, not part of a written type or base, and none of its own locals, parameters, local
-        /// functions or type parameters - the syntax alone cannot tell a field of another type from a value the language
-        /// itself holds, and a use of either is what the graph wants, resolved or not.
+        /// Whether <paramref name="read"/> names a value the member reads by the name alone - the first of a receiver's chain
+        /// among them, where it is a field of its type's or a name no capital begins, a capital beginning the name of a type
+        /// or a namespace a member is reached through: not a call's callee, not a member of a receiver, nothing the compiler
+        /// reads as a type or a namespace, no name a named argument, an initializer, an anonymous type, a tuple or a pattern
+        /// declares or sets - those of an initializer and a pattern are read as their type's - no discard, and none of its
+        /// own locals, parameters, local functions or type parameters, nor a primary constructor's parameter or an extension
+        /// block's receiver, of which no member is declared. The syntax alone cannot tell a field of another type from a
+        /// value the language itself holds, and a use of either is what the graph wants, resolved or not.
         /// </summary>
         private static bool Readable(IdentifierNameSyntax read, Known known, IReadOnlySet<string> functions, IReadOnlySet<string> typeParameters)
         {
             var name = read.Identifier.ValueText;
 
-            // The right operand of an as or an is is a type the Mention cases read, not a value.
-            if (read.Parent is BinaryExpressionSyntax asOrIs && (asOrIs.IsKind(SyntaxKind.AsExpression) || asOrIs.IsKind(SyntaxKind.IsExpression)) && ReferenceEquals(asOrIs.Right, read))
+            if (name.Length == 0 || name == "value" || typeParameters.Contains(name) || functions.Contains(name) || known.Locals.ContainsKey(name) || known.Captured.Contains(name)
+                || (name == "_" && !known.Fields.ContainsKey(name))
+                || SyntaxFacts.IsInNamespaceOrTypeContext(read))
             {
                 return false;
             }
 
-            return name.Length > 0
-                && name != "value"
-                && !typeParameters.Contains(name)
-                && !functions.Contains(name)
-                && !known.Locals.ContainsKey(name)
-                && read.Parent is not InvocationExpressionSyntax
-                    and not MemberAccessExpressionSyntax
-                    and not MemberBindingExpressionSyntax
-                    and not QualifiedNameSyntax
-                    and not AliasQualifiedNameSyntax
-                    and not VariableDeclarationSyntax
-                    and not ForEachStatementSyntax
-                    and not CatchDeclarationSyntax
-                    and not DeclarationExpressionSyntax
-                    and not TypeOfExpressionSyntax
-                    and not CastExpressionSyntax
-                    and not DeclarationPatternSyntax
-                    and not TypePatternSyntax
-                    and not RecursivePatternSyntax
-                    and not AttributeSyntax
-                    and not BaseListSyntax
-                    and not SimpleBaseTypeSyntax
-                    and not PrimaryConstructorBaseTypeSyntax
-                    and not ObjectCreationExpressionSyntax
-                    and not ImplicitObjectCreationExpressionSyntax
-                    and not ArrayTypeSyntax
-                    and not NullableTypeSyntax
-                    and not PointerTypeSyntax
-                    and not TupleTypeSyntax
-                    and not GenericNameSyntax
-                    and not TypeArgumentListSyntax
-                    and not TupleElementSyntax
-                    and not TypeConstraintSyntax
-                    and not RefTypeSyntax
-                    and not ScopedTypeSyntax
-                    and not FunctionPointerTypeSyntax
-                    and not ParameterSyntax
-                    and not ArgumentSyntax { NameColon: not null };
+            return read.Parent switch
+            {
+                InvocationExpressionSyntax or MemberBindingExpressionSyntax or NameColonSyntax or NameEqualsSyntax or QualifiedNameSyntax or AliasQualifiedNameSyntax => false,
+
+                // A chain's first name is read where it is a value: a field of its type's, or a name no type's is.
+                MemberAccessExpressionSyntax access => ReferenceEquals(access.Expression, read) && (known.Fields.ContainsKey(name) || !char.IsUpper(name[0])),
+                AssignmentExpressionSyntax { Parent: InitializerExpressionSyntax initializer } assignment => !ReferenceEquals(assignment.Left, read)
+                    || !(initializer.IsKind(SyntaxKind.ObjectInitializerExpression) || initializer.IsKind(SyntaxKind.WithInitializerExpression)),
+                _ => true,
+            };
+        }
+
+        /// <summary>
+        /// What the members <paramref name="initializer"/> sets are qualified by: the type a <c>new</c> makes - a
+        /// target-typed one's where the code says it - the value a <c>with</c> copies; a value of no type the file says for
+        /// an initializer of a member's value.
+        /// </summary>
+        private static ExtractQualifier Initialized(InitializerExpressionSyntax initializer, Known known) => initializer.Parent switch
+        {
+            ObjectCreationExpressionSyntax created => Receiver(created, known),
+            ImplicitObjectCreationExpressionSyntax created when TargetType(created) is { } target && Key(target) is { } made => new ExtractQualifier(CodeQualifierKinds.Type, made),
+            WithExpressionSyntax copied => Receiver(copied.Expression, known),
+            _ => new ExtractQualifier(CodeQualifierKinds.Value),
+        };
+
+        /// <summary>
+        /// What the members <paramref name="pattern"/> reads are qualified by: the type it names, else what it tests - an
+        /// <c>is</c>'s operand, a switch's governing value - and a value of no type the file says for a pattern nested in
+        /// another's.
+        /// </summary>
+        private static ExtractQualifier Tested(RecursivePatternSyntax pattern, Known known)
+        {
+            if (pattern.Type is { } type)
+            {
+                return Key(type) is { } named ? new ExtractQualifier(CodeQualifierKinds.Type, named) : new ExtractQualifier(CodeQualifierKinds.Value);
+            }
+
+            return pattern.Parent switch
+            {
+                IsPatternExpressionSyntax tested => Receiver(tested.Expression, known),
+                SwitchExpressionArmSyntax { Parent: SwitchExpressionSyntax switched } => Receiver(switched.GoverningExpression, known),
+                CasePatternSwitchLabelSyntax { Parent.Parent: SwitchStatementSyntax switched } => Receiver(switched.Expression, known),
+                _ => new ExtractQualifier(CodeQualifierKinds.Value),
+            };
+        }
+
+        /// <summary>
+        /// The property pattern whose path - what an extended pattern writes before its colon, <c>{ A.B: 1 }</c> - is
+        /// <paramref name="node"/> or holds it as the receiver of a member it names; <see langword="null"/> where no path
+        /// of at most <see cref="FileExtract.MostReceiverNames"/> names does, so no long chain is climbed whole. The path's
+        /// first name is a member of what the pattern tests.
+        /// </summary>
+        private static RecursivePatternSyntax? PatternOfPath(ExpressionSyntax node)
+        {
+            SyntaxNode at = node;
+
+            for (var names = 1; at.Parent is MemberAccessExpressionSyntax access && ReferenceEquals(access.Expression, at); names++)
+            {
+                if (names == FileExtract.MostReceiverNames)
+                {
+                    return null;
+                }
+
+                at = access;
+            }
+
+            return at.Parent is ExpressionColonSyntax { Parent: SubpatternSyntax { Parent: PropertyPatternClauseSyntax { Parent: RecursivePatternSyntax pattern } } } colon && ReferenceEquals(colon.Expression, at)
+                ? pattern
+                : null;
         }
 
         /// <summary>One invocation: a call by its name, its argument count and its receiver, or a mark where it cannot be bound.</summary>
@@ -1026,17 +1121,6 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 Dynamic(name, "a type made by Activator.CreateInstance");
             }
 
-            switch (receiver)
-            {
-                case ThisExpressionSyntax:
-                    Call(from, member, arity, line, new ExtractQualifier(CodeQualifierKinds.This));
-                    return;
-
-                case BaseExpressionSyntax:
-                    Call(from, member, arity, line, new ExtractQualifier(CodeQualifierKinds.Base));
-                    return;
-            }
-
             if (DynamicRoot(receiver, known) is { } loose)
             {
                 Dynamic(name, $"a call on '{loose}', which is dynamic");
@@ -1053,16 +1137,23 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         /// <summary>
-        /// What a call's <paramref name="receiver"/> is: a type it is made or cast as; a variable, parameter or field the
-        /// member reads, by the type it is declared with - each a type qualifier - a field's chain of members by its names,
-        /// for the linker to follow, or a value of no said type; a name no variable has, as a named qualifier - a type's, a
-        /// namespace's or a value's - where it begins with a capital letter, else as a value of another file by its name;
-        /// anything else a value of no said type.
+        /// What a call's or a use's <paramref name="receiver"/> is - the one owner of it for both: <c>this</c> and
+        /// <c>base</c>; a type it is made or cast as; a variable, parameter or field the member reads, by the type it is
+        /// declared with - each a type qualifier - a field's chain of members by its names, for the linker to follow, or a
+        /// value of no said type; a name no variable has, as a named qualifier - a type's, a namespace's or a value's - where
+        /// it begins with a capital letter, else as a value of another file by its name; anything else - a chain longer than
+        /// <see cref="FileExtract.MostReceiverNames"/> names among them - a value of no said type.
         /// </summary>
         private static ExtractQualifier Receiver(ExpressionSyntax? receiver, Known known)
         {
             switch (receiver)
             {
+                case ThisExpressionSyntax:
+                    return new ExtractQualifier(CodeQualifierKinds.This);
+
+                case BaseExpressionSyntax:
+                    return new ExtractQualifier(CodeQualifierKinds.Base);
+
                 case ObjectCreationExpressionSyntax created when NameOf(created.Type) is { } made:
                     return new ExtractQualifier(CodeQualifierKinds.Type, ExtractText.Qualify(made.Qualifier, made.Name));
 
@@ -1100,17 +1191,25 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
         /// <summary>
         /// The variable or cast a receiver's chain begins at, where it is <c>dynamic</c>: what the call is on, written as the
-        /// code names it; <see langword="null"/> where it is not.
+        /// code names it; <see langword="null"/> where it is not, or the chain holds more than
+        /// <see cref="FileExtract.MostReceiverNames"/> names - read no further, as <see cref="Receiver"/> reads it.
         /// </summary>
         private static string? DynamicRoot(ExpressionSyntax? receiver, Known known)
         {
             var at = receiver;
+            var names = 0;
 
+            // A chain of more names than a receiver is read by is a value of no type the file says, dynamic or not.
             while (true)
             {
                 switch (at)
                 {
                     case MemberAccessExpressionSyntax access when access.Expression is not ThisExpressionSyntax:
+                        if (++names >= FileExtract.MostReceiverNames)
+                        {
+                            return null;
+                        }
+
                         at = access.Expression;
                         continue;
 
@@ -1147,6 +1246,21 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                         return null;
                 }
             }
+        }
+
+        /// <summary>
+        /// The parameters of a class's or a struct's primary constructor no member of <paramref name="declared"/> is declared
+        /// of: what its members read by their names as fields, though no node is of them. A record's are its properties.
+        /// </summary>
+        private static HashSet<string> Captured(BaseTypeDeclarationSyntax declared, IReadOnlySet<string> typeParameters)
+        {
+            if (declared is not TypeDeclarationSyntax { ParameterList: { } primary } typed || declared is RecordDeclarationSyntax)
+            {
+                return new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            var members = FieldTypes(typed.WithParameterList(null), typeParameters);
+            return primary.Parameters.Select(parameter => parameter.Identifier.ValueText).Where(name => name.Length > 0 && !members.ContainsKey(name)).ToHashSet(StringComparer.Ordinal);
         }
 
         /// <summary>
@@ -1399,13 +1513,19 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                     continue;
                 }
 
-                var tick = named.Name.IndexOf('`', StringComparison.Ordinal);
-                var plain = tick < 0 ? named.Name : named.Name[..tick];
-                var arity = tick < 0 ? string.Empty : named.Name[tick..];
-
-                Reference(from, CodeEdgeKinds.References, (plain.EndsWith("Attribute", StringComparison.Ordinal) ? plain : $"{plain}Attribute") + arity, named.Qualifier, Line(attribute.SpanStart));
+                Reference(from, CodeEdgeKinds.References, AttributeClass(named.Name), named.Qualifier, Line(attribute.SpanStart));
                 Arguments(from, attribute.Name, typeParameters);
             }
+        }
+
+        /// <summary>The class an attribute written <paramref name="name"/> is: its name with <c>Attribute</c> after it where it is left out, a generic one's count kept.</summary>
+        private static string AttributeClass(string name)
+        {
+            var tick = name.IndexOf('`', StringComparison.Ordinal);
+            var plain = tick < 0 ? name : name[..tick];
+            var arity = tick < 0 ? string.Empty : name[tick..];
+
+            return (plain.EndsWith("Attribute", StringComparison.Ordinal) ? plain : $"{plain}Attribute") + arity;
         }
 
         /// <summary>An <c>override</c>'s reference to the member of a base type it overrides, by its name and parameters.</summary>
@@ -1655,43 +1775,64 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         => ValueKey(type, typeParameters) is { } key && key != DynamicType ? key : null;
 
     /// <summary>
-    /// The names <paramref name="receiver"/> writes, where it is a chain of them - an identifier, a type's name, members
-    /// of it - with <c>this.</c> before it left out and said in <paramref name="throughThis"/>; <see langword="null"/>
-    /// where it is anything else.
+    /// The names <paramref name="receiver"/> writes, where it is a chain of at most <see cref="FileExtract.MostReceiverNames"/>
+    /// of them - an identifier, a type's name, members of it - with <c>this.</c> before it left out and said in
+    /// <paramref name="throughThis"/>; <see langword="null"/> where it is anything else, or a longer chain, which is read
+    /// no further than its most: a use of each member of a long chain costs no walk of the whole of it.
     /// </summary>
     private static List<string>? Path(ExpressionSyntax? receiver, out bool throughThis)
     {
         throughThis = false;
 
-        switch (receiver)
+        // Read from its end, last first, and turned once it is read; no chain past the most names is read on.
+        var names = new List<string>();
+        var at = receiver;
+
+        while (names.Count < FileExtract.MostReceiverNames)
         {
-            case IdentifierNameSyntax identifier when identifier.Identifier.ValueText.Length > 0:
-                return [identifier.Identifier.ValueText];
+            switch (at)
+            {
+                case IdentifierNameSyntax identifier when identifier.Identifier.ValueText.Length > 0:
+                    names.Add(identifier.Identifier.ValueText);
+                    names.Reverse();
+                    return names;
 
-            case GenericNameSyntax generic when generic.Identifier.ValueText.Length > 0:
-                return [Generic(generic.Identifier.ValueText, generic.TypeArgumentList.Arguments.Count)];
+                case GenericNameSyntax named when named.Identifier.ValueText.Length > 0:
+                    names.Add(Generic(named.Identifier.ValueText, named.TypeArgumentList.Arguments.Count));
+                    names.Reverse();
+                    return names;
 
-            case AliasQualifiedNameSyntax aliased:
-                return Path(aliased.Name, out throughThis);
+                case AliasQualifiedNameSyntax aliased:
+                    at = aliased.Name;
+                    continue;
 
-            // `x!` and `(x)` are x.
-            case PostfixUnaryExpressionSyntax suppressed when suppressed.IsKind(SyntaxKind.SuppressNullableWarningExpression):
-                return Path(suppressed.Operand, out throughThis);
+                // `x!` and `(x)` are x.
+                case PostfixUnaryExpressionSyntax suppressed when suppressed.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    at = suppressed.Operand;
+                    continue;
 
-            case ParenthesizedExpressionSyntax parenthesized:
-                return Path(parenthesized.Expression, out throughThis);
+                case ParenthesizedExpressionSyntax parenthesized:
+                    at = parenthesized.Expression;
+                    continue;
 
-            case MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax } access when access.IsKind(SyntaxKind.SimpleMemberAccessExpression) && access.Name.Identifier.ValueText.Length > 0:
-                throughThis = true;
-                return [access.Name.Identifier.ValueText];
+                case MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax } access when access.IsKind(SyntaxKind.SimpleMemberAccessExpression) && access.Name.Identifier.ValueText.Length > 0:
+                    throughThis = true;
+                    names.Add(access.Name.Identifier.ValueText);
+                    names.Reverse();
+                    return names;
 
-            case MemberAccessExpressionSyntax access when access.IsKind(SyntaxKind.SimpleMemberAccessExpression) && Path(access.Expression, out throughThis) is { } left && Path(access.Name, out _) is [var right]:
-                left.Add(right);
-                return left;
+                case MemberAccessExpressionSyntax access when access.IsKind(SyntaxKind.SimpleMemberAccessExpression) && access.Name.Identifier.ValueText.Length > 0:
+                    names.Add(access.Name is GenericNameSyntax generic ? Generic(generic.Identifier.ValueText, generic.TypeArgumentList.Arguments.Count) : access.Name.Identifier.ValueText);
+                    at = access.Expression;
+                    continue;
 
-            default:
-                return null;
+                default:
+                    return null;
+            }
         }
+
+        throughThis = false;
+        return null;
     }
 
     /// <summary><paramref name="outer"/>'s type parameters and those <paramref name="list"/> declares: the names a type of it may be.</summary>

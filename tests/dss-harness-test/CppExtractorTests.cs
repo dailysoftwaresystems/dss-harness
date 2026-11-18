@@ -702,8 +702,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     /// A head written under each branch of a conditional over one body is read by its first head, and the body holds what
     /// every branch writes after its own head - the first branch's members, enumerators, declarations and calls among
     /// them - the head another branch repeats none of it: a class, an enumeration, a namespace and a linkage block each
-    /// one node holding its members - never a nested one of its own name - and a function's body calls nothing another
-    /// head names.
+    /// one node holding its members - never a nested one of its own name - and a function calls what its first head's
+    /// defaults call, and nothing another head names.
     /// </summary>
     [Fact]
     public void AHeadUnderEachBranch_IsReadByItsFirst_TheOthersNoneOfItsBody()
@@ -759,7 +759,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             ],
             extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
         Assert.Equal(["A", "B"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Name));
-        Assert.Equal(["quick", "go"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
+        Assert.Equal(["fast", "quick", "go"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
     }
 
     /// <summary>
@@ -848,6 +848,54 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
         Assert.Equal("Color", Node(extract, "cpp:S.c").ValueType);
         Assert.Contains(extract.References, reference => reference is { From: "cpp:S.c", Kind: CodeEdgeKinds.References, Name: "Color" });
+    }
+
+    /// <summary>
+    /// A raw string's value is what its parentheses hold as written, its delimiter and its prefix none of it, and a
+    /// user-defined literal's suffix is no name the code reads; a parameter's default is its function's code; a structured
+    /// binding's names are its own variables, a type a declaration is written with and a scope a <c>::</c> follows are no
+    /// use, and a conditional's branch is.
+    /// </summary>
+    [Fact]
+    public void ARawStringIsAsWritten_ASuffixAndABindingAndAScopeAreNoUses_ADefaultIsItsFunctions()
+    {
+        var extract = Read("src/t.cpp", """
+            #include <map>
+
+            namespace shapes
+            {
+            enum class Kind { One, Two };
+
+            void log(const char *name = "parameter default", int n = LIMIT);
+
+            int take(std::map<int, int> &m, bool c)
+            {
+                auto raw = R"x(not ) a "call(" here)x";
+                auto pattern = R"(\d+)";
+                auto wide = LR"(C:\temp)";
+                auto text = "abc"s;
+                Kind which = Kind::One;
+                for (auto& [key, value] : m) { use(key, value); }
+                return c ? COUNT : 0;
+            }
+            }
+            """);
+
+        const string Log = "cpp:shapes.log(const char*,int)";
+        const string Take = "cpp:shapes.take(std::map<int,int>&,bool)";
+
+        Assert.Equal(
+            [
+                new ExtractLiteral("parameter default", 7) { Node = Log },
+                new ExtractLiteral("not ) a \"call(\" here", 11) { Node = Take },
+                new ExtractLiteral("\\d+", 12) { Node = Take },
+                new ExtractLiteral("C:\\temp", 13) { Node = Take },
+                new ExtractLiteral("abc", 14) { Node = Take },
+            ],
+            extract.Literals);
+        Assert.Equal(
+            [(Log, CodeEdgeKinds.Uses, "LIMIT", 7), (Take, CodeEdgeKinds.Uses, "One", 15), (Take, CodeEdgeKinds.Calls, "use", 16), (Take, CodeEdgeKinds.Uses, "COUNT", 17)],
+            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
     }
 
     private static FileExtract Read(string path, string text) => new CppExtractor().Extract(new CodeFileInput(path, text));

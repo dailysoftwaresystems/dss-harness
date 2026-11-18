@@ -464,8 +464,8 @@ public sealed class StructuralScannerTests
     /// <summary>
     /// A string in single quotes, double quotes or backticks, a heredoc and a nowdoc are each one token; a double-quoted
     /// string's and a heredoc's interpolations - <c>{$...}</c> from its <c>$</c>, <c>${...}</c> after its brace, holding
-    /// strings and braces of their own - are said as code, a single-quoted string's and a nowdoc's never; a string or a
-    /// heredoc the text ends in is read to its end.
+    /// strings and braces of their own - are said as code, a single-quoted string's and a nowdoc's never, nor a
+    /// <c>${name}</c>'s, a variable read by its name; a string or a heredoc the text ends in is read to its end.
     /// </summary>
     [Fact]
     public void PhpsLexer_ReadsStringsHeredocsAndNowdocs_AndSaysTheirInterpolations()
@@ -477,7 +477,7 @@ public sealed class StructuralScannerTests
         Assert.Equal(
             ["'x {$no}'", "\"y {$b->c(\"}\")} ${d} {$o->{'p'}->q()} {$a['{$']} \\\" e\"", "`f`", "<<<EOT\n  g {$h->i()}\n  EOT", "<<<'N'\n  {$j}\n  N"],
             texts.Select(at => scan.Scan.Text(at)));
-        Assert.Equal(["$b->c(\"}\")", "d", "$o->{'p'}->q()", "$a['{$']"], scan.Interpolations[scan.Scan[texts[1]].Start].Select(span => Text[span.Start..span.End]));
+        Assert.Equal(["$b->c(\"}\")", "$o->{'p'}->q()", "$a['{$']"], scan.Interpolations[scan.Scan[texts[1]].Start].Select(span => Text[span.Start..span.End]));
         Assert.Equal(["$h->i()"], scan.Interpolations[scan.Scan[texts[3]].Start].Select(span => Text[span.Start..span.End]));
         Assert.False(scan.Interpolations.ContainsKey(scan.Scan[texts[0]].Start));
         Assert.False(scan.Interpolations.ContainsKey(scan.Scan[texts[4]].Start));
