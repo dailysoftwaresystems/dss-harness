@@ -184,20 +184,34 @@ public static partial class HostCopies
 
     /// <summary>
     /// The host's copy of the main checkout that <paramref name="tree"/> - a tree a host was sent legs to run in: its copy
-    /// of a tree, or a leg's own copy of one kept in that copy's .legs - belongs to (<see cref="MainCopyOf"/>).
+    /// of a tree, or a leg's own copy of one kept in that copy's .legs (<see cref="HolderOf"/>) - belongs to
+    /// (<see cref="MainCopyOf"/>).
     /// </summary>
     /// <param name="tree">The tree, as the host spells it.</param>
-    public static string MainCopyOfTree(string tree)
+    /// <param name="comparison">How the machine the tree is on compares paths.</param>
+    public static string MainCopyOfTree(string tree, StringComparison comparison)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tree);
 
-        var whole = Path.TrimEndingDirectorySeparator(tree);
+        return MainCopyOf(HolderOf(tree, comparison) ?? Path.TrimEndingDirectorySeparator(tree));
+    }
 
-        return Path.GetDirectoryName(whole) is { } slot
-            && string.Equals(Path.GetFileName(slot), HarnessLayout.LegsDirectoryName, StringComparison.Ordinal)
+    /// <summary>
+    /// The tree whose <c>.legs</c> keeps <paramref name="tree"/> - a leg's own copy of it, <c>&lt;tree&gt;/.legs/&lt;key&gt;</c> -
+    /// or <see langword="null"/> where no tree's .legs keeps it: the one rule by which a copy made for a leg is told from
+    /// the tree it was made of, wherever a machine asks which repository a tree is of.
+    /// </summary>
+    /// <param name="tree">The tree, as the machine it is on spells it.</param>
+    /// <param name="comparison">How that machine compares paths.</param>
+    public static string? HolderOf(string tree, StringComparison comparison)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        return Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(tree)) is { } slot
+            && string.Equals(Path.GetFileName(slot), HarnessLayout.LegsDirectoryName, comparison)
             && Path.GetDirectoryName(slot) is { Length: > 0 } holder
-                ? MainCopyOf(holder)
-                : MainCopyOf(whole);
+                ? holder
+                : null;
     }
 
     /// <summary>Where a host keeps the main checkout's copy for this machine: see <see cref="RepositoryOf"/>.</summary>
@@ -214,7 +228,7 @@ public static partial class HostCopies
     /// </summary>
     /// <remarks>
     /// Asked on the machine that reaches the host, which holds its item: a host's own copy holds none, and a DssHarness
-    /// there finds its copies from the copy it was sent to run in (<see cref="MainCopyOf"/>), never from config.json.
+    /// there finds its copies from the copy it was sent to run in (<see cref="MainCopyOfTree"/>), never from config.json.
     /// </remarks>
     /// <param name="context">The repository, its configuration and what the hosts' items declare.</param>
     /// <param name="host">The host.</param>

@@ -64,12 +64,13 @@ public sealed record RepositoryTree(string Root, string Name)
     /// </remarks>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="here">The host this machine is to the machine that sent the legs here, or <see langword="null"/>.</param>
-    public static string MainCheckoutOf(HarnessContext context, HostId? here)
+    /// <param name="comparison">How this machine compares paths.</param>
+    public static string MainCheckoutOf(HarnessContext context, HostId? here, StringComparison comparison)
     {
         ArgumentNullException.ThrowIfNull(context);
 
         return HostCopies.KeptAs(here) is not null
-            ? HostCopies.MainCopyOfTree(context.Layout.MainCheckoutRoot)
+            ? HostCopies.MainCopyOfTree(context.Layout.MainCheckoutRoot, comparison)
             : context.Layout.MainCheckoutRoot;
     }
 
@@ -146,7 +147,7 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
 
         if (HostCopies.KeptAs(here) is not null)
         {
-            var main = RepositoryTree.MainCheckoutOf(context, here);
+            var main = RepositoryTree.MainCheckoutOf(context, here, _platform.PathComparison);
 
             try
             {

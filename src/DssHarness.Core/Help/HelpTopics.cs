@@ -634,10 +634,12 @@ public static class HelpTopics
             + "their order: the steps the run selects and the leg's system runs, every input and every name a run line "
             + "holds, each program a line starts held to the tool policy, a line that starts nothing or would put a "
             + "secret in its arguments, and an action's working space git does not ignore. A leg this machine runs is "
-            + "checked here once its tree is synced and locked, right before its slot is asked for; a WSL "
-            + "distribution's leg by the distribution, sent the leg's own run line with "
-            + $"{Application.Legs.RunnerLegs.CheckBeforeAdmissionOption}, which checks and runs nothing; an ssh host's by the host, before "
-            + "it admits the leg. A step reading the build of a leg this run did not build is refused as the runner "
+            + "checked here once its tree is synced and locked and its isolation and developer environment are decided, "
+            + "right before its slot is asked for; a WSL distribution's leg by the distribution, sent the leg's run line "
+            + $"without --json, {SetUps.LegSetUps.Option} or {Build.KeepGoing.Option} and with {Application.Legs.RunnerLegs.CheckBeforeAdmissionOption}, "
+            + "which checks and runs nothing; an ssh host's by the host, before it admits the leg. A leg whose work would "
+            + "never start - its isolation refused, or its developer environment not set up - ends with its own line and "
+            + "is never checked. A step reading the build of a leg this run did not build is refused as the runner "
             + "starts, after the slot, for the build it waits on is made then; a leg that waits for no slot is checked "
             + "as its runner starts. A run check's runner is checked alike, and what would refuse it is warned of rather "
             + "than refusing the run: a check runs only where a failure matches the exception it confirms, and one that "
@@ -2140,10 +2142,11 @@ public static class HelpTopics
             + $"{(RemoteLegRunner.MostRestarts == 1 ? "once" : $"{RemoteLegRunner.MostRestarts} times")} at most, which is safe since "
             + "nothing ran: a runtime or a tool replaced there while it started fails that way once. "
             + "A start that then answers is the leg's line, which says what the failed start said ('retried once: ...', and "
-            + "retried in --json); one that fails so again is poisoned, saying it was retried. Once anything ran there, the leg "
-            + "is never started again. A WSL distribution asked to check a heavy leg before this machine takes its slot is "
-            + "asked once more alike - a check runs nothing - and one that fails so again is the leg's poisoned line, with no "
-            + "slot waited for.");
+            + "retried in --json); one that fails so again is poisoned, saying it was retried; and one that ends with no line "
+            + "for the leg says it in what ends it. Once anything ran there, the leg is never started again. A WSL distribution "
+            + "asked to check a heavy leg before this machine takes its slot is asked once more alike - a check runs nothing - "
+            + "and one that fails so again is the leg's poisoned line, with no slot waited for; what its failed start said is "
+            + "said on whatever line the leg then reaches, before what its run's own starts said.");
         builder.AppendLine();
         AppendWrapped(
             builder,

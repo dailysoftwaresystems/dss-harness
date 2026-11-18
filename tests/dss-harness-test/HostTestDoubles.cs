@@ -696,7 +696,7 @@ internal sealed class KnownTrees : IRepositoryTrees
     public string? Unlisted { get; init; }
 
     public Task<RepositoryTreesFound> HereAsync(HarnessContext context, HostId? here, CancellationToken cancellationToken = default)
-        => Task.FromResult(Found(RepositoryTree.MainCheckoutOf(context, here), HostId.Local));
+        => Task.FromResult(Found(RepositoryTree.MainCheckoutOf(context, here, new HostPlatform().PathComparison), HostId.Local));
 
     public RepositoryTreesFound On(HarnessContext context, HostId host) => Copies(context, host);
 

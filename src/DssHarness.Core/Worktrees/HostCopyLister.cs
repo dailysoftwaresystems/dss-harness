@@ -68,8 +68,12 @@ public sealed record HostCopyMissing(HostCopyEntry Entry, CopyStanding Standing)
 
 /// <summary>What one declared host was asked about the worktree copies it keeps, and what it answered.</summary>
 /// <param name="Host">The host.</param>
-/// <param name="RepositoryPath">Where it keeps the main checkout's copy, beside which it keeps the rest.</param>
-public sealed record HostCopiesAnswer(HostId Host, string RepositoryPath)
+/// <param name="RepositoryPath">
+/// Where it keeps the main checkout's copy for this machine, beside which it keeps the rest
+/// (<see cref="HostCopies.RepositoryOf"/>); <see langword="null"/> where that is not known - its item cannot be read - and
+/// it was asked nothing, for no other path stands in for it.
+/// </param>
+public sealed record HostCopiesAnswer(HostId Host, string? RepositoryPath)
 {
     /// <summary>Every copy it keeps there, in the order of their names.</summary>
     public IReadOnlyList<HostCopySeen> Copies { get; init; } = [];
@@ -242,28 +246,26 @@ public sealed class HostCopyLister(
         var declared = Declared(context.Config);
         var answers = new List<HostCopiesAnswer>();
 
-        foreach (var (host, repositoryPath) in declared)
+        foreach (var host in declared)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            answers.Add(await AskAsync(context, host, repositoryPath, recorded, worktrees, cancellationToken).ConfigureAwait(false));
+            answers.Add(await AskAsync(context, host, recorded, worktrees, cancellationToken).ConfigureAwait(false));
         }
 
         return listing with
         {
             Hosts = answers,
-            Undeclared = [.. recorded.Where(entry => !declared.Any(pair => OnHost(entry, pair.Host)))],
+            Undeclared = [.. recorded.Where(entry => !declared.Any(host => OnHost(entry, host)))],
         };
     }
 
     /// <summary>
     /// What <paramref name="host"/> keeps beside where it keeps the main checkout's copy for this machine
-    /// (<see cref="HostCopies.RepositoryOf"/>), set against the record; where that is not known, why, beside
-    /// <paramref name="declared"/>, the repositoryPath config.json declares.
+    /// (<see cref="HostCopies.RepositoryOf"/>), set against the record; where that is not known, why, with no path.
     /// </summary>
     private async Task<HostCopiesAnswer> AskAsync(
         HarnessContext context,
         HostId host,
-        string declared,
         IReadOnlyList<HostCopyEntry> recorded,
         IReadOnlyList<WorktreeListing> worktrees,
         CancellationToken cancellationToken)
@@ -276,9 +278,10 @@ public sealed class HostCopyLister(
         }
         catch (HarnessException ex)
         {
-            // Never listed beside config.json's in its place: an item set to keep the copies elsewhere would have this
-            // machine's copies there read as none, and whatever else is there as copies.
-            return new HostCopiesAnswer(host, declared) { Unasked = ex.Message, ExitCode = ex.ExitCode };
+            // Never listed, nor named, beside config.json's in its place: an item set to keep the copies elsewhere would
+            // have this machine's copies there read as none, whatever else is there as copies, and its reader sent to the
+            // path the item was written to replace.
+            return new HostCopiesAnswer(host, null) { Unasked = ex.Message, ExitCode = ex.ExitCode };
         }
 
         var asked = new HostCopiesAnswer(host, repositoryPath);
@@ -371,14 +374,14 @@ public sealed class HostCopyLister(
     }
 
     /// <summary>
-    /// The hosts that can keep copies - each WSL distribution and ssh host the configuration declares - with where
-    /// config.json says each keeps the main checkout's, in the order a reader looks them up.
+    /// The hosts that can keep copies - each WSL distribution and ssh host the configuration declares - in the order a
+    /// reader looks them up.
     /// </summary>
-    private static IReadOnlyList<(HostId Host, string RepositoryPath)> Declared(HarnessConfig config)
+    private static IReadOnlyList<HostId> Declared(HarnessConfig config)
         =>
         [
-            .. config.Hosts.Wsl.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase).Select(pair => (HostId.Wsl(pair.Key), pair.Value.RepositoryPath)),
-            .. config.Hosts.Ssh.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase).Select(pair => (HostId.Ssh(pair.Key), pair.Value.RepositoryPath)),
+            .. config.Hosts.Wsl.Keys.Order(StringComparer.OrdinalIgnoreCase).Select(HostId.Wsl),
+            .. config.Hosts.Ssh.Keys.Order(StringComparer.OrdinalIgnoreCase).Select(HostId.Ssh),
         ];
 
     /// <summary>Whether <paramref name="entry"/> records a copy on <paramref name="host"/>, as the record spells a host.</summary>

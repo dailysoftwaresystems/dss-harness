@@ -6,6 +6,7 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using NSubstitute;
 
 namespace DssHarness.Tests;
 
@@ -453,6 +454,57 @@ public sealed class HostExecServiceTests
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.NotNull(sent);
         Assert.Equal("/srv/repo.worktree-feature", JsonSerializer.Deserialize<HostAgentRequest>(sent.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.Directory);
+    }
+
+    /// <summary>
+    /// host-exec runs in the copy the host keeps for this machine where its item says it keeps them - under the
+    /// REPOSITORY_PATH the item sets, a worktree's copy beside it - never under config.json's repositoryPath, which names
+    /// a copy this machine does not keep there; and where the item cannot be read, nothing is sent, the host's copies not
+    /// known.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "/home/dev/mine/repo")]
+    [InlineData(true, "/home/dev/mine/repo.worktree-feature")]
+    [InlineData(false, null)]
+    public async Task TheCommand_RunsInTheCopyTheHostsItemKeeps_NeverConfigJsons(bool fromWorktree, string? copy)
+    {
+        HostCommand? sent = null;
+        var worktree = Path.Combine(Root, ".harness-config", "worktrees", "feature");
+        var secrets = Substitute.For<DssHarness.Core.Secrets.IHostSecretsStore>();
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), HostId.Ssh("vps")).Returns(copy is null
+            ? new DssHarness.Core.Secrets.ItemFacts { File = ".harness-config/sshItems/vps/.env", Present = true, Problem = "other users can change '.harness-config/sshItems/vps/.env'" }
+            : new DssHarness.Core.Secrets.ItemFacts { File = ".harness-config/sshItems/vps/.env", Present = true, RepositoryPath = "/home/dev/mine/repo" });
+        var fixture = Create(
+            respond: (_, command) =>
+            {
+                sent = command;
+                return HostResults.Finished(command, HarnessExit.Success);
+            },
+            loader: HostDoubles.Loader(
+                Config,
+                fromWorktree ? worktree : Root,
+                Root,
+                items: DssHarness.Core.Secrets.HostItems.Reading(secrets, new HarnessLayout(Root, Root))));
+
+        if (copy is null)
+        {
+            var unknown = await Assert.ThrowsAsync<HarnessException>(
+                () => fixture.Service.RunAsync(Root, "vps", null, ["verify-git"], TestContext.Current.CancellationToken));
+
+            Assert.Equal(HarnessExit.HostUnavailable, unknown.ExitCode);
+            Assert.Equal(
+                "Where host ssh vps keeps its copies for this machine is not known, since its item cannot be read: "
+                    + "other users can change '.harness-config/sshItems/vps/.env'.",
+                unknown.Message);
+            Assert.Null(sent);
+            return;
+        }
+
+        var outcome = await fixture.Service.RunAsync(fromWorktree ? worktree : Root, "vps", null, ["verify-git"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.NotNull(sent);
+        Assert.Equal(copy, JsonSerializer.Deserialize<HostAgentRequest>(sent.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.Directory);
     }
 
     /// <summary>A host reached, with a session a request can travel on.</summary>

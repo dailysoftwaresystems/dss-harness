@@ -123,7 +123,10 @@ public static class WorktreeReports
         {
             if (host.Unasked is { } why)
             {
-                yield return $"{host.Host}: could not be asked about the copies beside '{host.RepositoryPath}': {why.TrimEnd('.')}";
+                // Where it keeps them is named only where it is known: no other path stands in for one its item would set.
+                yield return host.RepositoryPath is { } beside
+                    ? $"{host.Host}: could not be asked about the copies beside '{beside}': {why.TrimEnd('.')}"
+                    : $"{host.Host}: could not be asked about its copies: {why.TrimEnd('.')}";
                 continue;
             }
 

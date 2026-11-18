@@ -139,7 +139,7 @@ public sealed class RepositoryTreesTests
 
         var found = await Trees(new HarnessFactory()).HereAsync(context, HostId.Ssh("pi"), TestContext.Current.CancellationToken);
 
-        Assert.Equal(temp.Combine(main), RepositoryTree.MainCheckoutOf(context, HostId.Ssh("pi")));
+        Assert.Equal(temp.Combine(main), RepositoryTree.MainCheckoutOf(context, HostId.Ssh("pi"), new DssHarness.Core.Platform.HostPlatform().PathComparison));
         Assert.Equal(new RepositoryTree(temp.Combine(main), RepositoryTree.MainCheckout), found.Trees[0]);
     }
 

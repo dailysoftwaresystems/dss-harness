@@ -77,8 +77,10 @@ public interface IHarnessContextLoader
     /// <param name="cancellationToken">Stops the lookup.</param>
     /// <remarks>
     /// A tree git holds names its main checkout. A copy a sync made is a repository of its own to git, so it is told by
-    /// where it is kept: in a tree's <c>.legs</c>, of that tree's repository - a copy made for a run as one typed in; beside a host's copy of the main checkout as a worktree's copy (<c>repo.worktree-o1--xa</c>),
-    /// of that copy's (<see cref="HostCopies.MainCopyOf"/>); anywhere else, the copy of the main checkout itself.
+    /// where it is kept (<see cref="HostCopies.HolderOf"/>, <see cref="HostCopies.MainCopyOfTree"/>, the rules a host finds
+    /// its main copy by): in a tree's <c>.legs</c>, of that tree's repository - a copy made for a run as one typed in;
+    /// beside a host's copy of the main checkout as a worktree's copy (<c>repo.worktree-o1--xa</c>), of that copy's;
+    /// anywhere else, the copy of the main checkout itself.
     /// </remarks>
     Task<string> RepositoryOfAsync(HarnessContext context, CancellationToken cancellationToken = default);
 }
@@ -241,18 +243,17 @@ public sealed class HarnessContextLoader(
 
         var root = Whole(context.Layout.RepositoryRoot);
 
-        if (Path.GetDirectoryName(root) is { } slot
-            && string.Equals(Path.GetFileName(slot), HarnessLayout.LegsDirectoryName, _platform.PathComparison)
-            && Path.GetDirectoryName(slot) is { Length: > 0 } holder
-            && await _repositoryLocator.LocateAsync(holder, cancellationToken).ConfigureAwait(false) is { } held)
+        // A leg's own copy, kept in a tree's .legs, is of that tree's repository: of a tree git holds here, its main checkout.
+        if (HostCopies.HolderOf(root, _platform.PathComparison) is { } holder
+            && await _repositoryLocator.LocateAsync(holder, cancellationToken).ConfigureAwait(false) is { } held
+            && !_fileSystem.FileExists(held.SyncedCopyMarkerFile))
         {
-            return await RepositoryOfAsync(
-                    new HarnessContext(held, context.Config) { IsSyncedCopy = _fileSystem.FileExists(held.SyncedCopyMarkerFile) },
-                    cancellationToken)
-                .ConfigureAwait(false);
+            return Whole(held.MainCheckoutRoot);
         }
 
-        return HostCopies.MainCopyOf(root);
+        // A host's copy of a tree, or a leg's copy kept in one: the host's copy of the main checkout it belongs to, by the
+        // one rule a host finds its main copy by (HostCopies.MainCopyOfTree).
+        return HostCopies.MainCopyOfTree(root, _platform.PathComparison);
     }
 
     private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));

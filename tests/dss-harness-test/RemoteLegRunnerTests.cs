@@ -1139,12 +1139,13 @@ public sealed class RemoteLegRunnerTests
             Distributions = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["Ubuntu-24"] = "Example-Linux", ["Alpine"] = null },
         };
 
-        var poisoned = await Runner(hosts).CheckAsync(
+        var check = await Runner(hosts).CheckAsync(
             "run", leg, ["corpus", "--input", "sources=a b", "--check-before-admission"], TestContext.Current.CancellationToken);
 
         var request = Request(sent);
 
-        Assert.Null(poisoned);
+        Assert.Null(check.Poisoned);
+        Assert.Empty(check.Restarts.Said);
         Assert.Equal(HostAgentRequestKind.Run, request.Kind);
         Assert.Equal("/home/dev/repo", request.Directory);
         Assert.Null(request.RunId);
@@ -1213,7 +1214,8 @@ public sealed class RemoteLegRunnerTests
     /// <summary>
     /// A check whose host's DssHarness failed as a defect as it started is asked once more, as a run of the leg is - a
     /// check runs nothing, so every start of one is before anything ran there - and one that then refuses nothing lets the
-    /// leg go on to wait for its slot, a warning saying what the first start said.
+    /// leg go on to wait for its slot, a warning saying what the first start said, and answers what that start said, which
+    /// the leg's line says whatever it then reaches.
     /// </summary>
     [Fact]
     public async Task ACheckWhoseHostsDssHarnessFailedAsItStarted_IsAskedOnceMore_AndOneThatThenPassesRefusesNothing()
@@ -1231,13 +1233,13 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.Success);
         });
 
-        var poisoned = await Runner(hosts, harness).CheckAsync("run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken);
+        var check = await Runner(hosts, harness).CheckAsync("run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken);
 
-        Assert.Null(poisoned);
+        Assert.Null(check.Poisoned);
+        Assert.Equal([SaidAsItStarted], check.Restarts.Said);
         Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
         Assert.Contains(
-            $"run: WARN - wsl-debug: wsl Example-Linux's DssHarness exited 70 as it started, before anything ran there, saying: {CouldNotLoad}; "
-                + "asking it to check the leg once more",
+            $"run: WARN - wsl-debug: {SaidAsItStarted}; asking it to check the leg once more",
             harness.StandardError.ToString(),
             StringComparison.Ordinal);
     }
@@ -1256,7 +1258,8 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.InternalError);
         });
 
-        var poisoned = await Runner(hosts).CheckAsync("run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken);
+        var check = await Runner(hosts).CheckAsync("run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken);
+        var poisoned = check.Poisoned;
 
         Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
         Assert.NotNull(poisoned);
@@ -1265,7 +1268,43 @@ public sealed class RemoteLegRunnerTests
             "wsl Example-Linux ran 'run' for leg 'wsl-debug', and its DssHarness failed as it started, before anything ran there: "
             + $"it exited 70, saying: {CouldNotLoad}",
             poisoned.Detail);
-        Assert.Equal([$"wsl Example-Linux's DssHarness exited 70 as it started, before anything ran there, saying: {CouldNotLoad}"], poisoned.Retried);
+        Assert.Equal([SaidAsItStarted], poisoned.Retried);
+        Assert.Equal([SaidAsItStarted], check.Restarts.Said);
+    }
+
+    /// <summary>
+    /// A check whose host's DssHarness failed as it started and that then ends any way but passing or failing so again -
+    /// refusing the run, with no line, or ending it some other way - says what the first start said in what it raises, as
+    /// a run of the leg does: what ended the later start never leaves behind that the host's DssHarness failed the first.
+    /// </summary>
+    [Theory]
+    [InlineData(HarnessExit.UsageError)]
+    [InlineData(HarnessExit.CommandFailed)]
+    public async Task ACheckStartedOnceMore_ThatThenRefusesOrEndsAnotherWay_SaysWhatTheFirstStartSaid(int code)
+    {
+        var starts = 0;
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            if (++starts == 1)
+            {
+                command.OnErrorLine?.Invoke(FailureLine.For("run", CouldNotLoad));
+                return HostResults.Finished(command, HarnessExit.InternalError);
+            }
+
+            command.OnErrorLine?.Invoke(FailureLine.For("run", "it would not"));
+            return HostResults.Finished(command, code);
+        });
+
+        var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).CheckAsync(
+            "run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken));
+
+        Assert.Equal(code == HarnessExit.UsageError ? code : HarnessExit.HostUnavailable, failure.ExitCode);
+        Assert.Equal(
+            (code == HarnessExit.UsageError
+                ? "wsl Example-Linux refused 'run' for leg 'wsl-debug': it would not"
+                : $"wsl Example-Linux checked 'run' for leg 'wsl-debug' and exited {code}, saying: it would not")
+            + $" (retried once: {SaidAsItStarted})",
+            failure.Message);
     }
 
     /// <summary>
@@ -1407,6 +1446,9 @@ public sealed class RemoteLegRunnerTests
 
     /// <summary>What a host's DssHarness says as it fails to start: a defect, read by the one table every defect is read by.</summary>
     private const string CouldNotLoad = "Unexpected FileNotFoundException: Could not load file or assembly 'System.Runtime.Intrinsics'.";
+
+    /// <summary>What the leg's line and the warning before the next start say of a start whose DssHarness failed so.</summary>
+    private const string SaidAsItStarted = $"wsl Example-Linux's DssHarness exited 70 as it started, before anything ran there, saying: {CouldNotLoad}";
 
     /// <summary>
     /// A host whose own DssHarness failed as a defect before anything ran there - exit 70, no run named, no note, no
@@ -1580,6 +1622,90 @@ public sealed class RemoteLegRunnerTests
             $"(retried once: wsl Example-Linux's DssHarness exited 70 as it started, before anything ran there, saying: {CouldNotLoad})",
             failure.Message,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A host started once more whose second start then ends with no line for the leg - refusing the run, or with a code
+    /// that is neither a refusal nor a defect, which leaves the leg skipped - says what the first start said in what it
+    /// raises, as one not reached does: a leg whose host's DssHarness failed is never read as a refusal or a skip alone.
+    /// </summary>
+    [Theory]
+    [InlineData(HarnessExit.UsageError)]
+    [InlineData(HarnessExit.HostUnavailable)]
+    public async Task AHostStartedOnceMore_WhoseSecondStartEndsWithNoLine_StillSaysWhatTheFirstStartSaid(int code)
+    {
+        var starts = 0;
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            if (++starts == 1)
+            {
+                command.OnErrorLine?.Invoke(FailureLine.For("build", CouldNotLoad));
+                return HostResults.Finished(command, HarnessExit.InternalError);
+            }
+
+            command.OnErrorLine?.Invoke(FailureLine.For("build", "it could not"));
+            return HostResults.Finished(command, code);
+        });
+
+        var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
+            "build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+        Assert.Equal(code, failure.ExitCode);
+        Assert.Equal(
+            (code == HarnessExit.UsageError
+                ? "wsl Example-Linux refused 'build' for leg 'wsl-debug': it could not"
+                : $"wsl Example-Linux ran 'build' for leg 'wsl-debug' and exited {code} without a ledger entry for it, saying: it could not")
+            + $" (retried once: {SaidAsItStarted})",
+            failure.Message);
+    }
+
+    /// <summary>
+    /// What earlier starts of the leg's work there said as they failed - its check's before this machine took its slot -
+    /// is said before what this command's own starts said, on the leg's line and in what ends it with none; and it costs
+    /// this command none of its own starts once more.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task WhatEarlierStartsOfALegsWorkSaid_IsSaidFirst_OnItsLineAndInWhatEndsItWithNone(bool answers)
+    {
+        const string Checked = "wsl Example-Linux's DssHarness exited 70 as it started, before anything ran there, saying: the check's own";
+        var starts = 0;
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            if (++starts == 1)
+            {
+                command.OnErrorLine?.Invoke(FailureLine.For("build", CouldNotLoad));
+                return HostResults.Finished(command, HarnessExit.InternalError);
+            }
+
+            if (!answers)
+            {
+                return HostResults.Failed(255, "ssh: connection closed");
+            }
+
+            Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+            return HostResults.Finished(command, HarnessExit.Success);
+        });
+
+        var earlier = HostRestarts.None.Then(Checked);
+        var running = Runner(hosts).RunAsync("build", Leg(), [], earlier: earlier, cancellationToken: TestContext.Current.CancellationToken);
+
+        if (answers)
+        {
+            var entry = await running;
+
+            Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+            Assert.Equal((LegVerdict.Passed, "412 tests"), (entry.Verdict, entry.Detail));
+            Assert.Equal([Checked, SaidAsItStarted], entry.Retried);
+            return;
+        }
+
+        var failure = await Assert.ThrowsAsync<HarnessException>(() => running);
+
+        Assert.Equal(HarnessExit.HostUnavailable, failure.ExitCode);
+        Assert.EndsWith($"(retried 2 times: {Checked}; {SaidAsItStarted})", failure.Message, StringComparison.Ordinal);
     }
 
     /// <summary>

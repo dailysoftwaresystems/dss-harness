@@ -42,6 +42,31 @@ public sealed class HostCopiesTests
     }
 
     /// <summary>
+    /// A leg's own copy kept in a tree's .legs is held by that tree, the slot's name compared as the machine compares
+    /// paths - one that folds case holds a '.LEGS' copy as its own '.legs' one - and a host's tree is of the main copy its
+    /// holder, or the tree itself, is kept beside: the one rule a host finds its main copy by and a tree's repository is
+    /// told by.
+    /// </summary>
+    [Fact]
+    public void ALegsCopyInATreesLegs_IsHeldByThatTree_ItsSlotComparedAsTheMachineComparesPaths()
+    {
+        var main = Path.Combine(TestHost.TemporaryRoot, "host", "repo");
+        var worktree = main + ".worktree-o1--xa";
+        var inSlot = Path.Combine(worktree, HarnessLayout.LegsDirectoryName, "357e24c");
+        var folded = Path.Combine(worktree, ".LEGS", "357e24c");
+
+        Assert.Equal(worktree, HostCopies.HolderOf(inSlot, StringComparison.Ordinal));
+        Assert.Equal(worktree, HostCopies.HolderOf(folded + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+        Assert.Null(HostCopies.HolderOf(folded, StringComparison.Ordinal));
+        Assert.Null(HostCopies.HolderOf(worktree, StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(main, HostCopies.MainCopyOfTree(inSlot, StringComparison.Ordinal));
+        Assert.Equal(main, HostCopies.MainCopyOfTree(folded, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(folded, HostCopies.MainCopyOfTree(folded, StringComparison.Ordinal));
+        Assert.Equal(main, HostCopies.MainCopyOfTree(worktree + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// The main checkout keeps the host's repositoryPath, and a worktree a copy of its own beside it, named for its
     /// directory as a worktree's name is spelt, whatever form the repositoryPath takes.
     /// </summary>
@@ -2362,6 +2387,75 @@ public sealed class HostCopiesTests
             $"  /home/pi/repo.worktree-lfprobe  1 KiB  gone from '/gone/lfprobe': 'dssharness clean --gone-copies' {expected}",
             report.Details ?? [],
             StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// A host is asked about the copies it keeps where its item keeps this machine's - beside the REPOSITORY_PATH the item
+    /// sets, never config.json's repositoryPath, whose copies are another machine's - and one whose item cannot be read is
+    /// asked nothing and named with no path, in text and in --json: where it keeps its copies is not known, and config.json's
+    /// path, which its item was written to replace, would send its reader to another directory.
+    /// </summary>
+    [Fact]
+    public async Task AHostIsListedWhereItsItemKeepsItsCopies_AndOneWhoseItemCannotBeRead_WithNoPath()
+    {
+        using var temp = new TempDirectory();
+        using var hosts = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, hosts.Path);
+        var mine = hosts.Combine("pi", "mine", "repo");
+
+        foreach (var (item, env) in new[]
+        {
+            ("pi", $"ADDRESS=pi.invalid\nUSER=dev\nREPOSITORY_PATH={mine}\n"),
+            ("mac", "ADDRESS=mac.invalid\nUSER=dev\nREPOSITORY_PAHT=/Users/dev/mine/repo\n"),
+        })
+        {
+            temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, ".env"), env);
+            temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, ".key"), "not a real key\n");
+            temp.WriteFile(Path.Combine(".harness-config", "sshItems", item, "known_hosts"), $"{item}.invalid ssh-ed25519 AAAA\n");
+        }
+
+        // A copy beside each place config.json names, and one beside the item's: only the item's is this machine's.
+        foreach (var copy in new[] { mine + ".worktree-alpha", hosts.Combine("pi", "repo") + ".worktree-beta", hosts.Combine("mac", "repo") + ".worktree-gamma" })
+        {
+            await Local(harness).CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
+        }
+
+        var inspector = new RecordingInspector(Answering);
+        var worktrees = await harness.WorktreeService.ListAsync(temp.Path, cancellationToken);
+        var listing = await Lister(harness, inspector).ListAsync(temp.Path, worktrees, askHosts: true, cancellationToken);
+        var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
+        var unknown = Assert.Throws<HarnessException>(() => HostCopies.RepositoryOf(context, Mac)).Message;
+
+        var mac = listing.Hosts![0];
+        var pi = listing.Hosts[1];
+
+        Assert.Equal([Pi], inspector.Inspected);
+        Assert.Equal((Mac, null, unknown, HarnessExit.HostUnavailable), (mac.Host, mac.RepositoryPath, mac.Unasked, mac.ExitCode));
+        Assert.Empty(mac.Copies);
+        Assert.Equal((Pi, mine, HarnessExit.Success), (pi.Host, pi.RepositoryPath, pi.ExitCode));
+        Assert.Equal([mine + ".worktree-alpha"], pi.Copies.Select(copy => copy.Found.Path));
+        Assert.StartsWith(
+            "Where host ssh mac keeps its copies for this machine is not known, since its item cannot be read: ",
+            unknown,
+            StringComparison.Ordinal);
+
+        var report = WorktreeReports.List(worktrees, listing, json: false);
+        var size = DiskSpace.Size(pi.Copies[0].Found.Bytes);
+
+        // Its copy's own line says what the record makes of it, which is not this test's.
+        Assert.Equal(3, report.Details!.Count);
+        Assert.Equal(
+            [$"ssh mac: could not be asked about its copies: {unknown.TrimEnd('.')}", $"ssh pi keeps 1 worktree copy beside '{mine}', {size} in all"],
+            report.Details.Take(2));
+        Assert.StartsWith($"  {mine}.worktree-alpha  {size}  ", report.Details[2], StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(Assert.Single(WorktreeReports.List(worktrees, listing, json: true).Data!));
+        var asked = document.RootElement.GetProperty("hosts");
+
+        Assert.Equal(JsonValueKind.Null, asked[0].GetProperty("repositoryPath").ValueKind);
+        Assert.Equal(unknown, asked[0].GetProperty("unasked").GetString());
+        Assert.Equal(mine, asked[1].GetProperty("repositoryPath").GetString());
     }
 
     /// <summary>

@@ -5334,14 +5334,21 @@ safe since nothing ran: a consumer's leg met a DssHarness in a WSL distribution 
 one of the runtime's own assemblies, once, as the runtime or the tool there was replaced while it
 started, and the next run was fine. A start that then answers is the leg's line, which says what the
 failed start said (`retried once: ...`, and `retried` in `--json`), so a failure the second start
-did not meet is never hidden; one that fails so again is `poisoned`, saying it was retried. Once
-anything ran there, the command is never started again. A WSL distribution's check of a heavy leg
-before this machine takes its slot (`RemoteLegRunner.CheckAsync`) goes through the same start
-(`AskStartedOnceMoreAsync`), told beside its command line what the leg's run there is told - its
-distributions among it, so it refuses what that run would and nothing it would not: it runs
-nothing, so a check that failed so is always one before anything ran, asked once more, and one
-that fails so again is the leg's `poisoned` line, which `LegRunService.CheckBeforeTheSlotAsync`
-ends the leg with before it waits for any slot.
+did not meet is never hidden; one that fails so again is `poisoned`, saying it was retried; and one
+that then ends with no line - a refusal of the run, a code that leaves the leg skipped, a host not
+reached - says it in what it raises. Once anything ran there, the command is never started again.
+A WSL distribution's check of a heavy leg before this machine takes its slot
+(`RemoteLegRunner.CheckAsync`) goes through the same start (`StartedOnceMoreAsync`, the one place
+a leg's run and its check start a command there and read what it came to), told beside its command
+line what the leg's run there is told - its distributions among it, so it refuses what that run
+would and nothing it would not: it runs nothing, so a check that failed so is always one before
+anything ran, asked once more, and one that fails so again is the leg's `poisoned` line, which
+`LegRunService.CheckBeforeTheSlotAsync` ends the leg with before it waits for any slot. What a start
+of the check that failed so said is said on whatever the leg then reaches - not admitted, or what
+its run there reached, before what that run's own starts said - and in what ends it with no line
+(`HostRestarts`, the one owner of how it is said, and `HostCheck`, which carries it from the
+check): a host tool that failed once is never hidden by the start that then passed. A start once
+more is this command's own: a check that started once more leaves the leg's run its own.
 
 ### A host's home is `~`
 
@@ -6433,9 +6440,13 @@ while a gate ran turned a green suite red, with four test processes live at once
   back to `config.json`'s, since a sync would write, and a clean or removal delete, where its user
   keeps something else. Sync, a leg placed there, `host-exec`, `legs`, `list-worktree --hosts` and
   `clean` all ask it, and `legs` names each host's copy of the tree it was typed in and
-  what set it (`copy`, `repositoryPath` and `repositoryPathFrom` in `--json`). A host running legs
+  what set it (`copy`, `repositoryPath` and `repositoryPathFrom` in `--json`); `list-worktree
+  --hosts` names a host whose item cannot be read with no path at all - where it keeps its copies
+  is not known, `repositoryPath` `null` in `--json` - and asks it nothing. A host running legs
   finds its main copy beside the copy it was sent (`HostCopies.MainCopyOfTree`, a leg copy in its
-  `.legs` included), never from `config.json`, which there names another machine's default. An
+  `.legs` included - `HostCopies.HolderOf`, its slot's name compared as that machine compares
+  paths, the one rule `IHarnessContextLoader.RepositoryOfAsync` tells a tree's repository by too),
+  never from `config.json`, which there names another machine's default. An
   item's `.env` declaring a key it is not read for is refused (`ItemEnvironment.Read`), naming the
   keys it is: a misspelt `REPOSITORY_PATH` would otherwise leave the copies where they were.
 - A remote tree's identity is its content manifest. Every sync that finishes confirms the copy
@@ -7318,7 +7329,9 @@ sibling directory whose name merely starts the same way is outside, not inside.
   is that machine's to hold, by the same rule run there: an ssh host before it admits the leg, as
   its `run` begins; and a WSL distribution, whose leg this machine admits, when this machine asks
   it to - once the leg's copy is synced and locked and before this machine asks for the leg's slot,
-  the dispatcher sends the distribution's host agent the leg's own `run` line with the hidden
+  the dispatcher sends the distribution's host agent the leg's `run` line - the command's own
+  options, without the `--json`, `--set-up` and `--keep-going` the leg's run there is given, which a
+  check that writes no ledger and runs nothing has no use for - with the hidden
   `--check-before-admission` (`RunnerLegs.CheckBeforeAdmissionAsync`), which places the leg there
   and asks of it what the leg's slot is asked after below, and runs nothing, its refusal the run's.
   The host agent's `run` request is the channel and not the survey: a survey is taken before the
@@ -7327,22 +7340,31 @@ sibling directory whose name merely starts the same way is outside, not inside.
   machines' legs is never refused over this machine's.
 - **Everything a leg's runner refuses before its first step that does not wait on its build is
   refused before a heavy leg waits for its slot.** The run's request carries the check
-  (`LegRunRequest.AdmissionCheck`), which `LegRunService.AdmitAsync` asks right before it asks for
-  the slot, once the leg's tree is synced and locked: of a leg this process runs, here
-  (`IRunnerRunService.VetAsync`); of a WSL distribution's, by the distribution, as above; an ssh
-  host's own run asks it of the legs it was sent before it admits them. `VetAsync` makes the very
-  checks the runner makes as it starts, in their order and through the same code
-  (`RunnerRunService.VetStepsAsync` and `RefuseUnstartableAsync`, which the start calls too): the
+  (`LegRunRequest.AdmissionCheck`), which `LegRunService.CheckBeforeTheSlotAsync` asks right before
+  the slot is asked for (`AdmitAsync`), once the leg's tree is synced and locked and whether its work
+  starts at all is decided (`LegRunService.StartAsync`): the isolation a run's step holds its work
+  inside - a WSL distribution's, which required refuses, among it - and the developer environment
+  its toolchain names, set up here. A leg whose work would never start ends with its own line, as it
+  did once it had waited - skipped, its isolation refused; failed, its environment not set up - and
+  is never checked: a check's refusal would end the run in place of the leg's verdict, and a
+  distribution the isolation forbids the leg to run in would be asked to run DssHarness for it. Of a
+  leg whose work would start, the check is asked here of one this process runs
+  (`IRunnerRunService.VetAsync`), in its developer environment; of a WSL distribution's, by the
+  distribution, as above; an ssh host's own run asks it of the legs it was sent before it admits
+  them. `VetAsync` makes the very checks the runner makes as it starts, in their order and through
+  the same code (`RunnerRunService.VetStepsAsync` and `RefuseUnstartableAsync`, which the start
+  calls too): the
   steps the run selects and the leg's system runs, the inputs and the names each run line holds,
   the tool policy, a line that starts nothing or names what the leg has nothing for, a secret in an
   argument list, and an action's working space and kept output git does not ignore - with nothing
   performed, written or started. What waits on the build stays at the start: a step reading the
   build of a leg this run did not build (`RefuseUnbuilt`), and what a predefined action refuses as
   it is performed. A run check's runner is vetted alike, by its own values, and what refuses it is
-  warned of on the leg's line rather than refusing the run: a check runs only where a failure
-  matches the exception it confirms, so a run that may never start it is not refused over it, and
-  one that does is refused by it then, the failure left unexcused. A leg that waits for no slot is
-  asked nothing before: its runner refuses it as it starts, after no wait.
+  warned of - a warning of the run's, on neither the leg's line nor its `--json` - instead of
+  refusing the run: a check runs only where a failure matches the exception it confirms, so a run
+  that may never start it is not refused over it, and one that does is refused by it then, the
+  failure left unexcused. A leg that waits for no slot is asked nothing before: its runner refuses
+  it as it starts, after no wait.
 - **Each line is a program and its arguments, never a shell string.** No shell parses it, so no
   shell's word splitting, globbing or process emulation sits between the harness and the program.
 - The splitter honours double quotes only, understands no escape, and strips every `"` from the

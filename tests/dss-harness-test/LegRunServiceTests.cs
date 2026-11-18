@@ -2631,6 +2631,215 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A heavy leg whose work would never start is never checked before its slot, and ends with its own line, as it did
+    /// once it had waited: one whose isolation cannot be held here, one in a WSL distribution its run's isolation forbids
+    /// it to run in - whose distribution is never asked to run DssHarness for it, not even to check it - and one whose
+    /// developer environment will not set up. Checked first, a refusal of the check ended the whole run in the place of the
+    /// leg's own verdict. None waits for the slot another run holds.
+    /// </summary>
+    [Theory]
+    [InlineData("isolation")]
+    [InlineData("distribution")]
+    [InlineData("environment")]
+    public async Task AHeavyLegWhoseWorkWouldNeverStart_IsNeverCheckedBeforeItsSlot_AndEndsWithItsOwnLine(string never)
+    {
+        using var temp = new TempDirectory();
+        using var visualStudio = new ScriptedVisualStudio { ExitCode = "1" };
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var asked = new List<string>();
+        var sent = new List<IReadOnlyList<string>>();
+        var admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 };
+        const string Refused = "'actions/corpus.yml' names 1 program that may not run.";
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var request = System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
+
+            sent.Add([.. request.Arguments.Select(argument => argument.Text)]);
+            command.OnErrorLine?.Invoke(FailureLine.For("test", Refused));
+
+            return HostResults.Finished(command, HarnessExit.Refused);
+        });
+
+        var (config, inspector, leg, workload) = never switch
+        {
+            "distribution" => (
+                new HarnessConfig
+                {
+                    BuildConfigs = { ["debug"] = new BuildConfiguration() },
+                    Hosts = new HostsConfig
+                    {
+                        Local = new LocalHostConfig { Admission = admission },
+                        Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+                    },
+                    Legs = { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+                },
+                new RecordingInspector(host => new HostReport
+                {
+                    Host = host,
+                    Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+                    Processor = "x86_64",
+                    Session = host.Kind == HostKind.Local ? null : Session(host),
+                }),
+                "remote",
+                Heavy),
+            "environment" => (
+                new HarnessConfig
+                {
+                    BuildConfigs = { ["debug"] = new BuildConfiguration() },
+                    Projects = { new ProjectConfig { Name = "app", Type = "cmake", Path = "." } },
+                    DeveloperEnvironments = { ["vs"] = new DeveloperEnvironmentConfig { Kind = DeveloperEnvironmentKinds.VisualStudio } },
+                    Toolchains = { ["msvc"] = new ToolchainConfig { Platforms = ["windows"], Env = { ["CC"] = "cl" }, DeveloperEnvironment = "vs" } },
+                    Hosts = new HostsConfig { Local = new LocalHostConfig { Admission = admission } },
+                    Legs = { ["native"] = new LegConfig { Os = "windows", Processor = "x86_64", Config = "debug", Toolchain = "msvc" } },
+                },
+                WindowsHere(visualStudio),
+                "native",
+                LegWorkload.BuildOnly),
+            _ => (Admitting(OneLeg(harness), local: admission), SshAndLocal(harness), "native", Heavy),
+        };
+
+        // Refusing under required: the leg's own isolation, or the one a WSL distribution's leg cannot have.
+        var isolation = never == "environment"
+            ? null
+            : new LegIsolationAnswer(new ExecutionIsolation(
+                IsolatedExecution.Legs,
+                AgentIsolationMode.Required,
+                never == "distribution" ? new PassThroughMechanism() : null,
+                never == "distribution" ? IsolationProfile.Nothing : null,
+                never == "distribution" ? null : "git could not say where it keeps its own files",
+                never == "distribution" ? null : "make sure git answers"));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true, RemoteArguments: ["corpus"])
+            {
+                Workload = workload,
+                Isolation = isolation,
+                AdmissionCheck = new LegAdmissionCheck(
+                    (work, _) =>
+                    {
+                        asked.Add(work.Leg.Name);
+                        throw new HarnessException(HarnessExit.Refused, Refused);
+                    },
+                    ["--check-there"]),
+            },
+            hosts: hosts,
+            developerEnvironments: never == "environment" ? visualStudio.Provider() : null);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var line = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        Assert.Empty(asked);
+        Assert.Empty(sent);
+        Assert.Equal(leg, line.GetProperty("leg").GetString());
+        Assert.Equal(
+            never switch
+            {
+                "isolation" => ("skipped-unavailable", "leg 'native' is refused: agentPolicy.isolation is \"required\" and git could not say where it keeps its own files, so nothing the agents wrote is built, tested or run here; make sure git answers"),
+                "distribution" => ("skipped-unavailable", "leg 'remote' is refused: agentPolicy.isolation is \"required\" and the leg runs in the WSL distribution 'Ubuntu', which this machine's isolation does not hold and which reaches this machine's drives under /mnt, so nothing the agents wrote is built, tested or run here; place the leg on this machine, or on another machine reached over ssh"),
+                _ => ("failed", "developer environment 'vs': vcvarsall.bat amd64 exited 1 and printed nothing"),
+            },
+            (line.GetProperty("verdict").GetString(), line.GetProperty("detail").GetString()));
+        // The leg's own code - failed, or a run left incomplete by a skip - never the check's refusal.
+        Assert.Equal(never == "environment" ? HarnessExit.CommandFailed : HarnessExit.Incomplete, outcome.ExitCode);
+        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A heavy WSL leg whose distribution's check failed as it started, and then passed, says so on whatever line the leg
+    /// then reaches - not admitted while another run holds its slot, or what its run there reached once it was - as a leg
+    /// whose run there was started once more does, before anything that run's own starts said: the host's DssHarness that
+    /// failed once is never hidden by the start that then passed.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWslLegWhoseCheckFailedAsItStarted_SaysSoOnTheLineItThenReaches(bool slotHeld)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var sent = new List<IReadOnlyList<string>>();
+        const string CouldNotLoad = "Unexpected FileNotFoundException: Could not load file or assembly 'System.Runtime.Intrinsics'.";
+
+        if (slotHeld)
+        {
+            AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+        }
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } },
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+            },
+            Legs = { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var request = System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
+            IReadOnlyList<string> arguments = [.. request.Arguments.Select(argument => argument.Text)];
+
+            sent.Add(arguments);
+
+            // The leg's run, which alone asks for a ledger, passes; its check fails as it starts the first time only.
+            if (arguments.Contains("--json"))
+            {
+                ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+                return HostResults.Finished(command, HarnessExit.Success);
+            }
+
+            if (sent.Count == 1)
+            {
+                command.OnErrorLine?.Invoke(FailureLine.For("test", CouldNotLoad));
+                return HostResults.Finished(command, HarnessExit.InternalError);
+            }
+
+            return HostResults.Finished(command, HarnessExit.Success);
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true, RemoteArguments: ["corpus"])
+            {
+                Workload = Heavy,
+                AdmissionCheck = new LegAdmissionCheck((_, _) => throw new InvalidOperationException("A leg a distribution runs is checked there."), ["--check-there"]),
+            },
+            hosts: hosts);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        // The check twice, then - once admitted - the leg's run.
+        Assert.Equal(slotHeld ? 2 : 3, sent.Count);
+        Assert.Equal(slotHeld ? "not-admitted" : "passed", leg.GetProperty("verdict").GetString());
+        Assert.Equal(
+            [$"wsl Ubuntu's DssHarness exited 70 as it started, before anything ran there, saying: {CouldNotLoad}"],
+            leg.GetProperty("retried").EnumerateArray().Select(said => said.GetString()));
+    }
+
+    /// <summary>
     /// A host running a leg another machine dispatched to it takes it by its own section, as a machine of its own; a WSL
     /// distribution running one takes nothing, since the machine that dispatched it - the one it runs on - did.
     /// </summary>

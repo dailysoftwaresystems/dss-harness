@@ -782,6 +782,84 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
+    /// The sync command writes a host's copy where the host's item keeps this machine's copies - the REPOSITORY_PATH it
+    /// sets - never where config.json's repositoryPath says, which the item was written to replace: a sync there would fill
+    /// a directory its user keeps for something else. Where the item cannot be read, nothing is written anywhere.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TheSyncCommand_WritesWhereTheHostsItemKeepsItsCopies_NeverWhereConfigJsonSays(bool readable)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, _) = await PrepareAsync(temp, cancellationToken);
+        var mine = SyncKit.CopyPath(temp);
+        var declared = SyncKit.CopyPath(temp);
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = declared } } },
+            Legs = { ["arm"] = HostDoubles.Leg("linux", "arm64") },
+        };
+
+        var secrets = Substitute.For<Core.Secrets.IHostSecretsStore>();
+        secrets.ReadFacts(Arg.Any<HarnessLayout>(), HostId.Ssh("pi")).Returns(readable
+            ? new Core.Secrets.ItemFacts { File = ".harness-config/sshItems/pi/.env", Present = true, RepositoryPath = mine }
+            : new Core.Secrets.ItemFacts { File = ".harness-config/sshItems/pi/.env", Present = true, Problem = "other users can change '.harness-config/sshItems/pi/.env'" });
+
+        var inspector = new RecordingInspector(host => host.Kind == HostKind.Local
+            ? new HostReport { Host = host, Os = "linux", Processor = "x86_64" }
+            : new HostReport
+            {
+                Host = host,
+                Os = "linux",
+                Processor = "arm64",
+                Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness"),
+            });
+
+        var transports = Substitute.For<ISyncTransportFactory>();
+        transports.For(Arg.Any<HostReport>()).Returns(call => new RecordingTransport(SyncKit.Transport(harness), reports: call.Arg<HostReport>().Host));
+
+        var service = SyncKit.Service(
+            harness,
+            loader: HostDoubles.Loader(config, temp.Path, temp.Path, items: Core.Secrets.HostItems.Reading(secrets, new HarnessLayout(temp.Path, temp.Path))),
+            inspector: inspector,
+            transports: transports);
+
+        try
+        {
+            if (!readable)
+            {
+                var unknown = await Assert.ThrowsAsync<HarnessException>(() => service.SyncHostsAsync(temp.Path, null, new SyncOptions(), [], cancellationToken));
+
+                Assert.Equal(HarnessExit.HostUnavailable, unknown.ExitCode);
+                Assert.Equal(
+                    "Where host ssh pi keeps its copies for this machine is not known, since its item cannot be read: "
+                        + "other users can change '.harness-config/sshItems/pi/.env'.",
+                    unknown.Message);
+                Assert.False(Directory.Exists(mine), "the sync wrote a copy where nothing says the host keeps one");
+            }
+            else
+            {
+                var outcome = await service.SyncHostsAsync(temp.Path, null, new SyncOptions(), [], cancellationToken);
+
+                Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+                Assert.Contains($"ssh pi: {mine}", outcome.Details ?? []);
+                Assert.True(File.Exists(Path.Combine(mine, "src", "a.c")));
+            }
+
+            Assert.False(Directory.Exists(declared), "the sync wrote where config.json's repositoryPath says, past the host's item");
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(mine);
+            SyncKit.DeleteIfPresent(declared);
+        }
+    }
+
+    /// <summary>
     /// The real file system, save that one file, listed as ever, is gone when it is opened - or, where
     /// <paramref name="withItsDirectory"/>, the directory it was in is, which is raised as no kind of the other.
     /// </summary>

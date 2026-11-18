@@ -102,7 +102,8 @@ public sealed record LegRunRequest(
     /// leg whose slot this process asks for: here, of a leg this process runs - an ssh host's own run of the legs it was
     /// sent among them, before it admits them; and of a WSL distribution, by the command run there, for a leg it runs and
     /// this machine admits. A leg that waits for no slot is asked nothing here: its work refuses it as it starts, after no
-    /// wait.
+    /// wait. Nor is one whose work would never start - its isolation refused, or its developer environment not set up -
+    /// which ends with its own line, as it would have once it had waited.
     /// </summary>
     public LegAdmissionCheck? AdmissionCheck { get; init; }
 
@@ -955,24 +956,52 @@ public sealed class LegRunService(
                 }
             }
 
-            // A heavy leg waits here, once its tree is synced and its lock taken, until its machine takes it: another run of
-            // its variant is refused-locked meanwhile, as it would be while it ran. Its slot is given back when its work
-            // ends, and before the lock is.
-            if (await CheckBeforeTheSlotAsync(context, leg, request, runId, runDirectory, ledger, cancellationToken).ConfigureAwait(false) is { } poisoned)
+            // Whether the leg's work starts at all, decided before it is checked and before it waits for its slot: the
+            // isolation a run's step holds it inside - a WSL distribution's, which refuses the leg under required, among it -
+            // and the developer environment its toolchain names. A leg whose work would never start ends with its own line,
+            // as it did once it had waited, and is never checked: a check's refusal would end the run in its place, and a
+            // distribution the isolation forbids the leg to run in would be asked to run DssHarness for it.
+            using var start = await StartAsync(context, leg, request, runId, ledger, started, cancellationToken).ConfigureAwait(false);
+
+            if (start.Ended is { } ended)
             {
-                return Ended(leg, poisoned.Verdict, poisoned.Detail ?? string.Empty, started) with { Retried = poisoned.Retried, Tree = tree };
+                return ended with { Tree = tree };
             }
 
-            using var admitted = await AdmitAsync(context, leg, request, runId, ledger, cancellationToken).ConfigureAwait(false);
+            // A heavy leg waits here, once its tree is synced, its lock taken and its start decided, until its machine takes
+            // it: another run of its variant is refused-locked meanwhile, as it would be while it ran. Its slot is given back
+            // when its work ends, and before the lock is. Checked first, so what its work would refuse as it starts is
+            // refused before the wait; and what a start of a host's check that failed as it started said is said on whatever
+            // the leg then reaches, as what a start of its run there said is.
+            var check = await CheckBeforeTheSlotAsync(context, start.Leg, request, runId, runDirectory, ledger, cancellationToken).ConfigureAwait(false);
 
-            if (admitted is { Refusal: { } refusal })
+            if (check.Poisoned is { } poisoned)
             {
-                return Ended(leg, LegVerdict.NotAdmitted, refusal, started) with { Admission = admitted.Fact, Tree = tree };
+                return Ended(start.Leg, poisoned.Verdict, poisoned.Detail ?? string.Empty, started) with { Retried = poisoned.Retried, Tree = tree };
             }
 
-            var entry = await RunTakenLegAsync(context, leg, runId, runDirectory, request, work, commandName, ledger, started, cancellationToken).ConfigureAwait(false);
+            Admission? admitted;
 
-            return (admitted is null ? entry : entry with { Admission = admitted.Fact }) with { Tree = tree };
+            try
+            {
+                admitted = await AdmitAsync(context, start.Leg, request, runId, ledger, cancellationToken).ConfigureAwait(false);
+            }
+            catch (HarnessException ex) when (check.Restarts.Any)
+            {
+                throw check.Restarts.On(ex);
+            }
+
+            using (admitted)
+            {
+                if (admitted is { Refusal: { } refusal })
+                {
+                    return check.Restarts.On(Ended(start.Leg, LegVerdict.NotAdmitted, refusal, started)) with { Admission = admitted.Fact, Tree = tree };
+                }
+
+                var entry = await RunTakenLegAsync(context, start, runId, runDirectory, request, work, commandName, ledger, started, check.Restarts, cancellationToken).ConfigureAwait(false);
+
+                return (admitted is null ? entry : entry with { Admission = admitted.Fact }) with { Tree = tree };
+            }
         }
     }
 
@@ -1061,19 +1090,22 @@ public sealed class LegRunService(
 
     /// <summary>
     /// Asks the command's check of <paramref name="leg"/> (<see cref="LegRunRequest.AdmissionCheck"/>) before the leg waits
-    /// for its slot, where it waits for one here (<see cref="WaitsForASlotHere"/>) - so a run its own work would refuse is
-    /// refused before the wait rather than after it, ending as it would have once the leg ran: of a leg this process
-    /// runs, here, as its work would start; of one a distribution runs - the only leg another machine's process runs whose
-    /// slot this process asks for - by the distribution, whose check reads its copy, which the sync made, and its own
-    /// values, which no sync carries.
+    /// for its slot, where it waits for one here (<see cref="WaitsForASlotHere"/>) and its work would start
+    /// (<see cref="StartAsync"/>) - so a run its own work would refuse is refused before the wait rather than after it,
+    /// ending as it would have once the leg ran: of a leg this process runs, here, as its work would start, in its
+    /// developer environment; of one a distribution runs - the only leg another machine's process runs whose slot this
+    /// process asks for - by the distribution, whose check reads its copy, which the sync made, and its own values, which
+    /// no sync carries.
     /// </summary>
     /// <returns>
-    /// The leg's <c>poisoned</c> line where the distribution's DssHarness failed as a defect as it checked, started once
-    /// more, as the leg's run there would have ended - no slot is waited for to learn it again; <see langword="null"/>
-    /// where nothing refused the leg, or the command asks nothing of it.
+    /// What each start of the distribution's check that failed as a defect before anything ran said, which the leg's line
+    /// says whatever it then reaches; and the leg's <c>poisoned</c> line where the distribution's DssHarness failed so
+    /// again, started once more, as the leg's run there would have ended - no slot is waited for to learn it again.
+    /// <see cref="HostCheck.Passed"/> where the check was asked here and refused nothing, or the command asks nothing of
+    /// the leg.
     /// </returns>
     /// <exception cref="HarnessException">The check refused the run, as its work would have refused it.</exception>
-    private async Task<LegEntry?> CheckBeforeTheSlotAsync(
+    private async Task<HostCheck> CheckBeforeTheSlotAsync(
         HarnessContext context,
         PlacedLeg leg,
         LegRunRequest request,
@@ -1084,14 +1116,14 @@ public sealed class LegRunService(
     {
         if (request.AdmissionCheck is not { } check || !WaitsForASlotHere(context, leg, request))
         {
-            return null;
+            return HostCheck.Passed;
         }
 
         if (!leg.Dispatched)
         {
             await check.Here(new LegWork(leg, RunsIn(context, leg), runId, runDirectory, request.Time) { KeepGoing = request.KeepGoing }, cancellationToken).ConfigureAwait(false);
 
-            return null;
+            return HostCheck.Passed;
         }
 
         ledger.Transition(leg.Name, $"asking {leg.Host.Host} to check the leg there before it waits for a slot here");
@@ -1312,33 +1344,37 @@ public sealed class LegRunService(
                 _platform)
             : null;
 
-    /// <summary>What <paramref name="leg"/> does once its lock is taken and, where it is heavy, its machine has taken it.</summary>
-    private async Task<LegEntry> RunTakenLegAsync(
+    /// <summary>
+    /// Decides, before anything of <paramref name="leg"/> starts - before it is checked and before it waits for its slot -
+    /// whether its work starts at all, and what it starts with: of a leg another machine runs, whether a WSL distribution's
+    /// leg may run there outside the isolation a run's step holds its legs' work inside; of a leg this process runs, the
+    /// developer environment its toolchain names, set up here, and the isolation its work is held inside.
+    /// </summary>
+    /// <returns>
+    /// The leg as its work starts, with what it holds for that work; or the line it ended with, its work never started -
+    /// skipped where its isolation is refused, failed where its developer environment will not set up, and a tool missing
+    /// where that environment's PATH lacks a program the leg starts.
+    /// </returns>
+    private async Task<LegStart> StartAsync(
         HarnessContext context,
         PlacedLeg leg,
-        RunId runId,
-        string runDirectory,
         LegRunRequest request,
-        Func<LegWork, CancellationToken, Task<LegEntry>> work,
-        string commandName,
+        RunId runId,
         LegLedger ledger,
         long started,
         CancellationToken cancellationToken)
     {
-        // A leg placed on another machine runs on that machine. Doing the work here instead
-        // would produce a verdict about the machine that typed the command, under the name of
-        // the leg that was supposed to check a different one — which is the whole failure a
-        // harness exists to prevent, wearing a green colour.
         if (leg.Dispatched && request.Here is null)
         {
             // A WSL distribution runs on this machine outside its isolation, and reaches its drives - the slots and every
             // tree's git files among them - under /mnt, written: where the run's step holds its legs' work inside the
-            // isolation, the leg is skipped under required, saying so, and runs there under preferred, its line saying so.
+            // isolation, the leg is skipped under required, saying so, nothing of it asked of the distribution - not even
+            // its check - and runs there under preferred, its line saying so.
             if (leg.Named.Kind == HostKind.Wsl && request.Isolation?.ForDistribution(leg.Named.Name) is { } distribution)
             {
                 if (distribution.Refusal($"leg '{leg.Name}'") is { } refused)
                 {
-                    return Ended(leg, LegVerdict.SkippedUnavailable, refused, started);
+                    return new LegStart(leg) { Ended = Ended(leg, LegVerdict.SkippedUnavailable, refused, started) };
                 }
 
                 if (distribution.Notice is { } outside)
@@ -1347,6 +1383,115 @@ public sealed class LegRunService(
                 }
             }
 
+            return new LegStart(leg);
+        }
+
+        var environmentName = LegPrograms.DeveloperEnvironmentOf(context.Config, leg.Leg, request.Workload);
+        DeveloperEnvironmentSetup? setUp = null;
+
+        if (environmentName is not null)
+        {
+            setUp = await SetUpDeveloperEnvironmentAsync(environmentName, leg, ledger, cancellationToken).ConfigureAwait(false);
+
+            if (setUp.HasFailed)
+            {
+                // The survey found the instance and the leg was placed here for it, so an environment
+                // that will not set up now is the leg failing, as a program that will not start once a
+                // leg began is: read as a skip, a gate that accepts an incomplete run passed it.
+                return new LegStart(leg) { Ended = Ended(leg, LegVerdict.Failed, setUp.Failure, started) };
+            }
+
+            if (await MissingInDeveloperEnvironmentAsync(context.Config, leg, request.Workload, environmentName, setUp, cancellationToken).ConfigureAwait(false) is { } missing)
+            {
+                return new LegStart(leg) { Ended = Ended(leg, missing.Verdict, missing.Reason, started) with { DeveloperEnvironment = setUp.Fact } };
+            }
+
+            leg = leg with { DeveloperEnvironment = setUp.Environment };
+        }
+
+        // The work of a run's machine step's leg builds, tests and runs what its agents wrote: held inside the operating
+        // system's isolation, the leg's own, decided before anything of it starts. Where the isolation is required and
+        // cannot be had for the leg's tree, the leg is skipped saying why; where it is preferred and there is none, the
+        // leg's line says what runs outside it. Its temporary directory goes with the leg. What its work writes in the tree's
+        // configuration directory - an action's build directory for this run - is written there, and nothing else of it.
+        var held = request.Isolation is { } isolation
+            ? await isolation.ForLegAsync(leg.HostTreeRoot, request.Workload.WritesIn(leg.HostTreeRoot, runId.Value, leg.Name), cancellationToken).ConfigureAwait(false)
+            : null;
+        var start = new LegStart(leg) { DeveloperEnvironment = setUp, Held = held };
+
+        if (held is null)
+        {
+            return start;
+        }
+
+        if (held.Refusal($"leg '{leg.Name}'") is { } heldRefused)
+        {
+            return start with { Ended = Ended(leg, LegVerdict.SkippedUnavailable, heldRefused, started) };
+        }
+
+        if (held.Notice is { } heldOutside)
+        {
+            ledger.Transition(leg.Name, heldOutside);
+        }
+
+        // A leg whose ground writes a linked worktree an earlier version of this tool made says so on its line, as a
+        // launch over one says it at its start: inside the isolation git add and git fetch fail there, and the remedy
+        // names the verbs that give the agent a repository of its own.
+        foreach (var legacy in held.LegacyWorktrees)
+        {
+            ledger.Transition(leg.Name, legacy);
+        }
+
+        return start;
+    }
+
+    /// <summary>
+    /// What decided, before anything of a leg started, whether its work starts (<see cref="StartAsync"/>): the leg as its
+    /// work starts, the developer environment set up for it and the isolation its work is held inside - or the line it
+    /// ended with, its work never started. Disposed as the leg ends, giving back the isolation it held.
+    /// </summary>
+    /// <param name="Leg">The leg as its work starts: in the developer environment set up for it, where its toolchain names one.</param>
+    private sealed record LegStart(PlacedLeg Leg) : IDisposable
+    {
+        /// <summary>The line the leg ended with before its work started; <see langword="null"/> where it starts.</summary>
+        public LegEntry? Ended { get; init; }
+
+        /// <summary>The developer environment set up for the leg's work here; <see langword="null"/> where its toolchain names none.</summary>
+        public DeveloperEnvironmentSetup? DeveloperEnvironment { get; init; }
+
+        /// <summary>The isolation the leg's work here is held inside; <see langword="null"/> where the run holds it inside none.</summary>
+        public Agents.Isolation.ExecutionIsolation? Held { get; init; }
+
+        /// <inheritdoc/>
+        public void Dispose() => Held?.Dispose();
+    }
+
+    /// <summary>
+    /// What the leg <paramref name="start"/> started does once its lock is taken and, where it is heavy, its machine has
+    /// taken it, saying on whatever it reaches what each start of a host's check of it that failed as it started said
+    /// (<paramref name="checkRestarts"/>).
+    /// </summary>
+    private async Task<LegEntry> RunTakenLegAsync(
+        HarnessContext context,
+        LegStart start,
+        RunId runId,
+        string runDirectory,
+        LegRunRequest request,
+        Func<LegWork, CancellationToken, Task<LegEntry>> work,
+        string commandName,
+        LegLedger ledger,
+        long started,
+        HostRestarts checkRestarts,
+        CancellationToken cancellationToken)
+    {
+        var leg = start.Leg;
+
+        // A leg placed on another machine runs on that machine. Doing the work here instead
+        // would produce a verdict about the machine that typed the command, under the name of
+        // the leg that was supposed to check a different one — which is the whole failure a
+        // harness exists to prevent, wearing a green colour.
+        if (leg.Dispatched && request.Here is null)
+        {
             // What one dispatched leg is given of its own, after the command's own options, and what reads the notes its
             // host writes while it runs: asked of it alone, here, once - no other leg is asked for.
             var own = request.RemoteArgumentsOf?.Invoke(leg) ?? [];
@@ -1359,6 +1504,7 @@ public sealed class LegRunService(
                     runId,
                     onNote,
                     facts => ledger.SetUpsEnded(leg.Name, facts),
+                    checkRestarts,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -1393,28 +1539,7 @@ public sealed class LegRunService(
         // declares - under the section the machine that dispatched the leg knows it by.
         await using var awake = _keepAwake.Hold(commandName, leg.Name, leg.HostSettings, leg.Host.ProgramDirectories.All, cancellationToken);
 
-        var environmentName = LegPrograms.DeveloperEnvironmentOf(context.Config, leg.Leg, request.Workload);
-        DeveloperEnvironmentSetup? setUp = null;
-
-        if (environmentName is not null)
-        {
-            setUp = await SetUpDeveloperEnvironmentAsync(environmentName, leg, ledger, cancellationToken).ConfigureAwait(false);
-
-            if (setUp.HasFailed)
-            {
-                // The survey found the instance and the leg was placed here for it, so an environment
-                // that will not set up now is the leg failing, as a program that will not start once a
-                // leg began is: read as a skip, a gate that accepts an incomplete run passed it.
-                return Ended(leg, LegVerdict.Failed, setUp.Failure, started);
-            }
-
-            if (await MissingInDeveloperEnvironmentAsync(context.Config, leg, request.Workload, environmentName, setUp, cancellationToken).ConfigureAwait(false) is { } missing)
-            {
-                return Ended(leg, missing.Verdict, missing.Reason, started) with { DeveloperEnvironment = setUp.Fact };
-            }
-
-            leg = leg with { DeveloperEnvironment = setUp.Environment };
-        }
+        var setUp = start.DeveloperEnvironment;
 
         // The repository's other trees here, whose build directory a process found beside the leg works in is told by,
         // listed as its work begins: a worktree made since the run began - an agent's, by its orchestrator - is among them.
@@ -1432,38 +1557,9 @@ public sealed class LegRunService(
         var runsIn = RunsIn(context, working);
         var runsAs = working;
 
-        // The work of a run's machine step's leg builds, tests and runs what its agents wrote: held inside the operating
-        // system's isolation, the leg's own, decided before anything of it starts. Where the isolation is required and
-        // cannot be had for the leg's tree, the leg is skipped saying why; where it is preferred and there is none, the
-        // leg's line says what runs outside it. Its temporary directory goes with the leg. What its work writes in the tree's
-        // configuration directory - an action's build directory for this run - is written there, and nothing else of it.
-        ProcessIsolation? isolated = null;
-        using var held = request.Isolation is { } isolation
-            ? await isolation.ForLegAsync(runsAs.HostTreeRoot, request.Workload.WritesIn(runsAs.HostTreeRoot, runId.Value, runsAs.Name), cancellationToken).ConfigureAwait(false)
-            : null;
-
-        if (held is not null)
-        {
-            if (held.Refusal($"leg '{runsAs.Name}'") is { } refused)
-            {
-                return Ended(runsAs, LegVerdict.SkippedUnavailable, refused, started);
-            }
-
-            if (held.Notice is { } outside)
-            {
-                ledger.Transition(runsAs.Name, outside);
-            }
-
-            // A leg whose ground writes a linked worktree an earlier version of this tool made says so on its line, as a
-            // launch over one says it at its start: inside the isolation git add and git fetch fail there, and the remedy
-            // names the verbs that give the agent a repository of its own.
-            foreach (var legacy in held.LegacyWorktrees)
-            {
-                ledger.Transition(runsAs.Name, legacy);
-            }
-
-            isolated = held.ForProcess;
-        }
+        // The isolation decided as the leg started (StartAsync), given back as the leg ends.
+        var held = start.Held;
+        var isolated = held?.ForProcess;
 
         // Every phase the work starts runs inside the leg's isolation, held for the work alone: a set-up's lines, brought
         // up around it, run outside it as the configuration gives them - under required reading nothing the agents wrote
