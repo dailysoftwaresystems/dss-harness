@@ -744,7 +744,19 @@ public sealed class WorkflowTemplatesTests
         var schema = JsonDocument.Parse(Read("item-pipeline/schemas/implement.schema.json")).RootElement;
 
         Assert.Contains(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "closure");
-        Assert.Contains(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "arms");
+
+        // Each class's arm is its own entry's: no flat list of arms beside the record, which nothing would read.
+        Assert.DoesNotContain(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "arms");
+        Assert.False(schema.GetProperty("properties").TryGetProperty("arms", out _));
+
+        // The builders measure on declared legs alone, and name any other reference unmeasured.
+        foreach (var builds in new[] { "item-pipeline/prompts/implement.md", "item-pipeline/prompts/remedy.md" })
+        {
+            Assert.Contains(
+                "Only a leg this run's configuration declares is measured; a reference that is no declared leg - a tool, a service, another implementation - is named unmeasured, with the reason, and so is a cell the tool answers unmeasured.",
+                Prose.Words(WorkflowTemplates.TextOf(builds)!),
+                StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

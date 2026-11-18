@@ -125,25 +125,41 @@ public static class FlowStepTemplates
     }
 
     /// <summary>
-    /// The classes of the work item <paramref name="item"/> - the whole <c>classes</c> array as the item declares it -
-    /// where <paramref name="template"/>, a reason step's prompt, reads them (<c>{item.classes}</c>, or
-    /// <c>{input.item.classes}</c> as the item pipeline's prompts spell it): the one reading whose place the classes are
-    /// handed to the step's runner under <c>classes</c>, for its pack to be seeded from (<see cref="FlowStepGraph"/>).
-    /// Null for a template that reads no classes, and for an item that holds none.
+    /// The classes of the work item <paramref name="template"/>, a reason step's prompt, reads - <c>{item.classes}</c>, or
+    /// <c>{input.item.classes}</c> as the item pipeline's prompts spell it - read by <paramref name="read"/>, the very
+    /// reader the template's fill reads its names by: so the classes handed to the step's runner under <c>classes</c>, for
+    /// its pack to be seeded from (<see cref="FlowStepGraph"/>), are the ones the prompt shows, whatever a use binds its
+    /// <c>item</c> to - a forEach item's member, a step's output outside every forEach. The template's first such read
+    /// decides; a read of one class (<c>{input.item.classes[0]}</c>) hands that class alone. Null for a template that reads
+    /// no classes, and for a read that yields none, or nothing the fill would show.
     /// </summary>
     /// <param name="template">The prompt's text, as written before it is filled.</param>
-    /// <param name="item">The work item of the <c>forEach</c> the step reading the template is an instance of; null outside every one.</param>
-    public static JsonArray? ClassesOf(string template, JsonNode? item)
+    /// <param name="read">Reads one path of a name, as the template's fill reads it, in the scope the step runs in.</param>
+    public static JsonArray? ClassesOf(string template, Func<FlowExpression.Path, FlowExpression.PathRead> read)
     {
         ArgumentNullException.ThrowIfNull(template);
+        ArgumentNullException.ThrowIfNull(read);
 
-        if (!WorkflowExpressions.TemplateReads(template).Any(read =>
-                (read.Root == "input" && read.Names is ["input", "item", "classes"])
-                || (read.Root == "item" && read.Names is ["item", "classes"])))
+        if (WorkflowExpressions.TemplateReads(template).FirstOrDefault(reading =>
+                (reading.Root == "input" && reading.Names is ["input", "item", "classes"])
+                || (reading.Root == "item" && reading.Names is ["item", "classes"])) is not { } classes)
         {
             return null;
         }
 
-        return item is JsonObject held && held["classes"] is JsonArray classes ? [.. classes.OfType<JsonNode>().Select(node => node.DeepClone())] : null;
+        try
+        {
+            return FlowExpression.Parse(classes.Whole).Evaluate(read).ToNode() switch
+            {
+                JsonArray declared => [.. declared.OfType<JsonNode>().Select(node => node.DeepClone())],
+                JsonObject one => [one.DeepClone()],
+                _ => null,
+            };
+        }
+        catch (Exception ex) when (ex is UnresolvedReadException or ArgumentException)
+        {
+            // What the fill refuses, it refuses itself and fails the step with why: no classes are read from it here.
+            return null;
+        }
     }
 }

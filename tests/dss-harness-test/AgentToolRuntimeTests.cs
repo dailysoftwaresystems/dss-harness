@@ -92,45 +92,64 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
     /// <summary>
     /// The run's measure tool, where its run is given one: offered among the harness's own to a ground that runs
-    /// commands - one that does not is not offered it - standing alone in its turn (Barrier), for a measurement is a
-    /// build and a test run, never a read beside others. Its call is answered with what the cell showed, the leg, the
-    /// variant, the filter and the cell said back, so a record's <c>measuredBy</c> cites a call whose input the run's
-    /// stored stream holds whole; a cell that could not be measured is a failed call carrying the reason, which the
-    /// agent names unmeasured.
+    /// commands - one that does not is not offered it, nor is the run's reporter, by the one rule the Claude Code client
+    /// serves it by - standing alone in its turn (Barrier), for a measurement is a build and a test run, never a read
+    /// beside others. Its call is handed its own id, as the stored stream records it, and where its records go - the
+    /// call's own folder of the step's directory, by that id - and is answered with what the cell showed, the leg, the
+    /// variant, the filter and the cell said back with where the run's records and the call's are, so a record's
+    /// <c>measuredBy</c> cites a call whose input the run's stored stream holds whole; what it answered is kept, masked,
+    /// in the call's own records, read back by the id alone. A cell that could not be measured is a failed call carrying
+    /// the reason, which the agent names unmeasured; a call of another tool, or an id no measure call made, has no record.
     /// </summary>
     [Fact]
     public async Task TheRunsMeasureTool_IsOfferedToAGroundThatRunsCommands_AndItsCallAnswersWhatTheCellShowed()
     {
         AgentMeasureCall? asked = null;
-        var runtime = Open(measure: new((call, _) =>
-        {
-            asked = call;
-            return Task.FromResult(call.Cell == "the good cell"
-                ? new AgentMeasureAnswer(Measured: true, Passed: true, "passed", "the tests passed", null)
-                : new AgentMeasureAnswer(false, false, string.Empty, null, "the tree's lock was held"));
-        }));
+        var runtime = Open(
+            mask: new Masking("s3cr3t-value", "***"),
+            measure: new((call, _) =>
+            {
+                asked = call;
+                return Task.FromResult(call.Cell == "the good cell"
+                    ? new AgentMeasureAnswer(Measured: true, Passed: true, "passed", "the tests passed with s3cr3t-value", null) { RunDirectory = "/runs/r1" }
+                    : new AgentMeasureAnswer(false, false, string.Empty, null, "the tree's lock was held"));
+            }));
 
         Assert.Contains(AgentMeasureSupport.ToolName, runtime.Tools.Select(tool => tool.Name));
         Assert.DoesNotContain(AgentMeasureSupport.ToolName, Open(capabilities: [AgentCapability.Read], measure: new((_, _) => Task.FromResult(new AgentMeasureAnswer(true, true, "passed", null, null)))).Tools.Select(tool => tool.Name));
+        Assert.DoesNotContain(AgentMeasureSupport.ToolName, Open(reporterRoot: _worktree, measure: new((_, _) => Task.FromResult(new AgentMeasureAnswer(true, true, "passed", null, null)))).Tools.Select(tool => tool.Name));
 
         // It stands alone: after every call before it and before every call after.
         Assert.True(runtime.Alone(new AgentToolCallRequest("call_2", AgentMeasureSupport.ToolName, """{"leg":"windows","variant":"debug","filter":"","cell":"x"}""")));
         Assert.True(runtime.Locks(new AgentToolCallRequest("call_3", AgentMeasureSupport.ToolName, """{"leg":"windows","variant":"debug","filter":"","cell":"x"}""")));
 
-        var passed = await Call(runtime, AgentMeasureSupport.ToolName, ("leg", "windows"), ("variant", "debug"), ("filter", "Shape"), ("cell", "the good cell"));
+        var passed = await Call(runtime, AgentMeasureSupport.ToolName, "toolu_01:A", ("leg", "windows"), ("variant", "debug"), ("filter", "Shape"), ("cell", "the good cell"));
+        var records = Path.Combine(_step, AgentMeasureSupport.RecordsDirectoryName, "toolu_01_A");
 
         Assert.True(passed.Ok, passed.Text);
-        Assert.Equal(new AgentMeasureCall("windows", "debug", "Shape", "the good cell"), asked);
+        Assert.Equal(new AgentMeasureCall("toolu_01:A", "windows", "debug", "Shape", "the good cell", records), asked);
+        Assert.Equal(records, AgentMeasureSupport.RecordsOf(_step, "toolu_01:A"));
 
         var said = JsonNode.Parse(passed.Text)!;
 
-        Assert.Equal("windows", said!["leg"]!.GetValue<string>());
-        Assert.Equal("debug", said["variant"]!.GetValue<string>());
-        Assert.Equal("Shape", said["filter"]!.GetValue<string>());
-        Assert.Equal("the good cell", said["cell"]!.GetValue<string>());
-        Assert.Equal("passed", said["result"]!.GetValue<string>());
-        Assert.Equal("passed", said["verdict"]!.GetValue<string>());
-        Assert.Equal("the tests passed", said["detail"]!.GetValue<string>());
+        Assert.Equal(
+            new JsonObject
+            {
+                ["leg"] = "windows",
+                ["variant"] = "debug",
+                ["filter"] = "Shape",
+                ["cell"] = "the good cell",
+                ["result"] = "passed",
+                ["verdict"] = "passed",
+                ["detail"] = "the tests passed with ***",
+                ["runDirectory"] = "/runs/r1",
+                ["records"] = records,
+            }.ToJsonString(),
+            said.ToJsonString());
+
+        // What it answered, kept masked in the call's own records and read back by its id alone.
+        Assert.Equal(said.ToJsonString(), AgentMeasureSupport.RecordOf(_harness.FileSystem, _step, "toolu_01:A")!.ToJsonString());
+        Assert.DoesNotContain("s3cr3t-value", File.ReadAllText(Path.Combine(records, AgentMeasureSupport.RecordFileName)), StringComparison.Ordinal);
 
         var unmeasured = await Call(runtime, AgentMeasureSupport.ToolName, "call_2", ("leg", "windows"), ("variant", "debug"), ("filter", ""), ("cell", "the held cell"));
 
@@ -140,6 +159,13 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         Assert.Equal("unmeasured", held!["result"]!.GetValue<string>());
         Assert.Equal("the tree's lock was held", held["reason"]!.GetValue<string>());
+        Assert.Null(held["runDirectory"]);
+        Assert.Equal("unmeasured", AgentMeasureSupport.RecordOf(_harness.FileSystem, _step, "call_2")!["result"]!.GetValue<string>());
+
+        // A call of another tool, and an id no call made, leave no measure's record.
+        _ = await View(runtime, "nothing-here.txt");
+        Assert.Null(AgentMeasureSupport.RecordOf(_harness.FileSystem, _step, "call_1"));
+        Assert.Null(AgentMeasureSupport.RecordOf(_harness.FileSystem, _step, "toolu_never"));
     }
 
     /// <summary>A call of a tool the step was not given is refused, and recorded as every denial is: a line, an event, its end.</summary>

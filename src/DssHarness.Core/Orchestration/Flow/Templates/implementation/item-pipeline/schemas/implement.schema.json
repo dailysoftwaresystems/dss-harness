@@ -6,7 +6,6 @@
     "done",
     "claims",
     "closure",
-    "arms",
     "tests",
     "reuse",
     "newRows",
@@ -298,7 +297,7 @@
           },
           "neighbours": {
             "type": "array",
-            "description": "Each neighbour swept before reporting: the same invariant at the other cells, the opposite direction, and the optimised form of the same source - measured with the measure tool on each leg and each reference separately, or named unmeasured with the reason.",
+            "description": "Each neighbour swept before reporting: the same invariant at the other cells, the opposite direction, and the optimised form of the same source - measured with the measure tool on each leg this run's configuration declares, separately, or named unmeasured with the reason, as a reference that is no declared leg always is.",
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -372,13 +371,6 @@
             }
           }
         }
-      }
-    },
-    "arms": {
-      "type": "array",
-      "description": "The mutation arms this item's work declares, by id, as the registry will name them - the flat list of every class's arm, read by the item's own sweep after its checkpoint. Empty where the repository keeps no mutation arms or the work declares none.",
-      "items": {
-        "type": "string"
       }
     },
     "tests": {

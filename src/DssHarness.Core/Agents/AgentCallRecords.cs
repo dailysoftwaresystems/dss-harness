@@ -71,17 +71,29 @@ public sealed class AgentCallRecords : IDisposable
         _web = new Lazy<AppendLog>(() => Opened(WebFileName), LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
-    /// <summary>The file a call's whole result is kept in, beside the stream: its id, every character no file name holds on every system made <c>_</c>.</summary>
+    /// <summary>The file a call's whole result is kept in, beside the stream: its id as a call's file is named (<see cref="NameOf"/>).</summary>
     /// <param name="stepDirectory">The step's directory.</param>
     /// <param name="callId">The call's id, as its client named it.</param>
     public static string ResultFile(string stepDirectory, string callId)
     {
         ArgumentNullException.ThrowIfNull(stepDirectory);
+
+        return Path.Combine(stepDirectory, ToolResultsDirectoryName, NameOf(callId) + ".txt");
+    }
+
+    /// <summary>
+    /// A call's id as the name of what the step keeps of the call - its result's file, a measure call's folder: the id,
+    /// every character no file name holds on every system made <c>_</c>, cut past <see cref="MostIdInName"/> characters;
+    /// <c>call</c> for an id that holds none.
+    /// </summary>
+    /// <param name="callId">The call's id, as its client named it.</param>
+    public static string NameOf(string callId)
+    {
         ArgumentNullException.ThrowIfNull(callId);
 
         var name = new string([.. callId.Take(MostIdInName).Select(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' ? character : '_')]);
 
-        return Path.Combine(stepDirectory, ToolResultsDirectoryName, (name.Length == 0 ? "call" : name) + ".txt");
+        return name.Length == 0 ? "call" : name;
     }
 
     /// <summary>

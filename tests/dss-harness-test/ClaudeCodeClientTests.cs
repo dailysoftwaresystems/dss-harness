@@ -819,6 +819,72 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// A launch whose run is given the measure tool, on a ground that runs commands, is served it by the engine's own MCP
+    /// server as the graph tool is: beside <c>--tools</c> with an ask rule, taken by <c>system/init</c>, each call asked of
+    /// the engine and answered by the tool runtime - handed the id the launch's stream records the call by, and its records
+    /// kept by that id in the step's directory, so a closure record's <c>measuredBy</c> finds it on this client as on the
+    /// APIs. On a ground that runs no command - a read-only reviewer's - the same run is served no measure tool, and the
+    /// launch runs: no client serves the tool its runtime does not offer, so no launch ends for a tool its server never
+    /// listed.
+    /// </summary>
+    [Fact]
+    public async Task ARunGivenTheMeasureTool_IsServedItWhereItsGroundRunsCommands_AndOnAReadOnlyGroundRunsWithout()
+    {
+        using var kit = new Kit();
+        var asked = new List<AgentMeasureCall>();
+        var measure = new AgentMeasureSupport((call, _) =>
+        {
+            asked.Add(call);
+            return Task.FromResult(new AgentMeasureAnswer(Measured: true, Passed: true, "passed", "the tests passed", Reason: null) { RunDirectory = "/runs/r1" });
+        });
+
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject
+        {
+            ["tool"] = "mcp__dssharness__measure",
+            ["input"] = new JsonObject { ["leg"] = "windows", ["variant"] = "debug", ["filter"] = "Shape", ["cell"] = "windows / the plain form" },
+        }) }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run() with
+        {
+            Ground = kit.Ground() with { Capabilities = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run] },
+            Measure = measure,
+        }, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
+        Assert.Contains("mcp__dssharness__measure", settings["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()).ToArray());
+        Assert.Contains("mcp__dssharness__measure", Assert.Single(sink.Of<SessionStarted>()).Tools);
+
+        // The call answered by the runtime, handed the id its stream records it by, its records kept by that id.
+        var started = Assert.Single(sink.Of<ToolCallStarted>());
+        var call = Assert.Single(asked);
+
+        Assert.Equal("mcp__dssharness__measure", started.Tool);
+        Assert.Equal(started.Id, call.Id);
+        Assert.Equal(("windows", "debug", "Shape", "windows / the plain form"), (call.Leg, call.Variant, call.Filter, call.Cell));
+        Assert.Equal(AgentMeasureSupport.RecordsOf(kit.StepDirectory, started.Id), call.Records);
+        Assert.Equal("passed", AgentMeasureSupport.RecordOf(kit.Harness.FileSystem, kit.StepDirectory, started.Id)!["result"]!.GetValue<string>());
+        Assert.True(Assert.Single(sink.Of<ToolCallFinished>(), finished => finished.Id == started.Id).Ok);
+
+        // A read-only ground: no measure tool served, the launch runs, and nothing is asked of the measure.
+        using var readOnly = new Kit();
+        readOnly.Script([new JsonObject { ["text"] = "Nothing to measure." }]);
+        var readOnlySink = new Sink();
+
+        var reviewed = await readOnly.Client().RunAsync(readOnly.Run() with
+        {
+            Ground = readOnly.Ground() with { Capabilities = [AgentCapability.Read, AgentCapability.Web] },
+            Measure = measure,
+        }, readOnlySink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, reviewed.Status);
+        Assert.DoesNotContain("mcp__dssharness__measure", Assert.Single(readOnlySink.Of<SessionStarted>()).Tools);
+        Assert.Single(asked);
+    }
+
+    /// <summary>
     /// A whole <c>Read</c> of a file the graph holds parsed over the narrowing bound is denied on Claude Code as a whole
     /// <c>view_file</c> is on the APIs (<c>graphReads: narrow</c>): by the same owner, with the same words, recorded as
     /// every denial is and as a line of the step's graph; a ranged read of the same file passes, and a file the graph is

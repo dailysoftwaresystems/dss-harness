@@ -120,9 +120,40 @@ public sealed class CodebaseContextPackTests
         Assert.Equal("the home of a class the item closes", Assert.Single(pack.Seeds, seed => seed.Id == Id(queries, "Shop.Checkout.CheckoutService.Checkout")).Why);
         Assert.Equal("a site of a class the item closes", Assert.Single(pack.Seeds, seed => seed.Id == Id(queries, "Shop.Storage.MemoryOrderStore.Save")).Why);
 
-        // The home and the sites, with the fallbacks their symbols leave, among the first line's seeds; the file the
-        // view does not hold seeds nothing.
-        Assert.True(pack.Text.Split('\n')[0].Contains($"; packed from the task: {1 + store + receipts} site(s) and home of the classes it is to close", StringComparison.Ordinal), $"store={store}, receipts={receipts}; first line: {pack.Text.Split('\n')[0]}");
+        // The declarations the home and the sites seeded, with the fallbacks their symbols leave, counted as declarations
+        // among the first line's seeds; the file the view does not hold seeds nothing.
+        Assert.True(pack.Text.Split('\n')[0].Contains($"; packed from the task: {1 + store + receipts} declaration(s) at the sites and homes of the classes it is to close", StringComparison.Ordinal), $"store={store}, receipts={receipts}; first line: {pack.Text.Split('\n')[0]}");
+    }
+
+    /// <summary>
+    /// A class's site is read by the pack's own rules of what a prompt names, as the plan check reads it: a path written
+    /// with backslashes or a leading <c>./</c> is the path the view holds, and a symbol written with its parameters names
+    /// the symbol - so a site the plan check accepts seeds its declaration at the weight of a named symbol, never its file
+    /// alone or nothing.
+    /// </summary>
+    [Fact]
+    public async Task ASitesPathAndSymbol_AreReadAsAPromptsNamesAre_SoASiteThePlanCheckAcceptsSeedsItsDeclaration()
+    {
+        using var tree = await ShopAsync();
+        var queries = await QueriesAsync(tree);
+
+        var pack = CodebaseContextPack.Make(
+            queries,
+            new ContextPackRequest("Close the class of the checkout's reference.", All)
+            {
+                Closure =
+                [
+                    new ContextPackClosure("./src/Checkout/CheckoutService.cs", "Checkout(Order order)", Home: true),
+                    new ContextPackClosure("src\\Storage\\MemoryOrderStore.cs", " Save ", Home: false),
+                ],
+            });
+
+        Assert.EndsWith(" | the home of a class the item closes", Line(pack, queries, "Shop.Checkout.CheckoutService.Checkout"), StringComparison.Ordinal);
+        Assert.EndsWith(" | a site of a class the item closes", Line(pack, queries, "Shop.Storage.MemoryOrderStore.Save"), StringComparison.Ordinal);
+        Assert.Equal(
+            ["a site of a class the item closes", "the home of a class the item closes"],
+            pack.Seeds.Where(seed => seed.Why.EndsWith("a class the item closes", StringComparison.Ordinal)).Select(seed => seed.Why).Order(StringComparer.Ordinal));
+        Assert.Contains("; packed from the task: 2 declaration(s) at the sites and homes of the classes it is to close", pack.Text.Split('\n')[0], StringComparison.Ordinal);
     }
 
     [Fact]

@@ -2138,11 +2138,16 @@ in the schema that says it, and which the step's start holds it to again before 
 a definition with the schema files beside it, a `$ref` of the form `plan.schema.json#/$defs/workItem` naming one, and
 where the schema is read - the check, a run, a path typed by it - the definition is taken into the schema's own
 `$defs`, so the shipped plan, self-audit and diagnosis schemas hold one work-item definition between them; and where
-the repository declares legs, the step's agent is given the `measure` tool on every client: one call takes a leg, its
-variant (the build configuration the leg's own configuration declares), a test filter and the cell of a universe being
-measured, runs those tests of that leg through the test service as any leg is run - in the agent's worktree where it
-has one, in a local copy of the main tree where it does not - and answers what they showed or why the cell could not
-be measured, the call a tool call of the step's stored stream whose id a closure record's `measuredBy` cites. The leg
+the repository declares legs, a step whose agent runs commands (its capabilities hold `run`) is given the `measure`
+tool on every client: one call takes a leg, its variant (the build configuration the leg's own configuration
+declares), a test filter and the cell of a universe being measured, runs those tests of that leg through the test
+service as a `test` step's legs are run - in the agent's worktree where it has one, in a local copy of the main tree
+where it does not, under the agents' isolation and the step's own record of what its legs start - and answers what
+they showed: `passed` where the leg passed, `failed` where its build or its tests failed, and `unmeasured` with why
+for anything else (a leg refused by another run's lock, skipped, stopped, a filter that matched no test, a leg not
+declared), the verdict spelt as the ledger spells it, with the run's directory and the call's own records
+(`measures/<call id>/` of the step's directory: the ledger, and what the call answered); the call is a tool call of
+the step's stored stream whose id a closure record's `measuredBy` cites. The leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass and its last lines, and for `build`, `test` and `run` the units its build

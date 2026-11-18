@@ -536,9 +536,10 @@ public sealed record AgentStepRequest(
     public AgentGraphSupport? Graph { get; init; }
 
     /// <summary>
-    /// The run's measure tool, where it is given one - a repository that declares legs gives each reason step's run one:
-    /// the <c>measure</c> tool the runtime offers among the harness's own, which runs the tests it is asked of one of the
-    /// run's legs through the test service, as any leg is run, where the agent works. Null where none is given.
+    /// The run's measure tool, where it is given one - a repository that declares legs gives one to each reason step whose
+    /// agent runs commands (<see cref="AgentMeasureSupport.OfferedOn"/>): the <c>measure</c> tool the runtime offers among
+    /// the harness's own, which runs the tests it is asked of one of the run's legs through the test service, as a leg
+    /// step's legs are run, where the agent works. Null where none is given.
     /// </summary>
     public AgentMeasureSupport? Measure { get; init; }
 
@@ -801,9 +802,11 @@ public sealed record AgentRun(
     public AgentGraphSupport? Graph { get; init; }
 
     /// <summary>
-    /// The run's measure tool, where it is given one - a repository that declares legs gives each reason step's run one:
-    /// the <c>measure</c> tool the runtime offers among the harness's own, which runs the tests it is asked of one of the
-    /// run's legs through the test service, as any leg is run, where the agent works. Null where none is given.
+    /// The run's measure tool, where it is given one - a repository that declares legs gives one to each reason step whose
+    /// agent runs commands: the <c>measure</c> tool the runtime offers among the harness's own, and the Claude Code client
+    /// serves from it, on a ground that runs commands alone (<see cref="AgentMeasureSupport.OfferedOn"/>), which runs the
+    /// tests it is asked of one of the run's legs through the test service, as a leg step's legs are run, where the agent
+    /// works. Null where none is given.
     /// </summary>
     public AgentMeasureSupport? Measure { get; init; }
 
@@ -972,9 +975,11 @@ public sealed record AgentGraphSupport(
 
 /// <summary>
 /// The run's measure tool, where it is given one: how an agent measures a neighbour of a class it closes - one cell of
-/// the universe, on one of the run's legs - through the test service, as any leg is run, where the agent works. Offered
-/// by the tool runtime to every client whose run carries it and whose ground runs commands; each call is a tool call of
-/// the run's stored stream, and the id it is recorded under is what a closure record's <c>measuredBy</c> cites.
+/// the universe, on one of the run's legs - through the test service, as a leg step's legs are run, where the agent
+/// works. Given only to an agent that runs commands (<see cref="OfferedOn"/>, the one rule the engine gives it by, the
+/// tool runtime offers it by and the Claude Code client serves it by); each call is a tool call of the run's stored
+/// stream, kept under the call's own id in the step's directory (<see cref="RecordsOf"/>) with what it answered
+/// (<see cref="RecordOf"/>) - and that id is what a closure record's <c>measuredBy</c> cites, on every client alike.
 /// </summary>
 /// <param name="Measure">Answers one call: runs what it asks and says what it showed, or why it could not be measured.</param>
 public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToken, Task<AgentMeasureAnswer>> Measure)
@@ -982,12 +987,19 @@ public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToke
     /// <summary>The tool's name, as the runtime offers it and an agent calls it.</summary>
     public const string ToolName = "measure";
 
+    /// <summary>The folder, in the step's directory, the measure calls keep their records in: one folder of its own for each call, named by its id.</summary>
+    public const string RecordsDirectoryName = "measures";
+
+    /// <summary>The file, in a measure call's own folder, that holds the call and what it answered, as the agent was given it.</summary>
+    public const string RecordFileName = "measure.json";
+
     /// <summary>How the tool describes itself to the agent that is offered it.</summary>
     public const string Told =
         "Measures one cell of the universe a class of your item names: runs the tests the filter names on the leg, built "
-        + "as its variant says - the build configuration the leg's configuration declares - where this run works, and answers what they showed. "
-        + "The id of the call is what your record's measuredBy cites. A leg that is not declared, or a configuration the leg does not build, "
-        + "is answered unmeasured, with the reason.";
+        + "as its variant says - the build configuration the leg's configuration declares - where this run works, and answers what they showed: "
+        + "passed where the leg passed, failed where its build or its tests failed. Anything else is answered unmeasured, with the reason - "
+        + "a leg that is not declared, a configuration the leg does not build, a leg refused, skipped or stopped, a filter that matched no test - "
+        + "for nothing of the cell was measured. The answer names where the run's records are. The id of the call is what your record's measuredBy cites.";
 
     /// <summary>What the tool asks, as its input schema says it.</summary>
     public const string Asked =
@@ -998,22 +1010,145 @@ public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToke
         "filter":{"type":"string","description":"The tests to run, as the leg's test runner's own filter takes it; empty for all of them."},
         "cell":{"type":"string","description":"The cell of the universe being measured, as the record will name it."}}}
         """;
+
+    /// <summary>
+    /// Whether an agent on <paramref name="ground"/> is given the tool: its tools are given the <c>run</c> capability, for
+    /// a measurement builds and runs what it measures. The one rule of it - the engine gives a run the tool by it, and the
+    /// tool runtime offers it and the Claude Code client serves it by it alone - so no client serves the tool its runtime
+    /// does not offer, and no agent that may run no command is given it.
+    /// </summary>
+    /// <param name="ground">The agent's ground, whose capabilities its tools are given by.</param>
+    public static bool OfferedOn(Policy.AgentPolicyGround ground)
+    {
+        ArgumentNullException.ThrowIfNull(ground);
+
+        return ground.Given.Contains(AgentCapability.Run);
+    }
+
+    /// <summary>
+    /// Where the measure call <paramref name="callId"/> of the step kept at <paramref name="stepDirectory"/> keeps its
+    /// records: <c>measures/&lt;call id&gt;/</c> of the step's directory, the id spelt as a call's records are named
+    /// (<see cref="AgentCallRecords.NameOf"/>) - the ledger of the leg run it made, the failing log of each red leg where
+    /// the step works in an agent's worktree, and what it answered (<see cref="RecordFileName"/>). The id is the one the
+    /// run's stored stream records the call under on every client, a Claude Code launch's among them, so what a closure
+    /// record's <c>measuredBy</c> names is found here by it.
+    /// </summary>
+    /// <param name="stepDirectory">The step's own directory.</param>
+    /// <param name="callId">The call's id, as the run's stored stream records it.</param>
+    public static string RecordsOf(string stepDirectory, string callId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepDirectory);
+
+        return Path.Combine(stepDirectory, RecordsDirectoryName, AgentCallRecords.NameOf(callId));
+    }
+
+    /// <summary>
+    /// What <paramref name="call"/> answered, as the agent is given it and its records keep it: the call's leg, variant,
+    /// filter and cell said back with its result (<see cref="AgentMeasureAnswer.Result"/>), the verdict, detail and reason
+    /// where there are any, where the run's records are where a run was made, and where the call's own are.
+    /// </summary>
+    /// <param name="call">The call, as the agent made it.</param>
+    /// <param name="answer">What it showed.</param>
+    public static System.Text.Json.Nodes.JsonObject Said(AgentMeasureCall call, AgentMeasureAnswer answer)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        ArgumentNullException.ThrowIfNull(answer);
+
+        var said = new System.Text.Json.Nodes.JsonObject
+        {
+            ["leg"] = call.Leg,
+            ["variant"] = call.Variant,
+            ["filter"] = call.Filter,
+            ["cell"] = call.Cell,
+            ["result"] = answer.Result,
+        };
+
+        if (answer.Verdict.Length > 0)
+        {
+            said["verdict"] = answer.Verdict;
+        }
+
+        if (answer.Detail is { Length: > 0 } detail)
+        {
+            said["detail"] = detail;
+        }
+
+        if (answer.Reason is { Length: > 0 } reason)
+        {
+            said["reason"] = reason;
+        }
+
+        if (answer.RunDirectory is { Length: > 0 } run)
+        {
+            said["runDirectory"] = run;
+        }
+
+        said["records"] = call.Records;
+
+        return said;
+    }
+
+    /// <summary>
+    /// What the measure call <paramref name="callId"/> of the step kept at <paramref name="stepDirectory"/> answered, as
+    /// its records keep it (<see cref="Said"/>, masked as the step's records are): the one reading of whether a call a
+    /// record cites is a measure call of the step's, and of what it showed, whatever client made it. Null where no measure
+    /// call of that id left a record there, or what it left does not read as one.
+    /// </summary>
+    /// <param name="fileSystem">The file system the step's records are read on.</param>
+    /// <param name="stepDirectory">The step's own directory.</param>
+    /// <param name="callId">The call's id, as the run's stored stream records it and a closure record cites it.</param>
+    public static System.Text.Json.Nodes.JsonObject? RecordOf(FileSystem.IFileSystem fileSystem, string stepDirectory, string callId)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        var file = Path.Combine(RecordsOf(stepDirectory, callId), RecordFileName);
+
+        if (!fileSystem.FileExists(file))
+        {
+            return null;
+        }
+
+        try
+        {
+            return System.Text.Json.Nodes.JsonNode.Parse(FileSystem.WholeFiles.ReadAllText(fileSystem, file)) is System.Text.Json.Nodes.JsonObject said
+                && said["result"] is System.Text.Json.Nodes.JsonValue result && result.TryGetValue<string>(out var word)
+                && AgentMeasureAnswer.Results.Contains(word, StringComparer.Ordinal)
+                    ? said
+                    : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
 }
 
-/// <summary>One call of the measure tool: the leg, its variant, the filter and the cell, as the agent gave them.</summary>
+/// <summary>One call of the measure tool: its id, the leg, its variant, the filter and the cell, as the agent gave them, and where the call keeps its records.</summary>
+/// <param name="Id">The call's id, as the run's stored stream records it: what a closure record's <c>measuredBy</c> cites.</param>
 /// <param name="Leg">The leg to measure on.</param>
 /// <param name="Variant">The build configuration to measure as.</param>
 /// <param name="Filter">The tests to run, as the leg's runner takes it; empty for all of them.</param>
 /// <param name="Cell">The cell of the universe being measured, as the record will name it.</param>
-public sealed record AgentMeasureCall(string Leg, string Variant, string Filter, string Cell);
+/// <param name="Records">Where the call keeps its records (<see cref="AgentMeasureSupport.RecordsOf"/>): the ledger of its leg run among them.</param>
+public sealed record AgentMeasureCall(string Id, string Leg, string Variant, string Filter, string Cell, string Records);
 
 /// <summary>
 /// What one measure call showed: the verdict of the tests it ran, with their detail - or, where the cell could not be
-/// measured, the reason and nothing run.
+/// measured, the reason, nothing run or nothing of the cell shown by what ran.
 /// </summary>
-/// <param name="Measured">Whether the cell was measured at all.</param>
+/// <param name="Measured">Whether the cell was measured at all: its leg passed, or its build or its tests failed.</param>
 /// <param name="Passed">Whether the tests it ran passed.</param>
-/// <param name="Verdict">The leg run's verdict, as the ledger spells it; empty where it never ran.</param>
+/// <param name="Verdict">The leg run's verdict, as the ledger spells it (<see cref="Verdicts.Display"/>); empty where no leg reached one.</param>
 /// <param name="Detail">What the leg's line said - the phase that did not pass and its last lines, where it did not; null where none.</param>
 /// <param name="Reason">Why the cell could not be measured, where it could not; null where it was.</param>
-public sealed record AgentMeasureAnswer(bool Measured, bool Passed, string Verdict, string? Detail, string? Reason);
+public sealed record AgentMeasureAnswer(bool Measured, bool Passed, string Verdict, string? Detail, string? Reason)
+{
+    /// <summary>Every result a measure call answers, as its answer and its record spell it.</summary>
+    public static IReadOnlyList<string> Results { get; } = ["passed", "failed", "unmeasured"];
+
+    /// <summary>Where the leg run the call made keeps its records; null where none was made.</summary>
+    public string? RunDirectory { get; init; }
+
+    /// <summary>The call's result, as its answer and its record spell it: <c>unmeasured</c>, <c>passed</c> or <c>failed</c>.</summary>
+    public string Result => !Measured ? Results[2] : Passed ? Results[0] : Results[1];
+}

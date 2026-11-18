@@ -141,6 +141,7 @@ public sealed class ImplementationFlowTests
             TimeProvider.System,
             new TestIsolation(),
             new NoTests(),
+            harness.ChildSessions,
             harness.GitClient,
             harness.ConfigStore,
             updates);
@@ -1032,7 +1033,6 @@ public sealed class ImplementationFlowTests
             ["done"] = new JsonArray(new JsonObject { ["statement"] = "the report ships", ["holds"] = true, ["shows"] = "its code, read again" }),
             ["claims"] = new JsonObject { ["built"] = "src/one/one.cs", ["tested"] = "nothing run: the repository keeps no legs" },
             ["closure"] = new JsonArray(),
-            ["arms"] = new JsonArray(),
             ["tests"] = new JsonArray([.. (tests ?? []).Select(unit => (JsonNode?)unit)]),
             ["reuse"] = "",
             ["newRows"] = new JsonArray(),

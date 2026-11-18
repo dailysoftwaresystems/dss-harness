@@ -6989,14 +6989,17 @@ public sealed class FlowCoordinator
 
                         // A reason step whose prompt reads the classes of the work item it is an instance of
                         // ({input.item.classes}, as the item pipeline's prompts spell it) is served them in its pack:
-                        // read here, once, from the raw template before it is filled, and handed its runner under
-                        // 'classes' (FlowStepGraph seeds the pack from them).
-                        if (promptKey == "prompt" && FlowStepTemplates.ClassesOf(raw, instance.Item.ToNode()) is { } declared)
+                        // read here, once, from the raw template's own read of them by the reader its fill reads by - so
+                        // the pack is seeded from the very classes the prompt shows, whatever a use binds its item to -
+                        // and handed its runner under 'classes' (FlowStepGraph seeds the pack from them).
+                        Func<FlowExpression.Path, FlowExpression.PathRead> promptReader = path => Read(path, instance.DeclaredScope!, reader: instance);
+
+                        if (promptKey == "prompt" && FlowStepTemplates.ClassesOf(raw, promptReader) is { } declared)
                         {
                             read["classes"] = FlowValue.Of(declared);
                         }
 
-                        if (FlowTemplate.FillAroundSkills(raw, path => Read(path, instance.DeclaredScope!, reader: instance), name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
+                        if (FlowTemplate.FillAroundSkills(raw, promptReader, name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
                         {
                             _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
                             return;

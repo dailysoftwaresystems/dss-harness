@@ -378,8 +378,8 @@ too (`HostCommand.Bound`): the host's leg ends when its input does. On Linux
 and macOS a bound child starts as any other: an interrupt or a termination signal given to the
 harness ends it with the harness's stop, a hang-up of its terminal reaches it as it reaches the
 harness, and a kill of the harness alone does not reach it - `stop-run --now` ends the harness with
-its whole tree. Save under a **process scope** (`ProcessScope`), which a run's machine step opens
-around its legs (`LegStepRunner`), flowing with the operation and seen by nothing outside it: there
+its whole tree. Save under a **process scope** (`ProcessScope`), which a run's machine step and a
+reason step's measure call open around their legs (`FlowStepLegs`), flowing with the operation and seen by nothing outside it: there
 every child but a contained one is started apart from the terminal, so the engine's first Ctrl+C -
 a safe pause - leaves the builds running, and a bound child's group is recorded in the step's
 directory as a contained child's session is, while anything is in it, so a killed engine leaves
@@ -2970,12 +2970,19 @@ class-closure paragraph, every prompt that goes on with an item - mend, rework, 
 undo - reads the item's classes and the record so far (`{input.item.classes}`, `{implement.latest.closure}`) under
 "The class you are closing", and the implement step's answer schema requires the record of each class (`closure`:
 class, invariant, home, sites before and after, searches citing the tool calls that made them, the universe covered,
-the pin, the arm, each neighbour and its measurement, the closing claim) beside `arms`, the flat list of the arms the
-item declares; where the repository declares legs, each reason step's agent is given the `measure` tool
-(`AgentMeasureSupport` on the step's request and run, offered by the tool runtime to a ground that runs commands,
-standing alone in its turn), whose every call - a leg, its variant, a filter, the cell measured - runs through
-`ITestLegs` as any leg is run, in the agent's worktree where it has one and in a local copy of the main tree where it
-does not (`ReasonStepRunner.MeasuredAsync`), its id what the record's `measuredBy` cites. Before every fold of an
+the pin, the arm, each neighbour and its measurement, the closing claim), each class's arm in its own entry; where the
+repository declares legs, each reason step whose agent runs commands is given the `measure` tool (`AgentMeasureSupport`
+on the step's request and run, standing alone in its turn), by one rule - `AgentMeasureSupport.OfferedOn`, the ground's
+tools given `run` - that the engine gives it by, the tool runtime offers it by and the Claude Code client serves it by,
+so no launch is told to take a tool its server does not list; its every call - a leg, its variant, a filter, the cell
+measured - runs through `ITestLegs` as a leg step's legs are (`FlowStepLegs`, the one owner of a step's legs: the
+isolation decided first, the process scope over the step's directory, the ledger kept), in the agent's worktree where
+it has one and in a local copy of the main tree where it does not (`ReasonStepRunner.MeasuredAsync`), read by
+`FlowLegVerdicts.ClassOf` - a red leg failed, a leg that passed passed, every other verdict unmeasured with the leg's
+words as why - and answered with the verdict as the ledger spells it, the run's directory and the call's own records,
+`measures/<call id>/` of the step's directory (`AgentMeasureSupport.RecordsOf`: the ledger, a red leg's log in an
+agent's worktree, and what the call answered, read back by `AgentMeasureSupport.RecordOf`), under the id the stored
+stream records the call by on every client - what the record's `measuredBy` cites. Before every fold of an
 item, the `class-closure` check (`ClassClosureStepRunner`) judges the record by `ClassClosureRules` - the one owner of
 the judgement - against the classes the plan declares, the item's stored streams (`OrchestrationStore.ReadStepStream`,
 every step of the agent's own directory), the paths the agent changed (the fold's own dry weighing,
@@ -3309,8 +3316,9 @@ x509 reaches no gpg agent hidden with the runtime directory, and fails there; on
 `user.signingKey` names a file under `~/.ssh` reads no such file, and fails too, where `key::` and the public key's line
 sign through the agent. Its refusal, notice and record are a
 launch's, from one base (`IsolationDecision`),
-with words of their own. A run's leg step (`LegStepRunner`) asks it for its tree before anything starts - none here
-under `required` ends the step 14, nothing run - and hands the leg service an `ILegIsolation`
+with words of their own. A run's leg step (`LegStepRunner`), and a reason step's measure call, ask it for their tree
+before anything starts, through the one owner of a step's legs (`FlowStepLegs`) - none here under `required` ends the
+step 14, and answers the call unmeasured, nothing run - and hand the leg service an `ILegIsolation`
 (`LegRunRequest.Isolation`, carried by each leg command's request) that asks it again for each leg this machine runs,
 of its own ground (`ExecutionGrounds.OfLeg`: the tree it works in, what `LegStepRunner.WritesBeside` names - a
 sweep's workers - and the build directory of the leg's run of each runner action its work runs, its runner's and its
@@ -3668,8 +3676,9 @@ the tree; each copy made, said where the leg takes its tree after the sync; each
 line is kept), each leg's verdict read on its own and `red` holding the red legs only, with the phase that did not pass
 (`LegEntry.TailPhase`, beside `LogTail`) and, for `build`, `test` and `run`, the units its build failed as the ledger's
 `--json` says them (`FailedUnits.Document`; `{run.red}` says their line's words, `FlowChecks`); the ledger (`LegRunResult.ToDocument`) and, in an agent's worktree, each red
-leg's failing phase log are kept in the step's directory. A leg run something other than its legs ended - refused, or
-stopped - ends the step with its own code. The checks that run no legs answer `FlowStepResult.Red` where they found red,
+leg's failing phase log are kept in the step's directory, by the one owner of a step's legs (`FlowStepLegs`), which a
+reason step's measure call runs its leg through too. A leg run something other than its legs ended - refused, or
+stopped (`FlowStepLegs.EndedOutsideItsLegs`) - ends the step with its own code. The checks that run no legs answer `FlowStepResult.Red` where they found red,
 which the coordinator reads by `failOn` as it reads a red leg: `AnchorBalanceStepRunner` and `AnchorCitationsStepRunner`
 over the anchor services, held to a step's rows or paths by `AnchorBalanceReport.HeldTo` (each `AnchorFinding` carries
 the id of its row, none for a registry as a whole) and `AnchorCitationReport.HeldTo`, their findings the lines the
@@ -4555,10 +4564,13 @@ declarations (`CodeNodeKinds.Declarations`) 3, the declarations of the files the
 (`AgentPolicy.StepWrites`) 2, and the ten nodes the prompt's words match best (`find`'s ranking, over declarations) 2 -
 beside which every site and home of the classes of the work item the step is an instance of seeds the pack
 (`ContextPackRequest.Closure`, each a `ContextPackClosure`: the declaration the site's symbol names in the site's file,
-at the weight of a node named - the file's declarations where the site names no symbol or its file carries it not), the
-engine reading the classes where the step's prompt is read and handing them its runner under `classes`
-(`FlowStepTemplates.ClassesOf`, `FlowStepRun.Read`), so a fresh agent's pack holds every site's declaration, not only
-those near the defect. The walk goes two hops from a node named or worked with and one from the others over `CodebaseContextPack.Walked` -
+at the weight of a node named - the file's declarations, at a named file's weight, where the site names no symbol or its
+file carries it not - the site's path and symbol read by the pack's own rules of a prompt's names, its path with either
+separator, a leading `./` or an ending of it, its symbol without its parameters; the first line counts the
+declarations they seeded), the engine reading the classes where the step's prompt is read, by the prompt's own read of
+them through the reader its fill reads by - whatever a use binds its `item` to - and handing them its runner under
+`classes` (`FlowStepTemplates.ClassesOf`, `FlowStepRun.Read`), so a fresh agent's pack holds every site's declaration,
+not only those near the defect. The walk goes two hops from a node named or worked with and one from the others over `CodebaseContextPack.Walked` -
 `calls`, `inherits`, `mixesIn`, `implements`, `overrides`, `dispatches` and `tests` both ways, `references` out, the
 steps of each `CodebaseGraphQueries.Steps` gives - each node keeping its best score (its seed's weight halved at each
 hop, times 1, 0.7 or 0.3 by each edge's confidence) and its relation to the node it was reached from (`calls

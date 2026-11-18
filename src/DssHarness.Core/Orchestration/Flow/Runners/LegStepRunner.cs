@@ -20,9 +20,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// use case its command runs: the legs run in the tree the step works in (the worktree of the agent its <c>in</c>
 /// names, else the main checkout); where each leg works, each copy made and each leg ended are told to the engine as the
 /// leg service says them, so the step lets its tree go once no leg reads it; each leg's verdict is read on its own, and
-/// <c>red</c> holds the red legs alone. The ledger is kept in the step's directory, and for a step in an agent's worktree
-/// the log of each red leg's phase that did not pass, whole, where this machine ran it: that worktree, and the run
-/// directory in it, go when the agent does.
+/// <c>red</c> holds the red legs alone. Its legs are run as every step of the engine runs legs (<see cref="FlowStepLegs"/>,
+/// a reason step's measure calls' owner too): under a process scope recorded in the step's directory, and the ledger kept
+/// there, with - for a step in an agent's worktree - the log of each red leg's phase that did not pass, whole, where this
+/// machine ran it: that worktree, and the run directory in it, go when the agent does.
 /// </summary>
 /// <remarks>
 /// What its legs build, test and run is what the run's agents wrote: the work of each leg this machine runs is held inside
@@ -42,6 +43,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
 public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IAgentIsolation isolation) : IFlowStepTypeRunner
 {
+    private readonly FlowStepLegs _legs = new(fileSystem, children, isolation);
+
     /// <inheritdoc/>
     public abstract string Type { get; }
 
@@ -71,42 +74,29 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             tree = worktree;
         }
 
-        // The isolation the legs' work is held inside, decided before anything of the step starts: where it is required and
-        // this machine has none, no leg runs.
-        var mainCheckout = context.Layout.MainCheckoutRoot;
-        using var held = await isolation.ForExecutionAsync(context.Config, ExecutionGrounds.OfLegs(context.Config, mainCheckout, tree), mainCheckout, cancellationToken).ConfigureAwait(false);
-
-        if (held.Refusal($"'{run.Instance}'") is { } refused)
-        {
-            return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, $"{refused}. Nothing was run.");
-        }
-
-        var legIsolation = new StepLegIsolation(isolation, context.Config, mainCheckout, tree, WritesBeside);
+        // The legs run as every step of the engine runs them: the isolation their work is held inside decided before
+        // anything of the step starts - where it is required and this machine has none, no leg runs - under the step's
+        // process scope, and the ledger kept in the step's directory, with each red leg's failing log in an agent's worktree.
         var watch = new StepWatch(run.Events);
         var directory = layout.InstanceDirectory(run.Instance, run.WorksIn);
-        LegRunResult result;
+        var ran = await _legs.RunAsync(
+            new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, directory, directory, RedLogs: run.WorksIn is not null, $"'{run.Instance}'") { WritesBeside = WritesBeside },
+            legIsolation => RunLegsAsync(run, context, tree, watch, legIsolation, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 
-        // What its legs start here is apart from the engine's terminal, so a first interruption typed there leaves it
-        // running for the pause to wait out; and the group of each phase - a set-up's up line apart - a leg's keep-awake and
-        // what carries a leg to a host is recorded in the step's directory while anything is in it, so what a killed engine
-        // left is ended by the next command over the run, a resume's first among them.
-        using (ProcessScope.Enter(new ProcessScope(() => children.For(directory))))
+        if (ran.Result is not { } result)
         {
-            result = await RunLegsAsync(run, context, tree, watch, legIsolation, cancellationToken).ConfigureAwait(false);
+            return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, ran.Refusal!);
         }
 
-        Keep(result, directory, redLogs: run.WorksIn is not null);
-
         var output = Output(result, arms: Type == "check-mutations");
-        output["isolation"] = held.Record.ToOutput();
+        output["isolation"] = ran.Isolation;
         var lines = result.Report.Lines;
 
         // A run something other than its legs ended - refused, cut off, a leg it placed left with no line - ends the step
         // with the run's own code: its ledger holds only what its legs reached, which says nothing of what ended it. A run
         // its legs ended - none could run, another run owns its records - is read by its legs' verdicts like any other.
-        if (result.Cancelled
-            || lines.Count == 0
-            || result.Stopped && (HarnessExit.RefusesTheRun(result.ExitCode) || watch.PlacedLegs.Any(leg => !lines.Any(line => line.Leg == leg))))
+        if (FlowStepLegs.EndedOutsideItsLegs(result, watch.PlacedLegs))
         {
             return FlowStepResult.Ended(passed: false, result.ExitCode, result.Message, output) with { Cause = result.Cause };
         }
@@ -212,68 +202,6 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
             return entry;
         }
-    }
-
-    /// <summary>
-    /// Keeps what the step's legs reached in its own directory: the ledger, as <c>--json</c> gives it; and, where
-    /// <paramref name="redLogs"/>, for each red leg this machine ran, the log of its phase that did not pass, whole.
-    /// </summary>
-    private void Keep(LegRunResult result, string stepDirectory, bool redLogs)
-    {
-        fileSystem.CreateDirectory(stepDirectory);
-        fileSystem.WriteAllTextAtomic(Path.Combine(stepDirectory, OrchestratorLayout.StepLedgerFileName), result.ToDocument(path => path) + "\n");
-
-        if (!redLogs)
-        {
-            return;
-        }
-
-        // The logs of this attempt's red legs alone: an attempt before it kept its own, of legs that may be green now.
-        var logs = Path.Combine(stepDirectory, OrchestratorLayout.StepLogsDirectoryName);
-
-        fileSystem.DeleteDirectory(logs);
-
-        foreach (var line in result.Report.Lines.Where(line => line.HostRunId is null && FlowLegVerdicts.ClassOf(line.Verdict) == FlowLegClass.Red))
-        {
-            if (line.TailPhase is not { } phase)
-            {
-                continue;
-            }
-
-            // Found as every log is named for its phase - a runner's step 'build (2/2)' is kept as 'build (2-2)'.
-            var named = PhaseLogs.NameFor(phase);
-
-            if (line.Logs.FirstOrDefault(log => log.Phase == named) is not { } log || !fileSystem.FileExists(log.File))
-            {
-                continue;
-            }
-
-            fileSystem.CreateDirectory(logs);
-            fileSystem.CopyFile(log.File, Path.Combine(logs, $"{line.Leg}.{named}{PhaseLogs.Extension}"), overwrite: true);
-        }
-    }
-
-    /// <summary>
-    /// The isolation of the work of legs run for a step of this engine - a test step's, or a measure call a reason
-    /// step's agent makes - from the leg's own ground (<see cref="ExecutionGrounds.OfLeg"/>): no writes beside the
-    /// tree's own, for a leg step writes none beside its tree.
-    /// </summary>
-    /// <param name="isolation">Decides the isolation the legs' work is held inside.</param>
-    /// <param name="config">The repository's configuration.</param>
-    /// <param name="mainCheckout">The main checkout's root.</param>
-    /// <param name="tree">The tree the legs work in.</param>
-    internal static ILegIsolation LegIsolationOf(IAgentIsolation isolation, HarnessConfig config, string mainCheckout, string tree)
-        => new StepLegIsolation(isolation, config, mainCheckout, tree, besides: _ => []);
-
-    /// <summary>The isolation of the work of one leg of the step, from the leg's own ground (<see cref="ExecutionGrounds.OfLeg"/>).</summary>
-    internal sealed class StepLegIsolation(IAgentIsolation isolation, HarnessConfig config, string mainCheckout, string tree, Func<string, IReadOnlyList<string>> besides) : ILegIsolation
-    {
-        /// <inheritdoc/>
-        public Task<ExecutionIsolation> ForLegAsync(string legTree, IReadOnlyList<string> writes, CancellationToken cancellationToken)
-            => isolation.ForExecutionAsync(config, ExecutionGrounds.OfLeg(config, mainCheckout, tree, legTree, [.. besides(legTree), .. writes]), mainCheckout, cancellationToken);
-
-        /// <inheritdoc/>
-        public ExecutionIsolation ForDistribution(string distribution) => ExecutionIsolation.InDistribution(AgentIsolationMode.Of(config), distribution);
     }
 
     /// <summary>Tells the engine what the leg service says of the step's legs, in the engine's words, and keeps the legs placed.</summary>

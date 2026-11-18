@@ -1450,7 +1450,7 @@ public sealed partial class HelpTests
             "the tools of the agent's capabilities and no other - read: Read, Grep, Glob; write: Write, Edit, NotebookEdit; run: Bash; web: "
                 + "none of Claude Code's, but mcp__dssharness__web_fetch and mcp__dssharness__web_search of the engine's tool server beside them; and "
                 + "a step that has a codebase graph (graph: tools) takes mcp__dssharness__graph of the engine's tool server beside them, only where its "
-                + "step is given one, and a step of a repository that declares legs takes mcp__dssharness__measure, which measures one cell of the universe "
+                + "step is given one, and a step whose agent runs commands, of a repository that declares legs, takes mcp__dssharness__measure, which measures one cell of the universe "
                 + "a class of the item names on one of the run's legs "
                 + "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode;",
             prose,
@@ -1461,8 +1461,9 @@ public sealed partial class HelpTests
                 + "step's claude-mcp.json), served in the engine's own process over the launch's control channel - its initialize, its tool list "
                 + "and its calls, our own code with no MCP library; each call of it is asked of the engine first, by its ask rule, and run by the "
                 + "tool runtime below as on the API clients, each address decided and recorded, the graph's calls answered by the same owner that "
-                + "answers them on the API clients and each recorded as a line of the step's graph - a step of a repository that declares legs takes the "
-                + "measure tool from the same server, its calls answered and recorded as every tool call is - but its edit operation is not given on this "
+                + "answers them on the API clients and each recorded as a line of the step's graph - a step whose agent runs commands, of a repository that "
+                + "declares legs, takes the measure tool from the same server, by the one rule the tool runtime offers it by, its calls answered and "
+                + "recorded as every tool call is - but its edit operation is not given on this "
                 + "client: the probe measured an Edit taken after a ranged Read, inside the range and outside it, on every version taken, so an "
                 + "agent that means to change a body reads its lines with Read and Edits them. A step's first user message holds the run's "
                 + "repository map first, then its context pack, then its task - every launch a conversation of its own, it is given them as every "
@@ -5153,7 +5154,7 @@ public sealed partial class HelpTests
         Assert.Contains($"{record} in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it", orchestrators, StringComparison.Ordinal);
         Assert.Contains(
             "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, and "
-            + "what a machine step's legs start a process group of its own, apart from the engine's terminal; nothing ends either "
+            + "what a machine step's legs, and a reason step's measure call's, start a process group of its own, apart from the engine's terminal; nothing ends either "
             + "when the process that started it is killed, so each session, and the group of each phase - a set-up's up line apart - "
             + $"keepAwake command and ssh that carries a leg to a host, is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
             + "while it runs, and the record taken back once nothing is left in it: a group still holding what its child left at its "
@@ -5805,9 +5806,11 @@ public sealed partial class HelpTests
                 + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
                 + "and each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
                 + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer, held to the schema its outputs names - one the engine reads, "
-                + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. Where the repository declares legs, the step's agent is given the measure tool on every client: one call takes a leg, its "
-                + "variant - the build configuration the leg's own configuration declares - a test filter and the cell of a universe being measured, runs those tests of that leg through the test service as any leg is run, in the agent's worktree "
-                + "where it has one and in a local copy of the main tree where it does not, and answers what they showed or why the cell could not be measured; the call is a tool call of the step's stored stream, its id what a closure record's "
+                + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. Where the repository declares legs, a step whose agent runs commands (its capabilities hold run) is given the measure tool on every client: one call takes a leg, its "
+                + "variant - the build configuration the leg's own configuration declares - a test filter and the cell of a universe being measured, runs those tests of that leg through the test service as a test step's legs are run, in the agent's worktree "
+                + "where it has one and in a local copy of the main tree where it does not, under the agents' isolation and the step's own record of what its legs start, and answers what they showed - passed where the leg passed, failed where its "
+                + "build or its tests failed, and unmeasured with why for anything else: a leg refused by another run's lock, skipped, stopped, a filter that matched no test, a leg not declared - the verdict as the ledger spells it, with the "
+                + "run's directory and the call's own records (measures/<call id>/ of the step's directory: the ledger, and what the call answered); the call is a tool call of the step's stored stream, its id what a closure record's "
                 + "measuredBy cites. A failed "
                 + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, absent the workflow's, twice as long before each later try - and then on each model of its order; a run that ended "
                 + "on a key the provider refused moves to the next key at once, with no wait, and the run's pause ends the wait before a try and begins no "
@@ -6064,7 +6067,7 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("codebase-graph").StandardOutput);
 
         Assert.Contains(Prose.Words($"the {DssHarness.Core.Codebase.CodebaseContextPack.WordSeeds} nodes its words match best"), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words("every site and home of the classes of the work item it is an instance of, where its prompt reads them ({input.item.classes}), each at the weight of a node named, so a fresh agent holds every site's declaration"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("every site and home of the classes of the work item it is an instance of, where its prompt reads them ({input.item.classes}), each site's declaration at the weight of a node named and its file's declarations at a named file's where it names no symbol its file carries, so a fresh agent holds every site's declaration"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"The walk goes {DssHarness.Core.Codebase.CodebaseContextPack.NamedHops} hops from a node named or worked with and {DssHarness.Core.Codebase.CodebaseContextPack.OtherHops} from the others"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"({string.Join(", ", DssHarness.Core.Codebase.CodeConfidences.All.Select(confidence => $"{confidence} {DssHarness.Core.Codebase.CodebaseContextPack.Confidence(confidence).ToString(System.Globalization.CultureInfo.InvariantCulture)}"))})"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"more edges of than the view's 99th percentile, and at least {DssHarness.Core.Codebase.CodebaseGraphQueries.CrowdFloor}, which its line says"), prose, StringComparison.Ordinal);

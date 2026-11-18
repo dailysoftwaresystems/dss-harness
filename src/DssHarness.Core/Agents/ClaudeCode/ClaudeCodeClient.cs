@@ -207,8 +207,9 @@ public sealed class ClaudeCodeClient(
         }
 
         // The run's measure tool, served the same way where its run is given one: what an agent measures a neighbour of
-        // a class with, from the same owner the API clients' tool comes from.
-        if (run.Measure is not null && !served.Contains(AgentMeasureSupport.ToolName, StringComparer.Ordinal))
+        // a class with, from the same owner the API clients' tool comes from - and by the one rule that owner offers it
+        // by, on a ground that runs commands alone, so the launch is never told to take a tool the server does not list.
+        if (run.Measure is not null && AgentMeasureSupport.OfferedOn(ground) && !served.Contains(AgentMeasureSupport.ToolName, StringComparer.Ordinal))
         {
             served = [.. served, AgentMeasureSupport.ToolName];
         }

@@ -51,9 +51,10 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
     public IReadOnlyList<ContextPackWorked> Worked { get; init; } = [];
 
     /// <summary>
-    /// Every site and home of the classes of the work item the step goes on with, where its prompt reads them: each a
-    /// seed of the weight of a named symbol, so a fresh agent's pack holds every site's declaration, not only those
-    /// near the defect. Empty for a step whose prompt reads no classes.
+    /// Every site and home of the classes of the work item the step goes on with, where its prompt reads them: each
+    /// site's declaration a seed of the weight of a named symbol - its file's declarations at a named file's, where it
+    /// names no symbol or its file carries none by that name - so a fresh agent's pack holds every site's declaration,
+    /// not only those near the defect. Empty for a step whose prompt reads no classes.
     /// </summary>
     public IReadOnlyList<ContextPackClosure> Closure { get; init; } = [];
 
@@ -113,7 +114,8 @@ public static class EstimatedTokens
 /// start from the view and what the step says alone - so the same step on the same tree is given the same pack - and
 /// written as lines within its cap. Its seeds are what the prompt names exactly (a symbol or a path in backquotes, a
 /// qualified name, a handle, a <c>path:line</c>), every site and home of the classes of the work item its prompt reads
-/// the classes of (<see cref="ContextPackRequest.Closure"/>, each at the weight of a named symbol), the working sets
+/// the classes of (<see cref="ContextPackRequest.Closure"/>, each site's declaration at the weight of a named symbol,
+/// its file's at a named file's where it names none the file carries), the working sets
 /// it is given, the declarations of the files its <c>writes</c> covers and the nodes its words match best; from each
 /// the walk goes <see cref="NamedHops"/> hops from a
 /// node named or worked with and <see cref="OtherHops"/> from the others over the edges <see cref="Walked"/> names, each
@@ -446,8 +448,7 @@ public static partial class CodebaseContextPack
                 return queries.Resolve(text) is GraphResolve.Found found ? [(found.Card, NamedWeight, NamedHops, "named", SeedKind.Named)] : [];
             }
 
-            // A symbol written with its parameters names the symbol.
-            var name = text.IndexOf('(', StringComparison.Ordinal) is > 0 and var paren && !CodebaseGraphQueries.NamesAFile(text) ? text[..paren].TrimEnd() : text;
+            var name = SymbolNamed(text);
 
             if (Relative(name) is { } file)
             {
@@ -468,14 +469,23 @@ public static partial class CodebaseContextPack
         /// The seeds of one site or home of a class the item closes: the declaration the site's symbol names in the
         /// site's file, at the weight of a named symbol - each of them, where the name is one several of the file's
         /// declarations carry - and, where the site names no symbol or nothing in the file carries it, the file's
-        /// declarations as a file the prompt names. Nothing where the view holds no such file.
+        /// declarations as a file the prompt names, at a named file's weight. The site's path and its symbol are read by
+        /// the pack's own rules of what a prompt names - the path the view holds it at, with either separator, a leading
+        /// <c>./</c> or an ending of it (<see cref="Relative"/>), and the symbol without its parameters
+        /// (<see cref="SymbolNamed"/>) - so a site the plan check accepts seeds what the prompt's own name of it would.
+        /// Nothing where the view holds no such file.
         /// </summary>
         private IEnumerable<(GraphCard Card, double Weight, int Hops, string Why)> AtSite(ContextPackClosure closure)
         {
-            var declared = Declarations(closure.Path).ToList();
+            if (Relative(closure.Path) is not { } path)
+            {
+                return [];
+            }
+
+            var declared = Declarations(path).ToList();
             var why = closure.Home ? "the home of a class the item closes" : "a site of a class the item closes";
 
-            var named = closure.Symbol is { Length: > 0 } symbol
+            var named = closure.Symbol is { Length: > 0 } written && SymbolNamed(written.Trim()) is { Length: > 0 } symbol
                 ? declared.Where(card => string.Equals(card.Name, symbol, StringComparison.Ordinal)
                     || string.Equals(card.Qualified, symbol, StringComparison.Ordinal)
                     || card.Qualified.EndsWith("." + symbol, StringComparison.Ordinal)).ToList()
@@ -485,6 +495,15 @@ public static partial class CodebaseContextPack
                 ? named.Select(card => (card, NamedWeight, NamedHops, why))
                 : declared.Select(card => (card, FileWeight, OtherHops, "in a file a class of the item names"));
         }
+
+        /// <summary>
+        /// What a written name names, as the pack reads a prompt's names: a symbol written with its parameters names the
+        /// symbol - <c>TokenOf(string)</c> names <c>TokenOf</c> - and anything that names a file, or holds no parameters,
+        /// stands as written.
+        /// </summary>
+        /// <param name="text">The name, as the prompt or a class's site wrote it.</param>
+        private static string SymbolNamed(string text)
+            => text.IndexOf('(', StringComparison.Ordinal) is > 0 and var paren && !CodebaseGraphQueries.NamesAFile(text) ? text[..paren].TrimEnd() : text;
 
         /// <summary>
         /// The path the view holds that <paramref name="written"/> names, with either separator: relative to the tree, the
@@ -846,7 +865,7 @@ public static partial class CodebaseContextPack
         private static string Said(SeedKind kind, int count) => kind switch
         {
             SeedKind.Named => ReportText.Counted(count, "node") + " it names",
-            SeedKind.Closure => ReportText.Counted(count, "site") + " and home of the classes it is to close",
+            SeedKind.Closure => ReportText.Counted(count, "declaration") + " at the sites and homes of the classes it is to close",
             SeedKind.File => ReportText.Counted(count, "declaration") + " of the files it names",
             SeedKind.Worked => ReportText.Counted(count, "working set node"),
             SeedKind.Written => ReportText.Counted(count, "declaration") + " of the files the step writes",

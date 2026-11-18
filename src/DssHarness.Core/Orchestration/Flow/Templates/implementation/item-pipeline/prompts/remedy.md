@@ -52,8 +52,8 @@ folds your changes into the main tree when you report.
 You cannot run `build`, `test` or `check-mutations` yourself: the engine runs them. Measure with the `measure`
 tool: it takes the leg, its variant, the filter and the cell you are measuring, runs those tests of that leg in the
 tree you work in, and answers what they showed. Your record's `measuredBy` cites the id of the call that measured.
-A reference that is a leg or a tool the repository's configuration runs is measured the same way; one that is none
-of those is named unmeasured, with the reason.
+Only a leg this run's configuration declares is measured; a reference that is no declared leg - a tool, a service,
+another implementation - is named unmeasured, with the reason, and so is a cell the tool answers unmeasured.
 
 ## The class you close
 
