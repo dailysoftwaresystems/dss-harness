@@ -3024,7 +3024,7 @@ by its id, its tool named as the runtime names it - Claude Code's `mcp__dssharne
 `measure` - and its input's texts unescaped; the calls that went through, `AgentStreamCalls.Of`, for the searches,
 and every measure call answered, `AgentStreamCalls.Answered` - a cell that failed or went unmeasured answers that its
 call did not succeed - each with what its own record in the directory of the step whose stream holds it says it
-measured, `ClassClosureMeasure`), the paths the agent changed (what the fold's own dry weighing would write, remove or
+measured and when that record was written, `ClassClosureMeasure`), the paths the agent changed (what the fold's own dry weighing would write, remove or
 merge, `IAgentService.FoldAsync` asked as a run's, and what the run's ledger says its earlier folds of the agent
 changed, `FoldLedger.Changed`), the graph's view of the worktree - synced where the check starts - or its text, the arms
 the registry of the agent's worktree declares (`ArmListingReader.DeclaredArmsAsync`, the registry alone, an arm the work
@@ -3033,7 +3033,9 @@ by the fold ledger through `FlowInstanceId.ItemOf`, the whole id a step of no `f
 accounted for and the planned home kept or its move said, a deleted site no longer declaring its symbol, a site that
 reads its home among the paths changed, every search citing a tool call of the streams one of whose input's texts holds
 its query, every neighbour measured by a `measure` call whose record can be read, names the neighbour's cell and
-answered its result (`failed` for `failed-fixed`: the measurement showed the failure, the fix is the item's; never the
+answered its result (`failed` for `failed-fixed`: the measurement showed the failure, the fix is the item's, and another
+`measure` call of the streams shows it - one that measured the same cell and answered `passed`, its record written after
+the failing call's, by `IFileSystem.LastWriteTimeUtc`, which `ClassClosureMeasure.Of` reads with the record; never the
 builder's word or the stream's capped text of the answer), or reasoned, the pin's tests declared, the arm one of the
 registry's and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every
 planned axis and the claim naming each; a record without a home audit is refused where the home was touched by other

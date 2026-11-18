@@ -329,12 +329,12 @@
                 },
                 "measuredBy": {
                   "type": "string",
-                  "description": "The id of the measure call that measured it - one that measured this cell and answered this result, failed for failed-fixed; empty where it is unmeasured."
+                  "description": "The id of the measure call that measured it - one that measured this cell and answered this result, failed for failed-fixed, whose fix a later call of this cell that answered passed shows; empty where it is unmeasured."
                 },
                 "result": {
                   "type": "string",
                   "enum": ["passed", "failed-fixed", "unmeasured"],
-                  "description": "What the measurement showed: passed, failed and fixed in this item, or unmeasured."
+                  "description": "What the measurement showed: passed, failed and fixed in this item - the cell measured again after the fix, and passing - or unmeasured."
                 },
                 "reason": {
                   "type": "string",

@@ -680,21 +680,22 @@ whose input's texts holds its query, every neighbour measured by a `measure` cal
 client called it, whatever it answered - whose own record (`measures/<call id>/measure.json` of
 the step whose stream holds it, never the builder's word or the stream's capped text of the
 answer) can be read, names the neighbour's cell and answered its result (`failed` for
-`failed-fixed`), or reasoned why not, every test of the pin declared, the arm one of the
-registry the worktree holds and mutating the home's own file or a reason the class has nothing to
-mutate, the universe holding every planned axis and the claim naming each - and each home's
-touches since the run's start commit, the item's own commits left out: a home touched by other
-work must carry a home audit. A fold it cannot weigh fails the check. The record's problems are
-repaired by `close-class`, which goes on with the implementation, and a missing audit by
-`home-audit`, which reads the whole home and makes its invariants structural; each changes code,
-so each goes back through the item's tests - its verify, or reverify in the review loop - before
-the check runs again and anything is folded; a home touched often enough is named a hotspot in the
-check's answer. A lane folded by hand joins the same rule opt-in: `anchors.closure: "required"`
-has `fold-agent` refuse a row whose status moves to closed unless its directory holds
-`closure.json` naming a class at least, judged by the same rules, its searches and measurements
-read as given and its arms against the registry its worktree holds - no consent lifts it. A run's
-own folds are held to no `closure.json`: the builder's answer is its record, which the check
-judged.
+`failed-fixed`, whose fix another `measure` call of the cell shows: one that answered `passed`,
+its record written after the failing call's), or reasoned why not, every test of the pin
+declared, the arm one of the registry the worktree holds and mutating the home's own file or a
+reason the class has nothing to mutate, the universe holding every planned axis and the claim
+naming each - and each home's touches since the run's start commit, the item's own commits left
+out: a home touched by other work must carry a home audit. A fold it cannot weigh fails the
+check. The record's problems are repaired by `close-class`, which goes on with the
+implementation, and a missing audit by `home-audit`, which reads the whole home and makes its
+invariants structural; each changes code, so each goes back through the item's tests - its
+verify, or reverify in the review loop - before the check runs again and anything is folded; a
+home touched often enough is named a hotspot in the check's answer. A lane folded by hand joins
+the same rule opt-in: `anchors.closure: "required"` has `fold-agent` refuse a row whose status
+moves to closed unless its directory holds `closure.json` naming a class at least, judged by the
+same rules, its searches and measurements read as given and its arms against the registry its
+worktree holds - no consent lifts it. A run's own folds are held to no `closure.json`: the
+builder's answer is its record, which the check judged.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its

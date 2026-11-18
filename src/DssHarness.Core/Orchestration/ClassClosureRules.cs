@@ -246,25 +246,34 @@ public sealed record ClassHomeAudit(IReadOnlyList<string> Consolidated, IReadOnl
 /// closing record says of it.
 /// </summary>
 /// <param name="Record">Where the call's record is (<see cref="Agents.AgentMeasureSupport.RecordFileOf"/>), as a problem names it where it cannot be read.</param>
-/// <param name="Measured">The cell the call measured and its result - passed, failed or unmeasured - as its record says them; null where the record cannot be read.</param>
-public sealed record ClassClosureMeasure(string Record, (string Cell, string Result)? Measured)
+/// <param name="Measured">
+/// The cell the call measured and its result - passed, failed or unmeasured - as its record says them, and when the record
+/// was written, which the tool runtime does as it answers the call: what orders a fix's measurement after the failure's.
+/// Null where the record cannot be read.
+/// </param>
+public sealed record ClassClosureMeasure(string Record, (string Cell, string Result, DateTime Written)? Measured)
 {
     /// <summary>
     /// What the measure call <paramref name="callId"/>, held by the stream of the step kept at
-    /// <paramref name="stepDirectory"/>, measured, as its record says it: unread, and named by its path, where no record
-    /// that reads as one is there.
+    /// <paramref name="stepDirectory"/>, measured, as its record says it, and when the record was written
+    /// (<see cref="FileSystem.IFileSystem.LastWriteTimeUtc"/>): unread, and named by its path, where no record that reads
+    /// as one is there.
     /// </summary>
     /// <param name="fileSystem">The file system the step's records are read on.</param>
     /// <param name="stepDirectory">The directory of the step whose stored stream holds the call.</param>
     /// <param name="callId">The call's id, as the stream holds it.</param>
     public static ClassClosureMeasure Of(FileSystem.IFileSystem fileSystem, string stepDirectory, string callId)
-        => new(
-            Agents.AgentMeasureSupport.RecordFileOf(stepDirectory, callId),
+    {
+        var record = Agents.AgentMeasureSupport.RecordFileOf(stepDirectory, callId);
+
+        return new(
+            record,
             Agents.AgentMeasureSupport.RecordOf(fileSystem, stepDirectory, callId) is { } said
                 && ClassClosureReading.Text(said["cell"]) is { } cell
                 && ClassClosureReading.Text(said["result"]) is { } result
-                    ? (cell, result)
+                    ? (cell, result, fileSystem.LastWriteTimeUtc(record))
                     : null);
+    }
 }
 
 /// <summary>
@@ -284,8 +293,9 @@ public sealed record ClassClosureMeasure(string Record, (string Cell, string Res
 /// </param>
 /// <param name="Measures">
 /// Every measure call of the item's stored streams, by the id a record's <c>measuredBy</c> cites - answered passed, failed
-/// or unmeasured alike, each with what its own record says it measured - empty where they hold none, so a measurement cited
-/// is never read as made. Null for a manual lane, whose measurements are read as given, their command lines.
+/// or unmeasured alike, each with what its own record says it measured and when that record was written - empty where they
+/// hold none, so a measurement cited is never read as made. Null for a manual lane, whose measurements are read as given,
+/// their command lines.
 /// </param>
 /// <param name="Declares">
 /// Whether a file of the agent's worktree still declares a symbol - the graph's view of its tree, or text where the graph
@@ -370,7 +380,8 @@ public sealed record ClassClosureJudged(
 /// and a site that reads its home among the paths the agent changed; every search was made - it cites the call that made
 /// it, a tool call of the item's stored streams one of whose input's texts holds its query - and every neighbour was
 /// measured - its measurement a <c>measure</c> call of the same streams whose own record says it measured the neighbour's
-/// cell and answered its result (failed for failed-fixed), or reasoned where it says it was not; every test
+/// cell and answered its result (failed for failed-fixed, the fix shown by another call of the cell that answered passed,
+/// its record written after the failing call's), or reasoned where it says it was not; every test
 /// of the pin is declared in the worktree; where the worktree's configuration declares an arms registry, the arm is one of
 /// its arms and mutates the home's own file, or the record says why the class has none; the universe holds every axis the
 /// plan names, and the claim names every axis of it; and where the home was touched by other work, the record carries a
@@ -542,6 +553,17 @@ public static class ClassClosureRules
             {
                 problems.Add($"class '{entry.Class}': the neighbour '{cell}' is '{result}' in the record, but the call '{measuredBy}' that measured it answered '{measured.Result}'");
             }
+
+            // The failing call shows the failure, never the fix: a fix is shown by the cell measured again and passing, by a
+            // call whose record was written after the failing one's - the builder's word that it fixed the cell is not one.
+            else if (result == "failed-fixed"
+                && !measures.Values.Any(other => other.Measured is { } again
+                    && string.Equals(again.Cell, cell, StringComparison.Ordinal)
+                    && again.Result == "passed"
+                    && again.Written > measured.Written))
+            {
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is 'failed-fixed', and no measure call of this item's stored streams measured it passing after the call '{measuredBy}' answered 'failed'");
+            }
         }
 
         if (proof.TestDeclared is { } declared)
@@ -601,8 +623,8 @@ public static class ClassClosureRules
 
     /// <summary>
     /// What the measure call a neighbour cites answered, where the neighbour's result is true: <c>failed</c> for
-    /// <c>failed-fixed</c> - the measurement showed the failure, and the fix is the item's, after it - and every other result
-    /// as it is spelt, <c>passed</c> a call that answered passed.
+    /// <c>failed-fixed</c> - the measurement showed the failure, and the fix is the item's, after it, shown by a later call
+    /// of the cell that answered passed - and every other result as it is spelt, <c>passed</c> a call that answered passed.
     /// </summary>
     /// <param name="result">The neighbour's result, as the record spells it.</param>
     private static string AnswerOf(string result) => result == "failed-fixed" ? "failed" : result;
