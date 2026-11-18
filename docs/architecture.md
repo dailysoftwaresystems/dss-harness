@@ -4519,14 +4519,32 @@ kept) makes each landmark (`main`, `nav`, `header`, `footer`, `aside`, `article`
 element (`<my-widget>`) an `instantiates` of a component of that name; a `script src`, `link href`, `img src` and
 `a href` naming a local file by a relative path an import of it; an `on*=` handler a call of the function it names;
 and an inline `<script>` read by the JavaScript reader with the document's other lines blanked, so its declarations
-and literals carry the lines they stand on. `css` (`.css`, `.scss`, `.sass`, `.less`) makes each simple part of each
-selector - `.btn`, `#main`, `my-widget`, and no pseudo-class or attribute - a member SubKind `rule` named as the
-selector writes it, over the rule's lines; each custom property and each SCSS or Less variable a `constant`; each
-`@keyframes` name a rule and each `@mixin` a member; a `var(--x)` and a bare `$x` a use of the constant, an
-`@include` a use of the mixin, an `@extend` an inheritance; and an `@import`, `@use` and `@forward` naming a file an
-import of it. `related` answers `styledBy` (the rules that style a node: its `uses` edges to a rule, SubKind `rule`, alone) and
-`styles` (what a rule reaches: the nodes whose `uses` edges reach it, asked of a rule - of any other node, nothing), so
-"who uses this class" and "what styles this element" are one call each.
+and literals carry the lines they stand on.
+
+`css` (`.css`, `.scss`, `.sass`, `.less`) reads a sheet over the structural scanner's core, as the code readers do:
+`CssLexer` cuts it into tokens - a string to its own quote not escaped, an unquoted `url(...)` one token, `/* */` a
+comment and `//` one only in SCSS, Sass and Less, an interpolation (`#{...}`, Less's `@{...}`) one token whose code is
+read in its turn - and `ScannedText` matches its braces, so `CssReading` walks it block by block, each line a token's,
+no block nested past `ScanFrame.MostDepth` read and each one deeper marked dynamic. The indented syntax of `.sass` is
+first written in SCSS's braces line for line (`CssLexer.Braced`), so one reader reads all four. Each simple part of
+each selector - `.btn`, `#main`, `my-widget`, `%placeholder`; no pseudo-class, attribute or `:not()`, but an `:is()`'s
+and a `:where()`'s selectors, and a nested rule's `&__title` written onto its parent's names - is a member SubKind
+`rule` named as CSS reads it, escapes read, over its own rule's lines, inside an `@media`, `@supports`, `@layer` or
+any other at-rule's block too; each custom property, `@property` and SCSS or Less variable a `constant`; each
+`@mixin`, `@function`, `@keyframes` and `@font-face` a member of its own SubKind; a selector an interpolation writes
+no node, marked dynamic. A `var(--x)`, a `$x` and a Less `@x` are uses of the constant, an `@include` and a Less
+mixin call uses of the mixin, an `@extend` and a Less `:extend` an `inherits` of the rule it names - looked for among
+rules by the `selector` qualifier, as a document's classes are - and a Tailwind `@apply` and a CSS module's
+`composes` uses of the rules of the classes they name; each is made from the node that holds it, and only what no
+node holds from the sheet's first node. An `@import`, `@use` and `@forward` naming a file of the tree is an import of
+it, each file it may be tried in the order its language tries them - Sass's partials, extensions and index files a
+fallback each, Less's `.less` - none of a package, a URL or one of Sass's own modules; a `@use` is reached by its
+namespace, the import's prefix, and a `@forward` is an export with its `show` and `hide`. A sheet named as a CSS module
+(`x.module.css`) exports each class, id and keyframes by its name and its camel-cased one (`ExtractNode.Exports`), so a
+script's `import styles from './x.module.css'` and its `styles.btn` bind to the rule `.btn` through the import, by
+the linker's one rule for an exported name. `related` answers `styledBy` (the rules that style a node: its `uses`
+edges to a rule, SubKind `rule`, alone) and `styles` (what a rule reaches: the nodes whose `uses` edges reach it, asked
+of a rule - of any other node, nothing), so "who uses this class" and "what styles this element" are one call each.
 
 Razor views (.cshtml) and Blazor components (.razor) are one implementation, `razor`: a component is the class its
 `@code` block is - the block's opening line read as the `partial class` the page compiles to, named by its file, in
