@@ -28,7 +28,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
     public string Language => "html";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".html", ".htm");
@@ -135,6 +135,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
         return new FileExtract([.. nodes])
         {
+            Scopes = script.Scopes,
             References = references,
             Imports = imports,
             Literals = script.Literals,
@@ -206,7 +207,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             at += body.Count(character => character == '\n');
         }
 
-        return new JsReading("html", input.Path, text.ToString(), typescript: false).Read();
+        return new JsReading("html", input.Path, text.ToString(), typescript: false, script: true).Read();
     }
 
     /// <summary>Whether <paramref name="outer"/>'s lines hold <paramref name="inner"/>: it is inside it in the document.</summary>

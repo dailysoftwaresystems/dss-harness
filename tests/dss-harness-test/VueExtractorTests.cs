@@ -109,6 +109,7 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
         ]);
 
         Assert.Contains(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Imports && edge.From == "file:src/Cart.vue" && edge.To == "file:src/Billing.vue");
+        Assert.Contains(linked.Edges, edge => edge.Kind is CodeEdgeKinds.Calls && edge.To.StartsWith("vue:src/Billing.vue.", StringComparison.Ordinal));
     }
 
     private static FileExtract Read(string path, string text) => new VueExtractor().Extract(new CodeFileInput(path, text));

@@ -20,7 +20,7 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
     public string Language => "vue";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".vue");
@@ -122,17 +122,16 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
             }
         }
 
-        var script = new JsReading(Language, input.Path, string.Join('\n', code), typescript).Read();
+        var script = new JsReading(Language, input.Path, string.Join('\n', code), typescript, script: true).Read();
         nodes.AddRange(script.Nodes);
         references.AddRange(script.References);
-        imports.AddRange(script.Imports);
-
-        var style = CssExtractor.Read(Language, new CodeFileInput(input.Path, string.Join('\n', styles)));
+        imports.AddRange(script.Imports);        var style = CssExtractor.Read(Language, new CodeFileInput(input.Path, string.Join('\n', styles)));
         nodes.AddRange(style.Nodes);
         references.AddRange(style.References);
 
         return new FileExtract([.. nodes])
         {
+            Scopes = script.Scopes,
             References = references,
             Imports = imports,
             Literals = script.Literals,

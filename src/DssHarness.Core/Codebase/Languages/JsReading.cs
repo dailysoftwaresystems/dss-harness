@@ -201,14 +201,16 @@ internal sealed class JsReading
     /// <param name="path">The file's path.</param>
     /// <param name="text">Its text.</param>
     /// <param name="typescript">Whether it is TypeScript, whose types the reader takes.</param>
-    public JsReading(string language, string path, string text, bool typescript)
+    /// <param name="script">Where the text is script alone - another file's embedded script, its markup blanked - so no
+    /// markup is lexed however the file is named; null where the name says, as a file of its own does.</param>
+    public JsReading(string language, string path, string text, bool typescript, bool? script = null)
     {
         var name = CodeGraphIds.FileName(path);
 
         _typescript = typescript;
 
         // JavaScript writes no type that a < could open, so every file of it may hold markup; TypeScript's .tsx alone does.
-        _markup = !typescript || name.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase);
+        _markup = script ?? (!typescript || name.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase));
         _text = JsLexer.Scan(text, _markup);
         _scan = _text.Scan;
         _prefix = $"{language}:";
@@ -457,7 +459,11 @@ internal sealed class JsReading
             }
             else if (_scan.IsName(clause))
             {
-                Bind(_scan.Text(clause), specifier, "default", line);
+                // What a file of no script kind a module binds - a Vue component, a style sheet - is named by no export
+                // of its own: the binding is the import's prefix alone, so a member of what it binds is looked for in
+                // what the file itself declares.
+                var asset = AssetExtensions.Contains(specifier[(specifier.LastIndexOf('.') + 1)..].Length > 0 ? $".{specifier[(specifier.LastIndexOf('.') + 1)..]}" : string.Empty);
+                Bind(_scan.Text(clause), specifier, asset ? null : "default", line);
                 clause = _scan.Next(clause);
             }
             else
